@@ -1,0 +1,53 @@
+{
+  "title": "All lanes",
+  "notes": [
+    {
+      "ms": 0,
+      "lane": "HH"
+    },
+    {
+      "ms": 1000,
+      "lane": "SD"
+    },
+    {
+      "ms": 2000,
+      "lane": "BD"
+    },
+    {
+      "ms": 3000,
+      "lane": "HT"
+    },
+    {
+      "ms": 4000,
+      "lane": "LT"
+    },
+    {
+      "ms": 5000,
+      "lane": "CY"
+    },
+    {
+      "ms": 6000,
+      "lane": "FT"
+    },
+    {
+      "ms": 7000,
+      "lane": "HHO"
+    },
+    {
+      "ms": 8000,
+      "lane": "RD"
+    },
+    {
+      "ms": 9000,
+      "lane": "LC"
+    },
+    {
+      "ms": 10000,
+      "lane": "LP"
+    },
+    {
+      "ms": 11000,
+      "lane": "LBD"
+    }
+  ]
+}

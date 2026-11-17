@@ -1,0 +1,29 @@
+{
+  "title": "Bar length",
+  "notes": [
+    {
+      "ms": 2000,
+      "lane": "BD"
+    },
+    {
+      "ms": 2500,
+      "lane": "BD"
+    },
+    {
+      "ms": 3000,
+      "lane": "BD"
+    },
+    {
+      "ms": 3500,
+      "lane": "BD"
+    },
+    {
+      "ms": 5000,
+      "lane": "BD"
+    },
+    {
+      "ms": 7000,
+      "lane": "BD"
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "title": "BPM change",
+  "notes": [
+    {
+      "ms": 4000,
+      "lane": "BD"
+    },
+    {
+      "ms": 4250,
+      "lane": "BD"
+    },
+    {
+      "ms": 4500,
+      "lane": "BD"
+    },
+    {
+      "ms": 4750,
+      "lane": "BD"
+    },
+    {
+      "ms": 5000,
+      "lane": "BD"
+    },
+    {
+      "ms": 7000,
+      "lane": "BD"
+    }
+  ]
+}

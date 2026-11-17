@@ -1,0 +1,2 @@
+# 譜面は Shift_JIS と CRLF のまま保つ
+*.dtx -text
