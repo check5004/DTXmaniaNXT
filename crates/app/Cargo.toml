@@ -10,6 +10,7 @@ rust-version.workspace = true
 [dependencies]
 dtx = { path = "../dtx" }
 engine = { path = "../engine" }
+library = { path = "../library" }
 anyhow = "1"
 cpal = "0.18"
 egui = "0.37"
@@ -23,6 +24,10 @@ env_logger = "0.11"
 pollster = "1"
 wgpu = "30"
 winit = "0.30"
+serde = { version = "1", features = ["derive"] }
+toml = "1"
+dirs = "7"
+rfd = "0.17"
 
 [lints]
 workspace = true

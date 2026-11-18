@@ -1,13 +1,16 @@
-//! DTXmaniaNXT 本体。フェーズ 1 は「1 曲を最後まで遊べる」最小版。
+//! DTXmaniaNXT 本体。
 //!
-//! - 引数かドロップで DTX を読み、BGM を鳴らし、落ちてくる音符を叩いて判定する
+//! - 曲のフォルダを探して選曲し、BGM を鳴らし、落ちてくる音符を叩いて判定する
 //! - 判定は MIDI の時刻と音の再生位置で行い、画面のフレームには左右されない
 //! - 電子ドラムが無いときはキーボードで叩ける
+//! - 設定（曲のフォルダ・補正値など）は config.toml に残す
 
 mod audio;
+mod config;
 mod fonts;
 mod game;
 mod midi;
+mod songs;
 mod time;
 mod ui;
 
@@ -22,10 +25,11 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowId};
 
-use crate::game::Play;
+use crate::config::Config;
+use crate::game::{Outcome, Play};
 use crate::midi::MidiIn;
+use crate::songs::SongList;
 use crate::time::host_us;
-use crate::ui::View;
 
 struct Gpu {
     surface: wgpu::Surface<'static>,
@@ -162,20 +166,31 @@ impl Gpu {
     }
 }
 
+/// いまの画面
+enum Screen {
+    Select,
+    Play(Box<Play>),
+    Result(Box<Outcome>),
+}
+
 struct App {
     window: Option<Arc<Window>>,
     gpu: Option<Gpu>,
     egui_ctx: egui::Context,
     egui_state: Option<egui_winit::State>,
     midi: Option<MidiIn>,
-    play: Option<Play>,
-    view: View,
+    screen: Screen,
+    songs: SongList,
+    config: Config,
+    /// 起動の引数で渡された譜面（ウィンドウができてから始める）
     pending: Option<PathBuf>,
     message: Option<String>,
+    /// 次の描画で、選んでいる行が見えるように一覧を動かす
+    scroll_to_cursor: bool,
 }
 
 impl App {
-    fn new(pending: Option<PathBuf>) -> Self {
+    fn new(arg: Option<PathBuf>) -> Self {
         let midi = match MidiIn::open_all() {
             Ok(m) => Some(m),
             Err(e) => {
@@ -183,25 +198,44 @@ impl App {
                 None
             }
         };
+        let mut config = Config::load();
+        let mut pending = None;
+        // 引数がフォルダなら曲のフォルダに足し、譜面ならすぐ遊ぶ
+        if let Some(p) = arg {
+            if p.is_dir() {
+                if config.add_song_dir(p) {
+                    config.save();
+                }
+            } else {
+                pending = Some(p);
+            }
+        }
+        let mut songs = SongList::new(config.level);
+        if !config.song_dirs.is_empty() {
+            songs.rescan(config.song_dirs.clone());
+        }
         Self {
             window: None,
             gpu: None,
             egui_ctx: egui::Context::default(),
             egui_state: None,
             midi,
-            play: None,
-            view: View::default(),
+            screen: Screen::Select,
+            songs,
+            config,
             pending,
             message: None,
+            scroll_to_cursor: true,
         }
     }
 
     fn start(&mut self, path: PathBuf) {
-        self.play = None;
-        match Play::load(&path) {
+        // 前の曲の音を止めてから読む
+        self.screen = Screen::Select;
+        match Play::load(&path, self.config.input_offset_ms, self.config.drum_sounds) {
             Ok(p) => {
                 self.message = None;
-                self.play = Some(p);
+                self.screen = Screen::Play(Box::new(p));
             }
             Err(e) => {
                 log::error!("{e:#}");
@@ -210,61 +244,226 @@ impl App {
         }
     }
 
+    /// 曲を終える。結果の画面へ
+    fn finish_play(&mut self) {
+        if let Screen::Play(p) = &self.screen {
+            let outcome = p.outcome();
+            self.screen = Screen::Result(Box::new(outcome));
+        }
+    }
+
+    fn add_song_dir(&mut self, dir: PathBuf) {
+        if self.config.add_song_dir(dir) {
+            self.config.save();
+        }
+        self.songs.rescan(self.config.song_dirs.clone());
+    }
+
     /// 届いた MIDI をすべて処理し、時間を進める
     fn pump(&mut self) {
-        if let (Some(midi), Some(play)) = (&self.midi, &mut self.play) {
-            for raw in midi.drain() {
-                play.on_midi(raw);
+        self.songs.poll();
+        match (&self.midi, &mut self.screen) {
+            (Some(midi), Screen::Play(play)) => {
+                for raw in midi.drain() {
+                    play.on_midi(raw);
+                }
             }
-        } else if let Some(midi) = &self.midi {
-            midi.drain().for_each(drop);
+            (Some(midi), _) => midi.drain().for_each(drop),
+            _ => {}
         }
-        if let Some(play) = &mut self.play {
+        if let Screen::Play(play) = &mut self.screen {
             play.update();
+            if play.finished() {
+                self.finish_play();
+            }
         }
     }
 
     fn on_key(&mut self, event_loop: &ActiveEventLoop, code: KeyCode) {
         let at = host_us();
-        if let Some(lane) = key_lane(code)
-            && let Some(play) = &mut self.play
-        {
-            play.on_key(lane, at);
-            return;
-        }
-        match code {
-            KeyCode::Escape => {
-                if self.play.take().is_none() {
-                    event_loop.exit();
+        match &mut self.screen {
+            Screen::Play(play) => {
+                if let Some(lane) = key_lane(code) {
+                    play.on_key(lane, at);
+                    return;
                 }
+                self.on_play_key(code);
             }
-            KeyCode::KeyR => {
-                if let Some(path) = self.play.as_ref().map(|p| p.path.clone()) {
+            Screen::Select => self.on_select_key(event_loop, code),
+            Screen::Result(o) => match code {
+                KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Escape => {
+                    self.screen = Screen::Select;
+                }
+                KeyCode::KeyR => {
+                    let path = o.path.clone();
                     self.start(path);
                 }
+                _ => {}
+            },
+        }
+    }
+
+    fn on_play_key(&mut self, code: KeyCode) {
+        let Screen::Play(play) = &mut self.screen else {
+            return;
+        };
+        match code {
+            KeyCode::Escape => self.finish_play(),
+            KeyCode::KeyR => {
+                let path = play.path.clone();
+                self.start(path);
             }
             KeyCode::KeyM => {
-                if let Some(p) = &mut self.play {
-                    p.drum_sounds = !p.drum_sounds;
-                }
+                play.drum_sounds = !play.drum_sounds;
+                self.config.drum_sounds = play.drum_sounds;
+                self.config.save();
             }
-            KeyCode::Minus => self.adjust_input(-1.0),
-            KeyCode::Equal => self.adjust_input(1.0),
-            KeyCode::BracketLeft => self.view.visual_offset_ms -= 1.0,
-            KeyCode::BracketRight => self.view.visual_offset_ms += 1.0,
-            KeyCode::ArrowUp => {
-                self.view.scroll_px_per_ms = (self.view.scroll_px_per_ms + 0.05).min(3.0)
+            KeyCode::Minus | KeyCode::Equal => {
+                let d = if code == KeyCode::Minus { -1.0 } else { 1.0 };
+                play.input_offset_ms += d;
+                self.config.input_offset_ms = play.input_offset_ms;
+                self.config.save();
             }
-            KeyCode::ArrowDown => {
-                self.view.scroll_px_per_ms = (self.view.scroll_px_per_ms - 0.05).max(0.1)
+            KeyCode::BracketLeft | KeyCode::BracketRight => {
+                let d = if code == KeyCode::BracketLeft {
+                    -1.0
+                } else {
+                    1.0
+                };
+                self.config.visual_offset_ms += d;
+                self.config.save();
+            }
+            KeyCode::ArrowUp | KeyCode::ArrowDown => {
+                let d = if code == KeyCode::ArrowUp {
+                    0.05
+                } else {
+                    -0.05
+                };
+                self.config.scroll_px_per_ms = (self.config.scroll_px_per_ms + d).clamp(0.1, 3.0);
+                self.config.save();
             }
             _ => {}
         }
     }
 
-    fn adjust_input(&mut self, d: f64) {
-        if let Some(p) = &mut self.play {
-            p.input_offset_ms += d;
+    fn on_select_key(&mut self, event_loop: &ActiveEventLoop, code: KeyCode) {
+        let moved = match code {
+            KeyCode::ArrowUp => {
+                self.songs.move_by(-1);
+                true
+            }
+            KeyCode::ArrowDown => {
+                self.songs.move_by(1);
+                true
+            }
+            KeyCode::PageUp => {
+                self.songs.move_by(-10);
+                true
+            }
+            KeyCode::PageDown => {
+                self.songs.move_by(10);
+                true
+            }
+            _ => false,
+        };
+        if moved {
+            self.scroll_to_cursor = true;
+            return;
+        }
+        match code {
+            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space => {
+                self.select_action(ui::SelectAction::Enter)
+            }
+            KeyCode::Backspace => self.select_action(ui::SelectAction::Back),
+            KeyCode::Escape => {
+                if !self.songs.back() {
+                    event_loop.exit();
+                }
+                self.scroll_to_cursor = true;
+            }
+            KeyCode::ArrowLeft => self.change_level(-1),
+            KeyCode::ArrowRight => self.change_level(1),
+            KeyCode::F5 => self.select_action(ui::SelectAction::Rescan),
+            _ => {}
+        }
+    }
+
+    fn change_level(&mut self, delta: isize) {
+        self.songs.change_level(delta);
+        self.remember_level();
+    }
+
+    fn remember_level(&mut self) {
+        if self.config.level != self.songs.level {
+            self.config.level = self.songs.level;
+            self.config.save();
+        }
+    }
+
+    fn select_action(&mut self, action: ui::SelectAction) {
+        use ui::SelectAction as A;
+        match action {
+            A::Select(i) => self.songs.select(i),
+            A::Enter => {
+                if let Some(path) = self.songs.enter() {
+                    self.start(path);
+                }
+                self.scroll_to_cursor = true;
+            }
+            A::Back => {
+                self.songs.back();
+                self.scroll_to_cursor = true;
+            }
+            A::Level(l) => {
+                self.songs.level = l;
+                self.remember_level();
+            }
+            A::AddFolder => {
+                if let Some(dir) = ui::pick_folder() {
+                    self.add_song_dir(dir);
+                }
+            }
+            A::RemoveFolder(i) => {
+                if i < self.config.song_dirs.len() {
+                    self.config.song_dirs.remove(i);
+                    self.config.save();
+                    self.songs.rescan(self.config.song_dirs.clone());
+                }
+            }
+            A::Rescan => {
+                if !self.config.song_dirs.is_empty() {
+                    self.songs.rescan(self.config.song_dirs.clone());
+                }
+            }
+        }
+    }
+
+    fn result_action(&mut self, action: ui::ResultAction) {
+        match action {
+            ui::ResultAction::Back => self.screen = Screen::Select,
+            ui::ResultAction::Retry => {
+                if let Screen::Result(o) = &self.screen {
+                    let path = o.path.clone();
+                    self.start(path);
+                }
+            }
+            ui::ResultAction::SetInputOffset(ms) => {
+                self.config.input_offset_ms = ms;
+                self.config.save();
+            }
+        }
+    }
+
+    fn on_drop(&mut self, path: PathBuf) {
+        if path.is_dir() {
+            self.add_song_dir(path);
+        } else if ui::is_chart_file(&path) {
+            self.start(path);
+        } else {
+            self.message = Some(format!(
+                "DTX ファイルか曲のフォルダをドロップしてください: {}",
+                path.display()
+            ));
         }
     }
 
@@ -278,13 +477,32 @@ impl App {
             .as_ref()
             .map(|m| m.ports.clone())
             .unwrap_or_default();
-        let output = self.egui_ctx.run_ui(input, |ui| match &self.play {
-            Some(play) => ui::draw_play(ui, play, &self.view, &ports),
-            None => ui::draw_idle(ui, &ports, self.message.as_deref()),
+        let mut select_actions = Vec::new();
+        let mut result_actions = Vec::new();
+        let scroll = std::mem::take(&mut self.scroll_to_cursor);
+        let output = self.egui_ctx.run_ui(input, |ui| match &self.screen {
+            Screen::Select => {
+                select_actions = ui::draw_select(
+                    ui,
+                    &self.songs,
+                    &self.config,
+                    &ports,
+                    self.message.as_deref(),
+                    scroll,
+                );
+            }
+            Screen::Play(play) => ui::draw_play(ui, play, &self.config, &ports),
+            Screen::Result(o) => result_actions = ui::draw_result(ui, o, &self.config),
         });
         state.handle_platform_output(window, output.platform_output.clone());
         if let Some(gpu) = &mut self.gpu {
             gpu.render(&self.egui_ctx, output);
+        }
+        for a in select_actions {
+            self.select_action(a);
+        }
+        for a in result_actions {
+            self.result_action(a);
         }
     }
 }
@@ -358,7 +576,7 @@ impl ApplicationHandler for App {
                     gpu.resize(size.width, size.height);
                 }
             }
-            WindowEvent::DroppedFile(path) => self.start(path),
+            WindowEvent::DroppedFile(path) => self.on_drop(path),
             WindowEvent::KeyboardInput { event, .. } => {
                 if event.state == ElementState::Pressed
                     && !event.repeat
@@ -387,10 +605,10 @@ impl ApplicationHandler for App {
 fn main() -> Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     let _ = host_us();
-    let pending = std::env::args().nth(1).map(PathBuf::from);
+    let arg = std::env::args_os().nth(1).map(PathBuf::from);
     let event_loop = EventLoop::new()?;
     event_loop.set_control_flow(ControlFlow::Poll);
-    let mut app = App::new(pending);
+    let mut app = App::new(arg);
     event_loop.run_app(&mut app)?;
     Ok(())
 }
