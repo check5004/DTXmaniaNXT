@@ -2,15 +2,18 @@
 //! 結果の画面に出す苦手な小節を、直近の記録から出す。
 //! 記録が開けないときは残さずに遊べるようにし、苦手な小節は今回のプレイだけから出す。
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use engine::analysis::{HISTORY_PLAYS, measure_weakness, weak_phrases};
-use records::{ChartKey, Records};
+use engine::analysis::{HISTORY_PLAYS, NoteResult, measure_weakness, weak_phrases};
+use records::{ChartKey, Records, SessionKind};
 
-use crate::game::{Outcome, Play, WeakMap};
+use crate::game::{Play, WeakMap};
 
 /// 結果の画面に出す苦手フレーズの数
 const TOP_PHRASES: usize = 5;
+
+/// 苦手度に使う練習の周の数。練習の周は区間しか叩かないので、普通のプレイより多めに読む
+const RECENT_PRACTICE_LAPS: usize = 100;
 
 pub struct History {
     records: Option<Records>,
@@ -60,27 +63,46 @@ impl History {
         }
     }
 
-    /// 結果の画面に出す苦手な小節。記録が読めなければ今回のプレイだけから出す
-    pub fn weak_map(&self, o: &Outcome) -> WeakMap {
-        let path = o.path.to_string_lossy();
-        let plays = self
+    /// 苦手な小節。記録から出し、記録が読めなければ `fallback`（今回のプレイ）から出す。
+    /// どちらも無ければ全部「記録なし」
+    pub fn weak_map(
+        &self,
+        path: &Path,
+        notes_per_measure: &[usize],
+        fallback: Option<&[NoteResult]>,
+    ) -> WeakMap {
+        let path = path.to_string_lossy();
+        let laps = self
             .records
             .as_ref()
-            .and_then(|r| match r.recent_results(&path, HISTORY_PLAYS) {
-                Ok(p) => Some(p),
-                Err(e) => {
-                    log::warn!("cannot read the records: {e}");
-                    None
-                }
-            })
-            .filter(|p| !p.is_empty())
-            .unwrap_or_else(|| vec![o.results.clone()]);
-        let weakness = measure_weakness(&plays, o.measures);
-        let phrases = weak_phrases(&weakness, &o.notes_per_measure, TOP_PHRASES);
+            .and_then(
+                |r| match r.recent_results(&path, HISTORY_PLAYS, RECENT_PRACTICE_LAPS) {
+                    Ok(p) => Some(p),
+                    Err(e) => {
+                        log::warn!("cannot read the records: {e}");
+                        None
+                    }
+                },
+            )
+            .unwrap_or_default();
+        let (plays, practice_laps, results): (usize, usize, Vec<Vec<NoteResult>>) =
+            match (laps.is_empty(), fallback) {
+                (true, Some(f)) => (1, 0, vec![f.to_vec()]),
+                _ => (
+                    laps.iter().filter(|l| l.kind == SessionKind::Play).count(),
+                    laps.iter()
+                        .filter(|l| l.kind == SessionKind::Practice)
+                        .count(),
+                    laps.into_iter().map(|l| l.results).collect(),
+                ),
+            };
+        let weakness = measure_weakness(&results, notes_per_measure.len());
+        let phrases = weak_phrases(&weakness, notes_per_measure, TOP_PHRASES);
         WeakMap {
             weakness,
             phrases,
-            plays: plays.len(),
+            plays,
+            practice_laps,
         }
     }
 }

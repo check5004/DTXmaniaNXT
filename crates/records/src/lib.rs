@@ -112,6 +112,19 @@ impl SessionKind {
             Self::Practice => "practice",
         }
     }
+
+    fn from_name(name: &str) -> Option<Self> {
+        [Self::Play, Self::Practice]
+            .into_iter()
+            .find(|k| k.name() == name)
+    }
+}
+
+/// 等速で叩いた周 1 つぶんの、音符ごとの判定
+#[derive(Debug, Clone, PartialEq)]
+pub struct RecentLap {
+    pub kind: SessionKind,
+    pub results: Vec<NoteResult>,
 }
 
 /// 普通のプレイ 1 回、または練習 1 回
@@ -224,37 +237,54 @@ impl Records {
         Ok(session_id)
     }
 
-    /// 等速（100%）で叩いた直近 `limit` 周の、音符ごとの判定。新しい順
-    pub fn recent_results(&self, chart_path: &str, limit: usize) -> Result<Vec<Vec<NoteResult>>> {
+    /// 等速（100%）で叩いた周の、音符ごとの判定。新しい順。
+    /// 普通のプレイは直近 `plays` 回、練習は直近 `practice_laps` 周まで（練習の周は区間しか叩かないので多めに読む）
+    pub fn recent_results(
+        &self,
+        chart_path: &str,
+        plays: usize,
+        practice_laps: usize,
+    ) -> Result<Vec<RecentLap>> {
         let mut laps = self.conn.prepare(
-            "SELECT l.id FROM laps l
-             JOIN sessions s ON s.id = l.session_id
-             JOIN charts c ON c.id = s.chart_id
-             WHERE c.path = ?1 AND abs(l.speed - 1.0) < 1e-6
-             ORDER BY s.started_at DESC, s.id DESC, l.lap DESC
-             LIMIT ?2",
+            "SELECT id, kind FROM (
+                 SELECT l.id, s.kind, s.started_at, s.id AS session, l.lap,
+                     ROW_NUMBER() OVER (
+                         PARTITION BY s.kind
+                         ORDER BY s.started_at DESC, s.id DESC, l.lap DESC
+                     ) AS n
+                 FROM laps l
+                 JOIN sessions s ON s.id = l.session_id
+                 JOIN charts c ON c.id = s.chart_id
+                 WHERE c.path = ?1 AND abs(l.speed - 1.0) < 1e-6
+             )
+             WHERE (kind = 'play' AND n <= ?2) OR (kind = 'practice' AND n <= ?3)
+             ORDER BY started_at DESC, session DESC, lap DESC",
         )?;
         let ids = laps
-            .query_map(params![chart_path, limit as i64], |row| {
-                row.get::<_, i64>(0)
-            })?
+            .query_map(
+                params![chart_path, plays as i64, practice_laps as i64],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+            )?
             .collect::<Result<Vec<_>>>()?;
         let mut hits = self
             .conn
             .prepare("SELECT measure, judgement FROM hits WHERE lap_id = ?1")?;
         ids.into_iter()
-            .map(|id| {
-                hits.query_map(params![id], |row| {
-                    let measure: u32 = row.get(0)?;
-                    let name: String = row.get(1)?;
-                    Ok((measure, name))
-                })?
-                .filter_map(|r| match r {
-                    Ok((measure, name)) => Judgement::from_name(&name)
-                        .map(|judgement| Ok(NoteResult { measure, judgement })),
-                    Err(e) => Some(Err(e)),
-                })
-                .collect()
+            .filter_map(|(id, kind)| SessionKind::from_name(&kind).map(|kind| (id, kind)))
+            .map(|(id, kind)| {
+                let results = hits
+                    .query_map(params![id], |row| {
+                        let measure: u32 = row.get(0)?;
+                        let name: String = row.get(1)?;
+                        Ok((measure, name))
+                    })?
+                    .filter_map(|r| match r {
+                        Ok((measure, name)) => Judgement::from_name(&name)
+                            .map(|judgement| Ok(NoteResult { measure, judgement })),
+                        Err(e) => Some(Err(e)),
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(RecentLap { kind, results })
             })
             .collect()
     }
@@ -432,7 +462,12 @@ mod tests {
             ),
         )
         .unwrap();
-        let got = r.recent_results("songs/a/master.dtx", 10).unwrap();
+        let got: Vec<Vec<NoteResult>> = r
+            .recent_results("songs/a/master.dtx", 10, 10)
+            .unwrap()
+            .into_iter()
+            .map(|l| l.results)
+            .collect();
         // 70% の周は数えない
         assert_eq!(
             got,
@@ -453,8 +488,54 @@ mod tests {
                 }],
             ]
         );
-        assert_eq!(r.recent_results("songs/a/master.dtx", 1).unwrap().len(), 1);
-        assert!(r.recent_results("other.dtx", 10).unwrap().is_empty());
+        assert_eq!(
+            r.recent_results("songs/a/master.dtx", 1, 0).unwrap().len(),
+            1
+        );
+        assert!(r.recent_results("other.dtx", 10, 10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn practice_laps_are_limited_separately() {
+        let mut r = Records::open_in_memory().unwrap();
+        r.save(&chart(1), &play(100, 1.0, vec![hit(1, Judgement::Miss)]))
+            .unwrap();
+        let mut practice = play(200, 1.0, vec![hit(7, Judgement::Good)]);
+        practice.kind = SessionKind::Practice;
+        let lap = practice.laps[0].clone();
+        practice.laps.push(Lap {
+            hits: vec![hit(8, Judgement::Perfect)],
+            ..lap.clone()
+        });
+        practice.laps.push(Lap {
+            speed: 0.7,
+            hits: vec![hit(9, Judgement::Perfect)],
+            ..lap
+        });
+        r.save(&chart(1), &practice).unwrap();
+        let got: Vec<(SessionKind, u32)> = r
+            .recent_results("songs/a/master.dtx", 10, 10)
+            .unwrap()
+            .into_iter()
+            .map(|l| (l.kind, l.results[0].measure))
+            .collect();
+        // 新しい順（同じ練習の中は後の周が先）。70% の周は入らない
+        assert_eq!(
+            got,
+            vec![
+                (SessionKind::Practice, 8),
+                (SessionKind::Practice, 7),
+                (SessionKind::Play, 1)
+            ]
+        );
+        // 練習は 1 周まで、プレイは別に数える
+        let got: Vec<SessionKind> = r
+            .recent_results("songs/a/master.dtx", 10, 1)
+            .unwrap()
+            .into_iter()
+            .map(|l| l.kind)
+            .collect();
+        assert_eq!(got, vec![SessionKind::Practice, SessionKind::Play]);
     }
 
     #[test]
@@ -542,7 +623,12 @@ mod tests {
         }
         let r = Records::open(&path).unwrap();
         assert_eq!(r.schema_version().unwrap(), MIGRATIONS.len());
-        assert_eq!(r.recent_results("songs/a/master.dtx", 10).unwrap().len(), 1);
+        assert_eq!(
+            r.recent_results("songs/a/master.dtx", 10, 10)
+                .unwrap()
+                .len(),
+            1
+        );
         drop(r);
         let _ = std::fs::remove_file(&path);
     }

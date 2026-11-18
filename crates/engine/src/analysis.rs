@@ -14,7 +14,7 @@ pub const WEAK_THRESHOLD: f64 = 0.25;
 /// 苦手フレーズ 1 つの長さの上限（小節）
 pub const MAX_PHRASE_MEASURES: usize = 4;
 
-/// 苦手度に使う記録の数（直近のプレイ）
+/// 苦手度に使う記録の数。小節ごとに、その小節を叩いた直近の周をこの数まで使う
 pub const HISTORY_PLAYS: usize = 10;
 
 /// 判定 1 つの点。苦手なほど大きい
@@ -34,26 +34,48 @@ pub struct NoteResult {
     pub judgement: Judgement,
 }
 
-/// 小節ごとの苦手度（0〜1）。`plays` は新しい順に並べる。
+/// 小節ごとの苦手度（0〜1）。`plays` は新しい順に並べた周（普通のプレイ 1 回、または練習の 1 周）。
+///
+/// 新しさは小節ごとに数える。練習の周は区間の小節しか叩かないので、ほかの小節の記録を古くしない。
+/// 小節ごとに、その小節を叩いた直近 [`HISTORY_PLAYS`] 周までを使う。
 /// 記録の無い小節（音符が無い、まだそこまで遊んでいない）は `None`
 pub fn measure_weakness(plays: &[Vec<NoteResult>], measures: usize) -> Vec<Option<f64>> {
     let mut sum = vec![0.0; measures];
     let mut weight = vec![0.0; measures];
-    let mut w = 1.0;
+    // 小節ごとの「その小節を叩いた、より新しい周の数」
+    let mut age = vec![0usize; measures];
+    let mut covered = vec![false; measures];
     for play in plays {
+        covered.fill(false);
         for r in play {
             let m = r.measure as usize;
-            if m < measures {
+            if m < measures && age[m] < HISTORY_PLAYS {
+                let w = RECENCY.powi(age[m] as i32);
                 sum[m] += w * weakness_points(r.judgement);
                 weight[m] += w;
+                covered[m] = true;
             }
         }
-        w *= RECENCY;
+        for (a, &c) in age.iter_mut().zip(&covered) {
+            if c {
+                *a += 1;
+            }
+        }
     }
     sum.iter()
         .zip(&weight)
         .map(|(&s, &w)| (w > 0.0).then(|| s / w))
         .collect()
+}
+
+/// 平均と標準偏差（標本、n − 1 で割る）。空なら両方 `None`、1 つなら標準偏差だけ `None`
+pub fn mean_and_sd(xs: &[f64]) -> (Option<f64>, Option<f64>) {
+    let n = xs.len();
+    let mean = (n > 0).then(|| xs.iter().sum::<f64>() / n as f64);
+    let sd = mean
+        .filter(|_| n > 1)
+        .map(|m| (xs.iter().map(|x| (x - m).powi(2)).sum::<f64>() / (n - 1) as f64).sqrt());
+    (mean, sd)
 }
 
 /// 苦手なフレーズ（続いた苦手な小節のまとまり）
@@ -171,6 +193,40 @@ mod tests {
         // 逆なら (1 × 1 + 0 × 0.8) / 1.8
         let w = measure_weakness(&[vec![r(0, Miss)], vec![r(0, Perfect)]], 1);
         assert!(close(w[0], 1.0 / 1.8));
+    }
+
+    #[test]
+    fn recency_is_counted_per_measure() {
+        // 最新は小節 1 だけの練習の周。小節 0 にとっては 1 回前のプレイが最新なので重み 1
+        let plays = vec![
+            vec![r(1, Perfect)],
+            vec![r(0, Miss), r(1, Miss)],
+            vec![r(0, Perfect), r(1, Perfect)],
+        ];
+        let w = measure_weakness(&plays, 2);
+        assert!(close(w[0], 1.0 / 1.8));
+        // 小節 1 は 3 周とも叩いている: (0 + 0.8 + 0) / (1 + 0.8 + 0.64)
+        assert!(close(w[1], 0.8 / 2.44));
+    }
+
+    #[test]
+    fn only_the_latest_plays_of_each_measure_count() {
+        // 小節 0 を PERFECT で 10 周叩いたら、それより古い MISS は数えない
+        let mut plays = vec![vec![r(0, Perfect)]; HISTORY_PLAYS];
+        plays.push(vec![r(0, Miss), r(1, Miss)]);
+        let w = measure_weakness(&plays, 2);
+        assert!(close(w[0], 0.0));
+        // 小節 1 にとっては唯一の記録
+        assert!(close(w[1], 1.0));
+    }
+
+    #[test]
+    fn mean_and_sd_of_offsets() {
+        assert_eq!(mean_and_sd(&[]), (None, None));
+        assert_eq!(mean_and_sd(&[4.0]), (Some(4.0), None));
+        let (m, sd) = mean_and_sd(&[1.0, 3.0]);
+        assert_eq!(m, Some(2.0));
+        assert!((sd.unwrap() - 2f64.sqrt()).abs() < 1e-12);
     }
 
     #[test]

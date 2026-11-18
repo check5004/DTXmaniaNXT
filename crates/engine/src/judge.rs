@@ -205,7 +205,8 @@ pub struct Tally {
 }
 
 impl Tally {
-    fn add(&mut self, j: Judgement) {
+    /// 判定を 1 つ数える（コンボも進める）
+    pub fn add(&mut self, j: Judgement) {
         match j {
             Judgement::Perfect => self.perfect += 1,
             Judgement::Great => self.great += 1,
@@ -236,9 +237,16 @@ pub struct Judge {
 }
 
 impl Judge {
-    /// `notes` は時刻順に並んでいること（`TempoMap::drum_notes` の結果）
+    /// `notes` は時刻順に並んでいること（`TempoMap::drum_notes` の結果）。
+    /// 叩き分けの寄せ方は、この音符にあわせて [`LaneGroups::effective_for`] で決める
     pub fn new(notes: Vec<DrumNote>, windows: HitWindows, groups: LaneGroups) -> Self {
         let groups = groups.effective_for(&notes);
+        Self::with_groups(notes, windows, groups)
+    }
+
+    /// 叩き分けの寄せ方を `groups` のまま使う。練習では曲全体の音符で決めた寄せ方を渡し、
+    /// 区間によって判定が変わらないようにする
+    pub fn with_groups(notes: Vec<DrumNote>, windows: HitWindows, groups: LaneGroups) -> Self {
         let done = vec![false; notes.len()];
         Self {
             notes,
@@ -252,6 +260,21 @@ impl Judge {
 
     pub fn notes(&self) -> &[DrumNote] {
         &self.notes
+    }
+
+    /// 後ろに音符を足す（練習の次の周）。`notes` は時刻順で、今ある最後の音符より前に来ないこと。
+    /// 足した音符の添字の範囲を返す
+    pub fn extend(&mut self, notes: impl IntoIterator<Item = DrumNote>) -> std::ops::Range<usize> {
+        let from = self.notes.len();
+        for n in notes {
+            debug_assert!(
+                self.notes.last().is_none_or(|last| last.ms <= n.ms),
+                "notes must be added in time order"
+            );
+            self.notes.push(n);
+            self.done.push(false);
+        }
+        from..self.notes.len()
     }
 
     pub fn is_done(&self, note: usize) -> bool {
@@ -485,6 +508,30 @@ mod tests {
         let g = LaneGroups::default().effective_for(&[note(0.0, HHO), note(0.0, RD)]);
         assert_eq!(g.hh, HhGroup::HiHatOnly);
         assert_eq!(g.cy, CyGroup::Separate);
+    }
+
+    #[test]
+    fn extended_notes_are_judged_like_the_first_ones() {
+        let mut j = judge(vec![note(1000.0, SD)]);
+        let added = j.extend(vec![note(2000.0, SD), note(2000.0, BD)]);
+        assert_eq!(added, 1..3);
+        assert_eq!(j.notes().len(), 3);
+        // 足した周の頭を少し早く叩いても、足した音符に当たる
+        let ev = j.hit(hit(1990.0, SD));
+        assert_eq!(ev[0].note, 1);
+        let ev = j.advance(2200.0);
+        assert_eq!(ev.iter().map(|e| e.note).collect::<Vec<_>>(), vec![0, 2]);
+    }
+
+    #[test]
+    fn groups_can_be_kept_as_given() {
+        // 区間に HHO が無くても、曲全体で決めた叩き分けのままにする
+        let j = Judge::with_groups(
+            vec![note(0.0, HH)],
+            HitWindows::default(),
+            LaneGroups::default(),
+        );
+        assert_eq!(j.groups().hh, HhGroup::Separate);
     }
 
     #[test]

@@ -158,6 +158,13 @@ impl SongList {
     }
 
     /// BOX なら入り、曲なら遊ぶ譜面を返す
+    /// 選んでいる曲の、今の難易度の譜面
+    pub fn selected_chart(&self) -> Option<PathBuf> {
+        let s = self.selected_song()?;
+        let level = self.level_for(s)?;
+        s.charts[level].as_ref().map(|c| c.path.clone())
+    }
+
     pub fn enter(&mut self) -> Option<PathBuf> {
         match self.selected()? {
             Node::Box(_) => {
