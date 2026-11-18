@@ -3,7 +3,9 @@
 //! - [`judge`] は叩いた時刻と音符の時刻を比べて判定する
 //! - [`clock`] は音の再生位置と MIDI の受信時刻を、同じ「曲の時刻」にそろえる
 //! - [`input`] は電子ドラムの MIDI を、レーンと叩き方にそろえる（Roland の既定値つき）
+//! - [`analysis`] は記録から苦手な小節とフレーズを出す
 
+pub mod analysis;
 pub mod clock;
 pub mod input;
 pub mod judge;

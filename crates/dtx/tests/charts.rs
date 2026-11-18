@@ -15,6 +15,18 @@ struct Expected {
 struct ExpectedNote {
     ms: f64,
     lane: String,
+    /// 小節の番号（省略できる）
+    measure: Option<u32>,
+    /// 小節の中の位置。約分した分数 `"1/4"`、頭は `"0"`（省略できる）
+    pos: Option<String>,
+}
+
+/// `"3/8"` や `"0"` を (分子, 分母) にする
+fn fraction(s: &str) -> (u32, u32) {
+    match s.split_once('/') {
+        Some((n, d)) => (n.trim().parse().unwrap(), d.trim().parse().unwrap()),
+        None => (s.trim().parse().unwrap(), 1),
+    }
 }
 
 fn charts_dir() -> PathBuf {
@@ -61,6 +73,14 @@ fn shared_test_charts() {
                 (g.0 - w.0).abs() < 0.01 && g.1 == w.1,
                 "{name}: note {i}: got {g:?}, want {w:?}"
             );
+        }
+        for (i, (n, w)) in notes.iter().zip(&expected.notes).enumerate() {
+            if let Some(m) = w.measure {
+                assert_eq!(n.at.measure, m, "{name}: note {i}: measure");
+            }
+            if let Some(pos) = &w.pos {
+                assert_eq!((n.at.num, n.at.den), fraction(pos), "{name}: note {i}: pos");
+            }
         }
         checked += 1;
     }

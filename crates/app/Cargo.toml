@@ -11,6 +11,7 @@ rust-version.workspace = true
 dtx = { path = "../dtx" }
 engine = { path = "../engine" }
 library = { path = "../library" }
+records = { path = "../records" }
 anyhow = "1"
 cpal = "0.18"
 egui = "0.37"

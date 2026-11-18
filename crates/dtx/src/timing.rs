@@ -29,6 +29,42 @@ pub struct DrumNote {
     pub lane: DrumLane,
     /// `#WAVzz` の番号
     pub wav: u16,
+    /// 譜面上の位置（小節と、小節の中の位置）。記録で音符を見分けるのに使う
+    pub at: NotePos,
+    /// 曲頭からの拍
+    pub beat: f64,
+}
+
+/// 譜面上の位置。小節 `measure` の `num / den`（約分済み、0 以上 1 未満）
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct NotePos {
+    pub measure: u32,
+    pub num: u32,
+    pub den: u32,
+}
+
+impl NotePos {
+    /// チップの位置を約分して持つ
+    pub fn of(chip: &Chip) -> Self {
+        Self::new(chip.measure, chip.pos, chip.div)
+    }
+
+    pub fn new(measure: u32, num: u32, den: u32) -> Self {
+        let den = den.max(1);
+        let g = gcd(num, den);
+        Self {
+            measure,
+            num: num / g,
+            den: den / g,
+        }
+    }
+}
+
+fn gcd(mut a: u32, mut b: u32) -> u32 {
+    while b != 0 {
+        (a, b) = (b, a % b);
+    }
+    a.max(1)
 }
 
 fn initial_bpm(chart: &Chart) -> f64 {
@@ -136,16 +172,37 @@ impl TempoMap {
         self.beat_to_ms(self.beat_of(chip))
     }
 
+    /// 小節の数（チップか小節長の変更がある最後の小節まで。小節 0 を含む）
+    pub fn measure_count(&self) -> usize {
+        self.bar_len.len()
+    }
+
+    /// 小節 `m` の頭の拍。最後の小節の次（`measure_count()`）を渡すと曲の終わりの拍
+    pub fn measure_start_beat(&self, m: usize) -> f64 {
+        let last = self.measure_start.len() - 1;
+        self.measure_start[m.min(last)]
+    }
+
+    /// 小節 `m` の頭の時刻（ミリ秒）
+    pub fn measure_start_ms(&self, m: usize) -> f64 {
+        self.beat_to_ms(self.measure_start_beat(m))
+    }
+
     /// 叩く音符を時刻順に並べる
     pub fn drum_notes(&self, chart: &Chart) -> Vec<DrumNote> {
         let mut notes: Vec<DrumNote> = chart
             .chips
             .iter()
             .filter_map(|c| {
-                DrumLane::from_channel(c.channel).map(|lane| DrumNote {
-                    ms: self.chip_ms(c),
-                    lane,
-                    wav: c.value,
+                DrumLane::from_channel(c.channel).map(|lane| {
+                    let beat = self.beat_of(c);
+                    DrumNote {
+                        ms: self.beat_to_ms(beat),
+                        lane,
+                        wav: c.value,
+                        at: NotePos::of(c),
+                        beat,
+                    }
                 })
             })
             .collect();
@@ -168,5 +225,22 @@ mod tests {
         // 小節 0 は BPM 60 で 4 拍 = 4000ms、小節 1 は BPM 120
         assert!((notes[0].ms - 4000.0).abs() < 1e-6);
         assert!((notes[1].ms - 5000.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn note_positions_are_reduced() {
+        // 小節 2 の 16 分割の 4 番目と 0 番目 = 1/4 と 0
+        let c = parse("#BPM 120\n#00211: 00000000010000000000000000000000\n#00212: 01\n");
+        let t = TempoMap::build(&c);
+        let notes = t.drum_notes(&c);
+        assert_eq!(notes[0].at, NotePos::new(2, 0, 1));
+        assert_eq!(notes[1].at, NotePos::new(2, 1, 4));
+        assert_eq!((notes[1].at.num, notes[1].at.den), (1, 4));
+        // 小節 2 の頭は 8 拍目、1/4 は 9 拍目
+        assert!((notes[1].beat - 9.0).abs() < 1e-9);
+        assert_eq!(t.measure_count(), 3);
+        assert!((t.measure_start_ms(2) - 4000.0).abs() < 1e-6);
+        // 最後の小節の次は曲の終わり
+        assert!((t.measure_start_ms(3) - 6000.0).abs() < 1e-6);
     }
 }

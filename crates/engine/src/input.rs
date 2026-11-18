@@ -102,6 +102,34 @@ pub enum Articulation {
     Bell,
 }
 
+impl Articulation {
+    pub const ALL: [Articulation; 6] = [
+        Self::Head,
+        Self::Rim,
+        Self::CrossStick,
+        Self::Bow,
+        Self::Edge,
+        Self::Bell,
+    ];
+
+    /// 記録に書く名前
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Head => "head",
+            Self::Rim => "rim",
+            Self::CrossStick => "cross_stick",
+            Self::Bow => "bow",
+            Self::Edge => "edge",
+            Self::Bell => "bell",
+        }
+    }
+
+    /// [`Articulation::name`] の逆
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|a| a.name() == name)
+    }
+}
+
 /// ハイハットの開閉の決め方
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum HiHatMode {

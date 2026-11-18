@@ -21,6 +21,8 @@ GitHub の [Actions](https://github.com/check5004/DTXmaniaNXT/actions) で、成
 
 設定（曲のフォルダ・補正値など）は `config.toml` に残ります（Windows は `%APPDATA%\DTXmaniaNXT`）。
 
+遊んだ記録は、音符 1 つごとの判定・ずれ・強さまで同じフォルダの `records.sqlite` に残ります。結果の画面には、直近 10 回の記録から出した「苦手な小節」の帯（赤いほど苦手）と、苦手なフレーズの上位 5 つが出ます。小節の番号は DTX の小節番号（`#xxxyy` の `xxx`）です。
+
 ### 自分でビルドする
 
 Rust（stable）を入れてから（Linux は `libasound2-dev` も）:
@@ -34,8 +36,9 @@ cargo test --all
 | 場所 | 中身 |
 | --- | --- |
 | `crates/dtx` | DTX の読み込み（文字コード判定、ヘッダ、チップ、BPM と小節長から時刻を計算） |
-| `crates/engine` | 判定、音と MIDI の時計、電子ドラムの入力の正規化 |
+| `crates/engine` | 判定、音と MIDI の時計、電子ドラムの入力の正規化、記録からの苦手の分析 |
 | `crates/library` | 曲のフォルダの探し方（set.def・box.def・DTXFiles.*） |
+| `crates/records` | 遊んだ記録（SQLite）の読み書き |
 | `crates/app` | アプリ本体（winit + wgpu + egui、cpal、midir） |
 | `testdata/charts` | テスト譜面と手計算の正解。DTX Web Editor と共有する予定 |
 

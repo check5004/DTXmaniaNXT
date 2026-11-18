@@ -71,6 +71,11 @@ impl DrumLane {
             Self::LBD => "LBD",
         }
     }
+
+    /// [`DrumLane::name`] の逆
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|l| l.name() == name)
+    }
 }
 
 #[cfg(test)]
@@ -84,5 +89,9 @@ mod tests {
         }
         assert_eq!(DrumLane::from_channel(0x1A), Some(DrumLane::LC));
         assert_eq!(DrumLane::from_channel(0x1D), None);
+        for lane in DrumLane::ALL {
+            assert_eq!(DrumLane::from_name(lane.name()), Some(lane));
+        }
+        assert_eq!(DrumLane::from_name("XX"), None);
     }
 }

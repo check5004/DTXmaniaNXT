@@ -13,7 +13,7 @@ pub use encoding::{DtxEncoding, decode};
 pub use lane::DrumLane;
 pub use number::{parse_base36x2, parse_hex2, parse_measure, parse_nx_number};
 pub use parse::{Chart, Chip, Warning, parse};
-pub use timing::{DrumNote, TempoMap};
+pub use timing::{DrumNote, NotePos, TempoMap};
 
 /// チャンネル番号（よく使うもの）
 pub mod ch {
