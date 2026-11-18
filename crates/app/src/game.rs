@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use dtx::{Chart, DrumLane, TempoMap};
 use engine::clock::MidiTimestampMapper;
 use engine::input::{Articulation, InputEvent, MidiMessage, MidiProfile, Normalizer, Pad};
-use engine::judge::{Hit, HitWindows, Judge, JudgeEvent, Judgement, LaneGroups};
+use engine::judge::{Hit, HitWindows, Judge, JudgeEvent, Judgement, LaneGroups, Tally};
 
 use crate::audio::{AudioOut, Sound, load_sound};
 use crate::midi::RawMidi;
@@ -35,10 +35,27 @@ pub struct LastInput {
     pub hh_pedal: Option<u8>,
 }
 
+/// 1 曲を遊び終えたときの成績
+#[derive(Debug, Clone)]
+pub struct Outcome {
+    pub path: PathBuf,
+    pub title: String,
+    pub artist: String,
+    pub level: Option<f64>,
+    pub notes: usize,
+    pub tally: Tally,
+    /// 叩けた音符のずれ（ミリ秒、マイナスは早い）の平均と標準偏差
+    pub offset_mean_ms: Option<f64>,
+    pub offset_sd_ms: Option<f64>,
+    /// 最後まで遊んだ（途中でやめたら false）
+    pub cleared: bool,
+}
+
 pub struct Play {
     pub path: PathBuf,
     pub title: String,
     pub artist: String,
+    pub level: Option<f64>,
     pub judge: Judge,
     pub audio: Option<AudioOut>,
     pub end_ms: f64,
@@ -49,6 +66,8 @@ pub struct Play {
     pub flashes: HashMap<DrumLane, Flash>,
     pub last_input: Option<LastInput>,
     pub hh_pedal: Option<u8>,
+    /// 叩けた音符のずれ（ミリ秒）
+    hit_offsets: Vec<f64>,
     sounds: HashMap<u16, Sound>,
     normalizer: Normalizer,
     mappers: HashMap<String, MidiTimestampMapper>,
@@ -57,7 +76,8 @@ pub struct Play {
 }
 
 impl Play {
-    pub fn load(path: &Path) -> Result<Self> {
+    /// 譜面を読んで始める。`input_offset_ms` と `drum_sounds` は設定から
+    pub fn load(path: &Path, input_offset_ms: f64, drum_sounds: bool) -> Result<Self> {
         let bytes = std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
         let chart = dtx::load(&bytes);
         for w in &chart.warnings {
@@ -102,14 +122,16 @@ impl Play {
             path: path.to_owned(),
             title: chart.title().to_owned(),
             artist: chart.artist().to_owned(),
+            level: chart.drum_level(),
             judge: Judge::new(notes, HitWindows::default(), LaneGroups::default()),
             audio,
             end_ms,
-            input_offset_ms: 0.0,
-            drum_sounds: true,
+            input_offset_ms,
+            drum_sounds,
             flashes: HashMap::new(),
             last_input: None,
             hh_pedal: None,
+            hit_offsets: Vec::new(),
             sounds,
             normalizer: Normalizer::new(MidiProfile::roland_vdrums()),
             mappers: HashMap::new(),
@@ -211,8 +233,37 @@ impl Play {
             .map(|n| n.wav)
     }
 
+    /// 今までの成績
+    pub fn outcome(&self) -> Outcome {
+        let n = self.hit_offsets.len();
+        let mean = (n > 0).then(|| self.hit_offsets.iter().sum::<f64>() / n as f64);
+        let sd = mean.filter(|_| n > 1).map(|m| {
+            (self
+                .hit_offsets
+                .iter()
+                .map(|o| (o - m).powi(2))
+                .sum::<f64>()
+                / (n - 1) as f64)
+                .sqrt()
+        });
+        Outcome {
+            path: self.path.clone(),
+            title: self.title.clone(),
+            artist: self.artist.clone(),
+            level: self.level,
+            notes: self.judge.notes().len(),
+            tally: self.judge.tally().clone(),
+            offset_mean_ms: mean,
+            offset_sd_ms: sd,
+            cleared: self.finished(),
+        }
+    }
+
     fn show(&mut self, events: &[JudgeEvent], song_ms: f64) {
         for e in events {
+            if let Some(o) = e.offset_ms {
+                self.hit_offsets.push(o);
+            }
             let lane = self.judge.notes()[e.note].lane;
             self.flashes.insert(
                 lane,
