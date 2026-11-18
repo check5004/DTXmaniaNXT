@@ -107,7 +107,15 @@ fn builds_the_same_tree_as_upstream() {
     let easy = s2.charts[0].as_ref().unwrap();
     assert_eq!(easy.label, "BASIC");
     assert_eq!(easy.head.bpm, Some(140.0));
-    assert!(easy.path.ends_with("easy.dtx"));
+    // 大文字・小文字を見ないファイルシステム（Windows・macOS）では set.def の綴りのまま見つかる
+    let name = easy
+        .path
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .to_lowercase();
+    assert_eq!(name, "easy.dtx");
+    assert!(easy.path.is_file());
 
     let Node::Box(boxed) = &lib.nodes[2] else {
         panic!("not a box")
