@@ -19,6 +19,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use dtx::DrumLane;
+use engine::input::{InputEvent, MidiMessage, MidiProfile, Normalizer};
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
@@ -187,7 +188,14 @@ struct App {
     message: Option<String>,
     /// 次の描画で、選んでいる行が見えるように一覧を動かす
     scroll_to_cursor: bool,
+    /// 選曲や結果の画面で、電子ドラムで操作するための入力
+    menu_input: Normalizer,
+    /// 選曲の画面で最後に HH を叩いた時刻（2 回で難易度を変える）
+    last_hh_us: Option<i64>,
 }
+
+/// 2 回叩きと見なす間（上流と同じ 0.5 秒）
+const DOUBLE_HIT_US: i64 = 500_000;
 
 impl App {
     fn new(arg: Option<PathBuf>) -> Self {
@@ -226,6 +234,8 @@ impl App {
             pending,
             message: None,
             scroll_to_cursor: true,
+            menu_input: Normalizer::new(MidiProfile::roland_vdrums()),
+            last_hh_us: None,
         }
     }
 
@@ -268,7 +278,26 @@ impl App {
                     play.on_midi(raw);
                 }
             }
-            (Some(midi), _) => midi.drain().for_each(drop),
+            (Some(midi), _) => {
+                let input = &mut self.menu_input;
+                let hits: Vec<(DrumLane, i64)> = midi
+                    .drain()
+                    .filter_map(|raw| {
+                        let msg = MidiMessage::parse(&raw.bytes)?;
+                        match input.feed(msg, raw.arrival_us)? {
+                            InputEvent::Hit {
+                                lane: Some(lane),
+                                host_us,
+                                ..
+                            } => Some((lane, host_us)),
+                            _ => None,
+                        }
+                    })
+                    .collect();
+                for (lane, at) in hits {
+                    self.on_menu_pad(lane, at);
+                }
+            }
             _ => {}
         }
         if let Screen::Play(play) = &mut self.screen {
@@ -385,6 +414,42 @@ impl App {
             KeyCode::ArrowRight => self.change_level(1),
             KeyCode::F5 => self.select_action(ui::SelectAction::Rescan),
             _ => {}
+        }
+    }
+
+    /// 選曲と結果の画面での電子ドラムの操作（上流と同じ割り当て）。
+    /// HT で上、LT で下、CY か RD で決定、LC で戻る、HH を 2 回で難易度
+    fn on_menu_pad(&mut self, lane: DrumLane, at_us: i64) {
+        match &self.screen {
+            Screen::Select => match lane {
+                DrumLane::HT => {
+                    self.songs.move_by(-1);
+                    self.scroll_to_cursor = true;
+                }
+                DrumLane::LT => {
+                    self.songs.move_by(1);
+                    self.scroll_to_cursor = true;
+                }
+                DrumLane::CY | DrumLane::RD => self.select_action(ui::SelectAction::Enter),
+                // 一番上で LC を叩いてもアプリは終わらない
+                DrumLane::LC => self.select_action(ui::SelectAction::Back),
+                DrumLane::HH | DrumLane::HHO => {
+                    if self.last_hh_us.is_some_and(|t| at_us - t <= DOUBLE_HIT_US) {
+                        self.last_hh_us = None;
+                        self.songs.cycle_level();
+                        self.remember_level();
+                    } else {
+                        self.last_hh_us = Some(at_us);
+                    }
+                }
+                _ => {}
+            },
+            Screen::Result(_) => {
+                if matches!(lane, DrumLane::CY | DrumLane::RD | DrumLane::LC) {
+                    self.screen = Screen::Select;
+                }
+            }
+            Screen::Play(_) => {}
         }
     }
 

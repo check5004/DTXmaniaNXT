@@ -140,6 +140,7 @@ pub fn draw_select(
                 config.input_offset_ms, config.visual_offset_ms, config.scroll_px_per_ms
             ));
             ui.label("↑↓ で選ぶ、Enter で決定、←→ で難易度、Backspace で BOX を出る、Esc で終わる");
+            ui.label("ドラム: HT / LT で選ぶ、CY か RD で決定、LC で戻る、HH を 2 回で難易度");
         });
 
     egui::CentralPanel::default().show(ui, |ui| {
@@ -359,7 +360,10 @@ pub fn draw_result(ui: &mut egui::Ui, o: &Outcome, config: &Config) -> Vec<Resul
                 }
             }
             ui.add_space(24.0);
-            if ui.button("選曲に戻る（Enter）").clicked() {
+            if ui
+                .button("選曲に戻る（Enter、ドラムは CY か RD）")
+                .clicked()
+            {
                 actions.push(ResultAction::Back);
             }
             if ui.button("もう一度（R）").clicked() {

@@ -183,6 +183,23 @@ impl SongList {
         }
     }
 
+    /// 難易度をひとつ上へ。いちばん上の次はいちばん下に戻る（上流の HH 2 回と同じ）
+    pub fn cycle_level(&mut self) {
+        let Some(song) = self.selected_song() else {
+            return;
+        };
+        let Some(mut level) = self.level_for(song) else {
+            return;
+        };
+        for _ in 0..LEVELS {
+            level = (level + 1) % LEVELS;
+            if song.charts[level].is_some() {
+                break;
+            }
+        }
+        self.level = level;
+    }
+
     /// 難易度を変える（選んでいる曲にある難易度だけをたどる）
     pub fn change_level(&mut self, delta: isize) {
         let Some(song) = self.selected_song() else {
@@ -251,6 +268,17 @@ mod tests {
         assert!(l.back());
         assert_eq!(l.cursor, 0);
         assert!(!l.back());
+    }
+
+    #[test]
+    fn cycle_level_wraps_to_the_easiest() {
+        let mut l = list();
+        l.enter();
+        // a は 0 と 3。いまは 3 扱い
+        l.cycle_level();
+        assert_eq!(l.level, 0);
+        l.cycle_level();
+        assert_eq!(l.level, 3);
     }
 
     #[test]
