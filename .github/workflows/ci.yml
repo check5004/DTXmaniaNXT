@@ -1,4 +1,3 @@
-# このファイルを .github/workflows/ci.yml に置くと CI が動きます（Claude からはワークフローを置けないため、ここに置いています）。
 name: CI
 
 on:
@@ -23,6 +22,31 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+      # cpal（音声）と midir（MIDI）は Linux では ALSA を使う
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
       - run: cargo fmt --all --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test --all
+
+  # 実機で試せる実行ファイルを作る（Actions の実行結果の Artifacts からダウンロードできる）
+  package:
+    name: package-${{ matrix.os }}
+    needs: check
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release -p dtxmanianxt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dtxmanianxt-${{ runner.os }}
+          path: |
+            target/release/dtxmanianxt.exe
+            target/release/dtxmanianxt
+          if-no-files-found: error

@@ -88,7 +88,8 @@ impl MidiTimestampMapper {
     /// 1 つ受信するごとに呼び、叩いた瞬間のホスト時刻の見積もりを返す。
     /// デバイスが時刻を持たない（`None`）なら、届いた時刻をそのまま使う
     pub fn map(&mut self, device_us: Option<i64>, arrival_host_us: i64) -> i64 {
-        let Some(dev) = device_us else {
+        // 時刻 0 は「デバイスが時刻を持たない」とみなす（midir はそう返すバックエンドがある）
+        let Some(dev) = device_us.filter(|&d| d > 0) else {
             return arrival_host_us;
         };
         // デバイスの時計が戻った（ポートを開き直したなど）ら、覚えたことを捨てる
@@ -110,9 +111,19 @@ impl MidiTimestampMapper {
             self.mins.pop_front();
         }
         let min_offset = self.mins.front().map_or(offset, |&(_, o)| o);
-        dev + min_offset
+        let mapped = dev + min_offset;
+        // 直しが大きすぎるのはデバイスの時計がおかしいとき（止まっている、跳んだ）。届いた時刻に戻す
+        if arrival_host_us - mapped > MAX_CORRECTION_US {
+            self.mins.clear();
+            self.mins.push_back((dev, offset));
+            return arrival_host_us;
+        }
+        mapped
     }
 }
+
+/// MIDI の配送の遅れとして直してよい最大（これを超えたらデバイスの時計を信じない）
+const MAX_CORRECTION_US: i64 = 50_000;
 
 #[cfg(test)]
 mod tests {
@@ -155,12 +166,21 @@ mod tests {
     fn midi_mapper_without_device_time() {
         let mut m = MidiTimestampMapper::default();
         assert_eq!(m.map(None, 123), 123);
+        assert_eq!(m.map(Some(0), 456), 456);
+    }
+
+    #[test]
+    fn midi_mapper_distrusts_a_stuck_device_clock() {
+        let mut m = MidiTimestampMapper::default();
+        m.map(Some(1000), 1_000_000);
+        // デバイスの時計が進まないまま 1 秒後に届いた。直すと 1 秒も早まるので、届いた時刻を使う
+        assert_eq!(m.map(Some(1000), 2_000_000), 2_000_000);
     }
 
     #[test]
     fn midi_mapper_forgets_old_minimums_and_resets() {
         let mut m = MidiTimestampMapper::new(1_000_000);
-        m.map(Some(0), 1_000_000); // 時差 1_000_000
+        m.map(Some(1), 1_000_001); // 時差 1_000_000
         // 2 秒後には古い最小値は窓の外。時差 1_000_300 が新しい基準
         assert_eq!(m.map(Some(2_000_000), 3_000_300), 3_000_300);
         // デバイスの時計が戻ったら、覚えたことを捨てる
