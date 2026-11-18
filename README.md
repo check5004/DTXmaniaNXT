@@ -8,6 +8,21 @@ DTX 形式の譜面で遊べる、ドラムのゲーム兼練習アプリです�
 
 譜面づくりは [DTX Web Editor](https://github.com/check5004/dtx-mania-web-editor) で行い、本体とは DTX 形式とテスト譜面で互換を保ちます。
 
+## 動かし方（開発中）
+
+Rust（stable）を入れてから:
+
+```sh
+cargo run -p dtxmanianxt -- path/to/song.dtx   # ウィンドウを開き、譜面を読んだ結果をログに出す
+cargo test --all
+```
+
+| 場所 | 中身 |
+| --- | --- |
+| `crates/dtx` | DTX の読み込み（文字コード判定、ヘッダ、チップ、BPM と小節長から時刻を計算） |
+| `crates/app` | アプリ本体（winit + wgpu） |
+| `testdata/charts` | テスト譜面と手計算の正解。DTX Web Editor と共有する予定 |
+
 ## 上流について
 
 このリポジトリは [limyz/DTXmaniaNX](https://github.com/limyz/DTXmaniaNX) のフォークです。
