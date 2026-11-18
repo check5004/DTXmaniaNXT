@@ -3,27 +3,39 @@
   "notes": [
     {
       "ms": 4000,
-      "lane": "BD"
+      "lane": "BD",
+      "measure": 2,
+      "pos": "0"
     },
     {
       "ms": 4250,
-      "lane": "BD"
+      "lane": "BD",
+      "measure": 2,
+      "pos": "1/4"
     },
     {
       "ms": 4500,
-      "lane": "BD"
+      "lane": "BD",
+      "measure": 2,
+      "pos": "1/2"
     },
     {
       "ms": 4750,
-      "lane": "BD"
+      "lane": "BD",
+      "measure": 2,
+      "pos": "3/4"
     },
     {
       "ms": 5000,
-      "lane": "BD"
+      "lane": "BD",
+      "measure": 3,
+      "pos": "0"
     },
     {
       "ms": 7000,
-      "lane": "BD"
+      "lane": "BD",
+      "measure": 3,
+      "pos": "1/2"
     }
   ]
 }

@@ -1,0 +1,16 @@
+[package]
+name = "records"
+description = "Play and practice records (SQLite) for DTXmaniaNXT"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+dtx = { path = "../dtx" }
+engine = { path = "../engine" }
+rusqlite = { version = "0.43", features = ["bundled"] }
+
+[lints]
+workspace = true

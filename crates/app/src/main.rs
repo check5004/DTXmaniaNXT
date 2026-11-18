@@ -9,6 +9,7 @@ mod audio;
 mod config;
 mod fonts;
 mod game;
+mod history;
 mod midi;
 mod songs;
 mod time;
@@ -28,6 +29,7 @@ use winit::window::{Window, WindowId};
 
 use crate::config::Config;
 use crate::game::{Outcome, Play};
+use crate::history::History;
 use crate::midi::MidiIn;
 use crate::songs::SongList;
 use crate::time::host_us;
@@ -183,6 +185,8 @@ struct App {
     screen: Screen,
     songs: SongList,
     config: Config,
+    /// プレイの記録
+    history: History,
     /// 起動の引数で渡された譜面（ウィンドウができてから始める）
     pending: Option<PathBuf>,
     message: Option<String>,
@@ -231,6 +235,7 @@ impl App {
             screen: Screen::Select,
             songs,
             config,
+            history: History::open(),
             pending,
             message: None,
             scroll_to_cursor: true,
@@ -240,6 +245,8 @@ impl App {
     }
 
     fn start(&mut self, path: PathBuf) {
+        // やり直しなどで途中の曲を捨てるときも、そこまでの記録は残す
+        self.save_unfinished();
         // 前の曲の音を止めてから読む
         self.screen = Screen::Select;
         match Play::load(&path, self.config.input_offset_ms, self.config.drum_sounds) {
@@ -257,8 +264,17 @@ impl App {
     /// 曲を終える。結果の画面へ
     fn finish_play(&mut self) {
         if let Screen::Play(p) = &self.screen {
-            let outcome = p.outcome();
+            self.history.save(p);
+            let mut outcome = p.outcome();
+            outcome.weak = Some(self.history.weak_map(&outcome));
             self.screen = Screen::Result(Box::new(outcome));
+        }
+    }
+
+    /// 遊んでいる途中の曲があれば、そこまでの記録を残す
+    fn save_unfinished(&mut self) {
+        if let Screen::Play(p) = &self.screen {
+            self.history.save(p);
         }
     }
 
@@ -635,7 +651,10 @@ impl ApplicationHandler for App {
             let _ = state.on_window_event(window, &event);
         }
         match event {
-            WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::CloseRequested => {
+                self.save_unfinished();
+                event_loop.exit();
+            }
             WindowEvent::Resized(size) => {
                 if let Some(gpu) = &mut self.gpu {
                     gpu.resize(size.width, size.height);

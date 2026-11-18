@@ -5,9 +5,11 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use dtx::{Chart, DrumLane, TempoMap};
+use engine::analysis::{NoteResult, WeakPhrase};
 use engine::clock::MidiTimestampMapper;
 use engine::input::{Articulation, InputEvent, MidiMessage, MidiProfile, Normalizer, Pad};
 use engine::judge::{Hit, HitWindows, Judge, JudgeEvent, Judgement, LaneGroups, Tally};
+use records::{Lap, NoteHit, Session, SessionKind, StrayHit};
 
 use crate::audio::{AudioOut, Sound, load_sound};
 use crate::midi::RawMidi;
@@ -49,6 +51,23 @@ pub struct Outcome {
     pub offset_sd_ms: Option<f64>,
     /// 最後まで遊んだ（途中でやめたら false）
     pub cleared: bool,
+    /// 譜面の小節の数と、小節ごとの音符の数
+    pub measures: usize,
+    pub notes_per_measure: Vec<usize>,
+    /// 今回の、音符ごとの判定（苦手の帯に使う。記録が読めないときもこれで出す）
+    pub results: Vec<NoteResult>,
+    /// 苦手な小節（記録を読んでから入れる）
+    pub weak: Option<WeakMap>,
+}
+
+/// 苦手な小節の地図（結果の画面に出す）
+#[derive(Debug, Clone)]
+pub struct WeakMap {
+    /// 小節ごとの苦手度（0〜1）。記録の無い小節は None
+    pub weakness: Vec<Option<f64>>,
+    pub phrases: Vec<WeakPhrase>,
+    /// 何回ぶんの記録から出したか
+    pub plays: usize,
 }
 
 pub struct Play {
@@ -68,6 +87,14 @@ pub struct Play {
     pub hh_pedal: Option<u8>,
     /// 叩けた音符のずれ（ミリ秒）
     hit_offsets: Vec<f64>,
+    /// 譜面のファイルの中身のハッシュ（記録で譜面を見分ける）
+    pub chart_hash: u64,
+    /// 始めた時刻（UNIX 秒）
+    pub started_at: i64,
+    measures: usize,
+    /// 音符ごとの結果（判定したものだけ埋まる）
+    note_hits: Vec<Option<NoteHit>>,
+    strays: Vec<StrayHit>,
     sounds: HashMap<u16, Sound>,
     normalizer: Normalizer,
     mappers: HashMap<String, MidiTimestampMapper>,
@@ -85,6 +112,7 @@ impl Play {
         }
         let tempo = TempoMap::build(&chart);
         let notes = tempo.drum_notes(&chart);
+        let note_count = notes.len();
         let end_ms = chart
             .chips
             .iter()
@@ -132,6 +160,11 @@ impl Play {
             last_input: None,
             hh_pedal: None,
             hit_offsets: Vec::new(),
+            chart_hash: records::hash_bytes(&bytes),
+            started_at: unix_now(),
+            measures: tempo.measure_count(),
+            note_hits: vec![None; note_count],
+            strays: Vec::new(),
             sounds,
             normalizer: Normalizer::new(MidiProfile::roland_vdrums()),
             mappers: HashMap::new(),
@@ -159,6 +192,7 @@ impl Play {
     pub fn update(&mut self) {
         let now = self.now_ms();
         let misses = self.judge.advance(now);
+        self.record(&misses, None, None);
         self.show(&misses, now);
     }
 
@@ -186,7 +220,7 @@ impl Play {
                     hh_pedal,
                 });
                 if let Some(lane) = lane {
-                    self.hit(lane, velocity, host_us);
+                    self.hit(lane, velocity, host_us, Some(articulation), hh_pedal);
                 }
             }
             Some(InputEvent::HiHatPedal { value, .. }) => self.hh_pedal = Some(value),
@@ -204,12 +238,29 @@ impl Play {
             velocity: 100,
             hh_pedal: None,
         });
-        self.hit(lane, 100, at_us);
+        self.hit(lane, 100, at_us, None, None);
     }
 
-    fn hit(&mut self, lane: DrumLane, velocity: u8, at_us: i64) {
+    fn hit(
+        &mut self,
+        lane: DrumLane,
+        velocity: u8,
+        at_us: i64,
+        articulation: Option<Articulation>,
+        hh_pedal: Option<u8>,
+    ) {
         let ms = self.song_ms_at(at_us) - self.input_offset_ms;
         let events = self.judge.hit(Hit { ms, lane, velocity });
+        if events.is_empty() {
+            self.strays.push(StrayHit {
+                at_ms: ms,
+                lane,
+                velocity,
+                articulation,
+                hh_pedal,
+            });
+        }
+        self.record(&events, articulation, hh_pedal);
         if self.drum_sounds {
             // 取った音符の音を鳴らす。空打ちなら、そのレーンの一番近い音符の音
             let wav = events
@@ -256,7 +307,80 @@ impl Play {
             offset_mean_ms: mean,
             offset_sd_ms: sd,
             cleared: self.finished(),
+            measures: self.measures,
+            notes_per_measure: self.notes_per_measure(),
+            results: self
+                .note_hits
+                .iter()
+                .flatten()
+                .map(|h| NoteResult {
+                    measure: h.at.measure,
+                    judgement: h.judgement,
+                })
+                .collect(),
+            weak: None,
         }
+    }
+
+    fn notes_per_measure(&self) -> Vec<usize> {
+        let mut n = vec![0; self.measures];
+        for note in self.judge.notes() {
+            if let Some(c) = n.get_mut(note.at.measure as usize) {
+                *c += 1;
+            }
+        }
+        n
+    }
+
+    /// 判定の結果を音符ごとの記録に書く
+    fn record(
+        &mut self,
+        events: &[JudgeEvent],
+        articulation: Option<Articulation>,
+        hh_pedal: Option<u8>,
+    ) {
+        for e in events {
+            let note = &self.judge.notes()[e.note];
+            self.note_hits[e.note] = Some(NoteHit {
+                at: note.at,
+                lane: note.lane,
+                judgement: e.judgement,
+                offset_ms: e.offset_ms,
+                velocity: e.velocity,
+                articulation,
+                hh_pedal,
+            });
+        }
+    }
+
+    /// 記録に残す形にする。何も叩かず何も過ぎていなければ None（すぐやめたときは残さない）
+    pub fn session(&self) -> Option<Session> {
+        let hits: Vec<NoteHit> = self.note_hits.iter().flatten().cloned().collect();
+        if hits.is_empty() && self.strays.is_empty() {
+            return None;
+        }
+        let o = self.outcome();
+        let w = self.judge.windows();
+        // 設定は JSON で残す（数は有限なので Display のままで JSON の数になる）
+        let settings = format!(
+            "{{\"input_offset_ms\":{},\"windows_ms\":[{},{},{},{}],\"drum_sounds\":{}}}",
+            self.input_offset_ms, w.perfect, w.great, w.good, w.poor, self.drum_sounds
+        );
+        Some(Session {
+            kind: SessionKind::Play,
+            started_at: self.started_at,
+            settings,
+            laps: vec![Lap {
+                speed: 1.0,
+                completed: o.cleared,
+                passed: None,
+                tally: o.tally,
+                offset_mean_ms: o.offset_mean_ms,
+                offset_sd_ms: o.offset_sd_ms,
+                hits,
+                strays: self.strays.clone(),
+            }],
+        })
     }
 
     fn show(&mut self, events: &[JudgeEvent], song_ms: f64) {
@@ -275,6 +399,13 @@ impl Play {
             );
         }
     }
+}
+
+/// 今の UNIX 秒
+fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64)
 }
 
 /// 譜面が使う音をすべて読む。読めない音は飛ばす

@@ -48,6 +48,32 @@ pub enum Judgement {
     Miss,
 }
 
+impl Judgement {
+    pub const ALL: [Judgement; 5] = [
+        Self::Perfect,
+        Self::Great,
+        Self::Good,
+        Self::Poor,
+        Self::Miss,
+    ];
+
+    /// 記録に書く名前
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Perfect => "PERFECT",
+            Self::Great => "GREAT",
+            Self::Good => "GOOD",
+            Self::Poor => "POOR",
+            Self::Miss => "MISS",
+        }
+    }
+
+    /// [`Judgement::name`] の逆
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|j| j.name() == name)
+    }
+}
+
 /// ハイハット・左シンバルのまとめ方
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum HhGroup {
@@ -328,7 +354,13 @@ mod tests {
     use DrumLane::*;
 
     fn note(ms: f64, lane: DrumLane) -> DrumNote {
-        DrumNote { ms, lane, wav: 1 }
+        DrumNote {
+            ms,
+            lane,
+            wav: 1,
+            at: dtx::NotePos::new(0, 0, 1),
+            beat: 0.0,
+        }
     }
 
     fn hit(ms: f64, lane: DrumLane) -> Hit {
@@ -341,6 +373,14 @@ mod tests {
 
     fn judge(notes: Vec<DrumNote>) -> Judge {
         Judge::new(notes, HitWindows::default(), LaneGroups::default())
+    }
+
+    #[test]
+    fn judgement_names_round_trip() {
+        for j in Judgement::ALL {
+            assert_eq!(Judgement::from_name(j.name()), Some(j));
+        }
+        assert_eq!(Judgement::from_name("perfect"), None);
     }
 
     #[test]

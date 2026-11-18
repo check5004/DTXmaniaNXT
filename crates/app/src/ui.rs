@@ -4,12 +4,12 @@
 use std::path::PathBuf;
 
 use dtx::DrumLane;
-use egui::{Align, Align2, Color32, FontId, Pos2, Rect, RichText, Stroke, StrokeKind, Vec2};
+use egui::{Align, Align2, Color32, FontId, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, Vec2};
 use engine::judge::Judgement;
 use library::{LEVELS, Node};
 
 use crate::config::Config;
-use crate::game::{Outcome, Play};
+use crate::game::{Outcome, Play, WeakMap};
 use crate::songs::SongList;
 
 /// 左から並べるレーン（HHO は HH、LBD は LP の列に描く）
@@ -359,6 +359,10 @@ pub fn draw_result(ui: &mut egui::Ui, o: &Outcome, config: &Config) -> Vec<Resul
                     }
                 }
             }
+            if let Some(w) = &o.weak {
+                ui.add_space(24.0);
+                draw_weak_map(ui, w);
+            }
             ui.add_space(24.0);
             if ui
                 .button("選曲に戻る（Enter、ドラムは CY か RD）")
@@ -585,4 +589,121 @@ pub fn draw_play(ui: &mut egui::Ui, play: &Play, config: &Config, midi_ports: &[
 /// 無いときは「-」と出す
 fn opt<T: std::fmt::Debug>(v: Option<T>) -> String {
     v.map_or_else(|| "-".to_owned(), |v| format!("{v:?}"))
+}
+
+/// 苦手な小節の帯の幅の上限
+const WEAK_BAND_MAX_WIDTH: f32 = 720.0;
+
+/// 苦手な小節の帯と、苦手フレーズの一覧。帯は曲の小節を左から並べ、苦手なほど赤い
+fn draw_weak_map(ui: &mut egui::Ui, w: &WeakMap) {
+    let n = w.weakness.len();
+    if n == 0 {
+        return;
+    }
+    let from = if w.plays <= 1 {
+        "今回のプレイから".to_owned()
+    } else {
+        format!("直近 {} 回の記録から", w.plays)
+    };
+    ui.label(RichText::new(format!("苦手な小節（{from}）")).size(18.0));
+    let width = ui.available_width().min(WEAK_BAND_MAX_WIDTH);
+    let band_h = 28.0;
+    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, band_h + 18.0), Sense::hover());
+    let band = Rect::from_min_size(rect.min, Vec2::new(width, band_h));
+    let cell = width / n as f32;
+    let gap = if cell >= 4.0 { 1.0 } else { 0.0 };
+    let x_of = |m: usize| band.left() + cell * m as f32;
+    let painter = ui.painter();
+    for (m, v) in w.weakness.iter().enumerate() {
+        let r = Rect::from_min_max(
+            Pos2::new(x_of(m), band.top()),
+            Pos2::new(x_of(m + 1) - gap, band.bottom()),
+        );
+        painter.rect_filled(r, 0.0, weakness_color(*v));
+    }
+    // 苦手フレーズを枠で囲む
+    for p in &w.phrases {
+        let r = Rect::from_min_max(
+            Pos2::new(x_of(p.first as usize), band.top()),
+            Pos2::new(x_of(p.last as usize + 1) - gap, band.bottom()),
+        );
+        painter.rect_stroke(
+            r,
+            0.0,
+            Stroke::new(2.0, Color32::WHITE),
+            StrokeKind::Outside,
+        );
+    }
+    // 小節の番号（DTX の小節番号）。文字が重ならない間隔で
+    let step = [1, 2, 4, 8, 16, 32, 64, 128]
+        .into_iter()
+        .find(|&s| cell * s as f32 >= 36.0)
+        .unwrap_or(256);
+    for m in (0..n).step_by(step) {
+        painter.text(
+            Pos2::new(x_of(m), band.bottom() + 3.0),
+            Align2::LEFT_TOP,
+            m.to_string(),
+            FontId::proportional(11.0),
+            Color32::GRAY,
+        );
+    }
+    if let Some(pos) = response.hover_pos() {
+        let m = ((pos.x - band.left()) / cell).floor();
+        if m >= 0.0 && (m as usize) < n {
+            let m = m as usize;
+            let text = match w.weakness[m] {
+                Some(v) => format!("小節 {m}: 苦手度 {v:.2}"),
+                None => format!("小節 {m}: 記録なし"),
+            };
+            response.on_hover_text_at_pointer(text);
+        }
+    }
+    if w.phrases.is_empty() {
+        ui.label("苦手な小節は見つかりませんでした。");
+        return;
+    }
+    for p in &w.phrases {
+        let range = if p.first == p.last {
+            format!("小節 {}", p.first)
+        } else {
+            format!("小節 {}〜{}", p.first, p.last)
+        };
+        ui.label(format!(
+            "{range}　苦手度 {:.2}（音符 {}）",
+            p.weakness, p.notes
+        ));
+    }
+}
+
+/// 苦手度の色。0 は緑、0.25 で黄、0.6 以上は赤。記録の無い小節は暗い灰色
+fn weakness_color(v: Option<f64>) -> Color32 {
+    const GREEN: [f32; 3] = [70.0, 160.0, 100.0];
+    const YELLOW: [f32; 3] = [230.0, 200.0, 70.0];
+    const RED: [f32; 3] = [235.0, 75.0, 65.0];
+    let Some(v) = v else {
+        return Color32::from_gray(48);
+    };
+    let v = v.clamp(0.0, 1.0) as f32;
+    let (a, b, t) = if v < 0.25 {
+        (GREEN, YELLOW, v / 0.25)
+    } else {
+        (YELLOW, RED, ((v - 0.25) / 0.35).min(1.0))
+    };
+    let mix = |i: usize| (a[i] + (b[i] - a[i]) * t).round() as u8;
+    Color32::from_rgb(mix(0), mix(1), mix(2))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn weakness_colors() {
+        assert_eq!(weakness_color(None), Color32::from_gray(48));
+        assert_eq!(weakness_color(Some(0.0)), Color32::from_rgb(70, 160, 100));
+        assert_eq!(weakness_color(Some(0.25)), Color32::from_rgb(230, 200, 70));
+        assert_eq!(weakness_color(Some(0.6)), Color32::from_rgb(235, 75, 65));
+        assert_eq!(weakness_color(Some(1.0)), Color32::from_rgb(235, 75, 65));
+    }
 }

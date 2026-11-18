@@ -3,51 +3,75 @@
   "notes": [
     {
       "ms": 2000,
-      "lane": "HH"
+      "lane": "HH",
+      "measure": 1,
+      "pos": "0"
     },
     {
       "ms": 2000,
-      "lane": "BD"
+      "lane": "BD",
+      "measure": 1,
+      "pos": "0"
     },
     {
       "ms": 2250,
-      "lane": "HH"
+      "lane": "HH",
+      "measure": 1,
+      "pos": "1/8"
     },
     {
       "ms": 2500,
-      "lane": "HH"
+      "lane": "HH",
+      "measure": 1,
+      "pos": "1/4"
     },
     {
       "ms": 2500,
-      "lane": "SD"
+      "lane": "SD",
+      "measure": 1,
+      "pos": "1/4"
     },
     {
       "ms": 2750,
-      "lane": "HH"
+      "lane": "HH",
+      "measure": 1,
+      "pos": "3/8"
     },
     {
       "ms": 3000,
-      "lane": "HH"
+      "lane": "HH",
+      "measure": 1,
+      "pos": "1/2"
     },
     {
       "ms": 3000,
-      "lane": "BD"
+      "lane": "BD",
+      "measure": 1,
+      "pos": "1/2"
     },
     {
       "ms": 3250,
-      "lane": "HH"
+      "lane": "HH",
+      "measure": 1,
+      "pos": "5/8"
     },
     {
       "ms": 3500,
-      "lane": "HH"
+      "lane": "HH",
+      "measure": 1,
+      "pos": "3/4"
     },
     {
       "ms": 3500,
-      "lane": "SD"
+      "lane": "SD",
+      "measure": 1,
+      "pos": "3/4"
     },
     {
       "ms": 3750,
-      "lane": "HH"
+      "lane": "HH",
+      "measure": 1,
+      "pos": "7/8"
     }
   ],
   "level": 3.0
