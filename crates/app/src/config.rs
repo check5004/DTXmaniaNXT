@@ -3,8 +3,11 @@
 
 use std::path::PathBuf;
 
-use engine::practice::{LoopStyle, PassRule};
+use engine::practice::{LoopStyle, PassRule, SpeedPlan, snap_speed};
 use serde::{Deserialize, Serialize};
+
+use crate::practice::PracticePrefs;
+use crate::stretch::Pitch;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -25,6 +28,14 @@ pub struct Config {
     pub practice_style: String,
     /// 練習の合格の基準（"easy"、"normal"、"strict"）
     pub practice_rule: String,
+    /// 練習の速度を段階アップで上げる（false なら固定）
+    pub practice_ladder: bool,
+    /// 練習の速度（%）。段階アップなら始めの速度
+    pub practice_speed: u32,
+    /// 段階アップの目標の速度（%）
+    pub practice_target: u32,
+    /// 遅くするときの音程（"keep" は保つ、"tape" は音程ごと遅く）
+    pub practice_pitch: String,
 }
 
 impl Default for Config {
@@ -38,6 +49,10 @@ impl Default for Config {
             level: 2,
             practice_style: LoopStyle::default().name().to_owned(),
             practice_rule: PassRule::default().name().to_owned(),
+            practice_ladder: true,
+            practice_speed: SpeedPlan::DEFAULT_START,
+            practice_target: SpeedPlan::DEFAULT_TARGET,
+            practice_pitch: Pitch::default().name().to_owned(),
         }
     }
 }
@@ -92,6 +107,52 @@ impl Config {
         PassRule::from_name(&self.practice_rule).unwrap_or_default()
     }
 
+    /// 練習の速度の決め方
+    pub fn speed_plan(&self) -> SpeedPlan {
+        let speed = snap_speed(i64::from(self.practice_speed));
+        if self.practice_ladder {
+            SpeedPlan::Ladder {
+                start: speed,
+                target: snap_speed(i64::from(self.practice_target)),
+            }
+        } else {
+            SpeedPlan::Fixed(speed)
+        }
+    }
+
+    /// 遅くするときの音程（読めない値なら既定）
+    pub fn pitch(&self) -> Pitch {
+        Pitch::from_name(&self.practice_pitch).unwrap_or_default()
+    }
+
+    /// 練習の決めごと（区間のほか）
+    pub fn practice_prefs(&self) -> PracticePrefs {
+        PracticePrefs {
+            style: self.loop_style(),
+            rule: self.pass_rule(),
+            speed: self.speed_plan(),
+            pitch: self.pitch(),
+        }
+    }
+
+    /// 練習の決めごとを残す（次の練習でも使う）
+    pub fn set_practice_prefs(&mut self, p: PracticePrefs) {
+        self.practice_style = p.style.name().to_owned();
+        self.practice_rule = p.rule.name().to_owned();
+        match p.speed {
+            SpeedPlan::Fixed(s) => {
+                self.practice_ladder = false;
+                self.practice_speed = s;
+            }
+            SpeedPlan::Ladder { start, target } => {
+                self.practice_ladder = true;
+                self.practice_speed = start;
+                self.practice_target = target;
+            }
+        }
+        self.practice_pitch = p.pitch.name().to_owned();
+    }
+
     /// 曲のフォルダを足す（同じものは足さない）。足したら true
     pub fn add_song_dir(&mut self, dir: PathBuf) -> bool {
         if self.song_dirs.contains(&dir) {
@@ -114,6 +175,35 @@ mod tests {
         assert!(c.drum_sounds);
         assert_eq!(c.loop_style(), LoopStyle::Connect);
         assert_eq!(c.pass_rule(), PassRule::Normal);
+        assert_eq!(c.speed_plan(), SpeedPlan::default());
+        assert_eq!(c.pitch(), Pitch::Keep);
+    }
+
+    #[test]
+    fn practice_prefs_round_trip() {
+        let mut c = Config::default();
+        let p = PracticePrefs {
+            style: LoopStyle::Restart,
+            rule: PassRule::Strict,
+            speed: SpeedPlan::Fixed(85),
+            pitch: Pitch::Tape,
+        };
+        c.set_practice_prefs(p);
+        assert_eq!(c.practice_prefs(), p);
+        let back: Config = toml::from_str(&toml::to_string_pretty(&c).unwrap()).unwrap();
+        assert_eq!(back.practice_prefs(), p);
+        // 段階アップに戻しても目標は前の値のまま
+        c.practice_ladder = true;
+        assert_eq!(
+            c.speed_plan(),
+            SpeedPlan::Ladder {
+                start: 85,
+                target: 100
+            }
+        );
+        // 刻みに合わない速度は直す
+        c.practice_speed = 7;
+        assert_eq!(c.speed_plan().first_speed(), 25);
     }
 
     #[test]

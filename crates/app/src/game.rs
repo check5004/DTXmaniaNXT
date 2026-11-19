@@ -10,12 +10,13 @@ use engine::analysis::{NoteResult, WeakPhrase, mean_and_sd};
 use engine::clock::MidiTimestampMapper;
 use engine::input::{Articulation, InputEvent, MidiMessage, MidiProfile, Normalizer, Pad};
 use engine::judge::{Hit, HitWindows, Judge, JudgeEvent, Judgement, LaneGroups, Tally};
-use engine::practice::place;
+use engine::practice::{SpeedPlan, place};
 use records::{Lap, NoteHit, Session, SessionKind, StrayHit};
 
 use crate::audio::{AudioOut, Sound, click, load_sound};
 use crate::midi::RawMidi;
 use crate::practice::{LapSummary, Practice, PracticeOptions, count_per_measure};
+use crate::stretch::{SectionAudio, mix_bgm};
 use crate::time::host_us;
 
 /// 曲が始まる前の空白（ミリ秒）
@@ -26,6 +27,12 @@ const PRACTICE_LEAD_IN_MS: f64 = 1000.0;
 
 /// カウントのクリックの音量
 const CLICK_GAIN: f32 = 0.8;
+
+/// 練習の区間の BGM をまとめるとき、助走の前と着地のあとに足す余白（曲のミリ秒）。伸ばした音の端のにじみを周に入れないため
+const SECTION_MARGIN_MS: f64 = 1000.0;
+
+/// 落ちてくる音符が見え始めるより、これだけ前に周を並べる（ミリ秒）
+const LAY_MARGIN_MS: f64 = 500.0;
 
 /// レーンごとの最後の判定（画面に出す）
 #[derive(Debug, Clone, Copy)]
@@ -75,6 +82,8 @@ pub struct Outcome {
 pub struct PracticeOutcome {
     pub options: PracticeOptions,
     pub laps: Vec<LapSummary>,
+    /// 段階アップで目標の速度まで合格した
+    pub cleared: bool,
 }
 
 /// 苦手な小節の地図（結果の画面に出す）
@@ -113,6 +122,10 @@ pub struct Play {
     notes_per_measure: Vec<usize>,
     /// 練習なら周の並びと集計
     pub practice: Option<Practice>,
+    /// 練習の区間の BGM（速度ごとに伸ばしたもの）。音が出ないときは None
+    section_audio: Option<SectionAudio>,
+    /// 判定の線より上に見えている時間（ミリ秒）。練習の周をこれより前に並べる。画面の高さと落ちる速さから決める
+    pub view_ahead_ms: f64,
     /// カウントのクリック（1 拍目、ほか）
     clicks: Option<(Sound, Sound)>,
     /// 音符ごとの結果（判定したものだけ埋まる）
@@ -177,7 +190,7 @@ impl Play {
             ),
             Some(options) => (
                 Judge::with_groups(Vec::new(), HitWindows::default(), groups),
-                Some(Practice::new(options, &tempo, notes, bgm.clone())),
+                Some(Practice::new(options, &tempo, notes)),
             ),
         };
         let start_ms = practice
@@ -195,15 +208,45 @@ impl Play {
             Some(a) => load_sounds(&chart, path.parent().unwrap_or(Path::new(".")), a.rate()),
             None => HashMap::new(),
         };
-        if let Some(a) = audio.as_mut()
-            && practice.is_none()
-        {
-            // BGM（ch01）は決まった時刻に鳴らす
-            for (ms, wav) in &bgm {
-                if let Some(s) = sounds.get(wav) {
-                    a.play_at(s, *ms, 1.0);
+        let mut section_audio = None;
+        if let Some(a) = audio.as_mut() {
+            match &practice {
+                // BGM（ch01）は決まった時刻に鳴らす
+                None => {
+                    for (ms, wav) in &bgm {
+                        if let Some(s) = sounds.get(wav) {
+                            a.play_at(s, *ms, 1.0);
+                        }
+                    }
+                }
+                // 練習は区間の BGM を 1 本にまとめ、周の速度に伸ばして鳴らす
+                Some(p) => {
+                    let t = p.times();
+                    let from = t.run_up_ms - SECTION_MARGIN_MS;
+                    let to = t.tail_ms.max(t.end_ms) + SECTION_MARGIN_MS;
+                    let started = std::time::Instant::now();
+                    let first = p.ladder().speed();
+                    section_audio = Some(SectionAudio::new(
+                        mix_bgm(&bgm, &sounds, a.rate(), from, to),
+                        from,
+                        a.rate(),
+                        p.options.pitch,
+                        first,
+                    ));
+                    log::info!(
+                        "section audio at {first}%: {:.0}ms",
+                        started.elapsed().as_secs_f64() * 1000.0
+                    );
                 }
             }
+        }
+        // 音を読み終えてから鳴らし始める
+        if let Some(a) = &audio
+            && let Err(e) = a.start()
+        {
+            log::warn!("audio is off: {e:#}");
+            audio = None;
+            section_audio = None;
         }
         let clicks = audio
             .as_ref()
@@ -215,7 +258,7 @@ impl Play {
             judge.notes().len(),
             end_ms / 1000.0,
             practice.as_ref().map_or(String::new(), |p| format!(
-                ", practice measures {}-{}",
+                ", practice measures {}-{} from {start_ms:.0}ms",
                 p.options.section.first, p.options.section.last
             ))
         );
@@ -238,6 +281,8 @@ impl Play {
             started_at: unix_now(),
             notes_per_measure,
             practice,
+            section_audio,
+            view_ahead_ms: 2000.0,
             clicks,
             note_hits: vec![None; note_count],
             strays: Vec::new(),
@@ -251,23 +296,38 @@ impl Play {
         Ok(play)
     }
 
-    /// 練習なら、`now_ms` から少し先までの周を並べる（判定の音符・BGM・クリック）
+    /// 練習なら、終わった周の合否で速度を決め、`now_ms` から少し先までの周を並べる（判定の音符・BGM・クリック）
     fn lay_laps(&mut self, now_ms: f64) {
         let Some(p) = self.practice.as_mut() else {
             return;
         };
-        while p.wants_lap(now_ms) {
-            let (lap, notes) = p.next_lap();
+        if let Some(sa) = self.section_audio.as_mut() {
+            sa.poll();
+        }
+        p.settle(now_ms, self.judge.windows().poor);
+        let ahead = self.view_ahead_ms + LAY_MARGIN_MS;
+        while p.wants_lap(now_ms, ahead) {
+            // 決めた速度の音がまだできていなければ、できるまで前の周の速度で回す
+            let want = p.ladder().speed();
+            let speed = match &self.section_audio {
+                Some(sa) if sa.get(want).is_none() => p.last_speed().unwrap_or(want),
+                _ => want,
+            };
+            let (lap, notes) = p.next_lap(speed, now_ms + ahead);
+            log::info!(
+                "lap {} at {speed}%: {:.0}-{:.0}ms",
+                lap.index + 1,
+                lap.start_ms,
+                lap.end_ms
+            );
             let range = self.judge.extend(notes);
             self.note_hits.resize(self.judge.notes().len(), None);
             if let Some(a) = self.audio.as_mut() {
-                let rate = a.rate();
-                for (ms, wav) in &p.bgm {
-                    if let Some(s) = self.sounds.get(wav)
-                        && let Some(at) = place(*ms, s.ms(rate), lap.audio)
-                    {
-                        a.play_placed(s, &at, 1.0);
-                    }
+                if let Some(sa) = &self.section_audio
+                    && let Some(s) = sa.get(speed)
+                    && let Some(at) = place(sa.from_ms, sa.song_len_ms, lap.audio, lap.speed)
+                {
+                    a.play_placed(s, &at, 1.0);
                 }
                 if let Some((accent, plain)) = &self.clicks {
                     for (i, &c) in lap.clicks.iter().enumerate() {
@@ -277,7 +337,19 @@ impl Play {
             }
             p.push_lap(lap, range);
         }
+        if let Some(sa) = self.section_audio.as_mut() {
+            for s in p.speeds_to_prepare() {
+                sa.request(s);
+            }
+        }
         p.forget_before(now_ms - 2000.0);
+    }
+
+    /// 練習の速度を手で `steps` 刻み動かす（次に並べる周から）
+    pub fn nudge_speed(&mut self, steps: i64) {
+        if let Some(p) = self.practice.as_mut() {
+            p.nudge_speed(steps);
+        }
     }
 
     /// 小節ごとの音符の数（曲全体）
@@ -430,6 +502,7 @@ impl Play {
             practice: self.practice.as_ref().map(|p| PracticeOutcome {
                 options: p.options,
                 laps: p.summaries(self.now_ms()),
+                cleared: p.ladder().cleared(),
             }),
         }
     }
@@ -468,12 +541,21 @@ impl Play {
         );
         if let Some(p) = &self.practice {
             let o = p.options;
+            let speed = match o.speed {
+                SpeedPlan::Fixed(s) => format!("{{\"plan\":\"fixed\",\"speed\":{s}}}"),
+                SpeedPlan::Ladder { start, target } => {
+                    format!("{{\"plan\":\"ladder\",\"start\":{start},\"target\":{target}}}")
+                }
+            };
             settings += &format!(
-                ",\"section\":[{},{}],\"style\":\"{}\",\"rule\":\"{}\"",
+                ",\"section\":[{},{}],\"style\":\"{}\",\"rule\":\"{}\",\"speed\":{},\"pitch\":\"{}\",\"cleared\":{}",
                 o.section.first,
                 o.section.last,
                 o.style.name(),
-                o.rule.name()
+                o.rule.name(),
+                speed,
+                o.pitch.name(),
+                p.ladder().cleared()
             );
         }
         settings.push('}');

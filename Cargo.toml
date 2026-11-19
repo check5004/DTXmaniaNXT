@@ -14,3 +14,13 @@ unsafe_code = "forbid"
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }
+
+# 音程を保つ伸ばしは最適化しないと 20 倍ほど遅い（8 秒の音に 7 秒）。開発中のビルドでもこれだけは最適化する
+[profile.dev.package.timestretch]
+opt-level = 3
+
+[profile.dev.package.timestretch-core]
+opt-level = 3
+
+[profile.dev.package.rustfft]
+opt-level = 3

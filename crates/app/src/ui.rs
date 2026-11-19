@@ -7,13 +7,17 @@ use dtx::DrumLane;
 use egui::{Align, Align2, Color32, FontId, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, Vec2};
 use engine::analysis::WeakPhrase;
 use engine::judge::Judgement;
-use engine::practice::{LoopStyle, PassRule, Section};
+use engine::practice::{
+    FAILS_TO_DOWN, LoopStyle, PASSES_TO_UP, PassRule, Section, SpeedChange, SpeedPlan,
+    speed_percent,
+};
 use library::{LEVELS, Node};
 
 use crate::config::Config;
 use crate::game::{Outcome, Play, PracticeOutcome, WeakMap};
 use crate::practice::{LapSummary, Practice, PracticeSetup};
 use crate::songs::SongList;
+use crate::stretch::Pitch;
 
 /// 左から並べるレーン（HHO は HH、LBD は LP の列に描く）
 const COLUMNS: [DrumLane; 10] = [
@@ -415,10 +419,11 @@ fn draw_practice_result(ui: &mut egui::Ui, o: &Outcome, p: &PracticeOutcome) -> 
             }
             ui.label(
                 RichText::new(format!(
-                    "練習 {}（{}・合格の基準 {}）",
+                    "練習 {}（{}・合格の基準 {}・{}）",
                     section_text(p.options.section),
                     style_name(p.options.style),
-                    rule_name(p.options.rule)
+                    rule_name(p.options.rule),
+                    plan_text(p.options.speed)
                 ))
                 .size(18.0),
             );
@@ -437,6 +442,25 @@ fn draw_practice_result(ui: &mut egui::Ui, o: &Outcome, p: &PracticeOutcome) -> 
                         rate * 100.0
                     ))
                     .size(18.0),
+                );
+                let top = done
+                    .iter()
+                    .filter(|l| l.passed == Some(true))
+                    .map(|l| speed_percent(l.speed))
+                    .max();
+                if let Some(top) = top {
+                    ui.label(format!("合格した一番速い速度 {top}%"));
+                }
+            }
+            if p.cleared
+                && let SpeedPlan::Ladder { target, .. } = p.options.speed
+            {
+                ui.label(
+                    RichText::new(format!(
+                        "クリア！ 目標の {target}% で {PASSES_TO_UP} 周続けて合格しました"
+                    ))
+                    .size(20.0)
+                    .color(PASS_COLOR),
                 );
             }
             if p.laps.len() > done.len() {
@@ -472,7 +496,10 @@ fn draw_practice_result(ui: &mut egui::Ui, o: &Outcome, p: &PracticeOutcome) -> 
 }
 
 /// 周ごとの成績の表のおおよその幅（真ん中に寄せるのに使う）
-const LAP_TABLE_WIDTH: f32 = 580.0;
+const LAP_TABLE_WIDTH: f32 = 640.0;
+
+/// 合格・クリアの色
+const PASS_COLOR: Color32 = Color32::from_rgb(0x70, 0xE0, 0x90);
 
 /// 周ごとの成績の表
 fn lap_table(ui: &mut egui::Ui, laps: &[&LapSummary]) {
@@ -482,6 +509,7 @@ fn lap_table(ui: &mut egui::Ui, laps: &[&LapSummary]) {
         .show(ui, |ui| {
             for h in [
                 "周",
+                "速度",
                 "PERFECT",
                 "GREAT",
                 "GOOD",
@@ -497,6 +525,7 @@ fn lap_table(ui: &mut egui::Ui, laps: &[&LapSummary]) {
             for l in laps {
                 let t = &l.tally;
                 ui.label(format!("{}", l.index + 1));
+                ui.label(format!("{}%", speed_percent(l.speed)));
                 ui.label(format!("{} ({:.0}%)", t.perfect, l.perfect_rate() * 100.0));
                 ui.label(t.great.to_string());
                 ui.label(t.good.to_string());
@@ -520,6 +549,13 @@ pub enum SetupAction {
     Resize(i64),
     Style(LoopStyle),
     Rule(PassRule),
+    /// 段階アップと固定を切り替える
+    ToggleLadder,
+    /// 速度（段階アップなら始めの速度）を刻み単位で動かす
+    Speed(i64),
+    /// 段階アップの目標の速度
+    Target(u32),
+    Pitch(Pitch),
     Start,
     Back,
 }
@@ -624,6 +660,48 @@ pub fn draw_setup(ui: &mut egui::Ui, s: &PracticeSetup) -> Vec<SetupAction> {
             }
         });
         ui.label(RichText::new(rule_help(s.rule)).weak());
+        ui.add_space(8.0);
+        ui.label(RichText::new("速度（L で段階アップと固定を切り替え、, と . で速度）").strong());
+        let ladder = matches!(s.speed, SpeedPlan::Ladder { .. });
+        for (on, text) in [
+            (true, ladder_help()),
+            (false, "固定: 同じ速度のまま回る".to_owned()),
+        ] {
+            if ui.radio(ladder == on, text).clicked() && ladder != on {
+                actions.push(SetupAction::ToggleLadder);
+            }
+        }
+        ui.horizontal(|ui| {
+            if ui.button("−5%").clicked() {
+                actions.push(SetupAction::Speed(-1));
+            }
+            let label = if ladder { "始めの速度" } else { "速度" };
+            ui.label(
+                RichText::new(format!("{label} {}%", s.speed.first_speed()))
+                    .size(16.0)
+                    .strong(),
+            );
+            if ui.button("+5%").clicked() {
+                actions.push(SetupAction::Speed(1));
+            }
+            if let SpeedPlan::Ladder { target, .. } = s.speed {
+                ui.add_space(24.0);
+                ui.label("目標");
+                for t in SpeedPlan::TARGETS {
+                    if ui.radio(target == t, format!("{t}%")).clicked() {
+                        actions.push(SetupAction::Target(t));
+                    }
+                }
+            }
+        });
+        ui.horizontal(|ui| {
+            ui.label("遅くするときの音");
+            for pitch in Pitch::ALL {
+                if ui.radio(s.pitch == pitch, pitch_name(pitch)).clicked() {
+                    actions.push(SetupAction::Pitch(pitch));
+                }
+            }
+        });
         ui.add_space(16.0);
         ui.horizontal(|ui| {
             if ui
@@ -642,7 +720,7 @@ pub fn draw_setup(ui: &mut egui::Ui, s: &PracticeSetup) -> Vec<SetupAction> {
         ui.add_space(8.0);
         ui.label(
             RichText::new(
-                "←→ で区間をずらす、↑↓ で長さ。ドラム: HT / LT でずらす、CY か RD ではじめる、LC で戻る",
+                "←→ で区間をずらす、↑↓ で長さ、T でつなぎ方。ドラム: HT / LT でずらす、CY か RD ではじめる、LC で戻る",
             )
             .weak(),
         );
@@ -703,6 +781,27 @@ fn rule_help(r: PassRule) -> &'static str {
     }
 }
 
+fn ladder_help() -> String {
+    format!(
+        "段階アップ: 合格が {PASSES_TO_UP} 周続くたびに 5% 上げ、不合格が {FAILS_TO_DOWN} 周続いたら 5% 下げる（始めの速度より下げない）。目標の速度で {PASSES_TO_UP} 周続けて合格したらクリア"
+    )
+}
+
+/// 速度の決め方を短く
+fn plan_text(p: SpeedPlan) -> String {
+    match p {
+        SpeedPlan::Fixed(s) => format!("速度 {s}%"),
+        SpeedPlan::Ladder { start, target } => format!("段階アップ {start}%→{target}%"),
+    }
+}
+
+fn pitch_name(p: Pitch) -> &'static str {
+    match p {
+        Pitch::Keep => "音程を保つ",
+        Pitch::Tape => "音程ごと遅く（テープ）",
+    }
+}
+
 /// 周のずれ（平均とばらつき）
 fn offset_text(l: &LapSummary) -> String {
     match (l.offset_mean_ms, l.offset_sd_ms) {
@@ -715,7 +814,7 @@ fn offset_text(l: &LapSummary) -> String {
 /// 周の合否
 fn verdict(l: &LapSummary) -> RichText {
     match l.passed {
-        Some(true) => RichText::new("合格").color(Color32::from_rgb(0x70, 0xE0, 0x90)),
+        Some(true) => RichText::new("合格").color(PASS_COLOR),
         Some(false) => RichText::new("不合格").color(Color32::from_rgb(0xF0, 0x80, 0x60)),
         None => RichText::new("途中").weak(),
     }
@@ -804,7 +903,9 @@ pub fn draw_play(ui: &mut egui::Ui, play: &Play, config: &Config, midi_ports: &[
             }
         ));
         if play.practice.is_some() {
-            ui.label("←→ で区間を 1 小節ずらす、R で最初から、Esc で終わって結果へ");
+            ui.label(
+                "←→ で区間を 1 小節ずらす、, と . で速度 ±5%、R で最初から、Esc で終わって結果へ",
+            );
         } else {
             ui.label("R でやり直し、Esc で選曲に戻る");
         }
@@ -1025,15 +1126,60 @@ fn practice_panel(ui: &mut egui::Ui, p: &Practice, now: f64) {
         Vec2::new(width, 12.0),
         false,
     );
-    let lap = match p.current_lap(now) {
+    let current = p.current_lap(now);
+    let lap = match current {
         Some(i) => format!("{} 周目", i + 1),
         None => "助走".to_owned(),
     };
+    // 今鳴っている周の速度（助走中は 1 周目の速度）
+    let speed = current
+        .or((!p.laps.is_empty()).then_some(0))
+        .map_or(p.ladder().speed(), |i| speed_percent(p.laps[i].plan.speed));
     ui.label(
-        RichText::new(format!("{lap}　連続合格 {}", p.pass_streak()))
+        RichText::new(format!("{lap}　速度 {speed}%"))
             .size(18.0)
             .strong(),
     );
+    let ladder = p.ladder();
+    let (passes, fails) = ladder.streaks();
+    match ladder.plan() {
+        SpeedPlan::Ladder { target, .. } => {
+            ui.label(format!(
+                "段階アップ（目標 {target}%）: 合格 {passes}/{PASSES_TO_UP}、不合格 {fails}/{FAILS_TO_DOWN}"
+            ));
+        }
+        SpeedPlan::Fixed(_) => {
+            ui.label(format!("速度は固定　連続合格 {}", p.pass_streak()));
+        }
+    }
+    // 決めた速度がまだ並べていない周からのとき
+    if p.last_speed().is_some_and(|s| s != ladder.speed()) {
+        ui.label(
+            RichText::new(format!(
+                "{}% は {} 周目から",
+                ladder.speed(),
+                p.laps.len() + 1
+            ))
+            .color(SELECTION_COLOR),
+        );
+    }
+    if ladder.cleared() {
+        ui.label(
+            RichText::new("クリア！")
+                .size(20.0)
+                .strong()
+                .color(PASS_COLOR),
+        );
+    }
+    if let Some(c) = p.speed_note(now) {
+        let text = match c.change {
+            SpeedChange::Up => format!("合格が続いたので {}% に上げます", c.speed),
+            SpeedChange::Down => format!("不合格が続いたので {}% に下げます", c.speed),
+            SpeedChange::Cleared => format!("{}% で合格が続きました", c.speed),
+            SpeedChange::Stay => String::new(),
+        };
+        ui.label(RichText::new(text).color(SELECTION_COLOR));
+    }
     let done: Vec<LapSummary> = p
         .summaries(now)
         .into_iter()
@@ -1045,8 +1191,9 @@ fn practice_panel(ui: &mut egui::Ui, p: &Practice, now: f64) {
         ui.horizontal(|ui| {
             ui.label(
                 RichText::new(format!(
-                    "{:>3}  P {:>3.0}%  MISS {} POOR {}  {}",
+                    "{:>3} {:>3}%  P {:>3.0}%  MISS {} POOR {}  {}",
                     l.index + 1,
+                    speed_percent(l.speed),
                     l.perfect_rate() * 100.0,
                     l.tally.miss,
                     l.tally.poor,

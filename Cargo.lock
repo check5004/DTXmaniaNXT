@@ -728,6 +728,7 @@ dependencies = [
  "rtrb",
  "serde",
  "symphonia",
+ "timestretch",
  "toml",
  "wgpu",
  "winit",
@@ -3330,6 +3331,24 @@ dependencies = [
  "quick-error",
  "weezl",
  "zune-jpeg",
+]
+
+[[package]]
+name = "timestretch"
+version = "0.16.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ad484075af6caf97e09f3f869bed42c99ff4fea501f6df6ad65d5bb8c7186808"
+dependencies = [
+ "timestretch-core",
+]
+
+[[package]]
+name = "timestretch-core"
+version = "0.16.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fa8cb1cae3fd3788a7a9e704dd079d7dc56b00a8b2d0688e9be94130ebcbe1aa"
+dependencies = [
+ "rustfft",
 ]
 
 [[package]]
