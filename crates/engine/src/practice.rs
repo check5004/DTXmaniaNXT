@@ -5,6 +5,9 @@
 //! 1 周目の頭が 0 で、その前に助走（区間の 1 小節前からの BGM と 4 拍のカウント）が入る。
 //!
 //! 判定の幅とずれは実時間のミリ秒のまま使うので、遅くしても判定は甘くならない。
+//!
+//! 周の速度は `Ladder` が周の合否から決める（段階アップ）。速度を変えるのは周の切れ目だけで、
+//! 決めた速度は次に並べる周から使う。
 
 use dtx::{DrumNote, TempoMap};
 
@@ -167,12 +170,16 @@ impl Lap {
     /// 実時間 `ms` の空打ちを、この周のものとして数えるか。助走や着地のあとの空打ちは数えない。
     /// `poor_ms` は判定の幅の一番外（音符に届かない早さ・遅さの空打ちもその周に入れる）
     pub fn owns_stray(&self, ms: f64, poor_ms: f64) -> bool {
-        let to = match self.style {
+        ms >= self.start_ms - poor_ms && ms < self.stray_until(poor_ms)
+    }
+
+    /// この周の空打ちを数え終える実時間。これを過ぎて音符もすべて判定し終えたら、周の成績は動かない
+    pub fn stray_until(&self, poor_ms: f64) -> f64 {
+        match self.style {
             // つなぐときは次の周の頭の少し前まで（それより後は次の周の早打ち）
             LoopStyle::Connect => self.end_ms - poor_ms,
             LoopStyle::Restart => self.end_ms + poor_ms,
-        };
-        ms >= self.start_ms - poor_ms && ms < to
+        }
     }
 
     /// この周に並べる音符。曲の音符 `notes` のうち、この周で鳴らす範囲にあるもの
@@ -243,6 +250,14 @@ impl Looper {
         }
     }
 
+    /// 次の周の音を実時間 `audio_ms` より前には始めない。区切るときだけ効く（つなぐときは切れ目を作らない）。
+    /// 区切るときは前の周の合否で次の周の速度を決めてから並べるので、そのぶん待つのに使う
+    pub fn delay_to(&mut self, audio_ms: f64) {
+        if self.style == LoopStyle::Restart && self.next_index > 0 {
+            self.cursor_ms = self.cursor_ms.max(audio_ms);
+        }
+    }
+
     /// 次の周を速度 `speed` で並べる
     pub fn next_lap(&mut self, speed: f64) -> Lap {
         let speed = speed.max(0.01);
@@ -300,9 +315,10 @@ pub struct Placement {
     pub cut_end: bool,
 }
 
-/// 曲の時刻 `chip_ms` に鳴り始める長さ `sound_ms` の音を、等速の周の音の範囲 `span` に置く。
+/// 曲の時刻 `chip_ms` に鳴り始める長さ `sound_ms`（等速での長さ）の音を、周の音の範囲 `span` に置く。
+/// 音は速度 `speed` に合わせて伸ばしてあるものとし、置いた位置と長さは実時間で返す。
 /// 範囲にかからなければ `None`。範囲より前から鳴っている音は途中から鳴らし、範囲の終わりで切る
-pub fn place(chip_ms: f64, sound_ms: f64, span: Span) -> Option<Placement> {
+pub fn place(chip_ms: f64, sound_ms: f64, span: Span, speed: f64) -> Option<Placement> {
     let end = chip_ms + sound_ms;
     if chip_ms >= span.to_ms || end <= span.from_ms || sound_ms <= 0.0 {
         return None;
@@ -310,9 +326,9 @@ pub fn place(chip_ms: f64, sound_ms: f64, span: Span) -> Option<Placement> {
     let from = chip_ms.max(span.from_ms);
     let to = end.min(span.to_ms);
     Some(Placement {
-        at_ms: span.at_ms + (from - span.from_ms),
-        skip_ms: from - chip_ms,
-        len_ms: to - from,
+        at_ms: span.at_ms + (from - span.from_ms) / speed,
+        skip_ms: (from - chip_ms) / speed,
+        len_ms: (to - from) / speed,
         cut_start: from > chip_ms,
         cut_end: to < end,
     })
@@ -358,6 +374,166 @@ impl PassRule {
                     && tally.stray == 0
                     && offset_sd_ms.is_none_or(|sd| sd <= 15.0)
             }
+        }
+    }
+}
+
+/// 速度（%）の下限・上限・刻み
+pub const SPEED_MIN: u32 = 25;
+pub const SPEED_MAX: u32 = 150;
+pub const SPEED_STEP: u32 = 5;
+
+/// 速度（%）を刻みにそろえ、下限・上限に収める
+pub fn snap_speed(percent: i64) -> u32 {
+    let step = i64::from(SPEED_STEP);
+    let snapped = (percent + step / 2).div_euclid(step) * step;
+    snapped.clamp(i64::from(SPEED_MIN), i64::from(SPEED_MAX)) as u32
+}
+
+/// 周の速度（0〜1.5 の倍率）を % にする
+pub fn speed_percent(speed: f64) -> u32 {
+    (speed * 100.0).round().max(0.0) as u32
+}
+
+/// 速度の決め方
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpeedPlan {
+    /// 決めた速度のまま回る
+    Fixed(u32),
+    /// 合格が続いたら上げ、不合格が続いたら下げる。目標の速度で続けて合格したらクリア
+    Ladder { start: u32, target: u32 },
+}
+
+impl Default for SpeedPlan {
+    fn default() -> Self {
+        Self::Ladder {
+            start: Self::DEFAULT_START,
+            target: Self::DEFAULT_TARGET,
+        }
+    }
+}
+
+impl SpeedPlan {
+    pub const DEFAULT_START: u32 = 70;
+    pub const DEFAULT_TARGET: u32 = 100;
+    /// 選べる目標の速度（100% より上は余裕を作るため）
+    pub const TARGETS: [u32; 3] = [100, 105, 110];
+
+    /// 1 周目の速度（%）
+    pub fn first_speed(self) -> u32 {
+        match self {
+            Self::Fixed(s) => s,
+            Self::Ladder { start, .. } => start,
+        }
+    }
+}
+
+/// 段階アップで、上げるまでの連続合格
+pub const PASSES_TO_UP: u32 = 2;
+/// 段階アップで、下げるまでの連続不合格
+pub const FAILS_TO_DOWN: u32 = 3;
+
+/// 周の結果で速度がどう動いたか
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpeedChange {
+    Stay,
+    Up,
+    Down,
+    /// 目標の速度で続けて合格した
+    Cleared,
+}
+
+/// 次に並べる周の速度を決める
+#[derive(Debug, Clone, PartialEq)]
+pub struct Ladder {
+    plan: SpeedPlan,
+    speed: u32,
+    passes: u32,
+    fails: u32,
+    cleared: bool,
+}
+
+impl Ladder {
+    pub fn new(plan: SpeedPlan) -> Self {
+        Self {
+            plan,
+            speed: snap_speed(i64::from(plan.first_speed())),
+            passes: 0,
+            fails: 0,
+            cleared: false,
+        }
+    }
+
+    pub fn plan(&self) -> SpeedPlan {
+        self.plan
+    }
+
+    /// 次に並べる周の速度（%）
+    pub fn speed(&self) -> u32 {
+        self.speed
+    }
+
+    /// 今の速度での連続合格・連続不合格
+    pub fn streaks(&self) -> (u32, u32) {
+        (self.passes, self.fails)
+    }
+
+    /// 目標の速度で続けて合格した（段階アップのときだけ）
+    pub fn cleared(&self) -> bool {
+        self.cleared
+    }
+
+    /// 終わった周の合否を受ける。`lap_speed` はその周の速度（%）。
+    /// 速度を変えたあとに、前の速度のまま並べてあった周は数えない
+    pub fn record(&mut self, lap_speed: u32, passed: bool) -> SpeedChange {
+        if lap_speed != self.speed {
+            return SpeedChange::Stay;
+        }
+        if passed {
+            self.passes += 1;
+            self.fails = 0;
+        } else {
+            self.fails += 1;
+            self.passes = 0;
+        }
+        let SpeedPlan::Ladder { start, target } = self.plan else {
+            return SpeedChange::Stay;
+        };
+        if self.passes >= PASSES_TO_UP {
+            self.passes = 0;
+            if self.speed >= target {
+                if self.cleared {
+                    return SpeedChange::Stay;
+                }
+                self.cleared = true;
+                return SpeedChange::Cleared;
+            }
+            self.speed = (self.speed + SPEED_STEP).min(target);
+            return SpeedChange::Up;
+        }
+        if self.fails >= FAILS_TO_DOWN {
+            self.fails = 0;
+            // 始めの速度（手で下げていればその速度）より下げない
+            let floor = start.min(self.speed);
+            let down = self.speed.saturating_sub(SPEED_STEP).max(floor);
+            if down < self.speed {
+                self.speed = down;
+                return SpeedChange::Down;
+            }
+        }
+        SpeedChange::Stay
+    }
+
+    /// 手で速度を変える（次に並べる周から）。連続の数え直しになる
+    pub fn set_speed(&mut self, percent: u32) {
+        let s = snap_speed(i64::from(percent));
+        if s != self.speed {
+            self.speed = s;
+            self.passes = 0;
+            self.fails = 0;
+        }
+        if let SpeedPlan::Fixed(_) = self.plan {
+            self.plan = SpeedPlan::Fixed(s);
         }
     }
 }
@@ -584,7 +760,7 @@ mod tests {
         };
         // 範囲の中で鳴り終わる音はそのまま
         assert_eq!(
-            place(5000.0, 500.0, span),
+            place(5000.0, 500.0, span, 1.0),
             Some(Placement {
                 at_ms: 11_000.0,
                 skip_ms: 0.0,
@@ -595,7 +771,7 @@ mod tests {
         );
         // 曲頭からの長い BGM は途中から鳴らし、範囲の終わりで切る
         assert_eq!(
-            place(0.0, 60_000.0, span),
+            place(0.0, 60_000.0, span, 1.0),
             Some(Placement {
                 at_ms: 10_000.0,
                 skip_ms: 4000.0,
@@ -605,8 +781,134 @@ mod tests {
             })
         );
         // 範囲にかからない音
-        assert_eq!(place(8000.0, 100.0, span), None);
-        assert_eq!(place(1000.0, 3000.0, span), None);
+        assert_eq!(place(8000.0, 100.0, span, 1.0), None);
+        assert_eq!(place(1000.0, 3000.0, span, 1.0), None);
+        // 50% に伸ばした区間の音（曲の 2000ms から 9000ms 分）。範囲の 4000〜8000 は実時間で 2 倍
+        assert_eq!(
+            place(2000.0, 9000.0, span, 0.5),
+            Some(Placement {
+                at_ms: 10_000.0,
+                skip_ms: 4000.0,
+                len_ms: 8000.0,
+                cut_start: true,
+                cut_end: true
+            })
+        );
+    }
+
+    #[test]
+    fn restart_waits_when_asked() {
+        let times = SectionTimes::new(&tempo(), Section::new(2, 3));
+        let mut restart = Looper::new(times.clone(), LoopStyle::Restart);
+        // 1 周目の前には効かない
+        restart.delay_to(100_000.0);
+        assert!(close(restart.next_lap(1.0).audio.at_ms, -2000.0));
+        // 音の終わり（5000）より後まで待つ
+        restart.delay_to(6000.0);
+        assert!(close(restart.next_audio_ms(1.0), 6000.0));
+        let b = restart.next_lap(1.0);
+        assert!(close(b.audio.at_ms, 6000.0) && close(b.start_ms, 8000.0));
+        // 早い時刻を渡しても前へは詰めない（2 周目の音の終わりは 8000 + 5000）
+        restart.delay_to(0.0);
+        assert!(close(restart.next_audio_ms(1.0), 13_000.0));
+        // つなぐときは切れ目を作らない
+        let mut connect = Looper::new(times, LoopStyle::Connect);
+        connect.next_lap(1.0);
+        connect.delay_to(10_000.0);
+        assert!(close(connect.next_audio_ms(1.0), 4000.0));
+    }
+
+    #[test]
+    fn speeds_snap_to_steps() {
+        assert_eq!(snap_speed(72), 70);
+        assert_eq!(snap_speed(73), 75);
+        assert_eq!(snap_speed(10), SPEED_MIN);
+        assert_eq!(snap_speed(500), SPEED_MAX);
+        assert_eq!(speed_percent(0.7), 70);
+        assert_eq!(speed_percent(1.05), 105);
+    }
+
+    fn ladder(start: u32, target: u32) -> Ladder {
+        Ladder::new(SpeedPlan::Ladder { start, target })
+    }
+
+    #[test]
+    fn ladder_goes_up_after_two_passes() {
+        let mut l = ladder(70, 100);
+        assert_eq!(l.speed(), 70);
+        assert_eq!(l.record(70, true), SpeedChange::Stay);
+        assert_eq!(l.streaks(), (1, 0));
+        // 不合格で連続合格は数え直し
+        assert_eq!(l.record(70, false), SpeedChange::Stay);
+        assert_eq!(l.record(70, true), SpeedChange::Stay);
+        assert_eq!(l.record(70, true), SpeedChange::Up);
+        assert_eq!((l.speed(), l.streaks()), (75, (0, 0)));
+        // 決める前に 70% で並べてあった周は数えない
+        assert_eq!(l.record(70, true), SpeedChange::Stay);
+        assert_eq!(l.streaks(), (0, 0));
+    }
+
+    #[test]
+    fn ladder_goes_down_after_three_fails_but_not_below_start() {
+        let mut l = ladder(70, 100);
+        for _ in 0..2 {
+            l.record(70, true);
+        }
+        assert_eq!(l.speed(), 75);
+        assert_eq!(l.record(75, false), SpeedChange::Stay);
+        assert_eq!(l.record(75, false), SpeedChange::Stay);
+        assert_eq!(l.record(75, false), SpeedChange::Down);
+        assert_eq!(l.speed(), 70);
+        // 始めの速度より下には下げない
+        for _ in 0..3 {
+            assert_eq!(l.record(70, false), SpeedChange::Stay);
+        }
+        assert_eq!(l.speed(), 70);
+    }
+
+    #[test]
+    fn ladder_clears_at_the_target() {
+        let mut l = ladder(95, 100);
+        l.record(95, true);
+        assert_eq!(l.record(95, true), SpeedChange::Up);
+        assert_eq!(l.speed(), 100);
+        assert!(!l.cleared());
+        l.record(100, true);
+        assert_eq!(l.record(100, true), SpeedChange::Cleared);
+        assert!(l.cleared());
+        // クリアしたあとも目標の速度のまま
+        l.record(100, true);
+        assert_eq!(l.record(100, true), SpeedChange::Stay);
+        assert_eq!(l.speed(), 100);
+        // 目標を 110% にすれば 100% の先も上げる
+        let mut l = ladder(100, 110);
+        l.record(100, true);
+        assert_eq!(l.record(100, true), SpeedChange::Up);
+        assert_eq!(l.speed(), 105);
+    }
+
+    #[test]
+    fn fixed_speed_and_manual_changes() {
+        let mut f = Ladder::new(SpeedPlan::Fixed(80));
+        for _ in 0..5 {
+            assert_eq!(f.record(80, true), SpeedChange::Stay);
+        }
+        assert_eq!(f.speed(), 80);
+        f.set_speed(86);
+        assert_eq!((f.speed(), f.plan()), (85, SpeedPlan::Fixed(85)));
+        // 手で始めの速度より下げたら、そこより下には自動で下げない
+        let mut l = ladder(70, 100);
+        l.record(70, true);
+        l.set_speed(60);
+        assert_eq!((l.speed(), l.streaks()), (60, (0, 0)));
+        for _ in 0..3 {
+            l.record(60, false);
+        }
+        assert_eq!(l.speed(), 60);
+        for _ in 0..2 {
+            l.record(60, true);
+        }
+        assert_eq!(l.speed(), 65);
     }
 
     fn tally(perfect: u32, great: u32, poor: u32, miss: u32, stray: u32) -> Tally {

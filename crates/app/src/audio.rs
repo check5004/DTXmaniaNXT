@@ -23,13 +23,17 @@ use crate::time::{duration_us, host_us};
 pub struct Sound(Arc<[f32]>);
 
 impl Sound {
-    pub fn frames(&self) -> usize {
-        self.0.len() / 2
+    /// ステレオで交互に並んだサンプルから作る
+    pub fn from_samples(samples: Vec<f32>) -> Self {
+        Self(Arc::from(samples))
     }
 
-    /// 長さ（ミリ秒）。`rate` は出力のサンプルレート
-    pub fn ms(&self, rate: u32) -> f64 {
-        self.frames() as f64 * 1000.0 / f64::from(rate)
+    pub fn samples(&self) -> &[f32] {
+        &self.0
+    }
+
+    pub fn frames(&self) -> usize {
+        self.0.len() / 2
     }
 }
 
@@ -211,7 +215,7 @@ fn envelope(i: u64, len: u64, fade: u64, fade_in: bool, fade_out: bool) -> f32 {
 
 /// 鳴らしている出力
 pub struct AudioOut {
-    _stream: cpal::Stream,
+    stream: cpal::Stream,
     tx: rtrb::Producer<Command>,
     clock: Arc<Mutex<AudioClock>>,
     rate: u32,
@@ -220,7 +224,8 @@ pub struct AudioOut {
 }
 
 impl AudioOut {
-    /// 既定の出力デバイスを開く。`start_ms` は 0 フレーム目が曲の何ミリ秒にあたるか
+    /// 既定の出力デバイスを開く。`start_ms` は 0 フレーム目が曲の何ミリ秒にあたるか。
+    /// 音を読み終えてから `start` で鳴らし始める（読んでいるあいだに曲の頭が過ぎないように）
     pub fn open(start_ms: f64) -> Result<Self> {
         let host = cpal::default_host();
         let device = host
@@ -278,16 +283,21 @@ impl AudioOut {
             |err| log::warn!("audio stream: {err}"),
             None,
         )?;
-        stream.play()?;
         log::info!("audio: {device_name}, {rate} Hz, {channels} ch");
         Ok(Self {
-            _stream: stream,
+            stream,
             tx,
             clock,
             rate,
             start_ms,
             device_name,
         })
+    }
+
+    /// 鳴らし始める（0 フレーム目が `start_ms`）
+    pub fn start(&self) -> Result<()> {
+        self.stream.play()?;
+        Ok(())
     }
 
     pub fn rate(&self) -> u32 {

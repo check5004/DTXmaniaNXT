@@ -14,6 +14,7 @@ mod history;
 mod midi;
 mod practice;
 mod songs;
+mod stretch;
 mod time;
 mod ui;
 
@@ -271,13 +272,7 @@ impl App {
     fn open_setup(&mut self, path: PathBuf, previous: Option<PracticeOptions>) {
         self.save_unfinished();
         self.screen = Screen::Select;
-        match PracticeSetup::load(
-            &path,
-            &self.history,
-            previous,
-            self.config.loop_style(),
-            self.config.pass_rule(),
-        ) {
+        match PracticeSetup::load(&path, &self.history, previous, self.config.practice_prefs()) {
             Ok(s) => {
                 self.message = None;
                 self.screen = Screen::Setup(Box::new(s));
@@ -379,6 +374,12 @@ impl App {
             _ => {}
         }
         if let Screen::Play(play) = &mut self.screen {
+            // 判定の線（画面の上から 85%）より上に見えている時間
+            if let Some(w) = &self.window {
+                let height = w.inner_size().height as f64 / w.scale_factor();
+                play.view_ahead_ms =
+                    height * 0.85 / f64::from(self.config.scroll_px_per_ms.max(0.05));
+            }
             play.update();
             if play.finished() {
                 self.finish_play();
@@ -425,6 +426,9 @@ impl App {
                 engine::practice::LoopStyle::Connect => engine::practice::LoopStyle::Restart,
                 engine::practice::LoopStyle::Restart => engine::practice::LoopStyle::Connect,
             }),
+            KeyCode::KeyL => A::ToggleLadder,
+            KeyCode::Comma => A::Speed(-1),
+            KeyCode::Period => A::Speed(1),
             _ => return,
         };
         self.setup_action(action);
@@ -439,26 +443,30 @@ impl App {
             A::Select(sec) => s.section = Some(sec),
             A::Shift(d) => s.shift(d),
             A::Resize(d) => s.resize(d),
-            A::Style(style) => {
-                s.style = style;
-                self.config.practice_style = style.name().to_owned();
-                self.config.save();
-            }
-            A::Rule(rule) => {
-                s.rule = rule;
-                self.config.practice_rule = rule.name().to_owned();
-                self.config.save();
-            }
+            A::Style(style) => s.style = style,
+            A::Rule(rule) => s.rule = rule,
+            A::ToggleLadder => s.toggle_ladder(),
+            A::Speed(d) => s.nudge_speed(d),
+            A::Target(t) => s.set_target(t),
+            A::Pitch(p) => s.pitch = p,
             A::Start => {
                 if let Some(o) = s.options() {
                     let path = s.path.clone();
                     self.start_practice(path, o);
                 }
+                return;
             }
             A::Back => {
                 self.screen = Screen::Select;
                 self.scroll_to_cursor = true;
+                return;
             }
+        }
+        // 区間のほかの決めごとは次の練習でも使う
+        let prefs = s.prefs();
+        if prefs != self.config.practice_prefs() {
+            self.config.set_practice_prefs(prefs);
+            self.config.save();
         }
     }
 
@@ -470,7 +478,7 @@ impl App {
             KeyCode::Escape => self.finish_play(),
             KeyCode::KeyR => {
                 let path = play.path.clone();
-                match play.practice.as_ref().map(|p| p.options) {
+                match play.practice.as_ref().map(|p| p.restart_options()) {
                     Some(o) => self.start_practice(path, o),
                     None => self.start(path),
                 }
@@ -479,10 +487,13 @@ impl App {
                 // 区間を 1 小節ずらして始め直す
                 let d = if code == KeyCode::ArrowLeft { -1 } else { 1 };
                 let path = play.path.clone();
-                if let Some(mut o) = play.practice.as_ref().map(|p| p.options) {
+                if let Some(mut o) = play.practice.as_ref().map(|p| p.restart_options()) {
                     o.section = o.section.shifted(d, play.notes_per_measure().len());
                     self.start_practice(path, o);
                 }
+            }
+            KeyCode::Comma | KeyCode::Period if play.practice.is_some() => {
+                play.nudge_speed(if code == KeyCode::Comma { -1 } else { 1 });
             }
             KeyCode::KeyM => {
                 play.drum_sounds = !play.drum_sounds;
@@ -682,11 +693,16 @@ impl App {
             }
             ui::ResultAction::Practice(section) => {
                 let previous = match section {
-                    Some(section) => Some(PracticeOptions {
-                        section,
-                        style: self.config.loop_style(),
-                        rule: self.config.pass_rule(),
-                    }),
+                    Some(section) => {
+                        let p = self.config.practice_prefs();
+                        Some(PracticeOptions {
+                            section,
+                            style: p.style,
+                            rule: p.rule,
+                            speed: p.speed,
+                            pitch: p.pitch,
+                        })
+                    }
                     None => options,
                 };
                 self.open_setup(path, previous);
