@@ -7,7 +7,7 @@
 use std::path::Path;
 
 use dtx::{DrumLane, NotePos};
-use engine::analysis::NoteResult;
+use engine::analysis::{NoteResult, TimedHit};
 use engine::input::Articulation;
 use engine::judge::{Judgement, Tally};
 use rusqlite::{Connection, Transaction, params};
@@ -87,6 +87,27 @@ const MIGRATIONS: &[&str] = &[
     );
     CREATE INDEX strays_by_lap ON strays(lap_id);
     ",
+    // 2: 音符の拍の中の位置（叩き方のくせに使う）と、練習でクリアした区間（克服の印に使う）
+    "
+    -- 拍の中の位置（0 以上 1 未満、拍の頭が 0）。前の版の記録は NULL
+    ALTER TABLE hits ADD COLUMN beat_pos REAL;
+    CREATE TABLE clears (
+        id INTEGER PRIMARY KEY,
+        chart_id INTEGER NOT NULL REFERENCES charts(id),
+        session_id INTEGER NOT NULL REFERENCES sessions(id),
+        first_measure INTEGER NOT NULL,
+        last_measure INTEGER NOT NULL,
+        -- 続けて合格した速度（1.0 以上）
+        speed REAL NOT NULL,
+        -- クリアした練習を始めた時刻（UNIX 秒）
+        cleared_at INTEGER NOT NULL,
+        -- 普通のプレイで克服した時刻と、そのときの区間の苦手度（練習の前と後）。まだなら NULL
+        overcome_at INTEGER,
+        weakness_before REAL,
+        weakness_after REAL
+    );
+    CREATE INDEX clears_by_chart ON clears(chart_id);
+    ",
 ];
 
 /// 譜面 1 つの見分け方
@@ -136,6 +157,28 @@ pub struct Session {
     /// 遊んだときの設定（JSON）
     pub settings: String,
     pub laps: Vec<Lap>,
+    /// 練習で区間をクリアした（等速以上で続けて合格した）
+    pub clear: Option<SectionClear>,
+}
+
+/// 練習でクリアした区間
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SectionClear {
+    pub first: u32,
+    pub last: u32,
+    /// 続けて合格した速度（1.0 以上）
+    pub speed: f64,
+}
+
+/// 残っているクリアの記録
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClearRecord {
+    pub first: u32,
+    pub last: u32,
+    pub speed: f64,
+    pub cleared_at: i64,
+    /// 克服した時刻と、そのときの区間の苦手度（練習の前、後）
+    pub overcome: Option<(i64, Option<f64>, Option<f64>)>,
 }
 
 /// 1 周（普通のプレイは 1 周だけ）
@@ -161,6 +204,8 @@ pub struct NoteHit {
     pub velocity: Option<u8>,
     pub articulation: Option<Articulation>,
     pub hh_pedal: Option<u8>,
+    /// 拍の中の位置（0 以上 1 未満、拍の頭が 0）
+    pub beat_pos: Option<f64>,
 }
 
 /// 空打ち 1 つ
@@ -233,17 +278,95 @@ impl Records {
         for (i, lap) in session.laps.iter().enumerate() {
             insert_lap(&tx, session_id, i, lap)?;
         }
+        if let Some(c) = session.clear {
+            tx.execute(
+                "INSERT INTO clears (chart_id, session_id, first_measure, last_measure, speed, cleared_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![chart_id, session_id, c.first, c.last, c.speed, session.started_at],
+            )?;
+        }
         tx.commit()?;
         Ok(session_id)
     }
 
+    /// 譜面のクリアの記録。古い順
+    pub fn clears(&self, chart_path: &str) -> Result<Vec<ClearRecord>> {
+        let mut q = self.conn.prepare(
+            "SELECT k.first_measure, k.last_measure, k.speed, k.cleared_at,
+                 k.overcome_at, k.weakness_before, k.weakness_after
+             FROM clears k JOIN charts c ON c.id = k.chart_id
+             WHERE c.path = ?1
+             ORDER BY k.cleared_at, k.id",
+        )?;
+        q.query_map(params![chart_path], |row| {
+            let overcome_at: Option<i64> = row.get(4)?;
+            let before: Option<f64> = row.get(5)?;
+            let after: Option<f64> = row.get(6)?;
+            Ok(ClearRecord {
+                first: row.get(0)?,
+                last: row.get(1)?,
+                speed: row.get(2)?,
+                cleared_at: row.get(3)?,
+                overcome: overcome_at.map(|at| (at, before, after)),
+            })
+        })?
+        .collect()
+    }
+
+    /// まだ克服していない区間（小節 `first`〜`last`）のクリアを、時刻 `at` に克服したことにする。
+    /// `before` と `after` は区間の苦手度（練習の前と、克服したプレイのあと）。返すのは書き換えた数
+    pub fn mark_overcome(
+        &mut self,
+        chart_path: &str,
+        first: u32,
+        last: u32,
+        at: i64,
+        before: Option<f64>,
+        after: Option<f64>,
+    ) -> Result<usize> {
+        self.conn.execute(
+            "UPDATE clears SET overcome_at = ?4, weakness_before = ?5, weakness_after = ?6
+             WHERE overcome_at IS NULL AND first_measure = ?2 AND last_measure = ?3
+                 AND chart_id = (SELECT id FROM charts WHERE path = ?1)",
+            params![chart_path, first, last, at, before, after],
+        )
+    }
+
+    /// 等速（100%）で叩けた音符のずれと拍の中の位置。すべての譜面の、直近 `sessions` 回のプレイと練習から
+    pub fn recent_timed_hits(&self, sessions: usize) -> Result<Vec<TimedHit>> {
+        let mut q = self.conn.prepare(
+            "SELECT h.lane, h.beat_pos, h.offset_ms
+             FROM hits h JOIN laps l ON l.id = h.lap_id
+             WHERE h.offset_ms IS NOT NULL AND h.beat_pos IS NOT NULL
+                 AND abs(l.speed - 1.0) < 1e-6
+                 AND l.session_id IN (SELECT id FROM sessions ORDER BY started_at DESC, id DESC LIMIT ?1)",
+        )?;
+        q.query_map(params![sessions as i64], |row| {
+            let lane: String = row.get(0)?;
+            Ok((lane, row.get::<_, f64>(1)?, row.get::<_, f64>(2)?))
+        })?
+        .filter_map(|r| match r {
+            Ok((lane, beat_pos, offset_ms)) => DrumLane::from_name(&lane).map(|lane| {
+                Ok(TimedHit {
+                    lane,
+                    beat_pos,
+                    offset_ms,
+                })
+            }),
+            Err(e) => Some(Err(e)),
+        })
+        .collect()
+    }
+
     /// 等速（100%）で叩いた周の、音符ごとの判定。新しい順。
-    /// 普通のプレイは直近 `plays` 回、練習は直近 `practice_laps` 周まで（練習の周は区間しか叩かないので多めに読む）
+    /// 普通のプレイは直近 `plays` 回、練習は直近 `practice_laps` 周まで（練習の周は区間しか叩かないので多めに読む）。
+    /// `before` があれば、その時刻（UNIX 秒）より前に始めたセッションだけ
     pub fn recent_results(
         &self,
         chart_path: &str,
         plays: usize,
         practice_laps: usize,
+        before: Option<i64>,
     ) -> Result<Vec<RecentLap>> {
         let mut laps = self.conn.prepare(
             "SELECT id, kind FROM (
@@ -256,13 +379,14 @@ impl Records {
                  JOIN sessions s ON s.id = l.session_id
                  JOIN charts c ON c.id = s.chart_id
                  WHERE c.path = ?1 AND abs(l.speed - 1.0) < 1e-6
+                     AND (?4 IS NULL OR s.started_at < ?4)
              )
              WHERE (kind = 'play' AND n <= ?2) OR (kind = 'practice' AND n <= ?3)
              ORDER BY started_at DESC, session DESC, lap DESC",
         )?;
         let ids = laps
             .query_map(
-                params![chart_path, plays as i64, practice_laps as i64],
+                params![chart_path, plays as i64, practice_laps as i64, before],
                 |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
             )?
             .collect::<Result<Vec<_>>>()?;
@@ -338,8 +462,8 @@ fn insert_lap(tx: &Transaction, session_id: i64, index: usize, lap: &Lap) -> Res
     let lap_id = tx.last_insert_rowid();
     let mut hit = tx.prepare_cached(
         "INSERT INTO hits (lap_id, measure, pos_num, pos_den, lane, judgement,
-             offset_ms, velocity, articulation, hh_pedal)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+             offset_ms, velocity, articulation, hh_pedal, beat_pos)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
     )?;
     for h in &lap.hits {
         hit.execute(params![
@@ -352,7 +476,8 @@ fn insert_lap(tx: &Transaction, session_id: i64, index: usize, lap: &Lap) -> Res
             h.offset_ms,
             h.velocity,
             h.articulation.map(Articulation::name),
-            h.hh_pedal
+            h.hh_pedal,
+            h.beat_pos
         ])?;
     }
     let mut stray = tx.prepare_cached(
@@ -407,6 +532,7 @@ mod tests {
             velocity: (judgement != Judgement::Miss).then_some(90),
             articulation: Some(Articulation::Rim),
             hh_pedal: None,
+            beat_pos: Some(0.25),
         }
     }
 
@@ -431,6 +557,7 @@ mod tests {
                     hh_pedal: Some(10),
                 }],
             }],
+            clear: None,
         }
     }
 
@@ -463,7 +590,7 @@ mod tests {
         )
         .unwrap();
         let got: Vec<Vec<NoteResult>> = r
-            .recent_results("songs/a/master.dtx", 10, 10)
+            .recent_results("songs/a/master.dtx", 10, 10, None)
             .unwrap()
             .into_iter()
             .map(|l| l.results)
@@ -489,10 +616,16 @@ mod tests {
             ]
         );
         assert_eq!(
-            r.recent_results("songs/a/master.dtx", 1, 0).unwrap().len(),
+            r.recent_results("songs/a/master.dtx", 1, 0, None)
+                .unwrap()
+                .len(),
             1
         );
-        assert!(r.recent_results("other.dtx", 10, 10).unwrap().is_empty());
+        assert!(
+            r.recent_results("other.dtx", 10, 10, None)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
@@ -514,7 +647,7 @@ mod tests {
         });
         r.save(&chart(1), &practice).unwrap();
         let got: Vec<(SessionKind, u32)> = r
-            .recent_results("songs/a/master.dtx", 10, 10)
+            .recent_results("songs/a/master.dtx", 10, 10, None)
             .unwrap()
             .into_iter()
             .map(|l| (l.kind, l.results[0].measure))
@@ -530,7 +663,7 @@ mod tests {
         );
         // 練習は 1 周まで、プレイは別に数える
         let got: Vec<SessionKind> = r
-            .recent_results("songs/a/master.dtx", 10, 1)
+            .recent_results("songs/a/master.dtx", 10, 1, None)
             .unwrap()
             .into_iter()
             .map(|l| l.kind)
@@ -624,12 +757,116 @@ mod tests {
         let r = Records::open(&path).unwrap();
         assert_eq!(r.schema_version().unwrap(), MIGRATIONS.len());
         assert_eq!(
-            r.recent_results("songs/a/master.dtx", 10, 10)
+            r.recent_results("songs/a/master.dtx", 10, 10, None)
                 .unwrap()
                 .len(),
             1
         );
         drop(r);
         let _ = std::fs::remove_file(&path);
+    }
+    #[test]
+    fn results_before_a_time() {
+        let mut r = Records::open_in_memory().unwrap();
+        r.save(&chart(1), &play(100, 1.0, vec![hit(1, Judgement::Miss)]))
+            .unwrap();
+        r.save(&chart(1), &play(200, 1.0, vec![hit(2, Judgement::Miss)]))
+            .unwrap();
+        let got: Vec<u32> = r
+            .recent_results("songs/a/master.dtx", 10, 10, Some(200))
+            .unwrap()
+            .into_iter()
+            .map(|l| l.results[0].measure)
+            .collect();
+        assert_eq!(got, vec![1]);
+    }
+
+    #[test]
+    fn clears_and_overcoming() {
+        let mut r = Records::open_in_memory().unwrap();
+        let mut practice = play(100, 1.0, vec![hit(3, Judgement::Perfect)]);
+        practice.kind = SessionKind::Practice;
+        practice.clear = Some(SectionClear {
+            first: 3,
+            last: 4,
+            speed: 1.0,
+        });
+        r.save(&chart(1), &practice).unwrap();
+        practice.started_at = 200;
+        r.save(&chart(1), &practice).unwrap();
+        let c = r.clears("songs/a/master.dtx").unwrap();
+        assert_eq!(c.len(), 2);
+        assert_eq!((c[0].first, c[0].last, c[0].cleared_at), (3, 4, 100));
+        assert_eq!(c[0].overcome, None);
+        // 同じ区間のまだ克服していないクリアをまとめて書き換える
+        assert_eq!(
+            r.mark_overcome("songs/a/master.dtx", 3, 4, 300, Some(0.5), Some(0.1))
+                .unwrap(),
+            2
+        );
+        assert_eq!(
+            r.mark_overcome("songs/a/master.dtx", 3, 4, 400, None, None)
+                .unwrap(),
+            0
+        );
+        let c = r.clears("songs/a/master.dtx").unwrap();
+        assert_eq!(c[1].overcome, Some((300, Some(0.5), Some(0.1))));
+        assert!(r.clears("other.dtx").unwrap().is_empty());
+    }
+
+    #[test]
+    fn timed_hits_across_charts_at_normal_speed() {
+        let mut r = Records::open_in_memory().unwrap();
+        let other = ChartKey {
+            path: "songs/b/master.dtx",
+            ..chart(9)
+        };
+        r.save(&chart(1), &play(100, 1.0, vec![hit(1, Judgement::Good)]))
+            .unwrap();
+        r.save(&other, &play(200, 1.0, vec![hit(1, Judgement::Great)]))
+            .unwrap();
+        // 70% の周、見逃し、拍の位置の無い記録は入らない
+        r.save(&chart(1), &play(300, 0.7, vec![hit(1, Judgement::Good)]))
+            .unwrap();
+        let mut old = hit(1, Judgement::Good);
+        old.beat_pos = None;
+        r.save(
+            &chart(1),
+            &play(400, 1.0, vec![old, hit(2, Judgement::Miss)]),
+        )
+        .unwrap();
+        let hits = r.recent_timed_hits(10).unwrap();
+        assert_eq!(
+            hits,
+            vec![
+                TimedHit {
+                    lane: DrumLane::SD,
+                    beat_pos: 0.25,
+                    offset_ms: -3.5
+                };
+                2
+            ]
+        );
+        // 直近 3 回（300・400 と 200）だけなら 1 打
+        assert_eq!(r.recent_timed_hits(3).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn version_1_files_are_upgraded() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(MIGRATIONS[0]).unwrap();
+        conn.pragma_update(None, "user_version", 1).unwrap();
+        conn.execute_batch(
+            "INSERT INTO charts VALUES (1, 'a.dtx', 'A', '', '00', 0);
+             INSERT INTO sessions VALUES (1, 1, 'play', 0, '00', '{}');
+             INSERT INTO laps VALUES (1, 1, 0, 1.0, 1, NULL, 0, 0, 0, 0, 0, 0, 0, NULL, NULL);
+             INSERT INTO hits VALUES (1, 0, 0, 1, 'SD', 'PERFECT', 1.0, 100, NULL, NULL);",
+        )
+        .unwrap();
+        let r = Records::init(conn).unwrap();
+        assert_eq!(r.schema_version().unwrap(), 2);
+        // 前の版の音符は拍の位置が無いので、くせには入らない
+        assert!(r.recent_timed_hits(10).unwrap().is_empty());
+        assert_eq!(r.recent_results("a.dtx", 10, 10, None).unwrap().len(), 1);
     }
 }

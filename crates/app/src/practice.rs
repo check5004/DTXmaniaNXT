@@ -14,10 +14,10 @@ use dtx::{DrumLane, DrumNote, TempoMap};
 use engine::analysis::mean_and_sd;
 use engine::judge::{JudgeEvent, Tally};
 use engine::practice::{
-    Ladder, Lap, LoopStyle, Looper, PassRule, SPEED_STEP, Section, SectionTimes, SpeedChange,
-    SpeedPlan, snap_speed, speed_percent,
+    Ladder, Lap, LoopStyle, Looper, PASSES_TO_UP, PassRule, SPEED_STEP, Section, SectionTimes,
+    SpeedChange, SpeedPlan, snap_speed, speed_percent,
 };
-use records::StrayHit;
+use records::{ClearRecord, StrayHit};
 
 use crate::game::WeakMap;
 use crate::history::History;
@@ -51,6 +51,8 @@ pub struct PracticeSetup {
     pub notes_per_measure: Vec<usize>,
     /// 苦手な小節（記録が無ければ全部「記録なし」）
     pub weak: WeakMap,
+    /// 練習でクリアした区間（古い順）
+    pub clears: Vec<ClearRecord>,
     pub section: Option<Section>,
     pub style: LoopStyle,
     pub rule: PassRule,
@@ -76,6 +78,7 @@ impl PracticeSetup {
         let notes = tempo.drum_notes(&chart);
         let notes_per_measure = count_per_measure(&notes, tempo.measure_count());
         let weak = history.weak_map(path, &notes_per_measure, None);
+        let clears = history.clears(path);
         let section = previous
             .map(|p| p.section.clamped(notes_per_measure.len()))
             .or_else(|| default_section(&weak, &notes_per_measure));
@@ -85,6 +88,7 @@ impl PracticeSetup {
             artist: chart.artist().to_owned(),
             notes_per_measure,
             weak,
+            clears,
             section,
             style: previous.map_or(prefs.style, |p| p.style),
             rule: previous.map_or(prefs.rule, |p| p.rule),
@@ -157,6 +161,24 @@ impl PracticeSetup {
                 target: percent,
             };
         }
+    }
+
+    /// クリアした区間ごとの、一番速い速度（%）と克服したか。区間の順
+    pub fn cleared_sections(&self) -> Vec<(Section, u32, bool)> {
+        let mut out: Vec<(Section, u32, bool)> = Vec::new();
+        for c in &self.clears {
+            let s = Section::new(c.first, c.last);
+            let speed = speed_percent(c.speed);
+            match out.iter_mut().find(|o| o.0 == s) {
+                Some(o) => {
+                    o.1 = o.1.max(speed);
+                    o.2 |= c.overcome.is_some();
+                }
+                None => out.push((s, speed, c.overcome.is_some())),
+            }
+        }
+        out.sort_by_key(|o| (o.0.first, o.0.last));
+        out
     }
 
     /// 区間を `delta` 小節ずらす
@@ -390,6 +412,33 @@ impl Practice {
             speed: self.ladder.plan(),
             ..self.options
         }
+    }
+
+    /// 等速以上で続けて合格した一番速い速度（%）。最後まで叩いた周を順に見て、同じ速度で
+    /// [`PASSES_TO_UP`] 周続けて合格していればクリア
+    pub fn clear_speed(&self) -> Option<u32> {
+        let mut best = None;
+        let mut run: Option<(u32, u32)> = None;
+        for l in self
+            .laps
+            .iter()
+            .filter(|l| l.complete() && !l.notes.is_empty())
+        {
+            let speed = speed_percent(l.plan.speed);
+            let passed = l.summary(self.options.rule).passed == Some(true);
+            run = match (passed, run) {
+                (false, _) => None,
+                (true, Some((s, n))) if s == speed => Some((s, n + 1)),
+                (true, _) => Some((speed, 1)),
+            };
+            if let Some((s, n)) = run
+                && s >= 100
+                && n >= PASSES_TO_UP
+            {
+                best = best.max(Some(s));
+            }
+        }
+        best
     }
 
     /// 先に作っておく速度（%）。次の速度と、その上下
@@ -640,6 +689,7 @@ mod tests {
             artist: String::new(),
             notes_per_measure: npm,
             weak,
+            clears: Vec::new(),
             section: Some(Section::new(2, 5)),
             style: LoopStyle::Connect,
             rule: PassRule::Normal,
@@ -672,6 +722,7 @@ mod tests {
                 plays: 0,
                 practice_laps: 0,
             },
+            clears: Vec::new(),
             section: Some(Section::new(0, 0)),
             style: LoopStyle::Connect,
             rule: PassRule::Normal,
@@ -784,5 +835,72 @@ mod tests {
         // 助走は合否が出てから 2000ms 先（音の終わりの 3000 より後）
         let (lap, _) = p.next_lap(100, end + 117.0 + 2000.0);
         assert!((lap.audio.at_ms - 4117.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn two_passes_in_a_row_at_full_speed_clear_the_section() {
+        let mut judge =
+            Judge::with_groups(Vec::new(), HitWindows::default(), LaneGroups::default());
+        let mut p = practice_at(LoopStyle::Connect, SpeedPlan::Fixed(100));
+        play_lap(&mut p, &mut judge, 100, true);
+        play_lap(&mut p, &mut judge, 100, false);
+        play_lap(&mut p, &mut judge, 100, true);
+        assert_eq!(p.clear_speed(), None);
+        play_lap(&mut p, &mut judge, 100, true);
+        assert_eq!(p.clear_speed(), Some(100));
+        // 遅い速度で続けて合格してもクリアではない
+        let mut judge =
+            Judge::with_groups(Vec::new(), HitWindows::default(), LaneGroups::default());
+        let mut p = practice_at(LoopStyle::Connect, SpeedPlan::Fixed(95));
+        play_lap(&mut p, &mut judge, 95, true);
+        play_lap(&mut p, &mut judge, 95, true);
+        assert_eq!(p.clear_speed(), None);
+        // 速度が変わったら数え直し
+        play_lap(&mut p, &mut judge, 100, true);
+        play_lap(&mut p, &mut judge, 105, true);
+        assert_eq!(p.clear_speed(), None);
+        play_lap(&mut p, &mut judge, 105, true);
+        assert_eq!(p.clear_speed(), Some(105));
+    }
+
+    #[test]
+    fn cleared_sections_are_merged() {
+        let clear = |first, last, speed, overcome: bool| ClearRecord {
+            first,
+            last,
+            speed,
+            cleared_at: 0,
+            overcome: overcome.then_some((1, None, None)),
+        };
+        let mut s = PracticeSetup {
+            path: PathBuf::new(),
+            title: String::new(),
+            artist: String::new(),
+            notes_per_measure: vec![4; 10],
+            weak: WeakMap {
+                weakness: vec![None; 10],
+                phrases: Vec::new(),
+                plays: 0,
+                practice_laps: 0,
+            },
+            clears: Vec::new(),
+            section: None,
+            style: LoopStyle::Connect,
+            rule: PassRule::Normal,
+            speed: SpeedPlan::default(),
+            pitch: Pitch::Keep,
+        };
+        s.clears = vec![
+            clear(5, 6, 1.0, false),
+            clear(1, 2, 1.0, false),
+            clear(5, 6, 1.1, true),
+        ];
+        assert_eq!(
+            s.cleared_sections(),
+            vec![
+                (Section::new(1, 2), 100, false),
+                (Section::new(5, 6), 110, true)
+            ]
+        );
     }
 }

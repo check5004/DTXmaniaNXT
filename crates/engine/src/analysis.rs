@@ -2,6 +2,11 @@
 //!
 //! 苦手度は、音符ごとの判定を点（PERFECT 0、GREAT 0.2、GOOD 0.5、POOR と MISS 1）にし、
 //! 小節の中で新しい記録ほど重く平均したもの。0 なら全部 PERFECT、1 なら全部 MISS か POOR。
+//!
+//! ほかに、練習でクリアした区間を普通のプレイでも叩けたか（克服）と、
+//! レーンと「拍の中の位置」ごとのずれのくせ（傾向）を出す。
+
+use dtx::DrumLane;
 
 use crate::judge::Judgement;
 
@@ -152,6 +157,154 @@ pub fn weak_phrases(
     phrases
 }
 
+/// 区間（小節 `first`〜`last`）の苦手度。音符の数で重みをつけた小節の苦手度の平均。記録が無ければ `None`
+pub fn section_weakness(
+    weakness: &[Option<f64>],
+    notes_per_measure: &[usize],
+    first: u32,
+    last: u32,
+) -> Option<f64> {
+    let (mut sum, mut notes) = (0.0, 0usize);
+    for m in first as usize..=last as usize {
+        if let (Some(Some(w)), Some(&n)) = (weakness.get(m), notes_per_measure.get(m)) {
+            sum += w * n as f64;
+            notes += n;
+        }
+    }
+    (notes > 0).then(|| sum / notes as f64)
+}
+
+/// 1 回のプレイの、区間（小節 `first`〜`last`）の点の平均。区間を叩いていなければ `None`
+pub fn play_section_score(results: &[NoteResult], first: u32, last: u32) -> Option<f64> {
+    let points: Vec<f64> = results
+        .iter()
+        .filter(|r| (first..=last).contains(&r.measure))
+        .map(|r| weakness_points(r.judgement))
+        .collect();
+    (!points.is_empty()).then(|| points.iter().sum::<f64>() / points.len() as f64)
+}
+
+/// 練習でクリアした区間を「克服」したか。
+/// `before` は練習する前の区間の苦手度、`now` は今回のプレイを入れた苦手度、`this_play` は今回のプレイだけの点。
+/// 今回のプレイで苦手でなく（[`WEAK_THRESHOLD`] 未満）、苦手度が練習の前より下がっていれば克服
+pub fn overcome(before: Option<f64>, now: Option<f64>, this_play: Option<f64>) -> bool {
+    let Some(this_play) = this_play else {
+        return false;
+    };
+    let lower = match (before, now) {
+        (Some(b), Some(n)) => n < b,
+        // 練習の前に普通のプレイの記録が無ければ、今回のプレイだけで決める
+        (None, _) => true,
+        (Some(_), None) => false,
+    };
+    this_play < WEAK_THRESHOLD && lower
+}
+
+/// 拍の中の位置
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Subdivision {
+    /// 拍の頭（表拍）
+    OnBeat,
+    /// 8 分の裏
+    Eighth,
+    /// 16 分の裏（拍の 1/4 と 3/4）
+    Sixteenth,
+    /// 3 連符（拍の 1/3 と 2/3）
+    Triplet,
+    /// それより細かい位置
+    Other,
+}
+
+impl Subdivision {
+    pub const ALL: [Subdivision; 5] = [
+        Self::OnBeat,
+        Self::Eighth,
+        Self::Sixteenth,
+        Self::Triplet,
+        Self::Other,
+    ];
+
+    /// 拍の中の位置 `beat_pos`（0 以上 1 未満、拍の頭が 0）から
+    pub fn of(beat_pos: f64) -> Self {
+        const EPS: f64 = 1e-3;
+        let at = |x: f64| (beat_pos - x).abs() < EPS;
+        if at(0.0) || at(1.0) {
+            Self::OnBeat
+        } else if at(0.5) {
+            Self::Eighth
+        } else if at(0.25) || at(0.75) {
+            Self::Sixteenth
+        } else if at(1.0 / 3.0) || at(2.0 / 3.0) {
+            Self::Triplet
+        } else {
+            Self::Other
+        }
+    }
+}
+
+/// 叩けた 1 打（傾向の材料）
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TimedHit {
+    pub lane: DrumLane,
+    /// 拍の中の位置（0 以上 1 未満）
+    pub beat_pos: f64,
+    /// ずれ（ミリ秒、マイナスは早い）
+    pub offset_ms: f64,
+}
+
+/// レーンと拍の中の位置ごとのずれ
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Tendency {
+    pub lane: DrumLane,
+    pub sub: Subdivision,
+    pub hits: usize,
+    pub mean_ms: f64,
+    pub sd_ms: f64,
+}
+
+/// くせとして挙げるずれの平均の大きさ（ミリ秒）
+pub const NOTABLE_MEAN_MS: f64 = 8.0;
+
+/// レーンと拍の中の位置ごとに、ずれの平均と標準偏差を出す。`min_hits` 打に満たない組は出さない。
+/// 並びはレーンの順、同じレーンの中は拍の中の位置の順
+pub fn tendencies(hits: &[TimedHit], min_hits: usize) -> Vec<Tendency> {
+    let mut groups: std::collections::BTreeMap<(usize, Subdivision), Vec<f64>> =
+        std::collections::BTreeMap::new();
+    for h in hits {
+        let lane = DrumLane::ALL.iter().position(|&l| l == h.lane).unwrap_or(0);
+        groups
+            .entry((lane, Subdivision::of(h.beat_pos)))
+            .or_default()
+            .push(h.offset_ms);
+    }
+    groups
+        .into_iter()
+        .filter(|(_, xs)| xs.len() >= min_hits.max(2))
+        .filter_map(|((lane, sub), xs)| {
+            let (mean, sd) = mean_and_sd(&xs);
+            Some(Tendency {
+                lane: DrumLane::ALL[lane],
+                sub,
+                hits: xs.len(),
+                mean_ms: mean?,
+                sd_ms: sd?,
+            })
+        })
+        .collect()
+}
+
+/// 目立つくせ。ずれの平均が [`NOTABLE_MEAN_MS`] 以上の組を、ずれの大きい順に `top` 個まで
+pub fn notable_tendencies(t: &[Tendency], top: usize) -> Vec<Tendency> {
+    let mut v: Vec<Tendency> = t
+        .iter()
+        .copied()
+        .filter(|t| t.mean_ms.abs() >= NOTABLE_MEAN_MS)
+        .collect();
+    v.sort_by(|a, b| b.mean_ms.abs().total_cmp(&a.mean_ms.abs()));
+    v.truncate(top);
+    v
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -265,5 +418,98 @@ mod tests {
     #[test]
     fn no_phrases_without_weak_measures() {
         assert!(weak_phrases(&[Some(0.1), None, Some(0.24)], &[1, 0, 1], 5).is_empty());
+    }
+    #[test]
+    fn section_weakness_weighs_by_notes() {
+        let w = vec![Some(0.5), Some(0.0), None, Some(1.0)];
+        let n = vec![2, 6, 0, 2];
+        // (0.5 × 2 + 0 × 6) / 8
+        assert!(close(section_weakness(&w, &n, 0, 1), 0.125));
+        // 記録の無い小節は入れない: (0 × 6 + 1 × 2) / 8
+        assert!(close(section_weakness(&w, &n, 1, 3), 0.25));
+        assert_eq!(section_weakness(&w, &n, 2, 2), None);
+        assert_eq!(section_weakness(&w, &n, 5, 6), None);
+    }
+
+    #[test]
+    fn play_section_scores() {
+        let play = vec![r(0, Miss), r(1, Perfect), r(1, Good), r(2, Miss)];
+        assert!(close(play_section_score(&play, 1, 1), 0.25));
+        assert!(close(play_section_score(&play, 0, 1), 0.5));
+        assert_eq!(play_section_score(&play, 3, 4), None);
+    }
+
+    #[test]
+    fn overcoming_needs_a_good_play_and_lower_weakness() {
+        assert!(overcome(Some(0.5), Some(0.4), Some(0.1)));
+        // 今回のプレイが苦手なまま
+        assert!(!overcome(Some(0.5), Some(0.4), Some(0.3)));
+        // 苦手度が下がっていない
+        assert!(!overcome(Some(0.2), Some(0.2), Some(0.0)));
+        // 区間を叩いていない
+        assert!(!overcome(Some(0.5), Some(0.4), None));
+        // 練習の前に記録が無ければ今回のプレイだけで
+        assert!(overcome(None, Some(0.1), Some(0.1)));
+    }
+
+    #[test]
+    fn subdivisions_of_beat_positions() {
+        assert_eq!(Subdivision::of(0.0), Subdivision::OnBeat);
+        assert_eq!(Subdivision::of(0.9999), Subdivision::OnBeat);
+        assert_eq!(Subdivision::of(0.5), Subdivision::Eighth);
+        assert_eq!(Subdivision::of(0.25), Subdivision::Sixteenth);
+        assert_eq!(Subdivision::of(0.75), Subdivision::Sixteenth);
+        assert_eq!(Subdivision::of(1.0 / 3.0), Subdivision::Triplet);
+        assert_eq!(Subdivision::of(2.0 / 3.0), Subdivision::Triplet);
+        assert_eq!(Subdivision::of(0.125), Subdivision::Other);
+    }
+
+    fn th(lane: DrumLane, beat_pos: f64, offset_ms: f64) -> TimedHit {
+        TimedHit {
+            lane,
+            beat_pos,
+            offset_ms,
+        }
+    }
+
+    #[test]
+    fn tendencies_per_lane_and_position() {
+        let hits = vec![
+            th(DrumLane::BD, 0.25, 20.0),
+            th(DrumLane::BD, 0.75, 16.0),
+            th(DrumLane::BD, 0.25, 18.0),
+            th(DrumLane::BD, 0.0, -2.0),
+            th(DrumLane::BD, 0.0, 2.0),
+            th(DrumLane::SD, 0.5, -10.0),
+            th(DrumLane::SD, 0.5, -10.0),
+            // 1 打だけの組は出さない
+            th(DrumLane::HH, 0.0, 30.0),
+        ];
+        let t = tendencies(&hits, 2);
+        let got: Vec<(DrumLane, Subdivision, usize)> =
+            t.iter().map(|t| (t.lane, t.sub, t.hits)).collect();
+        // レーンの順（DrumLane::ALL: HH、SD、BD…）
+        let want = vec![
+            (DrumLane::SD, Subdivision::Eighth, 2),
+            (DrumLane::BD, Subdivision::OnBeat, 2),
+            (DrumLane::BD, Subdivision::Sixteenth, 3),
+        ];
+        assert_eq!(got, want);
+        let bd16 = t
+            .iter()
+            .find(|t| t.lane == DrumLane::BD && t.sub == Subdivision::Sixteenth)
+            .unwrap();
+        // 平均 18、標準偏差 2
+        assert!((bd16.mean_ms - 18.0).abs() < 1e-9 && (bd16.sd_ms - 2.0).abs() < 1e-9);
+        // 目立つのは BD の 16 分裏（+18）と SD の 8 分裏（−10）。表拍の BD（0）は入らない
+        let n = notable_tendencies(&t, 5);
+        assert_eq!(
+            n.iter().map(|t| (t.lane, t.sub)).collect::<Vec<_>>(),
+            vec![
+                (DrumLane::BD, Subdivision::Sixteenth),
+                (DrumLane::SD, Subdivision::Eighth)
+            ]
+        );
+        assert_eq!(notable_tendencies(&t, 1).len(), 1);
     }
 }
