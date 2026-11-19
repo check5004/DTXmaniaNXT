@@ -318,11 +318,20 @@ impl App {
             self.history.save(p);
             let mut outcome = p.outcome();
             if outcome.practice.is_none() {
-                outcome.weak = Some(self.history.weak_map(
+                let weak = self.history.weak_map(
                     &outcome.path,
                     &outcome.notes_per_measure,
                     Some(&outcome.results),
-                ));
+                );
+                outcome.overcome = self.history.check_overcome(
+                    &outcome.path,
+                    outcome.started_at,
+                    &outcome.notes_per_measure,
+                    &outcome.results,
+                    &weak,
+                );
+                outcome.weak = Some(weak);
+                outcome.tendencies = self.history.tendencies();
             }
             self.screen = Screen::Result(Box::new(outcome));
         }

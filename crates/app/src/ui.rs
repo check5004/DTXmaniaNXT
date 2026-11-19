@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use dtx::DrumLane;
 use egui::{Align, Align2, Color32, FontId, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, Vec2};
-use engine::analysis::WeakPhrase;
+use engine::analysis::{NOTABLE_MEAN_MS, Subdivision, Tendency, WeakPhrase, notable_tendencies};
 use engine::judge::Judgement;
 use engine::practice::{
     FAILS_TO_DOWN, LoopStyle, PASSES_TO_UP, PassRule, Section, SpeedChange, SpeedPlan,
@@ -15,6 +15,7 @@ use library::{LEVELS, Node};
 
 use crate::config::Config;
 use crate::game::{Outcome, Play, PracticeOutcome, WeakMap};
+use crate::history::{OvercomeCheck, TENDENCY_MIN_HITS, TENDENCY_SESSIONS};
 use crate::practice::{LapSummary, Practice, PracticeSetup};
 use crate::songs::SongList;
 use crate::stretch::Pitch;
@@ -320,91 +321,232 @@ pub fn draw_result(ui: &mut egui::Ui, o: &Outcome, config: &Config) -> Vec<Resul
     }
     let mut actions = Vec::new();
     egui::CentralPanel::default().show(ui, |ui| {
-        ui.vertical_centered(|ui| {
-            ui.add_space(40.0);
-            ui.heading(RichText::new(&o.title).size(28.0));
-            if !o.artist.is_empty() {
-                ui.label(&o.artist);
-            }
-            if let Some(lv) = o.level {
-                ui.label(format!("Lv {lv:.2}"));
-            }
-            if !o.cleared {
-                ui.label(RichText::new("途中でやめました").weak());
-            }
-            ui.add_space(24.0);
-            let t = &o.tally;
-            for (j, n) in [
-                (Judgement::Perfect, t.perfect),
-                (Judgement::Great, t.great),
-                (Judgement::Good, t.good),
-                (Judgement::Poor, t.poor),
-                (Judgement::Miss, t.miss),
-            ] {
-                let (name, color) = judgement_label(j);
-                ui.label(
-                    RichText::new(format!("{name:<8} {n:>5}"))
-                        .monospace()
-                        .size(20.0)
-                        .color(color),
-                );
-            }
-            ui.add_space(8.0);
-            ui.label(RichText::new(format!("最大コンボ {} / {}", t.max_combo, o.notes)).size(18.0));
-            ui.label(format!("空打ち {}", t.stray));
-            ui.add_space(16.0);
-            let hits = t.perfect + t.great + t.good + t.poor;
-            if let Some(mean) = o.offset_mean_ms {
-                let lean = if mean > 2.0 {
-                    "遅め"
-                } else if mean < -2.0 {
-                    "早め"
-                } else {
-                    "ちょうど"
-                };
-                let sd = o
-                    .offset_sd_ms
-                    .map_or(String::new(), |s| format!("、ばらつき ±{s:.1}ms"));
-                ui.label(format!("ずれの平均 {mean:+.1}ms（{lean}）{sd}"));
-                if hits >= MIN_HITS_FOR_OFFSET && mean.abs() >= 3.0 {
-                    let next = (config.input_offset_ms + mean).round();
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            ui.vertical_centered(|ui| {
+                ui.add_space(40.0);
+                ui.heading(RichText::new(&o.title).size(28.0));
+                if !o.artist.is_empty() {
+                    ui.label(&o.artist);
+                }
+                if let Some(lv) = o.level {
+                    ui.label(format!("Lv {lv:.2}"));
+                }
+                if !o.cleared {
+                    ui.label(RichText::new("途中でやめました").weak());
+                }
+                ui.add_space(24.0);
+                let t = &o.tally;
+                for (j, n) in [
+                    (Judgement::Perfect, t.perfect),
+                    (Judgement::Great, t.great),
+                    (Judgement::Good, t.good),
+                    (Judgement::Poor, t.poor),
+                    (Judgement::Miss, t.miss),
+                ] {
+                    let (name, color) = judgement_label(j);
                     ui.label(
-                        RichText::new("いつも同じ向きにずれるなら、機材の遅れかもしれません。")
-                            .weak(),
+                        RichText::new(format!("{name:<8} {n:>5}"))
+                            .monospace()
+                            .size(20.0)
+                            .color(color),
                     );
-                    if ui
-                        .button(format!(
-                            "入力の補正を {:+.0}ms → {next:+.0}ms にする",
-                            config.input_offset_ms
-                        ))
-                        .clicked()
-                    {
-                        actions.push(ResultAction::SetInputOffset(next));
+                }
+                ui.add_space(8.0);
+                ui.label(
+                    RichText::new(format!("最大コンボ {} / {}", t.max_combo, o.notes)).size(18.0),
+                );
+                ui.label(format!("空打ち {}", t.stray));
+                ui.add_space(16.0);
+                let hits = t.perfect + t.great + t.good + t.poor;
+                if let Some(mean) = o.offset_mean_ms {
+                    let lean = if mean > 2.0 {
+                        "遅め"
+                    } else if mean < -2.0 {
+                        "早め"
+                    } else {
+                        "ちょうど"
+                    };
+                    let sd = o
+                        .offset_sd_ms
+                        .map_or(String::new(), |s| format!("、ばらつき ±{s:.1}ms"));
+                    ui.label(format!("ずれの平均 {mean:+.1}ms（{lean}）{sd}"));
+                    if hits >= MIN_HITS_FOR_OFFSET && mean.abs() >= 3.0 {
+                        let next = (config.input_offset_ms + mean).round();
+                        ui.label(
+                            RichText::new("いつも同じ向きにずれるなら、機材の遅れかもしれません。")
+                                .weak(),
+                        );
+                        if ui
+                            .button(format!(
+                                "入力の補正を {:+.0}ms → {next:+.0}ms にする",
+                                config.input_offset_ms
+                            ))
+                            .clicked()
+                        {
+                            actions.push(ResultAction::SetInputOffset(next));
+                        }
                     }
                 }
-            }
-            if let Some(w) = &o.weak {
-                ui.add_space(24.0);
-                if let Some(section) = draw_weak_map(ui, w) {
-                    actions.push(ResultAction::Practice(Some(section)));
+                if !o.overcome.is_empty() {
+                    ui.add_space(24.0);
+                    draw_overcome(ui, &o.overcome);
                 }
-            }
-            ui.add_space(24.0);
-            if ui
-                .button("選曲に戻る（Enter、ドラムは CY か RD）")
-                .clicked()
-            {
-                actions.push(ResultAction::Back);
-            }
-            if ui.button("もう一度（R）").clicked() {
-                actions.push(ResultAction::Retry);
-            }
-            if ui.button("区間を練習（P）").clicked() {
-                actions.push(ResultAction::Practice(None));
-            }
+                if let Some(w) = &o.weak {
+                    ui.add_space(24.0);
+                    if let Some(section) = draw_weak_map(ui, w) {
+                        actions.push(ResultAction::Practice(Some(section)));
+                    }
+                }
+                ui.add_space(24.0);
+                draw_tendencies(ui, &o.tendencies);
+                ui.add_space(24.0);
+                if ui
+                    .button("選曲に戻る（Enter、ドラムは CY か RD）")
+                    .clicked()
+                {
+                    actions.push(ResultAction::Back);
+                }
+                if ui.button("もう一度（R）").clicked() {
+                    actions.push(ResultAction::Retry);
+                }
+                if ui.button("区間を練習（P）").clicked() {
+                    actions.push(ResultAction::Practice(None));
+                }
+                ui.add_space(24.0);
+            });
         });
     });
     actions
+}
+
+/// 練習でクリアした区間を、今回のプレイで克服したか
+fn draw_overcome(ui: &mut egui::Ui, checks: &[OvercomeCheck]) {
+    for c in checks {
+        let change = match (c.before, c.now) {
+            (Some(b), Some(n)) => format!("苦手度 {b:.2} → {n:.2}"),
+            (None, Some(n)) => format!("苦手度 {n:.2}"),
+            _ => String::new(),
+        };
+        if c.overcome {
+            ui.label(
+                RichText::new(format!(
+                    "克服！ {}（{}% でクリアした区間。{change}）",
+                    section_text(c.section),
+                    c.speed
+                ))
+                .size(20.0)
+                .color(PASS_COLOR),
+            );
+        } else {
+            ui.label(format!(
+                "{} は {}% でクリアした区間ですが、今回はまだ崩れました（今回の点 {:.2}、{change}）",
+                section_text(c.section),
+                c.speed,
+                c.this_play
+            ));
+        }
+    }
+}
+
+/// すべての曲を通した叩き方のくせ。目立つものを文で、全部を表で
+fn draw_tendencies(ui: &mut egui::Ui, t: &[Tendency]) {
+    ui.label(
+        RichText::new(format!(
+            "叩き方のくせ（すべての曲の、等速で叩いた直近 {TENDENCY_SESSIONS} 回から）"
+        ))
+        .size(18.0),
+    );
+    if t.is_empty() {
+        ui.label(format!(
+            "まだ記録が足りません（レーンと拍の中の位置の組ごとに {TENDENCY_MIN_HITS} 打から出します）。"
+        ));
+        return;
+    }
+    let notable = notable_tendencies(t, 3);
+    if notable.is_empty() {
+        ui.label(format!(
+            "目立つくせはありません（どの組もずれの平均が {NOTABLE_MEAN_MS:.0}ms 未満）。"
+        ));
+    }
+    for n in &notable {
+        ui.label(
+            RichText::new(format!(
+                "{} の{}{}: 平均 {:.0}ms {}（ばらつき ±{:.0}ms、{} 打）",
+                n.lane.name(),
+                // 数字で始まるときは間をあける
+                if sub_name(n.sub).starts_with(|c: char| c.is_ascii_digit()) {
+                    " "
+                } else {
+                    ""
+                },
+                sub_name(n.sub),
+                n.mean_ms.abs(),
+                if n.mean_ms > 0.0 { "遅い" } else { "早い" },
+                n.sd_ms,
+                n.hits
+            ))
+            .color(tendency_color(n.mean_ms)),
+        );
+    }
+    egui::CollapsingHeader::new("くせの表（レーン × 拍の中の位置、ずれの平均 ± ばらつき）")
+        .id_salt("tendencies")
+        .show(ui, |ui| {
+            let lanes: Vec<DrumLane> = DrumLane::ALL
+                .into_iter()
+                .filter(|l| t.iter().any(|x| x.lane == *l))
+                .collect();
+            egui::Grid::new("tendency_grid")
+                .striped(true)
+                .spacing(Vec2::new(16.0, 4.0))
+                .show(ui, |ui| {
+                    ui.label("");
+                    for sub in Subdivision::ALL {
+                        ui.label(RichText::new(sub_name(sub)).strong());
+                    }
+                    ui.end_row();
+                    for lane in lanes {
+                        ui.label(RichText::new(lane.name()).strong());
+                        for sub in Subdivision::ALL {
+                            match t.iter().find(|x| x.lane == lane && x.sub == sub) {
+                                Some(x) => {
+                                    ui.label(
+                                        RichText::new(format!("{:+.0} ±{:.0}", x.mean_ms, x.sd_ms))
+                                            .monospace()
+                                            .color(tendency_color(x.mean_ms)),
+                                    )
+                                    .on_hover_text(format!("{} 打", x.hits));
+                                }
+                                None => {
+                                    ui.label(RichText::new("-").weak());
+                                }
+                            }
+                        }
+                        ui.end_row();
+                    }
+                });
+            ui.label(RichText::new("ミリ秒。+ は遅い、- は早い").weak());
+        });
+}
+
+fn sub_name(s: Subdivision) -> &'static str {
+    match s {
+        Subdivision::OnBeat => "表拍",
+        Subdivision::Eighth => "8 分裏",
+        Subdivision::Sixteenth => "16 分裏",
+        Subdivision::Triplet => "3 連符",
+        Subdivision::Other => "細かい位置",
+    }
+}
+
+/// ずれの色。目立つほど、遅ければ赤、早ければ青
+fn tendency_color(mean_ms: f64) -> Color32 {
+    if mean_ms.abs() < NOTABLE_MEAN_MS {
+        Color32::from_gray(180)
+    } else if mean_ms > 0.0 {
+        Color32::from_rgb(0xF0, 0x90, 0x70)
+    } else {
+        Color32::from_rgb(0x70, 0xB0, 0xF0)
+    }
 }
 
 /// 練習の結果。周ごとの成績を並べる
@@ -566,6 +708,7 @@ const SETUP_BAND_MAX_WIDTH: f32 = 1000.0;
 pub fn draw_setup(ui: &mut egui::Ui, s: &PracticeSetup) -> Vec<SetupAction> {
     let mut actions = Vec::new();
     egui::CentralPanel::default().show(ui, |ui| {
+        egui::ScrollArea::vertical().show(ui, |ui| {
         ui.add_space(16.0);
         ui.heading(RichText::new(format!("練習: {}", s.title)).size(26.0));
         if !s.artist.is_empty() {
@@ -630,6 +773,27 @@ pub fn draw_setup(ui: &mut egui::Ui, s: &PracticeSetup) -> Vec<SetupAction> {
                 let sec = Section::new(p.first, p.last);
                 if ui
                     .selectable_label(s.section == Some(sec), phrase_text(p))
+                    .clicked()
+                {
+                    actions.push(SetupAction::Select(sec));
+                }
+            }
+        }
+        let cleared = s.cleared_sections();
+        if !cleared.is_empty() {
+            ui.add_space(12.0);
+            ui.label(RichText::new("練習でクリアした区間").strong());
+            for (sec, speed, overcome) in cleared {
+                let state = if overcome {
+                    "克服"
+                } else {
+                    "克服はまだ（普通のプレイで確かめます）"
+                };
+                if ui
+                    .selectable_label(
+                        s.section == Some(sec),
+                        format!("{}　{speed}% でクリア・{state}", section_text(sec)),
+                    )
                     .clicked()
                 {
                     actions.push(SetupAction::Select(sec));
@@ -724,6 +888,7 @@ pub fn draw_setup(ui: &mut egui::Ui, s: &PracticeSetup) -> Vec<SetupAction> {
             )
             .weak(),
         );
+        });
     });
     actions
 }

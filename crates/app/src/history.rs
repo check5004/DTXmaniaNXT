@@ -1,11 +1,15 @@
 //! プレイの記録。OS のデータのフォルダ（Windows は %APPDATA%\DTXmaniaNXT）の records.sqlite に残し、
-//! 結果の画面に出す苦手な小節を、直近の記録から出す。
+//! 結果の画面に出す苦手な小節、練習でクリアした区間の克服、叩き方のくせを、直近の記録から出す。
 //! 記録が開けないときは残さずに遊べるようにし、苦手な小節は今回のプレイだけから出す。
 
 use std::path::{Path, PathBuf};
 
-use engine::analysis::{HISTORY_PLAYS, NoteResult, measure_weakness, weak_phrases};
-use records::{ChartKey, Records, SessionKind};
+use engine::analysis::{
+    HISTORY_PLAYS, NoteResult, Tendency, measure_weakness, overcome, play_section_score,
+    section_weakness, tendencies, weak_phrases,
+};
+use engine::practice::Section;
+use records::{ChartKey, ClearRecord, Records, SessionKind};
 
 use crate::game::{Play, WeakMap};
 
@@ -14,6 +18,27 @@ const TOP_PHRASES: usize = 5;
 
 /// 苦手度に使う練習の周の数。練習の周は区間しか叩かないので、普通のプレイより多めに読む
 const RECENT_PRACTICE_LAPS: usize = 100;
+
+/// 叩き方のくせに使う、すべての曲の直近のセッションの数
+pub const TENDENCY_SESSIONS: usize = 200;
+
+/// 叩き方のくせを出すのに要る打数（レーンと拍の中の位置の組ごと）
+pub const TENDENCY_MIN_HITS: usize = 20;
+
+/// 練習でクリアした区間を、普通のプレイで確かめた結果
+#[derive(Debug, Clone, PartialEq)]
+pub struct OvercomeCheck {
+    pub section: Section,
+    /// 練習でクリアした速度（%、一番速いもの）
+    pub speed: u32,
+    /// 練習の前の区間の苦手度
+    pub before: Option<f64>,
+    /// 今回のプレイを入れた区間の苦手度
+    pub now: Option<f64>,
+    /// 今回のプレイだけの区間の点
+    pub this_play: f64,
+    pub overcome: bool,
+}
 
 pub struct History {
     records: Option<Records>,
@@ -71,19 +96,30 @@ impl History {
         notes_per_measure: &[usize],
         fallback: Option<&[NoteResult]>,
     ) -> WeakMap {
+        self.weak_map_before(path, notes_per_measure, fallback, None)
+    }
+
+    /// 苦手な小節。`before`（UNIX 秒）があれば、それより前に始めた記録だけから
+    fn weak_map_before(
+        &self,
+        path: &Path,
+        notes_per_measure: &[usize],
+        fallback: Option<&[NoteResult]>,
+        before: Option<i64>,
+    ) -> WeakMap {
         let path = path.to_string_lossy();
         let laps = self
             .records
             .as_ref()
-            .and_then(
-                |r| match r.recent_results(&path, HISTORY_PLAYS, RECENT_PRACTICE_LAPS) {
+            .and_then(|r| {
+                match r.recent_results(&path, HISTORY_PLAYS, RECENT_PRACTICE_LAPS, before) {
                     Ok(p) => Some(p),
                     Err(e) => {
                         log::warn!("cannot read the records: {e}");
                         None
                     }
-                },
-            )
+                }
+            })
             .unwrap_or_default();
         let (plays, practice_laps, results): (usize, usize, Vec<Vec<NoteResult>>) =
             match (laps.is_empty(), fallback) {
@@ -103,6 +139,96 @@ impl History {
             phrases,
             plays,
             practice_laps,
+        }
+    }
+
+    /// 譜面の、練習でクリアした区間の記録（古い順）
+    pub fn clears(&self, path: &Path) -> Vec<ClearRecord> {
+        let Some(r) = &self.records else {
+            return Vec::new();
+        };
+        r.clears(&path.to_string_lossy()).unwrap_or_else(|e| {
+            log::warn!("cannot read the clears: {e}");
+            Vec::new()
+        })
+    }
+
+    /// 練習でクリアしてまだ克服していない区間を、今回の普通のプレイ（`started_at` に始めた）で確かめる。
+    /// 区間の音符を全部叩いたものだけ確かめ、克服していたら記録に残す。
+    /// `now` は今回のプレイを入れた苦手な小節、`results` は今回のプレイの判定
+    pub fn check_overcome(
+        &mut self,
+        path: &Path,
+        started_at: i64,
+        notes_per_measure: &[usize],
+        results: &[NoteResult],
+        now: &WeakMap,
+    ) -> Vec<OvercomeCheck> {
+        // 同じ区間のクリアはまとめ、一番前のクリアの前を「練習の前」にする
+        let mut pending: Vec<(Section, i64, u32)> = Vec::new();
+        for c in self.clears(path) {
+            if c.overcome.is_some() || c.cleared_at >= started_at {
+                continue;
+            }
+            let section = Section::new(c.first, c.last);
+            let speed = (c.speed * 100.0).round() as u32;
+            match pending.iter_mut().find(|p| p.0 == section) {
+                Some(p) => p.2 = p.2.max(speed),
+                None => pending.push((section, c.cleared_at, speed)),
+            }
+        }
+        let mut checks = Vec::new();
+        for (section, first_clear, speed) in pending {
+            let (a, b) = (section.first, section.last);
+            let notes: usize = (a..=b)
+                .filter_map(|m| notes_per_measure.get(m as usize))
+                .sum();
+            let played = results
+                .iter()
+                .filter(|r| (a..=b).contains(&r.measure))
+                .count();
+            if notes == 0 || played < notes {
+                continue;
+            }
+            let Some(this_play) = play_section_score(results, a, b) else {
+                continue;
+            };
+            let earlier = self.weak_map_before(path, notes_per_measure, None, Some(first_clear));
+            let before = (earlier.plays + earlier.practice_laps > 0)
+                .then(|| section_weakness(&earlier.weakness, notes_per_measure, a, b))
+                .flatten();
+            let after = section_weakness(&now.weakness, notes_per_measure, a, b);
+            let done = overcome(before, after, Some(this_play));
+            if done
+                && let Some(r) = self.records.as_mut()
+                && let Err(e) =
+                    r.mark_overcome(&path.to_string_lossy(), a, b, started_at, before, after)
+            {
+                log::warn!("cannot save the overcome mark: {e}");
+            }
+            checks.push(OvercomeCheck {
+                section,
+                speed,
+                before,
+                now: after,
+                this_play,
+                overcome: done,
+            });
+        }
+        checks
+    }
+
+    /// すべての曲を通した叩き方のくせ（等速で叩いた直近の記録から）
+    pub fn tendencies(&self) -> Vec<Tendency> {
+        let Some(r) = &self.records else {
+            return Vec::new();
+        };
+        match r.recent_timed_hits(TENDENCY_SESSIONS) {
+            Ok(hits) => tendencies(&hits, TENDENCY_MIN_HITS),
+            Err(e) => {
+                log::warn!("cannot read the hits: {e}");
+                Vec::new()
+            }
         }
     }
 }

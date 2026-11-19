@@ -6,14 +6,15 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use dtx::{Chart, DrumLane, TempoMap};
-use engine::analysis::{NoteResult, WeakPhrase, mean_and_sd};
+use engine::analysis::{NoteResult, Tendency, WeakPhrase, mean_and_sd};
 use engine::clock::MidiTimestampMapper;
 use engine::input::{Articulation, InputEvent, MidiMessage, MidiProfile, Normalizer, Pad};
 use engine::judge::{Hit, HitWindows, Judge, JudgeEvent, Judgement, LaneGroups, Tally};
 use engine::practice::{SpeedPlan, place};
-use records::{Lap, NoteHit, Session, SessionKind, StrayHit};
+use records::{Lap, NoteHit, SectionClear, Session, SessionKind, StrayHit};
 
 use crate::audio::{AudioOut, Sound, click, load_sound};
+use crate::history::OvercomeCheck;
 use crate::midi::RawMidi;
 use crate::practice::{LapSummary, Practice, PracticeOptions, count_per_measure};
 use crate::stretch::{SectionAudio, mix_bgm};
@@ -73,6 +74,12 @@ pub struct Outcome {
     pub results: Vec<NoteResult>,
     /// 苦手な小節（記録を読んでから入れる）
     pub weak: Option<WeakMap>,
+    /// 練習でクリアした区間を、今回のプレイで克服したか（記録を読んでから入れる）
+    pub overcome: Vec<OvercomeCheck>,
+    /// すべての曲を通した叩き方のくせ（記録を読んでから入れる）
+    pub tendencies: Vec<Tendency>,
+    /// 始めた時刻（UNIX 秒）
+    pub started_at: i64,
     /// 練習なら、その決めごとと周ごとの成績
     pub practice: Option<PracticeOutcome>,
 }
@@ -120,6 +127,8 @@ pub struct Play {
     /// 始めた時刻（UNIX 秒）
     pub started_at: i64,
     notes_per_measure: Vec<usize>,
+    /// 小節の頭の拍（曲頭から）。音符の拍の中の位置を出すのに使う
+    measure_beats: Vec<f64>,
     /// 練習なら周の並びと集計
     pub practice: Option<Practice>,
     /// 練習の区間の BGM（速度ごとに伸ばしたもの）。音が出ないときは None
@@ -280,6 +289,9 @@ impl Play {
             chart_hash: records::hash_bytes(&bytes),
             started_at: unix_now(),
             notes_per_measure,
+            measure_beats: (0..=tempo.measure_count())
+                .map(|m| tempo.measure_start_beat(m))
+                .collect(),
             practice,
             section_audio,
             view_ahead_ms: 2000.0,
@@ -499,6 +511,9 @@ impl Play {
                 })
                 .collect(),
             weak: None,
+            overcome: Vec::new(),
+            tendencies: Vec::new(),
+            started_at: self.started_at,
             practice: self.practice.as_ref().map(|p| PracticeOutcome {
                 options: p.options,
                 laps: p.summaries(self.now_ms()),
@@ -519,6 +534,10 @@ impl Play {
         }
         for e in events {
             let note = &self.judge.notes()[e.note];
+            let beat_pos = self
+                .measure_beats
+                .get(note.at.measure as usize)
+                .map(|start| (note.beat - start).rem_euclid(1.0));
             self.note_hits[e.note] = Some(NoteHit {
                 at: note.at,
                 lane: note.lane,
@@ -527,6 +546,7 @@ impl Play {
                 velocity: e.velocity,
                 articulation,
                 hh_pedal,
+                beat_pos,
             });
         }
     }
@@ -613,6 +633,14 @@ impl Play {
             started_at: self.started_at,
             settings,
             laps,
+            // 等速以上で続けて合格したら、その区間をクリアとして残す（普通のプレイで克服したかを見る）
+            clear: self.practice.as_ref().and_then(|p| {
+                p.clear_speed().map(|speed| SectionClear {
+                    first: p.options.section.first,
+                    last: p.options.section.last,
+                    speed: f64::from(speed) / 100.0,
+                })
+            }),
         })
     }
 
