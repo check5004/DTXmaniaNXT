@@ -3,6 +3,7 @@
 
 use std::path::PathBuf;
 
+use engine::practice::{LoopStyle, PassRule};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -20,6 +21,10 @@ pub struct Config {
     pub drum_sounds: bool,
     /// 最後に選んだ難易度（0〜4）
     pub level: usize,
+    /// 練習の周のつなぎ方（"connect" か "restart"）
+    pub practice_style: String,
+    /// 練習の合格の基準（"easy"、"normal"、"strict"）
+    pub practice_rule: String,
 }
 
 impl Default for Config {
@@ -31,6 +36,8 @@ impl Default for Config {
             scroll_px_per_ms: 0.6,
             drum_sounds: true,
             level: 2,
+            practice_style: LoopStyle::default().name().to_owned(),
+            practice_rule: PassRule::default().name().to_owned(),
         }
     }
 }
@@ -75,6 +82,16 @@ impl Config {
         }
     }
 
+    /// 練習の周のつなぎ方（読めない値なら既定）
+    pub fn loop_style(&self) -> LoopStyle {
+        LoopStyle::from_name(&self.practice_style).unwrap_or_default()
+    }
+
+    /// 練習の合格の基準（読めない値なら既定）
+    pub fn pass_rule(&self) -> PassRule {
+        PassRule::from_name(&self.practice_rule).unwrap_or_default()
+    }
+
     /// 曲のフォルダを足す（同じものは足さない）。足したら true
     pub fn add_song_dir(&mut self, dir: PathBuf) -> bool {
         if self.song_dirs.contains(&dir) {
@@ -95,6 +112,16 @@ mod tests {
         assert_eq!(c.input_offset_ms, 12.0);
         assert_eq!(c.scroll_px_per_ms, 0.6);
         assert!(c.drum_sounds);
+        assert_eq!(c.loop_style(), LoopStyle::Connect);
+        assert_eq!(c.pass_rule(), PassRule::Normal);
+    }
+
+    #[test]
+    fn unknown_practice_names_fall_back() {
+        let c: Config =
+            toml::from_str("practice_style = \"loop\"\npractice_rule = \"strict\"\n").unwrap();
+        assert_eq!(c.loop_style(), LoopStyle::Connect);
+        assert_eq!(c.pass_rule(), PassRule::Strict);
     }
 
     #[test]

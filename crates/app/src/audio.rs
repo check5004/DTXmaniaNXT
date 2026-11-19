@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex};
 use anyhow::{Context, Result, anyhow};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use engine::clock::AudioClock;
+use engine::practice::Placement;
 use symphonia::core::audio::sample::Sample as _;
 use symphonia::core::codecs::audio::AudioDecoderOptions;
 use symphonia::core::errors::Error as SymphoniaError;
@@ -25,6 +26,26 @@ impl Sound {
     pub fn frames(&self) -> usize {
         self.0.len() / 2
     }
+
+    /// 長さ（ミリ秒）。`rate` は出力のサンプルレート
+    pub fn ms(&self, rate: u32) -> f64 {
+        self.frames() as f64 * 1000.0 / f64::from(rate)
+    }
+}
+
+/// カウントのクリック。短いサイン波を減衰させたもの。`accent` なら高い音（1 拍目）
+pub fn click(rate: u32, accent: bool) -> Sound {
+    let freq = if accent { 1760.0 } else { 1175.0 };
+    let rate = f64::from(rate);
+    let frames = (rate * 0.04) as usize;
+    let samples: Vec<f32> = (0..frames)
+        .flat_map(|i| {
+            let t = i as f64 / rate;
+            let v = ((std::f64::consts::TAU * freq * t).sin() * (-t / 0.008).exp() * 0.7) as f32;
+            [v, v]
+        })
+        .collect();
+    Sound(Arc::from(samples))
 }
 
 /// 音のファイルを読み、ステレオ・`rate` Hz にそろえる
@@ -111,17 +132,81 @@ fn resample_linear(stereo: &[f32], from: u32, to: u32) -> Vec<f32> {
     out
 }
 
+/// 切れ目にかけるフェードの長さ（秒）。プツッという音を消す
+const FADE_SECONDS: f64 = 0.005;
+
 enum Command {
     /// 決めたフレームから鳴らす（曲の BGM など）
-    At { sound: Sound, frame: u64, gain: f32 },
+    At(Voice),
     /// できるだけ早く鳴らす（叩いた音）
     Now { sound: Sound, gain: f32 },
 }
 
+/// 鳴らす音 1 つ。音の `skip` フレーム目から `len` フレームを、出力の `start` フレーム目から鳴らす
 struct Voice {
     sound: Sound,
     start: u64,
+    skip: u64,
+    len: u64,
     gain: f32,
+    /// 途中から始めたので頭にフェードをかける
+    fade_in: bool,
+    /// 途中で切るので終わりにフェードをかける
+    fade_out: bool,
+}
+
+impl Voice {
+    fn whole(sound: Sound, start: u64, gain: f32) -> Self {
+        let len = sound.frames() as u64;
+        Self {
+            sound,
+            start,
+            skip: 0,
+            len,
+            gain,
+            fade_in: false,
+            fade_out: false,
+        }
+    }
+
+    fn end(&self) -> u64 {
+        self.start + self.len
+    }
+
+    /// 出力の `frames_done` フレーム目から `n` フレームぶん（`data`）に足す。`fade` はフェードのフレーム数
+    fn mix(&self, data: &mut [f32], channels: usize, frames_done: u64, n: u64, fade: u64) {
+        if self.start >= frames_done + n || self.end() <= frames_done {
+            return;
+        }
+        let from = frames_done.max(self.start);
+        let to = (frames_done + n).min(self.end());
+        for f in from..to {
+            let i = f - self.start;
+            let g = self.gain * envelope(i, self.len, fade, self.fade_in, self.fade_out);
+            let src = ((self.skip + i) * 2) as usize;
+            let dst = ((f - frames_done) as usize) * channels;
+            data[dst] += self.sound.0[src] * g;
+            if channels > 1 {
+                data[dst + 1] += self.sound.0[src + 1] * g;
+            }
+        }
+    }
+}
+
+/// 長さ `len` の音の `i` フレーム目の音量（0〜1）。切れ目に `fade` フレームの直線のフェード
+fn envelope(i: u64, len: u64, fade: u64, fade_in: bool, fade_out: bool) -> f32 {
+    if fade == 0 {
+        return 1.0;
+    }
+    let mut g = 1.0f32;
+    if fade_in && i < fade {
+        g = g.min(i as f32 / fade as f32);
+    }
+    let left = len.saturating_sub(i + 1);
+    if fade_out && left < fade {
+        g = g.min(left as f32 / fade as f32);
+    }
+    g
 }
 
 /// 鳴らしている出力
@@ -161,6 +246,7 @@ impl AudioOut {
         let cb_clock = clock.clone();
         let mut voices: Vec<Voice> = Vec::with_capacity(1024);
         let mut frames_done: u64 = 0;
+        let fade = (f64::from(rate) * FADE_SECONDS) as u64;
         let stream = device.build_output_stream(
             config,
             move |data: &mut [f32], info: &cpal::OutputCallbackInfo| {
@@ -169,37 +255,18 @@ impl AudioOut {
                 let play_us = now + duration_us(ts.playback.duration_since(ts.callback));
                 while let Ok(cmd) = rx.pop() {
                     match cmd {
-                        Command::At { sound, frame, gain } => voices.push(Voice {
-                            sound,
-                            start: frame,
-                            gain,
-                        }),
-                        Command::Now { sound, gain } => voices.push(Voice {
-                            sound,
-                            start: frames_done,
-                            gain,
-                        }),
+                        Command::At(v) => voices.push(v),
+                        Command::Now { sound, gain } => {
+                            voices.push(Voice::whole(sound, frames_done, gain))
+                        }
                     }
                 }
                 let n = (data.len() / channels) as u64;
                 data.fill(0.0);
                 for v in &voices {
-                    let len = v.sound.frames() as u64;
-                    if v.start >= frames_done + n || v.start + len <= frames_done {
-                        continue;
-                    }
-                    let from = frames_done.max(v.start);
-                    let to = (frames_done + n).min(v.start + len);
-                    for f in from..to {
-                        let src = ((f - v.start) * 2) as usize;
-                        let dst = ((f - frames_done) as usize) * channels;
-                        data[dst] += v.sound.0[src] * v.gain;
-                        if channels > 1 {
-                            data[dst + 1] += v.sound.0[src + 1] * v.gain;
-                        }
-                    }
+                    v.mix(data, channels, frames_done, n, fade);
                 }
-                voices.retain(|v| v.start + v.sound.frames() as u64 > frames_done + n);
+                voices.retain(|v| v.end() > frames_done + n);
                 for s in data.iter_mut() {
                     *s = s.clamp(-1.0, 1.0);
                 }
@@ -232,14 +299,47 @@ impl AudioOut {
         self.clock.lock().ok()?.song_ms_at(host_us)
     }
 
+    /// 時刻 `ms` が出力の何フレーム目か（出力を始める前ならマイナス）
+    fn frame_at(&self, ms: f64) -> f64 {
+        (ms - self.start_ms) / 1000.0 * f64::from(self.rate)
+    }
+
     /// 曲の時刻 `song_ms` に鳴らす
     pub fn play_at(&mut self, sound: &Sound, song_ms: f64, gain: f32) {
-        let frame = ((song_ms - self.start_ms) / 1000.0 * f64::from(self.rate)).max(0.0) as u64;
-        let _ = self.tx.push(Command::At {
+        let frame = self.frame_at(song_ms).max(0.0) as u64;
+        let _ = self
+            .tx
+            .push(Command::At(Voice::whole(sound.clone(), frame, gain)));
+    }
+
+    /// 音の一部を、置いたとおりに鳴らす（練習の周の BGM）。途中から始めるときと途中で切るときは短いフェードをかける
+    pub fn play_placed(&mut self, sound: &Sound, p: &Placement, gain: f32) {
+        let rate = f64::from(self.rate);
+        let mut start = self.frame_at(p.at_ms);
+        let mut skip = p.skip_ms / 1000.0 * rate;
+        let mut len = p.len_ms / 1000.0 * rate;
+        let mut fade_in = p.cut_start;
+        // 出力を始める前の部分は飛ばす
+        if start < 0.0 {
+            skip -= start;
+            len += start;
+            start = 0.0;
+            fade_in = true;
+        }
+        let skip = skip.round() as u64;
+        let len = (len.round() as u64).min((sound.frames() as u64).saturating_sub(skip));
+        if len == 0 {
+            return;
+        }
+        let _ = self.tx.push(Command::At(Voice {
             sound: sound.clone(),
-            frame,
+            start: start.round() as u64,
+            skip,
+            len,
             gain,
-        });
+            fade_in,
+            fade_out: p.cut_end,
+        }));
     }
 
     pub fn play_now(&mut self, sound: &Sound, gain: f32) {
@@ -261,6 +361,55 @@ mod tests {
             to_stereo(&[0.1, 0.2, 0.3, 0.4, 0.5, 0.6], 3),
             vec![0.1, 0.2, 0.4, 0.5]
         );
+    }
+
+    #[test]
+    fn fades_only_at_cut_edges() {
+        // フェードなし
+        assert_eq!(envelope(0, 100, 10, false, false), 1.0);
+        assert_eq!(envelope(99, 100, 10, false, false), 1.0);
+        // 頭のフェード: 0 から上がる
+        assert_eq!(envelope(0, 100, 10, true, false), 0.0);
+        assert_eq!(envelope(5, 100, 10, true, false), 0.5);
+        assert_eq!(envelope(10, 100, 10, true, false), 1.0);
+        // 終わりのフェード: 最後のフレームで 0
+        assert_eq!(envelope(99, 100, 10, false, true), 0.0);
+        assert_eq!(envelope(94, 100, 10, false, true), 0.5);
+        assert_eq!(envelope(89, 100, 10, false, true), 1.0);
+    }
+
+    #[test]
+    fn a_voice_plays_only_its_part() {
+        // 音は 0, 1, 2, … の値のフレーム。2 フレーム目から 3 フレームを、出力の 1 フレーム目から
+        let sound = Sound(Arc::from(
+            (0..8)
+                .flat_map(|i| [i as f32, i as f32])
+                .collect::<Vec<_>>(),
+        ));
+        let v = Voice {
+            sound,
+            start: 1,
+            skip: 2,
+            len: 3,
+            gain: 1.0,
+            fade_in: false,
+            fade_out: false,
+        };
+        let mut out = vec![0.0; 6 * 2];
+        v.mix(&mut out, 2, 0, 6, 0);
+        assert_eq!(out, vec![0., 0., 2., 2., 3., 3., 4., 4., 0., 0., 0., 0.]);
+        // 出力のバッファの途中から（4 フレーム目〜）
+        let mut out = vec![0.0; 2 * 2];
+        v.mix(&mut out, 2, 3, 2, 0);
+        assert_eq!(out, vec![4., 4., 0., 0.]);
+    }
+
+    #[test]
+    fn clicks_are_short_and_start_silent() {
+        let c = click(48_000, true);
+        assert_eq!(c.frames(), 1920);
+        assert_eq!(c.0[0], 0.0);
+        assert!(c.0.iter().all(|s| s.abs() <= 0.7));
     }
 
     #[test]

@@ -1,6 +1,7 @@
 //! DTXmaniaNXT 本体。
 //!
 //! - 曲のフォルダを探して選曲し、BGM を鳴らし、落ちてくる音符を叩いて判定する
+//! - 曲の区間（小節の範囲）を選んで繰り返し練習できる。遊んだ記録から苦手な小節を出す
 //! - 判定は MIDI の時刻と音の再生位置で行い、画面のフレームには左右されない
 //! - 電子ドラムが無いときはキーボードで叩ける
 //! - 設定（曲のフォルダ・補正値など）は config.toml に残す
@@ -11,6 +12,7 @@ mod fonts;
 mod game;
 mod history;
 mod midi;
+mod practice;
 mod songs;
 mod time;
 mod ui;
@@ -31,6 +33,7 @@ use crate::config::Config;
 use crate::game::{Outcome, Play};
 use crate::history::History;
 use crate::midi::MidiIn;
+use crate::practice::{PracticeOptions, PracticeSetup};
 use crate::songs::SongList;
 use crate::time::host_us;
 
@@ -172,6 +175,9 @@ impl Gpu {
 /// いまの画面
 enum Screen {
     Select,
+    /// 練習する区間を選ぶ
+    Setup(Box<PracticeSetup>),
+    /// 遊んでいる（練習中も）
     Play(Box<Play>),
     Result(Box<Outcome>),
 }
@@ -261,12 +267,68 @@ impl App {
         }
     }
 
-    /// 曲を終える。結果の画面へ
+    /// 区間を選ぶ画面を開く。`previous` があればその区間とつなぎ方を選んでおく
+    fn open_setup(&mut self, path: PathBuf, previous: Option<PracticeOptions>) {
+        self.save_unfinished();
+        self.screen = Screen::Select;
+        match PracticeSetup::load(
+            &path,
+            &self.history,
+            previous,
+            self.config.loop_style(),
+            self.config.pass_rule(),
+        ) {
+            Ok(s) => {
+                self.message = None;
+                self.screen = Screen::Setup(Box::new(s));
+            }
+            Err(e) => {
+                log::error!("{e:#}");
+                self.message = Some(format!("読み込めませんでした: {e:#}"));
+            }
+        }
+    }
+
+    /// 区間の練習を始める
+    fn start_practice(&mut self, path: PathBuf, options: PracticeOptions) {
+        self.save_unfinished();
+        self.screen = Screen::Select;
+        match Play::load_practice(
+            &path,
+            self.config.input_offset_ms,
+            self.config.drum_sounds,
+            options,
+        ) {
+            Ok(mut p) => {
+                let band = self
+                    .history
+                    .weak_map(&path, p.notes_per_measure(), None)
+                    .weakness;
+                if let Some(pr) = p.practice.as_mut() {
+                    pr.band = band;
+                }
+                self.message = None;
+                self.screen = Screen::Play(Box::new(p));
+            }
+            Err(e) => {
+                log::error!("{e:#}");
+                self.message = Some(format!("読み込めませんでした: {e:#}"));
+            }
+        }
+    }
+
+    /// 曲（練習）を終える。結果の画面へ
     fn finish_play(&mut self) {
         if let Screen::Play(p) = &self.screen {
             self.history.save(p);
             let mut outcome = p.outcome();
-            outcome.weak = Some(self.history.weak_map(&outcome));
+            if outcome.practice.is_none() {
+                outcome.weak = Some(self.history.weak_map(
+                    &outcome.path,
+                    &outcome.notes_per_measure,
+                    Some(&outcome.results),
+                ));
+            }
             self.screen = Screen::Result(Box::new(outcome));
         }
     }
@@ -335,16 +397,68 @@ impl App {
                 self.on_play_key(code);
             }
             Screen::Select => self.on_select_key(event_loop, code),
-            Screen::Result(o) => match code {
+            Screen::Setup(_) => self.on_setup_key(code),
+            Screen::Result(_) => match code {
                 KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Escape => {
-                    self.screen = Screen::Select;
+                    self.result_action(ui::ResultAction::Back);
                 }
-                KeyCode::KeyR => {
-                    let path = o.path.clone();
-                    self.start(path);
-                }
+                KeyCode::KeyR => self.result_action(ui::ResultAction::Retry),
+                KeyCode::KeyP => self.result_action(ui::ResultAction::Practice(None)),
                 _ => {}
             },
+        }
+    }
+
+    fn on_setup_key(&mut self, code: KeyCode) {
+        use ui::SetupAction as A;
+        let Screen::Setup(s) = &self.screen else {
+            return;
+        };
+        let action = match code {
+            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space => A::Start,
+            KeyCode::Escape | KeyCode::Backspace => A::Back,
+            KeyCode::ArrowLeft => A::Shift(-1),
+            KeyCode::ArrowRight => A::Shift(1),
+            KeyCode::ArrowUp => A::Resize(1),
+            KeyCode::ArrowDown => A::Resize(-1),
+            KeyCode::KeyT => A::Style(match s.style {
+                engine::practice::LoopStyle::Connect => engine::practice::LoopStyle::Restart,
+                engine::practice::LoopStyle::Restart => engine::practice::LoopStyle::Connect,
+            }),
+            _ => return,
+        };
+        self.setup_action(action);
+    }
+
+    fn setup_action(&mut self, action: ui::SetupAction) {
+        use ui::SetupAction as A;
+        let Screen::Setup(s) = &mut self.screen else {
+            return;
+        };
+        match action {
+            A::Select(sec) => s.section = Some(sec),
+            A::Shift(d) => s.shift(d),
+            A::Resize(d) => s.resize(d),
+            A::Style(style) => {
+                s.style = style;
+                self.config.practice_style = style.name().to_owned();
+                self.config.save();
+            }
+            A::Rule(rule) => {
+                s.rule = rule;
+                self.config.practice_rule = rule.name().to_owned();
+                self.config.save();
+            }
+            A::Start => {
+                if let Some(o) = s.options() {
+                    let path = s.path.clone();
+                    self.start_practice(path, o);
+                }
+            }
+            A::Back => {
+                self.screen = Screen::Select;
+                self.scroll_to_cursor = true;
+            }
         }
     }
 
@@ -356,7 +470,19 @@ impl App {
             KeyCode::Escape => self.finish_play(),
             KeyCode::KeyR => {
                 let path = play.path.clone();
-                self.start(path);
+                match play.practice.as_ref().map(|p| p.options) {
+                    Some(o) => self.start_practice(path, o),
+                    None => self.start(path),
+                }
+            }
+            KeyCode::ArrowLeft | KeyCode::ArrowRight if play.practice.is_some() => {
+                // 区間を 1 小節ずらして始め直す
+                let d = if code == KeyCode::ArrowLeft { -1 } else { 1 };
+                let path = play.path.clone();
+                if let Some(mut o) = play.practice.as_ref().map(|p| p.options) {
+                    o.section = o.section.shifted(d, play.notes_per_measure().len());
+                    self.start_practice(path, o);
+                }
             }
             KeyCode::KeyM => {
                 play.drum_sounds = !play.drum_sounds;
@@ -429,6 +555,7 @@ impl App {
             KeyCode::ArrowLeft => self.change_level(-1),
             KeyCode::ArrowRight => self.change_level(1),
             KeyCode::F5 => self.select_action(ui::SelectAction::Rescan),
+            KeyCode::KeyP => self.select_action(ui::SelectAction::Practice),
             _ => {}
         }
     }
@@ -460,6 +587,16 @@ impl App {
                 }
                 _ => {}
             },
+            Screen::Setup(_) => {
+                let action = match lane {
+                    DrumLane::HT => ui::SetupAction::Shift(-1),
+                    DrumLane::LT => ui::SetupAction::Shift(1),
+                    DrumLane::CY | DrumLane::RD => ui::SetupAction::Start,
+                    DrumLane::LC => ui::SetupAction::Back,
+                    _ => return,
+                };
+                self.setup_action(action);
+            }
             Screen::Result(_) => {
                 if matches!(lane, DrumLane::CY | DrumLane::RD | DrumLane::LC) {
                     self.screen = Screen::Select;
@@ -516,21 +653,43 @@ impl App {
                     self.songs.rescan(self.config.song_dirs.clone());
                 }
             }
+            A::Practice => {
+                if let Some(path) = self.songs.selected_chart() {
+                    self.open_setup(path, None);
+                }
+            }
         }
     }
 
     fn result_action(&mut self, action: ui::ResultAction) {
+        let Screen::Result(o) = &self.screen else {
+            return;
+        };
+        let path = o.path.clone();
+        let options = o.practice.as_ref().map(|p| p.options);
         match action {
-            ui::ResultAction::Back => self.screen = Screen::Select,
-            ui::ResultAction::Retry => {
-                if let Screen::Result(o) = &self.screen {
-                    let path = o.path.clone();
-                    self.start(path);
-                }
+            ui::ResultAction::Back => {
+                self.screen = Screen::Select;
+                self.scroll_to_cursor = true;
             }
+            ui::ResultAction::Retry => match options {
+                Some(o) => self.start_practice(path, o),
+                None => self.start(path),
+            },
             ui::ResultAction::SetInputOffset(ms) => {
                 self.config.input_offset_ms = ms;
                 self.config.save();
+            }
+            ui::ResultAction::Practice(section) => {
+                let previous = match section {
+                    Some(section) => Some(PracticeOptions {
+                        section,
+                        style: self.config.loop_style(),
+                        rule: self.config.pass_rule(),
+                    }),
+                    None => options,
+                };
+                self.open_setup(path, previous);
             }
         }
     }
@@ -559,6 +718,7 @@ impl App {
             .map(|m| m.ports.clone())
             .unwrap_or_default();
         let mut select_actions = Vec::new();
+        let mut setup_actions = Vec::new();
         let mut result_actions = Vec::new();
         let scroll = std::mem::take(&mut self.scroll_to_cursor);
         let output = self.egui_ctx.run_ui(input, |ui| match &self.screen {
@@ -572,6 +732,7 @@ impl App {
                     scroll,
                 );
             }
+            Screen::Setup(s) => setup_actions = ui::draw_setup(ui, s),
             Screen::Play(play) => ui::draw_play(ui, play, &self.config, &ports),
             Screen::Result(o) => result_actions = ui::draw_result(ui, o, &self.config),
         });
@@ -581,6 +742,9 @@ impl App {
         }
         for a in select_actions {
             self.select_action(a);
+        }
+        for a in setup_actions {
+            self.setup_action(a);
         }
         for a in result_actions {
             self.result_action(a);
