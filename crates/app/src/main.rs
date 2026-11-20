@@ -13,7 +13,9 @@ mod fonts;
 mod game;
 mod gfx;
 mod history;
+mod loading;
 mod midi;
+mod play_view;
 mod practice;
 mod select;
 mod sfx;
@@ -25,6 +27,7 @@ mod ui;
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use dtx::DrumLane;
@@ -39,7 +42,9 @@ use crate::config::Config;
 use crate::game::{Outcome, Play};
 use crate::gfx::{Canvas, Gfx, Skin};
 use crate::history::History;
+use crate::loading::Loading;
 use crate::midi::MidiIn;
+use crate::play_view::PlayView;
 use crate::practice::{PracticeOptions, PracticeSetup};
 use crate::select::{PREVIEW_WAIT, SelectView};
 use crate::sfx::{Se, Sfx};
@@ -67,9 +72,12 @@ impl Gpu {
         }))
         .context("no GPU adapter")?;
         log::info!("GPU: {:?}", adapter.get_info().name);
-        let (device, queue) =
-            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
-                .context("request device")?;
+        // NX のスキンには縦 4080 の画像などがあるので、GPU が扱える一番大きい画像の大きさを使う
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            required_limits: wgpu::Limits::default().using_resolution(adapter.limits()),
+            ..Default::default()
+        }))
+        .context("request device")?;
         let size = window.inner_size();
         let mut config = surface
             .get_default_config(&adapter, size.width.max(1), size.height.max(1))
@@ -186,8 +194,10 @@ enum Screen {
     Select,
     /// 練習する区間を選ぶ
     Setup(Box<PracticeSetup>),
-    /// 遊んでいる（練習中も）
-    Play(Box<Play>),
+    /// 曲を読み込んでいる
+    Loading(Box<Loading>),
+    /// 遊んでいる（練習中も）。NX の演奏画面の動きと一緒に持つ
+    Play(Box<Play>, Box<PlayView>),
     Result(Box<Outcome>),
 }
 
@@ -222,7 +232,19 @@ struct App {
     decided: Option<Decided>,
     /// 選曲画面のマウスホイールの、まだ 1 行に満たない分
     wheel: f32,
+    /// 演奏中に設定と入力の情報を出す（I で切り替え）
+    show_play_info: bool,
+    /// 演奏中に設定を変えたときの短い知らせ（出した時刻）
+    toast: Option<(String, Instant)>,
+    /// 音符を自動で叩く（開発用。`DTXMANIANXT_AUTOPLAY=1`）
+    autoplay: bool,
 }
+
+/// 読み込みの画面を出しておく一番短い時間
+const MIN_LOADING: Duration = Duration::from_millis(1500);
+
+/// 演奏中の知らせを出しておく時間
+const TOAST_FOR: Duration = Duration::from_millis(1500);
 
 /// 選曲画面で決めたもの
 enum Decided {
@@ -318,6 +340,9 @@ impl App {
             settings_open: false,
             decided: None,
             wheel: 0.0,
+            show_play_info: false,
+            toast: None,
+            autoplay: std::env::var_os("DTXMANIANXT_AUTOPLAY").is_some_and(|v| v == "1"),
         }
     }
 
@@ -368,23 +393,116 @@ impl App {
         self.sfx.play(Se::Move);
     }
 
+    /// 曲を始める。読み込みの画面から
     fn start(&mut self, path: PathBuf) {
+        self.open_loading(path, None);
+    }
+
+    /// 読み込みの画面を開く。`practice` があれば区間の練習
+    fn open_loading(&mut self, path: PathBuf, practice: Option<PracticeOptions>) {
         // やり直しなどで途中の曲を捨てるときも、そこまでの記録は残す
+        self.save_unfinished();
+        let label = self.songs.chart_label(&path);
+        // 音が無いときも、読み込みの画面が一瞬で消えないように少しは出す
+        let wait = self.sfx.play_loading().max(MIN_LOADING);
+        self.screen = Screen::Loading(Box::new(Loading::new(
+            path,
+            practice,
+            &label,
+            self.gfx.skin.dir(),
+            wait,
+        )));
+    }
+
+    /// 曲を読み込む（読み込みの画面を 1 回出してから呼ぶ。時間がかかる）
+    fn load_play(&self, path: &std::path::Path, practice: Option<PracticeOptions>) -> Result<Play> {
+        let mut p = match practice {
+            Some(o) => Play::load_practice(
+                path,
+                self.config.input_offset_ms,
+                self.config.drum_sounds,
+                o,
+            )?,
+            None => Play::load(path, self.config.input_offset_ms, self.config.drum_sounds)?,
+        };
+        p.set_midi_profile(midi_profile(self.nx.as_ref()));
+        if p.practice.is_some() {
+            let band = self
+                .history
+                .weak_map(path, p.notes_per_measure(), None)
+                .weakness;
+            if let Some(pr) = p.practice.as_mut() {
+                pr.band = band;
+            }
+        }
+        Ok(p)
+    }
+
+    /// 読み込んだ曲を鳴らし始め、演奏の画面にする
+    fn enter_play(&mut self, mut play: Play) {
+        let label = self.songs.chart_label(&play.path);
+        play.begin();
+        let view = PlayView::new(&play, self.gfx.skin.dir(), &label);
+        self.message = None;
+        self.screen = Screen::Play(Box::new(play), Box::new(view));
+    }
+
+    /// 演奏中のやり直し。読み込みの画面を出さずにすぐ始める
+    fn restart(&mut self, path: PathBuf, practice: Option<PracticeOptions>) {
         self.save_unfinished();
         // 前の曲の音を止めてから読む
         self.screen = Screen::Select;
-        match Play::load(&path, self.config.input_offset_ms, self.config.drum_sounds) {
-            Ok(mut p) => {
-                p.set_midi_profile(midi_profile(self.nx.as_ref()));
-                self.message = None;
-                self.screen = Screen::Play(Box::new(p));
-            }
-            Err(e) => {
-                log::error!("{e:#}");
-                self.message = Some(format!("読み込めませんでした: {e:#}"));
-                self.view.enter();
+        match self.load_play(&path, practice) {
+            Ok(p) => self.enter_play(p),
+            Err(e) => self.load_failed(&e),
+        }
+    }
+
+    fn load_failed(&mut self, e: &anyhow::Error) {
+        log::error!("{e:#}");
+        self.sfx.stop_loading();
+        self.message = Some(format!("読み込めませんでした: {e:#}"));
+        self.go_to_select();
+    }
+
+    /// 読み込みの画面を進める。1 回描いたら読み、音が鳴り終えたら演奏へ
+    fn pump_loading(&mut self) {
+        let Screen::Loading(l) = &self.screen else {
+            return;
+        };
+        if l.ready_to_load() {
+            let (path, practice) = (l.path.clone(), l.practice);
+            match self.load_play(&path, practice) {
+                Ok(p) => {
+                    if let Screen::Loading(l) = &mut self.screen {
+                        l.play = Some(Box::new(p));
+                    }
+                }
+                Err(e) => {
+                    self.load_failed(&e);
+                    return;
+                }
             }
         }
+        if let Screen::Loading(l) = &mut self.screen
+            && l.done()
+            && let Some(p) = l.play.take()
+        {
+            self.enter_play(*p);
+        }
+    }
+
+    /// ゲージが尽きたら途中で終わるか（設定に無ければ NX の Config.ini、それも無ければ上流と同じく終わる）
+    fn stage_failed_enabled(&self) -> bool {
+        self.config
+            .stage_failed
+            .or_else(|| self.nx.as_ref().and_then(|n| n.config.stage_failed))
+            .unwrap_or(true)
+    }
+
+    /// 演奏中に設定を変えたことを知らせる
+    fn toast(&mut self, text: String) {
+        self.toast = Some((text, Instant::now()));
     }
 
     /// 区間を選ぶ画面を開く。`previous` があればその区間とつなぎ方を選んでおく
@@ -406,37 +524,12 @@ impl App {
 
     /// 区間の練習を始める
     fn start_practice(&mut self, path: PathBuf, options: PracticeOptions) {
-        self.save_unfinished();
-        self.screen = Screen::Select;
-        match Play::load_practice(
-            &path,
-            self.config.input_offset_ms,
-            self.config.drum_sounds,
-            options,
-        ) {
-            Ok(mut p) => {
-                p.set_midi_profile(midi_profile(self.nx.as_ref()));
-                let band = self
-                    .history
-                    .weak_map(&path, p.notes_per_measure(), None)
-                    .weakness;
-                if let Some(pr) = p.practice.as_mut() {
-                    pr.band = band;
-                }
-                self.message = None;
-                self.screen = Screen::Play(Box::new(p));
-            }
-            Err(e) => {
-                log::error!("{e:#}");
-                self.message = Some(format!("読み込めませんでした: {e:#}"));
-                self.view.enter();
-            }
-        }
+        self.open_loading(path, Some(options));
     }
 
     /// 曲（練習）を終える。結果の画面へ
     fn finish_play(&mut self) {
-        if let Screen::Play(p) = &self.screen {
+        if let Screen::Play(p, _) = &self.screen {
             self.history.save(p);
             let mut outcome = p.outcome();
             if outcome.practice.is_none() {
@@ -461,7 +554,7 @@ impl App {
 
     /// 遊んでいる途中の曲があれば、そこまでの記録を残す
     fn save_unfinished(&mut self) {
-        if let Screen::Play(p) = &self.screen {
+        if let Screen::Play(p, _) = &self.screen {
             self.history.save(p);
         }
     }
@@ -477,7 +570,7 @@ impl App {
     fn pump(&mut self) {
         self.songs.poll();
         match (&self.midi, &mut self.screen) {
-            (Some(midi), Screen::Play(play)) => {
+            (Some(midi), Screen::Play(play, _)) => {
                 for raw in midi.drain() {
                     play.on_midi(raw);
                 }
@@ -504,17 +597,37 @@ impl App {
             }
             _ => {}
         }
-        if let Screen::Play(play) = &mut self.screen {
-            // 判定の線（画面の上から 85%）より上に見えている時間
-            if let Some(w) = &self.window {
-                let height = w.inner_size().height as f64 / w.scale_factor();
-                play.view_ahead_ms =
-                    height * 0.85 / f64::from(self.config.scroll_px_per_ms.max(0.05));
+        self.pump_loading();
+        let stage_failed = self.stage_failed_enabled();
+        let mut failed_out = false;
+        let mut finished = false;
+        if let Screen::Play(play, view) = &mut self.screen {
+            if view.frozen_ms().is_some() {
+                // STAGE FAILED の途中は譜面を進めない
+                failed_out = view.failure_done();
+            } else {
+                // 判定の線より上に見えている時間
+                play.view_ahead_ms = play_view::view_ahead_ms(self.config.scroll_px_per_ms);
+                if self.autoplay {
+                    play.autoplay();
+                }
+                play.update();
+                view.feed(play);
+                if stage_failed && play.practice.is_none() && view.gauge_empty() {
+                    // 上流と同じく、音を止めて STAGE FAILED を出し、選曲に戻る（記録は残す）
+                    view.start_failure(play.now_ms() + self.config.visual_offset_ms);
+                    play.silence();
+                    self.sfx.play(Se::StageFailed);
+                } else {
+                    finished = play.finished();
+                }
             }
-            play.update();
-            if play.finished() {
-                self.finish_play();
-            }
+        }
+        if failed_out {
+            self.save_unfinished();
+            self.go_to_select();
+        } else if finished {
+            self.finish_play();
         }
         if matches!(self.screen, Screen::Select) {
             if self.view.faded_out()
@@ -542,7 +655,14 @@ impl App {
     fn on_key(&mut self, event_loop: &ActiveEventLoop, code: KeyCode) {
         let at = host_us();
         match &mut self.screen {
-            Screen::Play(play) => {
+            Screen::Loading(_) => {
+                // 上流と同じく Esc で読み込みをやめて選曲に戻る
+                if code == KeyCode::Escape {
+                    self.sfx.stop_loading();
+                    self.go_to_select();
+                }
+            }
+            Screen::Play(play, _) => {
                 if let Some(lane) = key_lane(code) {
                     play.on_key(lane, at);
                     return;
@@ -622,17 +742,19 @@ impl App {
     }
 
     fn on_play_key(&mut self, code: KeyCode) {
-        let Screen::Play(play) = &mut self.screen else {
+        let Screen::Play(play, _) = &mut self.screen else {
             return;
         };
-        match code {
-            KeyCode::Escape => self.finish_play(),
+        let toast = match code {
+            KeyCode::Escape => {
+                self.finish_play();
+                return;
+            }
             KeyCode::KeyR => {
                 let path = play.path.clone();
-                match play.practice.as_ref().map(|p| p.restart_options()) {
-                    Some(o) => self.start_practice(path, o),
-                    None => self.start(path),
-                }
+                let practice = play.practice.as_ref().map(|p| p.restart_options());
+                self.restart(path, practice);
+                return;
             }
             KeyCode::ArrowLeft | KeyCode::ArrowRight if play.practice.is_some() => {
                 // 区間を 1 小節ずらして始め直す
@@ -640,22 +762,34 @@ impl App {
                 let path = play.path.clone();
                 if let Some(mut o) = play.practice.as_ref().map(|p| p.restart_options()) {
                     o.section = o.section.shifted(d, play.notes_per_measure().len());
-                    self.start_practice(path, o);
+                    self.restart(path, Some(o));
                 }
+                return;
             }
             KeyCode::Comma | KeyCode::Period if play.practice.is_some() => {
                 play.nudge_speed(if code == KeyCode::Comma { -1 } else { 1 });
+                let speed = play.practice.as_ref().map_or(100, |p| p.ladder().speed());
+                format!("次の周から速度 {speed}%")
             }
             KeyCode::KeyM => {
                 play.drum_sounds = !play.drum_sounds;
                 self.config.drum_sounds = play.drum_sounds;
                 self.config.save();
+                format!(
+                    "譜面の音を{}",
+                    if play.drum_sounds {
+                        "鳴らす"
+                    } else {
+                        "鳴らさない"
+                    }
+                )
             }
             KeyCode::Minus | KeyCode::Equal => {
                 let d = if code == KeyCode::Minus { -1.0 } else { 1.0 };
                 play.input_offset_ms += d;
                 self.config.input_offset_ms = play.input_offset_ms;
                 self.config.save();
+                format!("入力の補正 {:+.0}ms", play.input_offset_ms)
             }
             KeyCode::BracketLeft | KeyCode::BracketRight => {
                 let d = if code == KeyCode::BracketLeft {
@@ -665,6 +799,7 @@ impl App {
                 };
                 self.config.visual_offset_ms += d;
                 self.config.save();
+                format!("表示の補正 {:+.0}ms", self.config.visual_offset_ms)
             }
             KeyCode::ArrowUp | KeyCode::ArrowDown => {
                 let d = if code == KeyCode::ArrowUp {
@@ -674,9 +809,15 @@ impl App {
                 };
                 self.config.scroll_px_per_ms = (self.config.scroll_px_per_ms + d).clamp(0.1, 3.0);
                 self.config.save();
+                format!("譜面の速さ {:.2}", self.config.scroll_px_per_ms)
             }
-            _ => {}
-        }
+            KeyCode::KeyI => {
+                self.show_play_info = !self.show_play_info;
+                return;
+            }
+            _ => return,
+        };
+        self.toast(toast);
     }
 
     /// 選曲画面のマウス：ホイールで動かし、曲バーを押すとそこへ動く（選んでいる曲なら決める）
@@ -790,7 +931,7 @@ impl App {
                     self.go_to_select();
                 }
             }
-            Screen::Play(_) => {}
+            Screen::Loading(_) | Screen::Play(..) => {}
         }
     }
 
@@ -937,7 +1078,12 @@ impl App {
         let mut mouse = SelectMouse::default();
         let mut setup_actions = Vec::new();
         let mut result_actions = Vec::new();
-        let output = self.egui_ctx.run_ui(input, |ui| match &self.screen {
+        let toast = self
+            .toast
+            .as_ref()
+            .filter(|(_, at)| at.elapsed() < TOAST_FOR)
+            .map(|(t, _)| t.clone());
+        let output = self.egui_ctx.run_ui(input, |ui| match &mut self.screen {
             Screen::Select => {
                 let ctx = ui.ctx().clone();
                 let painter = ctx.layer_painter(egui::LayerId::background());
@@ -963,7 +1109,37 @@ impl App {
                 }
             }
             Screen::Setup(s) => setup_actions = ui::draw_setup(ui, s),
-            Screen::Play(play) => ui::draw_play(ui, play, &self.config, &ports),
+            Screen::Loading(l) => {
+                let ctx = ui.ctx().clone();
+                let painter = ctx.layer_painter(egui::LayerId::background());
+                let c = Canvas::new(&painter, ctx.content_rect());
+                self.gfx.begin(&c, ctx.pixels_per_point());
+                l.draw(&c, &mut self.gfx);
+            }
+            Screen::Play(play, view) => {
+                let ctx = ui.ctx().clone();
+                let painter = ctx.layer_painter(egui::LayerId::background());
+                let c = Canvas::new(&painter, ctx.content_rect());
+                self.gfx.begin(&c, ctx.pixels_per_point());
+                let now = view
+                    .frozen_ms()
+                    .unwrap_or_else(|| play.now_ms() + self.config.visual_offset_ms);
+                view.draw(&c, &mut self.gfx, play, now, self.config.scroll_px_per_ms);
+                ui::draw_play_overlay(
+                    &ctx,
+                    &c,
+                    &ui::PlayOverlay {
+                        play,
+                        config: &self.config,
+                        midi_ports: &ports,
+                        show_info: self.show_play_info,
+                        now,
+                    },
+                );
+                if let Some(t) = &toast {
+                    ui::play_toast(&ctx, &c, t);
+                }
+            }
             Screen::Result(o) => result_actions = ui::draw_result(ui, o, &self.config),
         });
         state.handle_platform_output(window, output.platform_output.clone());
@@ -1026,13 +1202,17 @@ impl ApplicationHandler for App {
             }
         }
         fonts::install_japanese(&self.egui_ctx);
+        let max_texture_side = self
+            .gpu
+            .as_ref()
+            .map(|g| g.device.limits().max_texture_dimension_2d as usize);
         self.egui_state = Some(egui_winit::State::new(
             self.egui_ctx.clone(),
             egui::ViewportId::ROOT,
             &window,
             Some(window.scale_factor() as f32),
             None,
-            None,
+            max_texture_side,
         ));
         window.request_redraw();
         self.window = Some(window);

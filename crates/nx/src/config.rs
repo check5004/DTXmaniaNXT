@@ -13,6 +13,8 @@ pub struct NxConfig {
     pub skin_path: Option<String>,
     /// `[DrumsKeyAssign]` のレーンごとの割り当て
     pub drums: BTreeMap<DrumLane, Vec<KeyAssign>>,
+    /// `[System] StageFailed`（ゲージが尽きたら途中で終わる。書いていなければ None。上流の既定は on）
+    pub stage_failed: Option<bool>,
 }
 
 /// 入力の割り当て 1 つ（上流 `CConfigIni.tReadAndSetSkey` と同じ書き方）
@@ -99,6 +101,10 @@ impl NxConfig {
                     }
                     "SkinPath" => {
                         out.skin_path = (!value.is_empty()).then(|| value.to_owned());
+                    }
+                    // 上流 `CConversion.bONorOFF`：先頭の文字が 0 でなければ on
+                    "StageFailed" => {
+                        out.stage_failed = value.chars().next().map(|c| c != '0');
                     }
                     _ => {}
                 },
@@ -191,6 +197,19 @@ HH=M099
         );
         assert_eq!(KeyAssign::parse("M0300"), None);
         assert_eq!(KeyAssign::parse("L001"), None);
+    }
+
+    #[test]
+    fn stage_failed_follows_the_first_character() {
+        assert_eq!(
+            NxConfig::parse("[System]\nStageFailed=0\n").stage_failed,
+            Some(false)
+        );
+        assert_eq!(
+            NxConfig::parse("[System]\nStageFailed=1\n").stage_failed,
+            Some(true)
+        );
+        assert_eq!(NxConfig::parse("[System]\n").stage_failed, None);
     }
 
     #[test]

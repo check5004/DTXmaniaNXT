@@ -35,12 +35,29 @@ const SECTION_MARGIN_MS: f64 = 1000.0;
 /// 落ちてくる音符が見え始めるより、これだけ前に周を並べる（ミリ秒）
 const LAY_MARGIN_MS: f64 = 500.0;
 
-/// レーンごとの最後の判定（画面に出す）
-#[derive(Debug, Clone, Copy)]
-pub struct Flash {
-    pub judgement: Judgement,
-    pub offset_ms: Option<f64>,
-    pub song_ms: f64,
+/// 画面の効果に使う出来事。演奏画面が毎フレーム取り出す
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Fx {
+    /// 叩いた（判定に関わらず。レーンの光とパッドの動き）。`lane` は叩いたパッドのレーン
+    Hit { lane: DrumLane, velocity: u8 },
+    /// 音符を判定した（見逃しも）。`lane` と `note_ms` は音符のもの
+    Judged {
+        lane: DrumLane,
+        judgement: Judgement,
+        offset_ms: Option<f64>,
+        note_ms: f64,
+    },
+}
+
+/// 取り出されないまま溜められる効果の数（画面を描いていないあいだに増え続けないように）
+const MAX_FX: usize = 1024;
+
+/// 小節線と拍線（曲の時刻）
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BeatLine {
+    pub ms: f64,
+    /// 小節の頭（false なら拍の線）
+    pub bar: bool,
 }
 
 /// 最後に届いた入力（電子ドラムの確認用に画面に出す）
@@ -117,7 +134,16 @@ pub struct Play {
     pub input_offset_ms: f64,
     /// 叩いたときに譜面の音を鳴らすか（モジュールの音を使うなら切る）
     pub drum_sounds: bool,
-    pub flashes: HashMap<DrumLane, Flash>,
+    /// 画面の効果（演奏画面が取り出す）
+    fx: Vec<Fx>,
+    /// 小節線と拍線（時刻の順）
+    pub lines: Vec<BeatLine>,
+    /// 曲の頭のテンポ
+    pub bpm: f64,
+    /// 譜面の最後のチップの時刻（進み具合のバーに使う）
+    pub last_chip_ms: f64,
+    /// ジャケットの画像（`#PREIMAGE`。無ければ None）
+    pub preimage: Option<PathBuf>,
     pub last_input: Option<LastInput>,
     pub hh_pedal: Option<u8>,
     /// 叩けた音符のずれ（ミリ秒）
@@ -183,12 +209,12 @@ impl Play {
         let tempo = TempoMap::build(&chart);
         let notes = tempo.drum_notes(&chart);
         let notes_per_measure = count_per_measure(&notes, tempo.measure_count());
-        let end_ms = chart
+        let last_chip_ms = chart
             .chips
             .iter()
             .map(|c| tempo.chip_ms(c))
-            .fold(0.0, f64::max)
-            + 2000.0;
+            .fold(0.0, f64::max);
+        let end_ms = last_chip_ms + 2000.0;
         let bgm: Vec<(f64, u16)> = chart
             .chips
             .iter()
@@ -254,14 +280,6 @@ impl Play {
                 }
             }
         }
-        // 音を読み終えてから鳴らし始める
-        if let Some(a) = &audio
-            && let Err(e) = a.start()
-        {
-            log::warn!("audio is off: {e:#}");
-            audio = None;
-            section_audio = None;
-        }
         let clicks = audio
             .as_ref()
             .map(|a| (click(a.rate(), true), click(a.rate(), false)));
@@ -287,7 +305,11 @@ impl Play {
             end_ms,
             input_offset_ms,
             drum_sounds,
-            flashes: HashMap::new(),
+            fx: Vec::new(),
+            lines: beat_lines(&tempo),
+            bpm: 60_000.0 / (tempo.beat_to_ms(1.0) - tempo.beat_to_ms(0.0)).max(1.0),
+            last_chip_ms,
+            preimage: preimage_path(&chart, path),
             last_input: None,
             hh_pedal: None,
             hit_offsets: Vec::new(),
@@ -311,6 +333,30 @@ impl Play {
         };
         play.lay_laps(start_ms);
         Ok(play)
+    }
+
+    /// 鳴らし始める（曲の時計を動かす）。読み込んでから画面を切り替えるときに呼ぶ
+    pub fn begin(&mut self) {
+        if let Some(a) = &self.audio
+            && let Err(e) = a.start()
+        {
+            log::warn!("audio is off: {e:#}");
+            self.audio = None;
+            self.section_audio = None;
+        }
+        self.fallback_origin_us = host_us();
+    }
+
+    /// たまった画面の効果を取り出す
+    pub fn take_fx(&mut self) -> Vec<Fx> {
+        std::mem::take(&mut self.fx)
+    }
+
+    fn push_fx(&mut self, fx: Fx) {
+        if self.fx.len() >= MAX_FX {
+            self.fx.drain(..MAX_FX / 2);
+        }
+        self.fx.push(fx);
     }
 
     /// 練習なら、終わった周の合否で速度を決め、`now_ms` から少し先までの周を並べる（判定の音符・BGM・クリック）
@@ -397,7 +443,7 @@ impl Play {
         self.lay_laps(now);
         let misses = self.judge.advance(now);
         self.record(&misses, None, None);
-        self.show(&misses, now);
+        self.show(&misses);
     }
 
     pub fn on_midi(&mut self, raw: RawMidi) {
@@ -433,6 +479,30 @@ impl Play {
     }
 
     /// キーボードで叩いた（電子ドラムが無いときの確認用）
+    /// 音を止める（STAGE FAILED）。時計はシステム時刻になるが、もう譜面は進めない
+    pub fn silence(&mut self) {
+        self.audio = None;
+        self.section_audio = None;
+    }
+
+    /// 時刻の来た音符を自動で叩く（画面を確かめるための開発用。`DTXMANIANXT_AUTOPLAY=1` で起動）
+    pub fn autoplay(&mut self) {
+        let at = host_us();
+        let now = self.song_ms_at(at) - self.input_offset_ms;
+        let notes = self.judge.notes();
+        let from = notes.partition_point(|n| n.ms < now - 100.0);
+        let due: Vec<DrumLane> = notes[from..]
+            .iter()
+            .enumerate()
+            .take_while(|(_, n)| n.ms <= now)
+            .filter(|&(i, _)| !self.judge.is_done(from + i))
+            .map(|(_, n)| n.lane)
+            .collect();
+        for lane in due {
+            self.hit(lane, 100, at, None, None);
+        }
+    }
+
     pub fn on_key(&mut self, lane: DrumLane, at_us: i64) {
         self.last_input = Some(LastInput {
             source: "keyboard".into(),
@@ -454,6 +524,7 @@ impl Play {
         hh_pedal: Option<u8>,
     ) {
         let ms = self.song_ms_at(at_us) - self.input_offset_ms;
+        self.push_fx(Fx::Hit { lane, velocity });
         let events = self.judge.hit(Hit { ms, lane, velocity });
         if events.is_empty() {
             let stray = StrayHit {
@@ -480,7 +551,7 @@ impl Play {
                 a.play_now(s, f32::from(velocity) / 127.0);
             }
         }
-        self.show(&events, ms);
+        self.show(&events);
     }
 
     fn nearest_wav(&self, lane: DrumLane, ms: f64) -> Option<u16> {
@@ -649,22 +720,57 @@ impl Play {
         })
     }
 
-    fn show(&mut self, events: &[JudgeEvent], song_ms: f64) {
+    fn show(&mut self, events: &[JudgeEvent]) {
         for e in events {
             if let Some(o) = e.offset_ms {
                 self.hit_offsets.push(o);
             }
-            let lane = self.judge.notes()[e.note].lane;
-            self.flashes.insert(
-                lane,
-                Flash {
-                    judgement: e.judgement,
-                    offset_ms: e.offset_ms,
-                    song_ms,
-                },
-            );
+            let note = &self.judge.notes()[e.note];
+            let fx = Fx::Judged {
+                lane: note.lane,
+                judgement: e.judgement,
+                offset_ms: e.offset_ms,
+                note_ms: note.ms,
+            };
+            self.push_fx(fx);
         }
     }
+}
+
+/// 小節線と拍線を並べる（上流 `CDTX` の「拍子_拍線の挿入」と同じく、曲の終わりの小節まで小節線を引き、
+/// 小節の中は 1 拍ごとに拍線を引く。拍線のずらし（C1）と表示の切り替え（C2）はまだ読まない）
+fn beat_lines(tempo: &TempoMap) -> Vec<BeatLine> {
+    let measures = tempo.measure_count();
+    let mut out = Vec::new();
+    for m in 0..=measures {
+        let start = tempo.measure_start_beat(m);
+        out.push(BeatLine {
+            ms: tempo.beat_to_ms(start),
+            bar: true,
+        });
+        if m == measures {
+            break;
+        }
+        let len = tempo.measure_start_beat(m + 1) - start;
+        let mut i = 1.0;
+        while i < len - 1e-9 {
+            out.push(BeatLine {
+                ms: tempo.beat_to_ms(start + i),
+                bar: false,
+            });
+            i += 1.0;
+        }
+    }
+    out
+}
+
+/// 譜面の `#PREIMAGE` の画像のファイル（大文字小文字の違いは許す）
+fn preimage_path(chart: &Chart, path: &Path) -> Option<PathBuf> {
+    let name = chart.field("PREIMAGE")?.trim();
+    if name.is_empty() {
+        return None;
+    }
+    nx::find_file(path.parent()?, name).filter(|p| p.is_file())
 }
 
 /// 今の UNIX 秒
@@ -694,4 +800,26 @@ fn load_sounds(chart: &Chart, dir: &Path, rate: u32) -> HashMap<u16, Sound> {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn beat_lines_follow_bar_lengths() {
+        // BPM 120（1 拍 500ms）。小節の長さは次に変えるまで続くので、小節 2 で 4/4 に戻す
+        let chart = dtx::parse("#BPM 120\n#00102: 0.75\n#00202: 1\n#00211: 01\n");
+        let lines = beat_lines(&TempoMap::build(&chart));
+        let bars: Vec<f64> = lines.iter().filter(|l| l.bar).map(|l| l.ms).collect();
+        let beats: Vec<f64> = lines.iter().filter(|l| !l.bar).map(|l| l.ms).collect();
+        // 小節 0（4 拍）、小節 1（3 拍）、小節 2（4 拍）、曲の終わり
+        assert_eq!(bars, vec![0.0, 2000.0, 3500.0, 5500.0]);
+        assert_eq!(
+            beats,
+            vec![
+                500.0, 1000.0, 1500.0, 2500.0, 3000.0, 4000.0, 4500.0, 5000.0
+            ]
+        );
+    }
 }

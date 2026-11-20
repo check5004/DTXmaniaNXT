@@ -4,6 +4,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender, channel};
+use std::time::Duration;
 
 use crate::audio::{AudioOut, Sound, load_sound};
 use crate::gfx::Skin;
@@ -19,10 +20,21 @@ pub enum Se {
     Cancel,
     /// 難易度などを変えた
     Change,
+    /// 曲を読み込んでいる（読み込みの画面はこの音の長さだけ出す）
+    NowLoading,
+    /// ゲージが尽きた
+    StageFailed,
 }
 
 impl Se {
-    const ALL: [Se; 4] = [Se::Move, Se::Decide, Se::Cancel, Se::Change];
+    const ALL: [Se; 6] = [
+        Se::Move,
+        Se::Decide,
+        Se::Cancel,
+        Se::Change,
+        Se::NowLoading,
+        Se::StageFailed,
+    ];
 
     fn file(self) -> &'static str {
         match self {
@@ -30,12 +42,16 @@ impl Se {
             Se::Decide => "Sounds/Decide.ogg",
             Se::Cancel => "Sounds/Cancel.ogg",
             Se::Change => "Sounds/Change.ogg",
+            Se::NowLoading => "Sounds/Now loading.ogg",
+            Se::StageFailed => "Sounds/Stage failed.ogg",
         }
     }
 }
 
 /// プレビューの音に付ける目印
 const PREVIEW_TAG: u8 = 1;
+/// 読み込みの音に付ける目印（読み込みをやめたら止める）
+const LOADING_TAG: u8 = 2;
 
 pub struct Sfx {
     out: Option<AudioOut>,
@@ -94,6 +110,22 @@ impl Sfx {
     pub fn play(&mut self, se: Se) {
         if let (Some(out), Some(s)) = (&mut self.out, self.sounds.get(&se)) {
             out.play_now(s, 1.0);
+        }
+    }
+
+    /// 読み込みの音を鳴らし、その長さを返す（音が無ければ 0）
+    pub fn play_loading(&mut self) -> Duration {
+        let (Some(out), Some(s)) = (&mut self.out, self.sounds.get(&Se::NowLoading)) else {
+            return Duration::ZERO;
+        };
+        out.play_tagged(s, 1.0, LOADING_TAG);
+        Duration::from_secs_f64(s.frames() as f64 / f64::from(out.rate()))
+    }
+
+    /// 読み込みの音を止める
+    pub fn stop_loading(&mut self) {
+        if let Some(out) = &mut self.out {
+            out.stop(LOADING_TAG);
         }
     }
 

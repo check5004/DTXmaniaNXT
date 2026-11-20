@@ -28,8 +28,16 @@ pub struct Tex {
 }
 
 impl Tex {
+    /// 画像を GPU に載せる。GPU が扱えないほど大きければ縮めて載せる（`w`, `h` は元の大きさのまま）
     pub fn new(ctx: &egui::Context, name: &str, image: egui::ColorImage) -> Self {
         let [w, h] = image.size;
+        let max = ctx.input(|i| i.max_texture_side).max(1);
+        let image = if w.max(h) > max {
+            log::warn!("{name}: {w}x{h} is larger than the GPU allows ({max}), shrinking");
+            shrink(&image, w.max(h).div_ceil(max))
+        } else {
+            image
+        };
         let handle = ctx.load_texture(name, image, egui::TextureOptions::LINEAR);
         Self {
             handle,
@@ -41,6 +49,31 @@ impl Tex {
     pub fn id(&self) -> egui::TextureId {
         self.handle.id()
     }
+}
+
+/// 画像を縦横 1/`k` にする（`k`×`k` の平均）
+fn shrink(image: &egui::ColorImage, k: usize) -> egui::ColorImage {
+    let [w, h] = image.size;
+    let (nw, nh) = (w.div_ceil(k), h.div_ceil(k));
+    let mut pixels = Vec::with_capacity(nw * nh);
+    for y in 0..nh {
+        for x in 0..nw {
+            let mut sum = [0u32; 4];
+            let mut n = 0;
+            for sy in y * k..((y + 1) * k).min(h) {
+                for sx in x * k..((x + 1) * k).min(w) {
+                    let p = image.pixels[sy * w + sx].to_array();
+                    for (s, v) in sum.iter_mut().zip(p) {
+                        *s += u32::from(v);
+                    }
+                    n += 1;
+                }
+            }
+            let [r, g, b, a] = sum.map(|s| (s / n) as u8);
+            pixels.push(Color32::from_rgba_premultiplied(r, g, b, a));
+        }
+    }
+    egui::ColorImage::new([nw, nh], pixels)
 }
 
 /// 画像のどこを切り出すか（NX の `Rectangle`）
@@ -187,6 +220,43 @@ impl Canvas {
         };
         let mut mesh = Mesh::with_texture(t.id());
         mesh.add_rect_with_uv(dest, uv, color);
+        self.painter.add(mesh);
+    }
+
+    /// 画像の一部を、中心を (cx, cy) に置いて拡大・回転して描く（NX の `tDraw3D` と同じ使い方）。
+    /// `angle` は反時計回り（ラジアン）。拡大率がマイナスなら裏返す
+    pub fn draw_rot(&self, t: &Tex, cx: f32, cy: f32, angle: f32, o: Opt) {
+        let s = o.src.unwrap_or(src(0.0, 0.0, t.w, t.h));
+        if s.w <= 0.0 || s.h <= 0.0 || o.alpha <= 0.0 {
+            return;
+        }
+        let (hw, hh) = (s.w * o.sx / 2.0, s.h * o.sy / 2.0);
+        let (sin, cos) = angle.sin_cos();
+        // 画面は下向きが y なので、見た目で反時計回りにするには y の符号を逆にして回す
+        let at = |dx: f32, dy: f32| self.pos(cx + dx * cos + dy * sin, cy - dx * sin + dy * cos);
+        let (u0, v0) = (s.x / t.w, s.y / t.h);
+        let (u1, v1) = ((s.x + s.w) / t.w, (s.y + s.h) / t.h);
+        let a = (o.alpha.clamp(0.0, 1.0) * 255.0).round() as u8;
+        let color = if o.add {
+            Color32::from_rgba_premultiplied(a, a, a, 0)
+        } else {
+            Color32::from_rgba_premultiplied(a, a, a, a)
+        };
+        let mut mesh = Mesh::with_texture(t.id());
+        for (dx, dy, u, v) in [
+            (-hw, -hh, u0, v0),
+            (hw, -hh, u1, v0),
+            (hw, hh, u1, v1),
+            (-hw, hh, u0, v1),
+        ] {
+            mesh.vertices.push(egui::epaint::Vertex {
+                pos: at(dx, dy),
+                uv: pos2(u, v),
+                color,
+            });
+        }
+        mesh.add_triangle(0, 1, 2);
+        mesh.add_triangle(0, 2, 3);
         self.painter.add(mesh);
     }
 
@@ -404,6 +474,11 @@ impl Gfx {
     }
 }
 
+/// 長い辺を `size` に合わせる拡大率（上流のジャケットの `fScalingFactor`）
+pub fn fit_scale(t: &Tex, size: f32) -> f32 {
+    (size / t.w).min(size / t.h)
+}
+
 /// 数字などを並べた画像から 1 文字ずつ切り出して描く（NX の `tDrawBPM` などと同じ）
 pub struct Glyphs<'a> {
     /// 文字、切り出す範囲、次の文字までの幅
@@ -450,5 +525,19 @@ mod tests {
         assert_eq!(c.pos(0.0, 0.0), pos2(0.0, 60.0));
         assert_eq!(c.pos(1280.0, 720.0), pos2(1920.0, 1140.0));
         assert_eq!(c.to_nx(pos2(960.0, 600.0)), pos2(640.0, 360.0));
+    }
+
+    #[test]
+    fn shrink_averages_blocks() {
+        let px = |v: u8| Color32::from_rgba_premultiplied(v, v, v, 255);
+        // 3×2 を 1/2 に：端の半端なブロックはある分だけで平均する
+        let img = egui::ColorImage::new(
+            [3, 2],
+            vec![px(0), px(100), px(50), px(200), px(100), px(150)],
+        );
+        let s = shrink(&img, 2);
+        assert_eq!(s.size, [2, 1]);
+        assert_eq!(s.pixels[0], px(100));
+        assert_eq!(s.pixels[1], px(100));
     }
 }
