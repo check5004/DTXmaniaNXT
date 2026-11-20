@@ -1,6 +1,6 @@
 //! 選曲の状態。曲のフォルダを別のスレッドで探し、BOX の出入りと、選んでいる曲・難易度を持つ。
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, channel};
@@ -216,6 +216,17 @@ impl SongList {
         let s = self.selected_song()?;
         let level = self.level_for(s)?;
         s.charts[level].as_ref().map(|c| c.path.clone())
+    }
+
+    /// 譜面の難易度の名前（set.def の `#L1LABEL` など）。一覧に無いか名前が無ければ空
+    pub fn chart_label(&self, path: &Path) -> String {
+        self.library
+            .all_songs()
+            .into_iter()
+            .flat_map(|s| s.charts.iter().flatten())
+            .find(|c| c.path == path)
+            .map(|c| c.label.clone())
+            .unwrap_or_default()
     }
 
     /// BOX なら入り、`<< BACK` なら出て、曲なら遊ぶ譜面を返す。`< RANDOM SELECT >` は
