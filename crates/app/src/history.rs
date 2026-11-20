@@ -9,7 +9,7 @@ use engine::analysis::{
     section_weakness, tendencies, weak_phrases,
 };
 use engine::practice::Section;
-use records::{ChartKey, ClearRecord, Records, SessionKind};
+use records::{BestScore, ChartKey, ClearRecord, PlayScore, Records, SessionKind};
 
 use crate::game::{Play, WeakMap};
 
@@ -71,11 +71,15 @@ impl History {
         Self { records }
     }
 
-    /// 遊んだ記録を残す
-    pub fn save(&mut self, play: &Play) {
-        let (Some(records), Some(session)) = (self.records.as_mut(), play.session()) else {
-            return;
+    /// 遊んだ記録を残す。`score` は普通のプレイのスコアと達成率（演奏の画面が数えたもの）。
+    /// 返すのはセッションの番号（残せなかったら None）
+    pub fn save(&mut self, play: &Play, score: Option<PlayScore>) -> Option<i64> {
+        let (Some(records), Some(mut session)) = (self.records.as_mut(), play.session()) else {
+            return None;
         };
+        if play.practice.is_none() {
+            session.score = score;
+        }
         let path = play.path.to_string_lossy();
         let chart = ChartKey {
             path: &path,
@@ -83,9 +87,20 @@ impl History {
             artist: &play.artist,
             hash: play.chart_hash,
         };
-        if let Err(e) = records.save(&chart, &session) {
-            log::warn!("cannot save the record: {e}");
-        }
+        records
+            .save(&chart, &session)
+            .map_err(|e| log::warn!("cannot save the record: {e}"))
+            .ok()
+    }
+
+    /// 譜面のこれまでのベスト。`before`（セッションの番号）があれば、それより前のプレイだけから。
+    /// 記録が読めなければ None
+    pub fn best_score(&self, path: &Path, before: Option<i64>) -> Option<BestScore> {
+        let records = self.records.as_ref()?;
+        records
+            .best_score(&path.to_string_lossy(), before)
+            .map_err(|e| log::warn!("cannot read the records: {e}"))
+            .ok()
     }
 
     /// 苦手な小節。記録から出し、記録が読めなければ `fallback`（今回のプレイ）から出す。

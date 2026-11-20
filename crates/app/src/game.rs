@@ -717,6 +717,8 @@ impl Play {
                     speed: f64::from(speed) / 100.0,
                 })
             }),
+            // スコアは演奏の画面が数えている（History::save で入れる）
+            score: None,
         })
     }
 

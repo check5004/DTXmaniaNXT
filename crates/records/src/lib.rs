@@ -108,6 +108,21 @@ const MIGRATIONS: &[&str] = &[
     );
     CREATE INDEX clears_by_chart ON clears(chart_id);
     ",
+    // 3: 普通のプレイのスコアと達成率と進み具合のバー（結果の画面の New Record と前回のベストに使う）
+    "
+    CREATE TABLE play_scores (
+        session_id INTEGER PRIMARY KEY REFERENCES sessions(id),
+        -- XG のスコア（0〜100 万）
+        score INTEGER NOT NULL,
+        -- 達成率（上流の演奏型スキル、0〜100）
+        rate REAL NOT NULL,
+        -- 進み具合のバー。64 区間を最初から 1 文字ずつ（上流の score.ini と同じ。
+        -- '0' はたどり着いていない、'1' は取りこぼしあり、'2' は全部叩けた、'3' は音符なし）
+        progress TEXT NOT NULL,
+        -- 最後まで遊んだ（STAGE FAILED や途中でやめたら 0）
+        cleared INTEGER NOT NULL
+    );
+    ",
 ];
 
 /// 譜面 1 つの見分け方
@@ -159,6 +174,45 @@ pub struct Session {
     pub laps: Vec<Lap>,
     /// 練習で区間をクリアした（等速以上で続けて合格した）
     pub clear: Option<SectionClear>,
+    /// 普通のプレイのスコアと達成率（練習は None）
+    pub score: Option<PlayScore>,
+}
+
+/// 普通のプレイ 1 回のスコアと達成率と進み具合
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlayScore {
+    pub score: i64,
+    /// 達成率（0〜100）
+    pub rate: f64,
+    /// 進み具合のバー（64 文字。[`PlayScore::reached`] を参照）
+    pub progress: String,
+    /// 最後まで遊んだ
+    pub cleared: bool,
+}
+
+impl PlayScore {
+    /// 進み具合のバーで、たどり着いた区間の数（上流 `tProgressBarLength`）。形が違えば 0
+    pub fn reached(progress: &str) -> usize {
+        if progress.chars().count() != PROGRESS_SECTIONS {
+            return 0;
+        }
+        progress.chars().filter(|&c| c != '0').count()
+    }
+}
+
+/// 進み具合のバーの区間の数（上流 `nSectionIntervalCount`）
+pub const PROGRESS_SECTIONS: usize = 64;
+
+/// 譜面のこれまでのベスト（結果の画面に出す）
+#[derive(Debug, Clone, PartialEq)]
+pub struct BestScore {
+    /// 最後まで遊んだプレイの一番高い達成率。まだ無ければ None
+    pub rate: Option<f64>,
+    /// 一番高いスコア
+    pub score: Option<i64>,
+    /// 前回までのベストの進み具合。達成率が一番高かったプレイのもの、
+    /// 最後まで遊んだプレイが無ければ一番先までたどり着いたもの（上流と同じ）
+    pub progress: Option<String>,
 }
 
 /// 練習でクリアした区間
@@ -278,6 +332,13 @@ impl Records {
         for (i, lap) in session.laps.iter().enumerate() {
             insert_lap(&tx, session_id, i, lap)?;
         }
+        if let Some(p) = &session.score {
+            tx.execute(
+                "INSERT INTO play_scores (session_id, score, rate, progress, cleared)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![session_id, p.score, p.rate, p.progress, p.cleared],
+            )?;
+        }
         if let Some(c) = session.clear {
             tx.execute(
                 "INSERT INTO clears (chart_id, session_id, first_measure, last_measure, speed, cleared_at)
@@ -287,6 +348,55 @@ impl Records {
         }
         tx.commit()?;
         Ok(session_id)
+    }
+
+    /// 譜面のこれまでのベスト。`before`（セッションの番号）があれば、それより前のプレイだけから
+    pub fn best_score(&self, chart_path: &str, before: Option<i64>) -> Result<BestScore> {
+        let mut q = self.conn.prepare(
+            "SELECT p.score, p.rate, p.progress, p.cleared
+             FROM play_scores p
+             JOIN sessions s ON s.id = p.session_id
+             JOIN charts c ON c.id = s.chart_id
+             WHERE c.path = ?1 AND (?2 IS NULL OR s.id < ?2)
+             ORDER BY s.started_at, s.id",
+        )?;
+        let rows = q
+            .query_map(params![chart_path, before], |row| {
+                Ok(PlayScore {
+                    score: row.get(0)?,
+                    rate: row.get(1)?,
+                    progress: row.get(2)?,
+                    cleared: row.get(3)?,
+                })
+            })?
+            .collect::<Result<Vec<_>>>()?;
+        let score = rows.iter().map(|p| p.score).max();
+        // 同じ達成率なら先に出したもの
+        let mut best: Option<&PlayScore> = None;
+        for p in rows.iter().filter(|p| p.cleared) {
+            if best.is_none_or(|b| p.rate > b.rate) {
+                best = Some(p);
+            }
+        }
+        let progress = match best {
+            Some(b) => Some(b.progress.clone()),
+            None => {
+                let mut far: Option<&PlayScore> = None;
+                for p in &rows {
+                    if far.is_none_or(|f| {
+                        PlayScore::reached(&p.progress) >= PlayScore::reached(&f.progress)
+                    }) {
+                        far = Some(p);
+                    }
+                }
+                far.map(|f| f.progress.clone())
+            }
+        };
+        Ok(BestScore {
+            rate: best.map(|b| b.rate),
+            score,
+            progress,
+        })
     }
 
     /// 譜面のクリアの記録。古い順
@@ -558,6 +668,7 @@ mod tests {
                 }],
             }],
             clear: None,
+            score: None,
         }
     }
 
@@ -851,6 +962,75 @@ mod tests {
         assert_eq!(r.recent_timed_hits(3).unwrap().len(), 1);
     }
 
+    fn scored(started_at: i64, score: i64, rate: f64, progress: &str, cleared: bool) -> Session {
+        Session {
+            score: Some(PlayScore {
+                score,
+                rate,
+                progress: progress.to_owned(),
+                cleared,
+            }),
+            ..play(started_at, 1.0, vec![hit(1, Judgement::Perfect)])
+        }
+    }
+
+    #[test]
+    fn best_score_takes_the_best_rate_of_cleared_plays() {
+        let mut r = Records::open_in_memory().unwrap();
+        let path = "songs/a/master.dtx";
+        assert_eq!(
+            r.best_score(path, None).unwrap(),
+            BestScore {
+                rate: None,
+                score: None,
+                progress: None
+            }
+        );
+        let half = format!("{}{}", "1".repeat(32), "0".repeat(32));
+        let most = format!("{}{}", "2".repeat(40), "0".repeat(24));
+        let all1 = "1".repeat(64);
+        let all2 = "2".repeat(64);
+        // 途中で落ちたプレイだけなら、一番先までたどり着いたもの
+        r.save(&chart(1), &scored(100, 10_000, 30.0, &half, false))
+            .unwrap();
+        r.save(&chart(1), &scored(200, 20_000, 40.0, &most, false))
+            .unwrap();
+        let b = r.best_score(path, None).unwrap();
+        assert_eq!(b.rate, None);
+        assert_eq!(b.score, Some(20_000));
+        assert_eq!(b.progress.as_deref(), Some(most.as_str()));
+        // 最後まで遊んだプレイがあれば、達成率が一番高いもの（同じなら先のもの）
+        let s3 = r
+            .save(&chart(1), &scored(300, 500_000, 70.5, &all1, true))
+            .unwrap();
+        r.save(&chart(1), &scored(400, 400_000, 60.0, &all2, true))
+            .unwrap();
+        let s5 = r
+            .save(&chart(1), &scored(500, 600_000, 70.5, &all2, true))
+            .unwrap();
+        let b = r.best_score(path, None).unwrap();
+        assert_eq!(b.rate, Some(70.5));
+        assert_eq!(b.score, Some(600_000));
+        assert_eq!(b.progress.as_deref(), Some(all1.as_str()));
+        // 前のプレイだけから
+        let b = r.best_score(path, Some(s5)).unwrap();
+        assert_eq!(b.score, Some(500_000));
+        let b = r.best_score(path, Some(s3)).unwrap();
+        assert_eq!(b.rate, None);
+        // スコアの無い練習やほかの譜面は数えない
+        assert_eq!(r.best_score("other.dtx", None).unwrap().score, None);
+    }
+
+    #[test]
+    fn progress_length_counts_reached_sections() {
+        assert_eq!(PlayScore::reached(&"0".repeat(64)), 0);
+        assert_eq!(
+            PlayScore::reached(&format!("{}{}", "13".repeat(5), "0".repeat(54))),
+            10
+        );
+        assert_eq!(PlayScore::reached("2222"), 0);
+    }
+
     #[test]
     fn version_1_files_are_upgraded() {
         let conn = Connection::open_in_memory().unwrap();
@@ -864,7 +1044,7 @@ mod tests {
         )
         .unwrap();
         let r = Records::init(conn).unwrap();
-        assert_eq!(r.schema_version().unwrap(), 2);
+        assert_eq!(r.schema_version().unwrap(), MIGRATIONS.len());
         // 前の版の音符は拍の位置が無いので、くせには入らない
         assert!(r.recent_timed_hits(10).unwrap().is_empty());
         assert_eq!(r.recent_results("a.dtx", 10, 10, None).unwrap().len(), 1);

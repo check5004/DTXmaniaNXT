@@ -17,6 +17,7 @@ mod loading;
 mod midi;
 mod play_view;
 mod practice;
+mod result_view;
 mod select;
 mod sfx;
 mod songs;
@@ -46,6 +47,7 @@ use crate::loading::Loading;
 use crate::midi::MidiIn;
 use crate::play_view::PlayView;
 use crate::practice::{PracticeOptions, PracticeSetup};
+use crate::result_view::{Page, ResultInfo, ResultView};
 use crate::select::{PREVIEW_WAIT, SelectView};
 use crate::sfx::{Se, Sfx};
 use crate::songs::SongList;
@@ -198,7 +200,8 @@ enum Screen {
     Loading(Box<Loading>),
     /// 遊んでいる（練習中も）。NX の演奏画面の動きと一緒に持つ
     Play(Box<Play>, Box<PlayView>),
-    Result(Box<Outcome>),
+    /// 結果。NX の結果の画面の動きと一緒に持つ
+    Result(Box<Outcome>, Box<ResultView>),
 }
 
 struct App {
@@ -238,6 +241,16 @@ struct App {
     toast: Option<(String, Instant)>,
     /// 音符を自動で叩く（開発用。`DTXMANIANXT_AUTOPLAY=1`）
     autoplay: bool,
+}
+
+/// 演奏の画面が数えたスコアを、記録に残す形にする
+fn play_score(f: &play_view::Finish, cleared: bool) -> records::PlayScore {
+    records::PlayScore {
+        score: f.score,
+        rate: f.rate,
+        progress: f.progress.clone(),
+        cleared,
+    }
 }
 
 /// 読み込みの画面を出しておく一番短い時間
@@ -442,7 +455,8 @@ impl App {
     fn enter_play(&mut self, mut play: Play) {
         let label = self.songs.chart_label(&play.path);
         play.begin();
-        let view = PlayView::new(&play, self.gfx.skin.dir(), &label);
+        let lag = play_view::LagDigits::from_nx(self.nx.as_ref().map(|n| &n.config));
+        let view = PlayView::new(&play, self.gfx.skin.dir(), &label, lag);
         self.message = None;
         self.screen = Screen::Play(Box::new(play), Box::new(view));
     }
@@ -529,33 +543,60 @@ impl App {
 
     /// 曲（練習）を終える。結果の画面へ
     fn finish_play(&mut self) {
-        if let Screen::Play(p, _) = &self.screen {
-            self.history.save(p);
-            let mut outcome = p.outcome();
-            if outcome.practice.is_none() {
-                let weak = self.history.weak_map(
-                    &outcome.path,
-                    &outcome.notes_per_measure,
-                    Some(&outcome.results),
-                );
-                outcome.overcome = self.history.check_overcome(
-                    &outcome.path,
-                    outcome.started_at,
-                    &outcome.notes_per_measure,
-                    &outcome.results,
-                    &weak,
-                );
-                outcome.weak = Some(weak);
-                outcome.tendencies = self.history.tendencies();
-            }
-            self.screen = Screen::Result(Box::new(outcome));
+        let Screen::Play(p, view) = &self.screen else {
+            return;
+        };
+        let finish = view.finish(p, p.now_ms());
+        let practice = p.practice.is_some();
+        // Esc でやめたときも結果は出す（記録は「最後まで遊んでいない」として残す）
+        let cleared = p.finished();
+        let session = self.history.save(p, Some(play_score(&finish, cleared)));
+        // New Record と前回のベストのバーは、今回より前のプレイと比べる
+        let best = self.history.best_score(&p.path, session);
+        let mut outcome = p.outcome();
+        if !practice {
+            let weak = self.history.weak_map(
+                &outcome.path,
+                &outcome.notes_per_measure,
+                Some(&outcome.results),
+            );
+            outcome.overcome = self.history.check_overcome(
+                &outcome.path,
+                outcome.started_at,
+                &outcome.notes_per_measure,
+                &outcome.results,
+                &weak,
+            );
+            outcome.weak = Some(weak);
+            outcome.tendencies = self.history.tendencies();
         }
+        let lag_counts = self
+            .nx
+            .as_ref()
+            .filter(|n| n.config.show_lag_hit_count)
+            .map(|n| n.config.lag_color_swapped);
+        let view = ResultView::new(ResultInfo {
+            title: outcome.title.clone(),
+            artist: outcome.artist.clone(),
+            preimage: p.preimage.clone(),
+            level: outcome.level,
+            tally: outcome.tally.clone(),
+            notes: outcome.notes,
+            practice,
+            cleared: cleared && !practice,
+            finish,
+            best,
+            lag_counts,
+        });
+        self.screen = Screen::Result(Box::new(outcome), Box::new(view));
     }
 
-    /// 遊んでいる途中の曲があれば、そこまでの記録を残す
+    /// 遊んでいる途中の曲があれば、そこまでの記録を残す（STAGE FAILED や、途中でやめたとき）
     fn save_unfinished(&mut self) {
-        if let Screen::Play(p, _) = &self.screen {
-            self.history.save(p);
+        if let Screen::Play(p, view) = &self.screen {
+            let now = view.frozen_ms().unwrap_or_else(|| p.now_ms());
+            let finish = view.finish(p, now);
+            self.history.save(p, Some(play_score(&finish, false)));
         }
     }
 
@@ -598,6 +639,11 @@ impl App {
             _ => {}
         }
         self.pump_loading();
+        if let Screen::Result(_, view) = &mut self.screen {
+            for se in view.due_sounds() {
+                self.sfx.play(se);
+            }
+        }
         let stage_failed = self.stage_failed_enabled();
         let mut failed_out = false;
         let mut finished = false;
@@ -671,9 +717,13 @@ impl App {
             }
             Screen::Select => self.on_select_key(event_loop, code),
             Screen::Setup(_) => self.on_setup_key(code),
-            Screen::Result(_) => match code {
+            Screen::Result(_, view) => match code {
                 KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Escape => {
                     self.result_action(ui::ResultAction::Back);
+                }
+                KeyCode::ArrowLeft | KeyCode::ArrowRight => {
+                    view.turn();
+                    self.sfx.play(Se::Change);
                 }
                 KeyCode::KeyR => self.result_action(ui::ResultAction::Retry),
                 KeyCode::KeyP => self.result_action(ui::ResultAction::Practice(None)),
@@ -926,12 +976,23 @@ impl App {
                 };
                 self.setup_action(action);
             }
-            Screen::Result(_) => {
-                if matches!(lane, DrumLane::CY | DrumLane::RD | DrumLane::LC) {
-                    self.go_to_select();
+            Screen::Result(..) => match lane {
+                DrumLane::CY | DrumLane::RD | DrumLane::LC => {
+                    self.result_action(ui::ResultAction::Back);
                 }
-            }
+                // 選曲と同じく HT と LT で動かす
+                DrumLane::HT | DrumLane::LT => self.turn_result_page(),
+                _ => {}
+            },
             Screen::Loading(_) | Screen::Play(..) => {}
+        }
+    }
+
+    /// 結果の画面のページを切り替える
+    fn turn_result_page(&mut self) {
+        if let Screen::Result(_, view) = &mut self.screen {
+            view.turn();
+            self.sfx.play(Se::Change);
         }
     }
 
@@ -1011,13 +1072,15 @@ impl App {
     }
 
     fn result_action(&mut self, action: ui::ResultAction) {
-        let Screen::Result(o) = &self.screen else {
+        let Screen::Result(o, _) = &self.screen else {
             return;
         };
         let path = o.path.clone();
         let options = o.practice.as_ref().map(|p| p.options);
         match action {
             ui::ResultAction::Back => {
+                // 上流と同じく戻る音を鳴らして選曲へ
+                self.sfx.play(Se::Cancel);
                 self.go_to_select();
             }
             ui::ResultAction::Retry => match options {
@@ -1140,7 +1203,26 @@ impl App {
                     ui::play_toast(&ctx, &c, t);
                 }
             }
-            Screen::Result(o) => result_actions = ui::draw_result(ui, o, &self.config),
+            Screen::Result(o, view) => {
+                let ctx = ui.ctx().clone();
+                let painter = ctx.layer_painter(egui::LayerId::background());
+                let c = Canvas::new(&painter, ctx.content_rect());
+                self.gfx.begin(&c, ctx.pixels_per_point());
+                view.draw_background(&c, &mut self.gfx);
+                match view.page {
+                    Page::Summary => view.draw_summary(&c, &mut self.gfx),
+                    Page::Analysis => {
+                        view.draw_analysis_hint(&c, &mut self.gfx);
+                        result_actions = ui::draw_result(ui, o, &self.config);
+                    }
+                }
+                // フェードは egui の窓より上に
+                let top = ctx.layer_painter(egui::LayerId::new(
+                    egui::Order::Tooltip,
+                    egui::Id::unique("result fade"),
+                ));
+                view.draw_fade(&Canvas::overlay(&top, ctx.content_rect()));
+            }
         });
         state.handle_platform_output(window, output.platform_output.clone());
         if let Some(gpu) = &mut self.gpu {

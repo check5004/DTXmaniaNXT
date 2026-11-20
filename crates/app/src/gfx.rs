@@ -125,10 +125,15 @@ pub struct Canvas {
 impl Canvas {
     /// `area`（egui の座標）の中に 1280×720 を収める。外側は黒で塗る
     pub fn new(painter: &egui::Painter, area: Rect) -> Self {
+        painter.rect_filled(area, 0.0, Color32::BLACK);
+        Self::overlay(painter, area)
+    }
+
+    /// 外側を塗らずに作る（ほかの層の上に重ねて描く）
+    pub fn overlay(painter: &egui::Painter, area: Rect) -> Self {
         let scale = (area.width() / W).min(area.height() / H).max(0.01);
         let size = vec2(W * scale, H * scale);
         let origin = area.center() - size / 2.0;
-        painter.rect_filled(area, 0.0, Color32::BLACK);
         let painter = painter.with_clip_rect(Rect::from_min_size(origin, size));
         Self {
             painter,
@@ -344,6 +349,12 @@ impl Skin {
     /// 画像（一度読んだら覚えておく）
     pub fn tex(&self, rel: &str) -> Option<Tex> {
         self.tex_with(rel, false)
+    }
+
+    /// 無くてもよい画像（スキンに無ければ黙って None）
+    pub fn tex_optional(&self, rel: &str) -> Option<Tex> {
+        self.path(rel)?;
+        self.tex(rel)
     }
 
     /// 真っ黒を透明にして読む画像

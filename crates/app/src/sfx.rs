@@ -24,16 +24,28 @@ pub enum Se {
     NowLoading,
     /// ゲージが尽きた
     StageFailed,
+    /// 結果の画面（最後まで遊んだ）
+    StageClear,
+    /// 結果の画面（POOR と MISS が無い）
+    FullCombo,
+    /// 結果の画面（全部 PERFECT）
+    Excellent,
+    /// 結果の画面（達成率が自己ベストを超えた）
+    NewRecord,
 }
 
 impl Se {
-    const ALL: [Se; 6] = [
+    const ALL: [Se; 10] = [
         Se::Move,
         Se::Decide,
         Se::Cancel,
         Se::Change,
         Se::NowLoading,
         Se::StageFailed,
+        Se::StageClear,
+        Se::FullCombo,
+        Se::Excellent,
+        Se::NewRecord,
     ];
 
     fn file(self) -> &'static str {
@@ -44,6 +56,10 @@ impl Se {
             Se::Change => "Sounds/Change.ogg",
             Se::NowLoading => "Sounds/Now loading.ogg",
             Se::StageFailed => "Sounds/Stage failed.ogg",
+            Se::StageClear => "Sounds/Stage clear.ogg",
+            Se::FullCombo => "Sounds/Full combo.ogg",
+            Se::Excellent => "Sounds/Excellent.ogg",
+            Se::NewRecord => "Sounds/New Record.ogg",
         }
     }
 }

@@ -15,6 +15,13 @@ pub struct NxConfig {
     pub drums: BTreeMap<DrumLane, Vec<KeyAssign>>,
     /// `[System] StageFailed`（ゲージが尽きたら途中で終わる。書いていなければ None。上流の既定は on）
     pub stage_failed: Option<bool>,
+    /// `[System] ShowLagTime`（判定のずれの数字。0 は出さない、1 は出す、2 は PERFECT 以外だけ。
+    /// 書いていないか範囲の外なら None）
+    pub show_lag_time: Option<u8>,
+    /// `[System] ShowLagHitCount`（結果の画面に早かった数と遅かった数を出す。上流の既定は off）
+    pub show_lag_hit_count: bool,
+    /// `[System] ShowLagTimeColor`（1 なら早いを赤、遅いを青にする。上流の既定の 0 は逆）
+    pub lag_color_swapped: bool,
 }
 
 /// 入力の割り当て 1 つ（上流 `CConfigIni.tReadAndSetSkey` と同じ書き方）
@@ -106,6 +113,14 @@ impl NxConfig {
                     "StageFailed" => {
                         out.stage_failed = value.chars().next().map(|c| c != '0');
                     }
+                    "ShowLagTime" => {
+                        out.show_lag_time = value.parse().ok().filter(|v| *v <= 2);
+                    }
+                    "ShowLagHitCount" => {
+                        out.show_lag_hit_count = value.chars().next().is_some_and(|c| c != '0');
+                    }
+                    // 上流 `nGetNumberIfInRange(0, 1)`：範囲の外は既定のまま
+                    "ShowLagTimeColor" => out.lag_color_swapped = value == "1",
                     _ => {}
                 },
                 "DrumsKeyAssign" => {
@@ -210,6 +225,22 @@ HH=M099
             Some(true)
         );
         assert_eq!(NxConfig::parse("[System]\n").stage_failed, None);
+    }
+
+    #[test]
+    fn lag_hit_count_settings() {
+        let c = NxConfig::parse("[System]\nShowLagHitCount=1\nShowLagTimeColor=1\nShowLagTime=2\n");
+        assert_eq!(c.show_lag_time, Some(2));
+        assert!(c.show_lag_hit_count);
+        assert!(c.lag_color_swapped);
+        let c = NxConfig::parse("[System]\nShowLagHitCount=0\nShowLagTimeColor=2\n");
+        assert!(!c.show_lag_hit_count);
+        assert!(!c.lag_color_swapped);
+        assert_eq!(
+            NxConfig::parse("[System]\nShowLagTime=3\n").show_lag_time,
+            None
+        );
+        assert!(!NxConfig::parse("").show_lag_hit_count);
     }
 
     #[test]
