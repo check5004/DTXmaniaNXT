@@ -354,6 +354,8 @@ pub struct PlayView {
     /// 音符の数（スコアと達成率の分母）
     notes: usize,
     rng: Rng,
+    /// STAGE FAILED を始めた時刻と、そのときの曲の時刻（譜面はそこで止める）
+    failed: Option<(Instant, f64)>,
 }
 
 impl PlayView {
@@ -394,7 +396,28 @@ impl PlayView {
             sections,
             notes: play.judge.notes().len(),
             rng: Rng::new(),
+            failed: None,
         }
+    }
+
+    /// ゲージが尽きた（上流 `IsFailed`）
+    pub fn gauge_empty(&self) -> bool {
+        self.gauge <= GAUGE_MIN
+    }
+
+    /// STAGE FAILED を始める。`now_ms` は今の曲の時刻（譜面をそこで止める）
+    pub fn start_failure(&mut self, now_ms: f64) {
+        self.failed.get_or_insert((Instant::now(), now_ms));
+    }
+
+    /// STAGE FAILED の途中なら、止めた曲の時刻
+    pub fn frozen_ms(&self) -> Option<f64> {
+        self.failed.map(|(_, ms)| ms)
+    }
+
+    /// STAGE FAILED を出し終えた
+    pub fn failure_done(&self) -> bool {
+        self.failed.is_some_and(|(at, _)| at.elapsed() >= FAIL_FOR)
     }
 
     /// `Play` から出来事を受け取る。毎フレーム描く前に呼ぶ
@@ -428,7 +451,7 @@ impl PlayView {
                     if self.tally.combo > before {
                         self.combo_jump = Some(now);
                     }
-                    self.gauge = (self.gauge + gauge_delta(judgement)).clamp(0.0, 1.0);
+                    self.gauge = (self.gauge + gauge_delta(judgement)).clamp(GAUGE_MIN, 1.0);
                     if !practice {
                         self.add_score(judgement, now);
                         if matches!(
@@ -566,6 +589,7 @@ impl PlayView {
         self.draw_combo(c, g, play, now);
         self.draw_judges(c, g, now);
         self.draw_fire(c, g, now);
+        self.draw_failed(c, g, now);
         // 入ってきたときのフェード
         let t = now.saturating_duration_since(self.entered).as_secs_f32() / FADE_IN.as_secs_f32();
         if t < 1.0 {
@@ -897,6 +921,25 @@ impl PlayView {
         c.part(&t, 40.0, 13.0, src(0.0, 50.0, 86.0, 28.0));
     }
 
+    /// STAGE FAILED（上流 `CActPerfStageFailure`：7_stage_failed.jpg の左右の半分が真ん中へ閉じる）
+    fn draw_failed(&self, c: &Canvas, g: &Gfx, now: Instant) {
+        let Some((at, _)) = self.failed else {
+            return;
+        };
+        let Some(t) = g.skin.tex("Graphics/7_stage_failed.jpg") else {
+            c.cover(Color32::from_black_alpha(200));
+            return;
+        };
+        let v = now.saturating_duration_since(at).as_secs_f64() * 1000.0 / FAIL_CLOSE;
+        if v < 1.0 {
+            let x = (640.0 * (std::f64::consts::FRAC_PI_2 * v).cos()) as f32;
+            c.part(&t, 0.0, 0.0, src(x, 0.0, 640.0 - x, 720.0));
+            c.part(&t, 640.0 + x, 0.0, src(640.0, 0.0, 640.0 - x, 720.0));
+        } else {
+            c.draw(&t, 0.0, 0.0);
+        }
+    }
+
     /// 左のパネル（上流 `CActPerfDrumsStatusPanel`）
     fn draw_status(&self, c: &Canvas, g: &mut Gfx, play: &Play, practice: bool) {
         const X: f32 = 22.0;
@@ -1006,7 +1049,7 @@ impl PlayView {
                 635.0,
                 Opt {
                     src: Some(bar),
-                    sx: self.gauge as f32,
+                    sx: self.gauge.max(0.0) as f32,
                     ..Default::default()
                 },
             );
@@ -1238,6 +1281,13 @@ impl PlayView {
         }
     }
 }
+
+/// ゲージがここまで減ったら STAGE FAILED（上流 `GAUGE_MIN`。0 を少し下回るまでは耐える）
+const GAUGE_MIN: f64 = -0.1;
+/// STAGE FAILED の画像が閉じきるまで（上流は 2 ミリ秒 × 100）
+const FAIL_CLOSE: f64 = 200.0;
+/// STAGE FAILED を出しておく時間（上流は 2 ミリ秒 × 1000）
+const FAIL_FOR: Duration = Duration::from_millis(2000);
 
 /// XG のゲージの増減（上流 `CActPerfCommonGauge.Damage`、ダメージは普通）
 fn gauge_delta(j: Judgement) -> f64 {

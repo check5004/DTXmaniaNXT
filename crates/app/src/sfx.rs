@@ -22,10 +22,19 @@ pub enum Se {
     Change,
     /// 曲を読み込んでいる（読み込みの画面はこの音の長さだけ出す）
     NowLoading,
+    /// ゲージが尽きた
+    StageFailed,
 }
 
 impl Se {
-    const ALL: [Se; 5] = [Se::Move, Se::Decide, Se::Cancel, Se::Change, Se::NowLoading];
+    const ALL: [Se; 6] = [
+        Se::Move,
+        Se::Decide,
+        Se::Cancel,
+        Se::Change,
+        Se::NowLoading,
+        Se::StageFailed,
+    ];
 
     fn file(self) -> &'static str {
         match self {
@@ -34,6 +43,7 @@ impl Se {
             Se::Cancel => "Sounds/Cancel.ogg",
             Se::Change => "Sounds/Change.ogg",
             Se::NowLoading => "Sounds/Now loading.ogg",
+            Se::StageFailed => "Sounds/Stage failed.ogg",
         }
     }
 }

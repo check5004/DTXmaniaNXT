@@ -38,6 +38,8 @@ pub struct Config {
     pub practice_target: u32,
     /// 遅くするときの音程（"keep" は保つ、"tape" は音程ごと遅く）
     pub practice_pitch: String,
+    /// ゲージが尽きたら途中で終わる（STAGE FAILED）。書いていなければ NX の Config.ini の `StageFailed` に従う
+    pub stage_failed: Option<bool>,
 }
 
 impl Default for Config {
@@ -56,6 +58,7 @@ impl Default for Config {
             practice_speed: SpeedPlan::DEFAULT_START,
             practice_target: SpeedPlan::DEFAULT_TARGET,
             practice_pitch: Pitch::default().name().to_owned(),
+            stage_failed: None,
         }
     }
 }

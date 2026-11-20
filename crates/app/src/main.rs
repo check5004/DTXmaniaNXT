@@ -492,6 +492,14 @@ impl App {
         }
     }
 
+    /// ゲージが尽きたら途中で終わるか（設定に無ければ NX の Config.ini、それも無ければ上流と同じく終わる）
+    fn stage_failed_enabled(&self) -> bool {
+        self.config
+            .stage_failed
+            .or_else(|| self.nx.as_ref().and_then(|n| n.config.stage_failed))
+            .unwrap_or(true)
+    }
+
     /// 演奏中に設定を変えたことを知らせる
     fn toast(&mut self, text: String) {
         self.toast = Some((text, Instant::now()));
@@ -590,17 +598,36 @@ impl App {
             _ => {}
         }
         self.pump_loading();
+        let stage_failed = self.stage_failed_enabled();
+        let mut failed_out = false;
+        let mut finished = false;
         if let Screen::Play(play, view) = &mut self.screen {
-            // 判定の線より上に見えている時間
-            play.view_ahead_ms = play_view::view_ahead_ms(self.config.scroll_px_per_ms);
-            if self.autoplay {
-                play.autoplay();
+            if view.frozen_ms().is_some() {
+                // STAGE FAILED の途中は譜面を進めない
+                failed_out = view.failure_done();
+            } else {
+                // 判定の線より上に見えている時間
+                play.view_ahead_ms = play_view::view_ahead_ms(self.config.scroll_px_per_ms);
+                if self.autoplay {
+                    play.autoplay();
+                }
+                play.update();
+                view.feed(play);
+                if stage_failed && play.practice.is_none() && view.gauge_empty() {
+                    // 上流と同じく、音を止めて STAGE FAILED を出し、選曲に戻る（記録は残す）
+                    view.start_failure(play.now_ms() + self.config.visual_offset_ms);
+                    play.silence();
+                    self.sfx.play(Se::StageFailed);
+                } else {
+                    finished = play.finished();
+                }
             }
-            play.update();
-            view.feed(play);
-            if play.finished() {
-                self.finish_play();
-            }
+        }
+        if failed_out {
+            self.save_unfinished();
+            self.go_to_select();
+        } else if finished {
+            self.finish_play();
         }
         if matches!(self.screen, Screen::Select) {
             if self.view.faded_out()
@@ -1094,7 +1121,9 @@ impl App {
                 let painter = ctx.layer_painter(egui::LayerId::background());
                 let c = Canvas::new(&painter, ctx.content_rect());
                 self.gfx.begin(&c, ctx.pixels_per_point());
-                let now = play.now_ms() + self.config.visual_offset_ms;
+                let now = view
+                    .frozen_ms()
+                    .unwrap_or_else(|| play.now_ms() + self.config.visual_offset_ms);
                 view.draw(&c, &mut self.gfx, play, now, self.config.scroll_px_per_ms);
                 ui::draw_play_overlay(
                     &ctx,

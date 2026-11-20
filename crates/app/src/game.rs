@@ -479,6 +479,12 @@ impl Play {
     }
 
     /// キーボードで叩いた（電子ドラムが無いときの確認用）
+    /// 音を止める（STAGE FAILED）。時計はシステム時刻になるが、もう譜面は進めない
+    pub fn silence(&mut self) {
+        self.audio = None;
+        self.section_audio = None;
+    }
+
     /// 時刻の来た音符を自動で叩く（画面を確かめるための開発用。`DTXMANIANXT_AUTOPLAY=1` で起動）
     pub fn autoplay(&mut self) {
         let at = host_us();
