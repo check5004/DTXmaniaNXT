@@ -78,10 +78,15 @@ impl Song {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct SongBox {
     pub title: String,
     pub genre: String,
+    /// box.def の `#ARTIST`・`#COMMENT`・`#PREIMAGE`・`#PREVIEW`（無ければ空。画像と音は BOX のフォルダからの相対）
+    pub artist: String,
+    pub comment: String,
+    pub preimage: String,
+    pub preview: String,
     pub dir: PathBuf,
     pub nodes: Vec<Node>,
 }
@@ -298,6 +303,10 @@ fn scan_dir(dir: &Path, depth: usize, out: &mut Vec<Node>, st: &mut State) {
         out.push(Node::Box(SongBox {
             title,
             genre: def.genre,
+            artist: def.artist,
+            comment: def.comment,
+            preimage: def.preimage,
+            preview: def.preview,
             dir: path.clone(),
             nodes,
         }));
@@ -375,6 +384,10 @@ pub fn dot_box_name(dir_name: &str) -> Option<&str> {
 pub struct BoxDef {
     pub title: String,
     pub genre: String,
+    pub artist: String,
+    pub comment: String,
+    pub preimage: String,
+    pub preview: String,
 }
 
 pub fn read_box_def(text: &str) -> BoxDef {
@@ -388,11 +401,16 @@ pub fn read_box_def(text: &str) -> BoxDef {
         let Some((key, value)) = split_key(body) else {
             continue;
         };
-        if key.eq_ignore_ascii_case("TITLE") {
-            def.title = value.to_owned();
-        } else if key.eq_ignore_ascii_case("GENRE") {
-            def.genre = value.to_owned();
-        }
+        let field = match key.to_ascii_uppercase().as_str() {
+            "TITLE" => &mut def.title,
+            "GENRE" => &mut def.genre,
+            "ARTIST" => &mut def.artist,
+            "COMMENT" => &mut def.comment,
+            "PREIMAGE" => &mut def.preimage,
+            "PREVIEW" => &mut def.preview,
+            _ => continue,
+        };
+        *field = value.to_owned();
     }
     def
 }
@@ -482,9 +500,15 @@ mod tests {
 
     #[test]
     fn box_def_title() {
-        let d = read_box_def("#TITLE: ボックス ; 注釈\n#GENRE J-POP\n");
+        let d = read_box_def(
+            "#TITLE: ボックス ; 注釈\n#GENRE J-POP\n#artist 誰か\n#COMMENT 説明\n#PREIMAGE box.png\n#PREVIEW pre.ogg\n",
+        );
         assert_eq!(d.title, "ボックス");
         assert_eq!(d.genre, "J-POP");
+        assert_eq!(d.artist, "誰か");
+        assert_eq!(d.comment, "説明");
+        assert_eq!(d.preimage, "box.png");
+        assert_eq!(d.preview, "pre.ogg");
     }
 
     #[test]

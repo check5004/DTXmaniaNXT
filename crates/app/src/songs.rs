@@ -7,6 +7,34 @@ use std::sync::mpsc::{Receiver, channel};
 
 use library::{LEVELS, Library, Node, Progress, Song};
 
+/// 選曲の一覧の 1 行
+#[derive(Debug, Clone, Copy)]
+pub enum Entry<'a> {
+    /// BOX から出る（上流の `<< BACK`）
+    Back,
+    Node(&'a Node),
+    /// この BOX の中から 1 曲を選ぶ（上流の `< RANDOM SELECT >`）
+    Random,
+}
+
+fn collect_songs<'a>(nodes: &'a [Node], out: &mut Vec<&'a Song>) {
+    for n in nodes {
+        match n {
+            Node::Song(s) => out.push(s),
+            Node::Box(b) => collect_songs(&b.nodes, out),
+        }
+    }
+}
+
+/// `0..n` のどれか（xorshift。乱数のための依存を増やさない）
+fn pick(seed: u64, n: usize) -> usize {
+    let mut x = seed | 1;
+    x ^= x << 13;
+    x ^= x >> 7;
+    x ^= x << 17;
+    (x % n as u64) as usize
+}
+
 enum ScanMsg {
     Progress(Progress),
     Done(Library),
@@ -92,7 +120,7 @@ impl SongList {
                 self.path.clear();
                 self.cursor = 0;
             }
-            self.cursor = self.cursor.min(self.nodes().len().saturating_sub(1));
+            self.cursor = self.cursor.min(self.len().saturating_sub(1));
         }
     }
 
@@ -125,8 +153,40 @@ impl SongList {
         out
     }
 
+    /// 今いる BOX の行の数（`<< BACK` と `< RANDOM SELECT >` も数える）
+    pub fn len(&self) -> usize {
+        let n = self.nodes().len();
+        self.back_rows() + n + usize::from(n > 0)
+    }
+
+    /// 先頭の `<< BACK` の行の数（BOX の中なら 1）
+    fn back_rows(&self) -> usize {
+        usize::from(!self.path.is_empty())
+    }
+
+    /// `i` 行目（上流と同じく、BOX の中は先頭に `<< BACK`、曲があれば最後に `< RANDOM SELECT >`）
+    pub fn entry(&self, i: usize) -> Option<Entry<'_>> {
+        let back = self.back_rows();
+        let nodes = self.nodes();
+        if i < back {
+            return Some(Entry::Back);
+        }
+        match nodes.get(i - back) {
+            Some(n) => Some(Entry::Node(n)),
+            None if i == back + nodes.len() && !nodes.is_empty() => Some(Entry::Random),
+            None => None,
+        }
+    }
+
+    pub fn selected_entry(&self) -> Option<Entry<'_>> {
+        self.entry(self.cursor)
+    }
+
     pub fn selected(&self) -> Option<&Node> {
-        self.nodes().get(self.cursor)
+        match self.selected_entry()? {
+            Entry::Node(n) => Some(n),
+            _ => None,
+        }
     }
 
     pub fn selected_song(&self) -> Option<&Song> {
@@ -143,7 +203,7 @@ impl SongList {
 
     /// 上下に動く（端から端へ回る）
     pub fn move_by(&mut self, delta: isize) {
-        let n = self.nodes().len();
+        let n = self.len();
         if n == 0 {
             return;
         }
@@ -151,13 +211,6 @@ impl SongList {
         self.cursor = (self.cursor as isize + delta).rem_euclid(n) as usize;
     }
 
-    pub fn select(&mut self, index: usize) {
-        if index < self.nodes().len() {
-            self.cursor = index;
-        }
-    }
-
-    /// BOX なら入り、曲なら遊ぶ譜面を返す
     /// 選んでいる曲の、今の難易度の譜面
     pub fn selected_chart(&self) -> Option<PathBuf> {
         let s = self.selected_song()?;
@@ -165,25 +218,49 @@ impl SongList {
         s.charts[level].as_ref().map(|c| c.path.clone())
     }
 
+    /// BOX なら入り、`<< BACK` なら出て、曲なら遊ぶ譜面を返す。`< RANDOM SELECT >` は
+    /// この BOX の中（下の BOX も含む）から 1 曲選ぶ
     pub fn enter(&mut self) -> Option<PathBuf> {
-        match self.selected()? {
-            Node::Box(_) => {
-                self.path.push(self.cursor);
+        match self.selected_entry()? {
+            Entry::Back => {
+                self.back();
+                None
+            }
+            Entry::Random => self.random_chart(),
+            Entry::Node(Node::Box(_)) => {
+                self.path.push(self.cursor - self.back_rows());
+                // 上流と同じく、入ったら先頭（`<< BACK`）を選ぶ
                 self.cursor = 0;
                 None
             }
-            Node::Song(s) => {
+            Entry::Node(Node::Song(s)) => {
                 let level = self.level_for(s)?;
                 s.charts[level].as_ref().map(|c| c.path.clone())
             }
         }
     }
 
+    /// 今いる BOX の中の曲から 1 つ選び、今の難易度に近い譜面を返す
+    fn random_chart(&self) -> Option<PathBuf> {
+        let mut songs = Vec::new();
+        collect_songs(self.nodes(), &mut songs);
+        if songs.is_empty() {
+            return None;
+        }
+        let seed = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(1);
+        let song = songs[pick(seed, songs.len())];
+        let level = self.level_for(song)?;
+        song.charts[level].as_ref().map(|c| c.path.clone())
+    }
+
     /// BOX から出る。一番上なら false
     pub fn back(&mut self) -> bool {
         match self.path.pop() {
             Some(i) => {
-                self.cursor = i;
+                self.cursor = i + self.back_rows();
                 true
             }
             None => false,
@@ -252,9 +329,8 @@ mod tests {
         l.library.nodes = vec![
             Node::Box(SongBox {
                 title: "BOX".into(),
-                genre: String::new(),
-                dir: PathBuf::new(),
                 nodes: vec![song("a", &[0, 3]), song("b", &[1])],
+                ..Default::default()
             }),
             song("c", &[2]),
         ];
@@ -266,21 +342,46 @@ mod tests {
         let mut l = list();
         assert_eq!(l.enter(), None);
         assert_eq!(l.breadcrumbs(), vec!["BOX"]);
-        assert_eq!(l.nodes().len(), 2);
+        // `<< BACK`、a、b、`< RANDOM SELECT >`
+        assert_eq!(l.len(), 4);
+        assert!(matches!(l.selected_entry(), Some(Entry::Back)));
+        l.move_by(1);
         // 難易度 2 が無いので上の 3
         assert_eq!(l.enter(), Some(PathBuf::from("a3.dtx")));
         l.move_by(1);
         // 2 から上に無いので下の 1
         assert_eq!(l.enter(), Some(PathBuf::from("b1.dtx")));
+        // `<< BACK` で出ると、入った BOX を選んでいる
+        l.move_by(-2);
+        assert_eq!(l.enter(), None);
+        assert!(l.breadcrumbs().is_empty());
+        assert_eq!(l.cursor, 0);
+        l.enter();
         assert!(l.back());
         assert_eq!(l.cursor, 0);
         assert!(!l.back());
     }
 
     #[test]
+    fn random_picks_a_song_in_the_box() {
+        let mut l = list();
+        // 一番上は BOX、c、`< RANDOM SELECT >`（`<< BACK` は無い）
+        assert_eq!(l.len(), 3);
+        l.move_by(-1);
+        assert!(matches!(l.selected_entry(), Some(Entry::Random)));
+        let p = l.enter().unwrap();
+        assert!(
+            ["a3.dtx", "b1.dtx", "c2.dtx"].contains(&p.to_str().unwrap()),
+            "{p:?}"
+        );
+        assert!(pick(12345, 3) < 3);
+    }
+
+    #[test]
     fn cycle_level_wraps_to_the_easiest() {
         let mut l = list();
         l.enter();
+        l.move_by(1);
         // a は 0 と 3。いまは 3 扱い
         l.cycle_level();
         assert_eq!(l.level, 0);
@@ -292,7 +393,7 @@ mod tests {
     fn move_wraps_around() {
         let mut l = list();
         l.move_by(-1);
-        assert_eq!(l.cursor, 1);
+        assert_eq!(l.cursor, 2);
         l.move_by(1);
         assert_eq!(l.cursor, 0);
     }
@@ -301,6 +402,7 @@ mod tests {
     fn level_follows_the_song() {
         let mut l = list();
         l.enter();
+        l.move_by(1);
         // a は 0 と 3。いまは 3 扱いなので、下げると 0
         l.change_level(-1);
         assert_eq!(l.level, 0);

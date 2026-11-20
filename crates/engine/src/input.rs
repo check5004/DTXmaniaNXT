@@ -217,6 +217,65 @@ impl MidiProfile {
     }
 }
 
+impl MidiProfile {
+    /// DTXManiaNX の Config.ini のパッドの割り当て（ノート番号 → レーン）を重ねる。
+    /// NX で遊べていた割り当てをそのまま使えるようにする。
+    /// すでに同じレーンになるノートはそのまま（リムやエッジ、ハイハットの開き具合の区別を残す）。
+    /// 違うレーンになるノートと、知らないノートは NX に合わせる。左バスドラム（LBD）はまだ扱わない
+    pub fn apply_lanes(&mut self, notes: &[(u8, DrumLane)]) {
+        use Articulation::*;
+        for &(note, lane) in notes {
+            if let Some(m) = self.notes.get(&note) {
+                let same = match m.pad {
+                    Pad::HiHat => matches!(lane, DrumLane::HH | DrumLane::HHO),
+                    pad => pad_lane(pad) == Some(lane),
+                };
+                if same {
+                    continue;
+                }
+            }
+            let (pad, articulation, hh_open) = match lane {
+                DrumLane::HH => (Pad::HiHat, Bow, false),
+                DrumLane::HHO => (Pad::HiHat, Bow, true),
+                DrumLane::SD => (Pad::Snare, Head, false),
+                DrumLane::BD => (Pad::Kick, Head, false),
+                DrumLane::HT => (Pad::Tom1, Head, false),
+                DrumLane::LT => (Pad::Tom2, Head, false),
+                DrumLane::FT => (Pad::Tom3, Head, false),
+                DrumLane::CY => (Pad::Crash2, Bow, false),
+                DrumLane::RD => (Pad::Ride, Bow, false),
+                DrumLane::LC => (Pad::Crash1, Bow, false),
+                DrumLane::LP => (Pad::HiHatPedal, Head, false),
+                DrumLane::LBD => continue,
+            };
+            self.notes.insert(
+                note,
+                NoteMapping {
+                    pad,
+                    articulation,
+                    hh_open,
+                },
+            );
+        }
+    }
+}
+
+/// ハイハット以外のパッドのレーン
+fn pad_lane(pad: Pad) -> Option<DrumLane> {
+    Some(match pad {
+        Pad::Kick => DrumLane::BD,
+        Pad::Snare => DrumLane::SD,
+        Pad::Tom1 => DrumLane::HT,
+        Pad::Tom2 => DrumLane::LT,
+        Pad::Tom3 | Pad::Tom4 => DrumLane::FT,
+        Pad::HiHatPedal => DrumLane::LP,
+        Pad::Crash1 => DrumLane::LC,
+        Pad::Crash2 => DrumLane::CY,
+        Pad::Ride => DrumLane::RD,
+        Pad::HiHat | Pad::Aux => return None,
+    })
+}
+
 /// そろえた入力
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum InputEvent {
@@ -304,16 +363,6 @@ impl Normalizer {
 
     fn lane_for(&self, m: NoteMapping) -> Option<DrumLane> {
         Some(match m.pad {
-            Pad::Kick => DrumLane::BD,
-            Pad::Snare => DrumLane::SD,
-            Pad::Tom1 => DrumLane::HT,
-            Pad::Tom2 => DrumLane::LT,
-            Pad::Tom3 | Pad::Tom4 => DrumLane::FT,
-            Pad::HiHatPedal => DrumLane::LP,
-            Pad::Crash1 => DrumLane::LC,
-            Pad::Crash2 => DrumLane::CY,
-            Pad::Ride => DrumLane::RD,
-            Pad::Aux => return None,
             Pad::HiHat => {
                 let open = match self.profile.hi_hat {
                     HiHatMode::Note => m.hh_open,
@@ -324,6 +373,7 @@ impl Normalizer {
                 };
                 if open { DrumLane::HHO } else { DrumLane::HH }
             }
+            pad => return pad_lane(pad),
         })
     }
 }
@@ -331,6 +381,27 @@ impl Normalizer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nx_lanes_override_only_what_differs() {
+        let mut p = MidiProfile::roland_vdrums();
+        p.apply_lanes(&[
+            (36, DrumLane::BD),
+            (40, DrumLane::SD),
+            (46, DrumLane::HH),
+            (49, DrumLane::CY),
+            (60, DrumLane::SD),
+            (35, DrumLane::LBD),
+        ]);
+        // 同じレーンになるものは元のまま（スネアのリム、ハイハットの開き）
+        assert_eq!(p.notes[&40].articulation, Articulation::Rim);
+        assert!(p.notes[&46].hh_open);
+        // 違うレーンは NX に合わせる
+        assert_eq!(p.notes[&49].pad, Pad::Crash2);
+        // 知らないノートは足す
+        assert_eq!(p.notes[&60].pad, Pad::Snare);
+        assert!(!p.notes.contains_key(&35));
+    }
 
     fn on(note: u8, velocity: u8) -> MidiMessage {
         MidiMessage::NoteOn {

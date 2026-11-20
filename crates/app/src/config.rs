@@ -12,6 +12,8 @@ use crate::stretch::Pitch;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
+    /// DTXManiaNX のフォルダ（画面の画像と音、曲のフォルダ、パッドの割り当てをここから読む）
+    pub nx_dir: Option<PathBuf>,
     /// 曲のフォルダ
     pub song_dirs: Vec<PathBuf>,
     /// 入力の遅れの補正（ミリ秒）。叩いた時刻からこの分を引く
@@ -41,6 +43,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
+            nx_dir: None,
             song_dirs: Vec::new(),
             input_offset_ms: 0.0,
             visual_offset_ms: 0.0,

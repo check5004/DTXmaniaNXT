@@ -150,6 +150,11 @@ pub struct Play {
 
 impl Play {
     /// 譜面を読んで始める。`input_offset_ms` と `drum_sounds` は設定から
+    /// 電子ドラムのノート番号の割り当てを変える（NX の Config.ini の割り当てを重ねたもの）
+    pub fn set_midi_profile(&mut self, profile: MidiProfile) {
+        self.normalizer = Normalizer::new(profile);
+    }
+
     pub fn load(path: &Path, input_offset_ms: f64, drum_sounds: bool) -> Result<Self> {
         Self::open(path, input_offset_ms, drum_sounds, None)
     }

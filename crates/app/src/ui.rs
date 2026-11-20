@@ -4,14 +4,13 @@
 use std::path::PathBuf;
 
 use dtx::DrumLane;
-use egui::{Align, Align2, Color32, FontId, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, Vec2};
+use egui::{Align2, Color32, FontId, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, Vec2};
 use engine::analysis::{NOTABLE_MEAN_MS, Subdivision, Tendency, WeakPhrase, notable_tendencies};
 use engine::judge::Judgement;
 use engine::practice::{
     FAILS_TO_DOWN, LoopStyle, PASSES_TO_UP, PassRule, Section, SpeedChange, SpeedPlan,
     speed_percent,
 };
-use library::{LEVELS, Node};
 
 use crate::config::Config;
 use crate::game::{Outcome, Play, PracticeOutcome, WeakMap};
@@ -68,58 +67,62 @@ fn judgement_label(j: Judgement) -> (&'static str, Color32) {
     }
 }
 
-/// 選曲の画面で押されたもの
+/// 選曲の画面（と設定の窓）で押されたもの
 #[derive(Debug, Clone, PartialEq)]
 pub enum SelectAction {
-    /// 一覧の行を選んだ
-    Select(usize),
     /// 選んでいる行に入る（BOX なら中へ、曲なら始める）
     Enter,
     Back,
-    Level(usize),
     AddFolder,
     RemoveFolder(usize),
     Rescan,
     /// 選んでいる曲の区間を練習する
     Practice,
+    /// DTXManiaNX のフォルダを選ぶ
+    ChooseNx,
+    /// 設定の窓を閉じる
+    CloseSettings,
 }
 
-pub fn draw_select(
-    ui: &mut egui::Ui,
-    songs: &SongList,
-    config: &Config,
-    midi_ports: &[String],
-    message: Option<&str>,
-    scroll_to_cursor: bool,
-) -> Vec<SelectAction> {
+/// 設定の窓に出すもの
+pub struct SettingsInfo<'a> {
+    pub config: &'a Config,
+    /// 使っているスキンのフォルダ
+    pub skin: Option<&'a std::path::Path>,
+    pub songs: &'a SongList,
+    pub midi_ports: &'a [String],
+    pub message: Option<&'a str>,
+}
+
+/// 設定の窓（F1）。NX の設定画面に置き換えるまでの仮のもの
+pub fn draw_settings(ctx: &egui::Context, info: &SettingsInfo<'_>) -> Vec<SelectAction> {
     let mut actions = Vec::new();
-
-    egui::Panel::top("select-top").show(ui, |ui| {
-        ui.horizontal(|ui| {
-            ui.heading("DTXmaniaNXT");
-            ui.separator();
-            let mut crumbs = vec!["曲"];
-            crumbs.extend(songs.breadcrumbs());
-            ui.label(crumbs.join(" ＞ "));
-            if let Some(p) = songs.scanning() {
+    let config = info.config;
+    egui::Window::new("設定（F1 で閉じる）")
+        .collapsible(false)
+        .resizable(false)
+        .default_width(560.0)
+        .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
+        .show(ctx, |ui| {
+            if let Some(m) = info.message {
+                ui.colored_label(Color32::from_rgb(0xF0, 0x80, 0x60), m);
                 ui.separator();
-                ui.spinner();
-                ui.label(format!(
-                    "探しています（{} フォルダ、{} 曲）",
-                    p.folders, p.songs
-                ));
             }
-        });
-        if let Some(m) = message {
-            ui.colored_label(Color32::from_rgb(0xF0, 0x80, 0x60), m);
-        }
-    });
-
-    egui::Panel::right("select-info")
-        .min_size(320.0)
-        .show(ui, |ui| {
-            selected_info(ui, songs, &mut actions);
-            ui.add_space(12.0);
+            ui.label(RichText::new("DTXManiaNX のフォルダ").strong());
+            ui.label("画面の画像と音、曲のフォルダ、パッドの割り当てをここから読みます。");
+            ui.horizontal(|ui| {
+                match &config.nx_dir {
+                    Some(d) => ui.label(d.display().to_string()),
+                    None => ui.colored_label(Color32::from_rgb(0xF0, 0xC0, 0x60), "未設定"),
+                };
+                if ui.button("選ぶ…").clicked() {
+                    actions.push(SelectAction::ChooseNx);
+                }
+            });
+            if let Some(skin) = info.skin {
+                ui.label(RichText::new(format!("スキン: {}", skin.display())).weak());
+            }
+            ui.add_space(8.0);
             ui.separator();
             ui.label(RichText::new("曲のフォルダ").strong());
             for (i, dir) in config.song_dirs.iter().enumerate() {
@@ -141,164 +144,27 @@ pub fn draw_select(
                 {
                     actions.push(SelectAction::Rescan);
                 }
+                if let Some(p) = info.songs.scanning() {
+                    ui.spinner();
+                    ui.label(format!("探しています（{} フォルダ、{} 曲）", p.folders, p.songs));
+                }
             });
-            ui.label("フォルダをこのウィンドウにドロップしても追加できます。");
+            ui.label("曲のフォルダや NX のフォルダは、このウィンドウにドロップしても追加できます。");
             ui.separator();
-            ports_label(ui, midi_ports);
+            ports_label(ui, info.midi_ports);
             ui.label(format!(
                 "入力の補正 {:+.0}ms / 表示の補正 {:+.0}ms / 速さ {:.2}",
                 config.input_offset_ms, config.visual_offset_ms, config.scroll_px_per_ms
             ));
+            ui.separator();
             ui.label("↑↓ で選ぶ、Enter で決定、P で練習、←→ で難易度、Backspace で BOX を出る、Esc で終わる");
             ui.label("ドラム: HT / LT で選ぶ、CY か RD で決定、LC で戻る、HH を 2 回で難易度");
+            ui.add_space(4.0);
+            if ui.button("閉じる").clicked() {
+                actions.push(SelectAction::CloseSettings);
+            }
         });
-
-    egui::CentralPanel::default().show(ui, |ui| {
-        if config.song_dirs.is_empty() {
-            ui.vertical_centered(|ui| {
-                ui.add_space(80.0);
-                ui.heading("曲のフォルダを追加してください");
-                ui.add_space(8.0);
-                ui.label("DTXMania の曲のフォルダ（DTXFiles など）を選ぶと、中の曲を探して一覧にします。");
-                ui.label("DTX ファイルをドロップすると、その曲だけをすぐ遊べます。");
-                ui.add_space(16.0);
-                if ui.button("フォルダを追加…").clicked() {
-                    actions.push(SelectAction::AddFolder);
-                }
-            });
-            return;
-        }
-        let nodes = songs.nodes();
-        if nodes.is_empty() {
-            ui.vertical_centered(|ui| {
-                ui.add_space(80.0);
-                if songs.scanning().is_some() {
-                    ui.label("探しています…");
-                } else {
-                    ui.label("曲が見つかりませんでした。");
-                }
-            });
-            return;
-        }
-        egui::ScrollArea::vertical()
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                if !songs.breadcrumbs().is_empty()
-                    && ui
-                        .selectable_label(false, "← 戻る")
-                        .on_hover_text("Backspace")
-                        .clicked()
-                {
-                    actions.push(SelectAction::Back);
-                }
-                for (i, node) in nodes.iter().enumerate() {
-                    let selected = i == songs.cursor;
-                    let text = match node {
-                        Node::Box(b) => RichText::new(format!("■ {}（{}）", b.title, b.nodes.len()))
-                            .color(Color32::from_rgb(0xF0, 0xC8, 0x60)),
-                        Node::Song(s) => {
-                            let level = songs
-                                .level_for(s)
-                                .and_then(|l| s.charts[l].as_ref())
-                                .and_then(|c| c.head.level)
-                                .map_or(String::new(), |lv| format!("  Lv {lv:.2}"));
-                            let artist = if s.artist.is_empty() {
-                                String::new()
-                            } else {
-                                format!(" ／ {}", s.artist)
-                            };
-                            RichText::new(format!("{}{artist}{level}", s.title))
-                        }
-                    };
-                    let r = ui.selectable_label(selected, text.size(16.0));
-                    if selected && scroll_to_cursor {
-                        r.scroll_to_me(Some(Align::Center));
-                    }
-                    if r.double_clicked() {
-                        actions.push(SelectAction::Select(i));
-                        actions.push(SelectAction::Enter);
-                    } else if r.clicked() {
-                        actions.push(SelectAction::Select(i));
-                    }
-                }
-            });
-    });
     actions
-}
-
-fn selected_info(ui: &mut egui::Ui, songs: &SongList, actions: &mut Vec<SelectAction>) {
-    match songs.selected() {
-        None => {
-            ui.label("-");
-        }
-        Some(Node::Box(b)) => {
-            ui.heading(&b.title);
-            if !b.genre.is_empty() {
-                ui.label(&b.genre);
-            }
-            ui.label(format!("{} 件", b.nodes.len()));
-            ui.add_space(8.0);
-            if ui.button("開く（Enter）").clicked() {
-                actions.push(SelectAction::Enter);
-            }
-        }
-        Some(Node::Song(s)) => {
-            ui.heading(&s.title);
-            if !s.artist.is_empty() {
-                ui.label(&s.artist);
-            }
-            let top = s.charts.iter().rev().flatten().next();
-            let bpm = top.and_then(|c| c.head.bpm);
-            let mut line = Vec::new();
-            if !s.genre.is_empty() {
-                line.push(s.genre.clone());
-            }
-            if let Some(b) = bpm {
-                line.push(format!("BPM {b:.0}"));
-            }
-            if !line.is_empty() {
-                ui.label(line.join(" / "));
-            }
-            if let Some(c) = top.filter(|c| !c.head.comment.is_empty()) {
-                ui.label(RichText::new(&c.head.comment).weak());
-            }
-            ui.add_space(8.0);
-            let current = songs.level_for(s);
-            for i in (0..LEVELS).rev() {
-                let Some(c) = &s.charts[i] else {
-                    continue;
-                };
-                let label = if c.label.is_empty() {
-                    "DRUMS".to_owned()
-                } else {
-                    c.label.clone()
-                };
-                let lv = c.head.level.map_or("-".to_owned(), |l| format!("{l:.2}"));
-                if ui
-                    .selectable_label(
-                        current == Some(i),
-                        RichText::new(format!("{label}  {lv}")).size(16.0),
-                    )
-                    .clicked()
-                {
-                    actions.push(SelectAction::Level(i));
-                }
-            }
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                if ui.button("はじめる（Enter）").clicked() {
-                    actions.push(SelectAction::Enter);
-                }
-                if ui
-                    .button("区間を練習（P）")
-                    .on_hover_text("小節の範囲を選び、そこだけを繰り返します")
-                    .clicked()
-                {
-                    actions.push(SelectAction::Practice);
-                }
-            });
-        }
-    }
 }
 
 /// 結果の画面で押されたもの
@@ -1003,10 +869,24 @@ pub fn is_chart_file(path: &std::path::Path) -> bool {
 }
 
 /// フォルダを選ぶ（OS のダイアログ）
-pub fn pick_folder() -> Option<PathBuf> {
-    rfd::FileDialog::new()
-        .set_title("曲のフォルダを選ぶ")
-        .pick_folder()
+pub fn pick_folder(title: &str) -> Option<PathBuf> {
+    rfd::FileDialog::new().set_title(title).pick_folder()
+}
+
+/// 画面の下に短い知らせを出す
+pub fn message_overlay(ctx: &egui::Context, msg: &str) {
+    egui::Area::new(egui::Id::unique("message"))
+        .anchor(Align2::CENTER_BOTTOM, Vec2::new(0.0, -24.0))
+        .interactable(false)
+        .show(ctx, |ui| {
+            egui::Frame::new()
+                .fill(Color32::from_black_alpha(200))
+                .corner_radius(6.0)
+                .inner_margin(egui::Margin::symmetric(16, 10))
+                .show(ui, |ui| {
+                    ui.label(RichText::new(msg).color(Color32::WHITE).size(16.0));
+                });
+        });
 }
 
 fn ports_label(ui: &mut egui::Ui, midi_ports: &[String]) {
