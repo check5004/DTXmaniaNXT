@@ -16,8 +16,7 @@ use crate::config::Config;
 use crate::game::{Outcome, Play, PracticeOutcome, WeakMap};
 use crate::gfx::Canvas;
 use crate::history::{OvercomeCheck, TENDENCY_MIN_HITS, TENDENCY_SESSIONS};
-use crate::practice::{LapSummary, Practice, PracticeSetup};
-use crate::stretch::Pitch;
+use crate::practice::{LapSummary, Practice};
 
 fn judgement_label(j: Judgement) -> (&'static str, Color32) {
     match j {
@@ -448,218 +447,6 @@ fn lap_table(ui: &mut egui::Ui, laps: &[&LapSummary]) {
         });
 }
 
-/// 区間を選ぶ画面で押されたもの
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum SetupAction {
-    Select(Section),
-    /// 区間を小節単位でずらす
-    Shift(i64),
-    /// 区間の終わりを小節単位でのばす（縮める）
-    Resize(i64),
-    Style(LoopStyle),
-    Rule(PassRule),
-    /// 段階アップと固定を切り替える
-    ToggleLadder,
-    /// 速度（段階アップなら始めの速度）を刻み単位で動かす
-    Speed(i64),
-    /// 段階アップの目標の速度
-    Target(u32),
-    Pitch(Pitch),
-    Start,
-    Back,
-}
-
-/// 区間を選ぶ帯の幅の上限
-const SETUP_BAND_MAX_WIDTH: f32 = 1000.0;
-
-pub fn draw_setup(ui: &mut egui::Ui, s: &PracticeSetup) -> Vec<SetupAction> {
-    let mut actions = Vec::new();
-    egui::CentralPanel::default().show(ui, |ui| {
-        egui::ScrollArea::vertical().show(ui, |ui| {
-        ui.add_space(16.0);
-        ui.heading(RichText::new(format!("練習: {}", s.title)).size(26.0));
-        if !s.artist.is_empty() {
-            ui.label(&s.artist);
-        }
-        ui.add_space(16.0);
-        ui.label(RichText::new("練習する区間").size(18.0).strong());
-        ui.label(format!(
-            "帯をドラッグして選びます（クリックで 1 小節）。色は苦手度で、{}。",
-            weak_source(&s.weak)
-        ));
-        let width = ui.available_width().min(SETUP_BAND_MAX_WIDTH);
-        if let Some(sec) = measure_band(
-            ui,
-            &s.weak.weakness,
-            &s.weak.phrases,
-            s.section,
-            Vec2::new(width, 44.0),
-            true,
-        ) {
-            actions.push(SetupAction::Select(sec));
-        }
-        match s.section {
-            Some(sec) => {
-                let n = s.notes_in(sec);
-                ui.label(
-                    RichText::new(format!(
-                        "{}（{} 小節、音符 {}）",
-                        section_text(sec),
-                        sec.measures(),
-                        n
-                    ))
-                    .size(18.0),
-                );
-                if n == 0 {
-                    ui.colored_label(
-                        Color32::from_rgb(0xF0, 0x80, 0x60),
-                        "この区間には音符がありません。",
-                    );
-                }
-            }
-            None => {
-                ui.label("区間を選んでください。");
-            }
-        }
-        ui.horizontal(|ui| {
-            for (text, a) in [
-                ("◀ 1 小節前へ", SetupAction::Shift(-1)),
-                ("1 小節後へ ▶", SetupAction::Shift(1)),
-                ("短く", SetupAction::Resize(-1)),
-                ("長く", SetupAction::Resize(1)),
-            ] {
-                if ui.add_enabled(s.section.is_some(), egui::Button::new(text)).clicked() {
-                    actions.push(a);
-                }
-            }
-        });
-        if !s.weak.phrases.is_empty() {
-            ui.add_space(12.0);
-            ui.label(RichText::new("苦手フレーズから選ぶ").strong());
-            for p in &s.weak.phrases {
-                let sec = Section::new(p.first, p.last);
-                if ui
-                    .selectable_label(s.section == Some(sec), phrase_text(p))
-                    .clicked()
-                {
-                    actions.push(SetupAction::Select(sec));
-                }
-            }
-        }
-        let cleared = s.cleared_sections();
-        if !cleared.is_empty() {
-            ui.add_space(12.0);
-            ui.label(RichText::new("練習でクリアした区間").strong());
-            for (sec, speed, overcome) in cleared {
-                let state = if overcome {
-                    "克服"
-                } else {
-                    "克服はまだ（普通のプレイで確かめます）"
-                };
-                if ui
-                    .selectable_label(
-                        s.section == Some(sec),
-                        format!("{}　{speed}% でクリア・{state}", section_text(sec)),
-                    )
-                    .clicked()
-                {
-                    actions.push(SetupAction::Select(sec));
-                }
-            }
-        }
-        ui.add_space(12.0);
-        ui.label(RichText::new("周のつなぎ方（T で切り替え）").strong());
-        for style in LoopStyle::ALL {
-            if ui
-                .radio(s.style == style, style_help(style))
-                .clicked()
-            {
-                actions.push(SetupAction::Style(style));
-            }
-        }
-        ui.add_space(8.0);
-        ui.label(RichText::new("周の合格の基準").strong());
-        ui.horizontal(|ui| {
-            for rule in PassRule::ALL {
-                if ui
-                    .radio(s.rule == rule, rule_name(rule))
-                    .on_hover_text(rule_help(rule))
-                    .clicked()
-                {
-                    actions.push(SetupAction::Rule(rule));
-                }
-            }
-        });
-        ui.label(RichText::new(rule_help(s.rule)).weak());
-        ui.add_space(8.0);
-        ui.label(RichText::new("速度（L で段階アップと固定を切り替え、, と . で速度）").strong());
-        let ladder = matches!(s.speed, SpeedPlan::Ladder { .. });
-        for (on, text) in [
-            (true, ladder_help()),
-            (false, "固定: 同じ速度のまま回る".to_owned()),
-        ] {
-            if ui.radio(ladder == on, text).clicked() && ladder != on {
-                actions.push(SetupAction::ToggleLadder);
-            }
-        }
-        ui.horizontal(|ui| {
-            if ui.button("−5%").clicked() {
-                actions.push(SetupAction::Speed(-1));
-            }
-            let label = if ladder { "始めの速度" } else { "速度" };
-            ui.label(
-                RichText::new(format!("{label} {}%", s.speed.first_speed()))
-                    .size(16.0)
-                    .strong(),
-            );
-            if ui.button("+5%").clicked() {
-                actions.push(SetupAction::Speed(1));
-            }
-            if let SpeedPlan::Ladder { target, .. } = s.speed {
-                ui.add_space(24.0);
-                ui.label("目標");
-                for t in SpeedPlan::TARGETS {
-                    if ui.radio(target == t, format!("{t}%")).clicked() {
-                        actions.push(SetupAction::Target(t));
-                    }
-                }
-            }
-        });
-        ui.horizontal(|ui| {
-            ui.label("遅くするときの音");
-            for pitch in Pitch::ALL {
-                if ui.radio(s.pitch == pitch, pitch_name(pitch)).clicked() {
-                    actions.push(SetupAction::Pitch(pitch));
-                }
-            }
-        });
-        ui.add_space(16.0);
-        ui.horizontal(|ui| {
-            if ui
-                .add_enabled(
-                    s.options().is_some(),
-                    egui::Button::new(RichText::new("はじめる（Enter）").size(18.0)),
-                )
-                .clicked()
-            {
-                actions.push(SetupAction::Start);
-            }
-            if ui.button("選曲に戻る（Esc）").clicked() {
-                actions.push(SetupAction::Back);
-            }
-        });
-        ui.add_space(8.0);
-        ui.label(
-            RichText::new(
-                "←→ で区間をずらす、↑↓ で長さ、T でつなぎ方。ドラム: HT / LT でずらす、CY か RD ではじめる、LC で戻る",
-            )
-            .weak(),
-        );
-        });
-    });
-    actions
-}
-
 fn section_text(s: Section) -> String {
     if s.first == s.last {
         format!("小節 {}", s.first)
@@ -684,17 +471,6 @@ fn style_name(s: LoopStyle) -> &'static str {
     }
 }
 
-fn style_help(s: LoopStyle) -> &'static str {
-    match s {
-        LoopStyle::Connect => {
-            "つなぐ: 区間の終わりから切れ目なく頭へ戻る（ビートや繰り返すパターン向き）"
-        }
-        LoopStyle::Restart => {
-            "区切る: 次の小節の頭の 1 打（着地）まで叩き、助走からやり直す（フィル向き）"
-        }
-    }
-}
-
 fn rule_name(r: PassRule) -> &'static str {
     match r {
         PassRule::Easy => "ゆるめ",
@@ -703,34 +479,11 @@ fn rule_name(r: PassRule) -> &'static str {
     }
 }
 
-fn rule_help(r: PassRule) -> &'static str {
-    match r {
-        PassRule::Easy => "MISS と POOR が 0 なら合格",
-        PassRule::Normal => "MISS と POOR が 0、PERFECT が 8 割以上なら合格",
-        PassRule::Strict => {
-            "MISS と POOR が 0、PERFECT が 9 割以上、空打ち 0、ずれのばらつき 15ms 以下なら合格"
-        }
-    }
-}
-
-fn ladder_help() -> String {
-    format!(
-        "段階アップ: 合格が {PASSES_TO_UP} 周続くたびに 5% 上げ、不合格が {FAILS_TO_DOWN} 周続いたら 5% 下げる（始めの速度より下げない）。目標の速度で {PASSES_TO_UP} 周続けて合格したらクリア"
-    )
-}
-
 /// 速度の決め方を短く
 fn plan_text(p: SpeedPlan) -> String {
     match p {
         SpeedPlan::Fixed(s) => format!("速度 {s}%"),
         SpeedPlan::Ladder { start, target } => format!("段階アップ {start}%→{target}%"),
-    }
-}
-
-fn pitch_name(p: Pitch) -> &'static str {
-    match p {
-        Pitch::Keep => "音程を保つ",
-        Pitch::Tape => "音程ごと遅く（テープ）",
     }
 }
 
@@ -1201,7 +954,7 @@ fn draw_weak_map(ui: &mut egui::Ui, w: &WeakMap) -> Option<Section> {
 }
 
 /// 苦手度の色。0 は緑、0.25 で黄、0.6 以上は赤。記録の無い小節は暗い灰色
-fn weakness_color(v: Option<f64>) -> Color32 {
+pub fn weakness_color(v: Option<f64>) -> Color32 {
     const GREEN: [f32; 3] = [70.0, 160.0, 100.0];
     const YELLOW: [f32; 3] = [230.0, 200.0, 70.0];
     const RED: [f32; 3] = [235.0, 75.0, 65.0];

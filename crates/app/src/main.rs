@@ -19,6 +19,7 @@ mod loading;
 mod midi;
 mod play_view;
 mod practice;
+mod practice_popup;
 mod result_view;
 mod select;
 mod sfx;
@@ -51,6 +52,7 @@ use crate::loading::Loading;
 use crate::midi::MidiIn;
 use crate::play_view::PlayView;
 use crate::practice::{PracticeOptions, PracticeSetup};
+use crate::practice_popup::{Done, PopupInput, PopupMouse, PracticePopup};
 use crate::result_view::{Page, ResultInfo, ResultView};
 use crate::select::{PREVIEW_WAIT, SelectView};
 use crate::sfx::{Se, Sfx};
@@ -204,9 +206,8 @@ enum Screen {
     Config(Box<ConfigView>, bool),
     /// 終わる前の画面
     End(Ending),
+    /// 選曲（練習の決めごとのポップアップは App の `popup`）
     Select,
-    /// 練習する区間を選ぶ
-    Setup(Box<PracticeSetup>),
     /// 曲を読み込んでいる
     Loading(Box<Loading>),
     /// 遊んでいる（練習中も）。NX の演奏画面の動きと一緒に持つ
@@ -246,6 +247,8 @@ struct App {
     quit: bool,
     /// 選曲画面で決めたもの（暗くし終えたら始める）
     decided: Option<Decided>,
+    /// 選曲画面に重ねる、練習の決めごとのポップアップ
+    popup: Option<Box<PracticePopup>>,
     /// 選曲画面のマウスホイールの、まだ 1 行に満たない分
     wheel: f32,
     /// 演奏中に設定と入力の情報を出す（I で切り替え）
@@ -275,7 +278,6 @@ const TOAST_FOR: Duration = Duration::from_millis(1500);
 /// 選曲画面で決めたもの
 enum Decided {
     Play(PathBuf),
-    Practice(PathBuf),
     /// タイトルへ戻る
     Title,
 }
@@ -396,6 +398,7 @@ impl App {
             title: TitleView::new(),
             quit: false,
             decided: None,
+            popup: None,
             wheel: 0.0,
             show_play_info: false,
             toast: None,
@@ -406,6 +409,7 @@ impl App {
     /// 選曲画面に戻る（フェードと登場のアニメから）
     fn go_to_select(&mut self) {
         self.sfx.stop_title();
+        self.popup = None;
         self.screen = Screen::Select;
         self.view.enter();
     }
@@ -588,20 +592,56 @@ impl App {
         self.toast = Some((text, Instant::now()));
     }
 
-    /// 区間を選ぶ画面を開く。`previous` があればその区間とつなぎ方を選んでおく
+    /// 練習の決めごとのポップアップを選曲画面に開く。`previous` があればその区間とつなぎ方を選んでおく
     fn open_setup(&mut self, path: PathBuf, previous: Option<PracticeOptions>) {
-        self.save_unfinished();
-        self.screen = Screen::Select;
+        if !matches!(self.screen, Screen::Select) {
+            self.save_unfinished();
+            self.go_to_select();
+        }
         match PracticeSetup::load(&path, &self.history, previous, self.config.practice_prefs()) {
             Ok(s) => {
                 self.message = None;
-                self.screen = Screen::Setup(Box::new(s));
+                self.popup = Some(Box::new(PracticePopup::new(s)));
             }
             Err(e) => {
                 log::error!("{e:#}");
                 self.message = Some(format!("読み込めませんでした: {e:#}"));
-                self.view.enter();
             }
+        }
+    }
+
+    /// ポップアップを操作する
+    fn popup_input(&mut self, input: PopupInput) {
+        let Some(p) = &mut self.popup else {
+            return;
+        };
+        let r = p.input(input);
+        self.popup_response(r);
+    }
+
+    /// ポップアップの操作の結果：音を鳴らし、決めごとを覚え、閉じるか練習を始める
+    fn popup_response(&mut self, r: practice_popup::Response) {
+        let Some(p) = &self.popup else {
+            return;
+        };
+        if let Some(se) = r.se {
+            self.sfx.play(se);
+        }
+        // 区間のほかの決めごとは次の練習でも使う
+        let prefs = p.setup.prefs();
+        if prefs != self.config.practice_prefs() {
+            self.config.set_practice_prefs(prefs);
+            self.config.save();
+        }
+        match r.done {
+            Some(Done::Start(o)) => {
+                let path = p.setup.path.clone();
+                self.popup = None;
+                self.sfx.preview(None);
+                self.start_practice(path, o);
+            }
+            Some(Done::Close) => self.popup = None,
+            None => {}
         }
     }
 
@@ -768,7 +808,6 @@ impl App {
             {
                 match d {
                     Decided::Play(p) => self.start(p),
-                    Decided::Practice(p) => self.open_setup(p, None),
                     Decided::Title => self.go_to_title(),
                 }
             } else if !self.view.fading_out() {
@@ -984,7 +1023,6 @@ impl App {
                 self.on_play_key(code);
             }
             Screen::Select => self.on_select_key(code),
-            Screen::Setup(_) => self.on_setup_key(code),
             Screen::Result(_, view) => match code {
                 KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Escape => {
                     self.result_action(ui::ResultAction::Back);
@@ -997,65 +1035,6 @@ impl App {
                 KeyCode::KeyP => self.result_action(ui::ResultAction::Practice(None)),
                 _ => {}
             },
-        }
-    }
-
-    fn on_setup_key(&mut self, code: KeyCode) {
-        use ui::SetupAction as A;
-        let Screen::Setup(s) = &self.screen else {
-            return;
-        };
-        let action = match code {
-            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space => A::Start,
-            KeyCode::Escape | KeyCode::Backspace => A::Back,
-            KeyCode::ArrowLeft => A::Shift(-1),
-            KeyCode::ArrowRight => A::Shift(1),
-            KeyCode::ArrowUp => A::Resize(1),
-            KeyCode::ArrowDown => A::Resize(-1),
-            KeyCode::KeyT => A::Style(match s.style {
-                engine::practice::LoopStyle::Connect => engine::practice::LoopStyle::Restart,
-                engine::practice::LoopStyle::Restart => engine::practice::LoopStyle::Connect,
-            }),
-            KeyCode::KeyL => A::ToggleLadder,
-            KeyCode::Comma => A::Speed(-1),
-            KeyCode::Period => A::Speed(1),
-            _ => return,
-        };
-        self.setup_action(action);
-    }
-
-    fn setup_action(&mut self, action: ui::SetupAction) {
-        use ui::SetupAction as A;
-        let Screen::Setup(s) = &mut self.screen else {
-            return;
-        };
-        match action {
-            A::Select(sec) => s.section = Some(sec),
-            A::Shift(d) => s.shift(d),
-            A::Resize(d) => s.resize(d),
-            A::Style(style) => s.style = style,
-            A::Rule(rule) => s.rule = rule,
-            A::ToggleLadder => s.toggle_ladder(),
-            A::Speed(d) => s.nudge_speed(d),
-            A::Target(t) => s.set_target(t),
-            A::Pitch(p) => s.pitch = p,
-            A::Start => {
-                if let Some(o) = s.options() {
-                    let path = s.path.clone();
-                    self.start_practice(path, o);
-                }
-                return;
-            }
-            A::Back => {
-                self.go_to_select();
-                return;
-            }
-        }
-        // 区間のほかの決めごとは次の練習でも使う
-        let prefs = s.prefs();
-        if prefs != self.config.practice_prefs() {
-            self.config.set_practice_prefs(prefs);
-            self.config.save();
         }
     }
 
@@ -1144,6 +1123,12 @@ impl App {
             self.wheel = 0.0;
             return;
         }
+        if let Some(p) = &mut self.popup {
+            self.wheel = 0.0;
+            let r = p.mouse(mouse.popup);
+            self.popup_response(r);
+            return;
+        }
         self.wheel += mouse.wheel;
         let steps = self.wheel.trunc();
         if steps != 0.0 {
@@ -1160,6 +1145,10 @@ impl App {
 
     fn on_select_key(&mut self, code: KeyCode) {
         if self.view.fading_out() {
+            return;
+        }
+        if self.popup.is_some() {
+            self.on_popup_key(code);
             return;
         }
         if code == KeyCode::F1 {
@@ -1202,6 +1191,31 @@ impl App {
         }
     }
 
+    /// ポップアップを開いているときのキー
+    fn on_popup_key(&mut self, code: KeyCode) {
+        let input = match code {
+            KeyCode::ArrowUp => PopupInput::Up,
+            KeyCode::ArrowDown => PopupInput::Down,
+            KeyCode::ArrowLeft => PopupInput::Left,
+            KeyCode::ArrowRight => PopupInput::Right,
+            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space => PopupInput::Decide,
+            KeyCode::Escape | KeyCode::Backspace => PopupInput::Cancel,
+            KeyCode::Comma | KeyCode::Period => {
+                if let Some(p) = &mut self.popup {
+                    p.setup
+                        .nudge_speed(if code == KeyCode::Comma { -1 } else { 1 });
+                    self.popup_response(practice_popup::Response {
+                        se: Some(Se::Move),
+                        done: None,
+                    });
+                }
+                return;
+            }
+            _ => return,
+        };
+        self.popup_input(input);
+    }
+
     /// 選曲と結果の画面での電子ドラムの操作（上流と同じ割り当て）。
     /// HT で上、LT で下、CY か RD で決定、LC で戻る、HH を 2 回で難易度
     fn on_menu_pad(&mut self, lane: DrumLane, at_us: i64) {
@@ -1227,6 +1241,17 @@ impl App {
                 if self.view.fading_out() {
                     return;
                 }
+                if self.popup.is_some() {
+                    let input = match lane {
+                        DrumLane::HT => PopupInput::Up,
+                        DrumLane::LT => PopupInput::Down,
+                        DrumLane::CY | DrumLane::RD => PopupInput::Decide,
+                        DrumLane::LC => PopupInput::Cancel,
+                        _ => return,
+                    };
+                    self.popup_input(input);
+                    return;
+                }
                 match lane {
                     DrumLane::HT => self.move_cursor(-1),
                     DrumLane::LT => self.move_cursor(1),
@@ -1248,16 +1273,6 @@ impl App {
                     }
                     _ => {}
                 }
-            }
-            Screen::Setup(_) => {
-                let action = match lane {
-                    DrumLane::HT => ui::SetupAction::Shift(-1),
-                    DrumLane::LT => ui::SetupAction::Shift(1),
-                    DrumLane::CY | DrumLane::RD => ui::SetupAction::Start,
-                    DrumLane::LC => ui::SetupAction::Back,
-                    _ => return,
-                };
-                self.setup_action(action);
             }
             Screen::Result(..) => match lane {
                 DrumLane::CY | DrumLane::RD | DrumLane::LC => {
@@ -1326,11 +1341,10 @@ impl App {
                 }
             }
             A::Practice => {
+                // 上流のソートのポップアップと同じく、選曲画面の上に開く
                 if let Some(path) = self.songs.selected_chart() {
                     self.sfx.play(Se::Decide);
-                    self.sfx.preview(None);
-                    self.decided = Some(Decided::Practice(path));
-                    self.view.fade_out();
+                    self.open_setup(path, None);
                 }
             }
         }
@@ -1403,7 +1417,6 @@ impl App {
             .map(|m| m.ports.clone())
             .unwrap_or_default();
         let mut mouse = SelectMouse::default();
-        let mut setup_actions = Vec::new();
         let mut result_actions = Vec::new();
         let toast = self
             .toast
@@ -1444,12 +1457,14 @@ impl App {
                 let c = Canvas::new(&painter, ctx.content_rect());
                 self.gfx.begin(&c, ctx.pixels_per_point());
                 self.view.draw(&c, &mut self.gfx, &self.songs);
+                if let Some(p) = &self.popup {
+                    p.draw(&c, &mut self.gfx);
+                }
                 if let Some(m) = &self.message {
                     ui::message_overlay(&ctx, m);
                 }
                 mouse = SelectMouse::read(&ctx, &c);
             }
-            Screen::Setup(s) => setup_actions = ui::draw_setup(ui, s),
             Screen::Loading(l) => {
                 let ctx = ui.ctx().clone();
                 let painter = ctx.layer_painter(egui::LayerId::background());
@@ -1507,9 +1522,6 @@ impl App {
             gpu.render(&self.egui_ctx, output);
         }
         self.select_mouse(mouse);
-        for a in setup_actions {
-            self.setup_action(a);
-        }
         for a in result_actions {
             self.result_action(a);
         }
@@ -1635,6 +1647,8 @@ struct SelectMouse {
     wheel: f32,
     /// 押した曲バーが、選んでいる曲から何本先か
     clicked_row: Option<isize>,
+    /// 練習のポップアップへのマウスの操作
+    popup: PopupMouse,
 }
 
 impl SelectMouse {
@@ -1658,7 +1672,21 @@ impl SelectMouse {
                 .then(|| i.pointer.interact_pos())
                 .flatten()
                 .and_then(|p| SelectView::row_at(c.to_nx(p)));
-            Self { wheel, clicked_row }
+            let popup = PopupMouse {
+                pressed: i
+                    .pointer
+                    .primary_pressed()
+                    .then(|| i.pointer.interact_pos())
+                    .flatten()
+                    .map(|p| c.to_nx(p)),
+                down: i.pointer.primary_down(),
+                hover: i.pointer.hover_pos().map(|p| c.to_nx(p)),
+            };
+            Self {
+                wheel,
+                clicked_row,
+                popup,
+            }
         })
     }
 }
