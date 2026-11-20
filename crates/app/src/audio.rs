@@ -142,8 +142,10 @@ const FADE_SECONDS: f64 = 0.005;
 enum Command {
     /// 決めたフレームから鳴らす（曲の BGM など）
     At(Voice),
-    /// できるだけ早く鳴らす（叩いた音）
-    Now { sound: Sound, gain: f32 },
+    /// できるだけ早く鳴らす（叩いた音）。`tag` で後から止められる
+    Now { sound: Sound, gain: f32, tag: u8 },
+    /// `tag` の音を短いフェードで止める（選曲のプレビューの音）
+    Stop(u8),
 }
 
 /// 鳴らす音 1 つ。音の `skip` フレーム目から `len` フレームを、出力の `start` フレーム目から鳴らす
@@ -157,6 +159,8 @@ struct Voice {
     fade_in: bool,
     /// 途中で切るので終わりにフェードをかける
     fade_out: bool,
+    /// 止めるときの目印（0 は止めない）
+    tag: u8,
 }
 
 impl Voice {
@@ -170,6 +174,7 @@ impl Voice {
             gain,
             fade_in: false,
             fade_out: false,
+            tag: 0,
         }
     }
 
@@ -261,8 +266,17 @@ impl AudioOut {
                 while let Ok(cmd) = rx.pop() {
                     match cmd {
                         Command::At(v) => voices.push(v),
-                        Command::Now { sound, gain } => {
-                            voices.push(Voice::whole(sound, frames_done, gain))
+                        Command::Now { sound, gain, tag } => {
+                            let mut v = Voice::whole(sound, frames_done, gain);
+                            v.tag = tag;
+                            voices.push(v);
+                        }
+                        Command::Stop(tag) => {
+                            for v in voices.iter_mut().filter(|v| v.tag == tag) {
+                                let played = frames_done.saturating_sub(v.start);
+                                v.len = v.len.min(played + fade);
+                                v.fade_out = true;
+                            }
                         }
                     }
                 }
@@ -349,14 +363,26 @@ impl AudioOut {
             gain,
             fade_in,
             fade_out: p.cut_end,
+            tag: 0,
         }));
     }
 
     pub fn play_now(&mut self, sound: &Sound, gain: f32) {
+        self.play_tagged(sound, gain, 0);
+    }
+
+    /// すぐ鳴らし、`tag`（1 以上）を付けておく。`stop` で止められる
+    pub fn play_tagged(&mut self, sound: &Sound, gain: f32, tag: u8) {
         let _ = self.tx.push(Command::Now {
             sound: sound.clone(),
             gain,
+            tag,
         });
+    }
+
+    /// `tag` を付けて鳴らした音を止める
+    pub fn stop(&mut self, tag: u8) {
+        let _ = self.tx.push(Command::Stop(tag));
     }
 }
 
@@ -404,6 +430,7 @@ mod tests {
             gain: 1.0,
             fade_in: false,
             fade_out: false,
+            tag: 0,
         };
         let mut out = vec![0.0; 6 * 2];
         v.mix(&mut out, 2, 0, 6, 0);

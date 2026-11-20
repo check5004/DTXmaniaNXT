@@ -710,6 +710,7 @@ dependencies = [
 name = "dtxmanianxt"
 version = "0.1.0"
 dependencies = [
+ "ab_glyph",
  "anyhow",
  "cpal",
  "dirs",
@@ -719,9 +720,11 @@ dependencies = [
  "egui-winit",
  "engine",
  "env_logger",
+ "image",
  "library",
  "log",
  "midir",
+ "nx",
  "pollster 1.0.2",
  "records",
  "rfd",
@@ -730,6 +733,7 @@ dependencies = [
  "symphonia",
  "timestretch",
  "toml",
+ "ttf-parser",
  "wgpu",
  "winit",
 ]
@@ -1352,6 +1356,8 @@ dependencies = [
  "num-traits",
  "png",
  "tiff",
+ "zune-core",
+ "zune-jpeg",
 ]
 
 [[package]]
@@ -1897,6 +1903,13 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "nx"
+version = "0.1.0"
+dependencies = [
+ "dtx",
 ]
 
 [[package]]

@@ -12,6 +12,7 @@ dtx = { path = "../dtx" }
 engine = { path = "../engine" }
 library = { path = "../library" }
 records = { path = "../records" }
+nx = { path = "../nx" }
 anyhow = "1"
 cpal = "0.18"
 egui = "0.37"
@@ -31,6 +32,11 @@ dirs = "7"
 rfd = "0.17"
 # 練習で BGM を音程を保ったまま遅くする（Rust だけで書かれていて、ビルドに C++ や LLVM が要らない）
 timestretch = { version = "0.16", default-features = false }
+# NX のスキンの画像（PNG・JPEG・BMP）を読む
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "bmp"] }
+# NX と同じ書体で文字を描く
+ab_glyph = "0.2"
+ttf-parser = "0.25"
 
 [lints]
 workspace = true

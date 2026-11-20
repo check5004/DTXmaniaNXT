@@ -14,8 +14,10 @@ DTX 形式の譜面で遊べる、ドラムのゲーム兼練習アプリです�
 
 GitHub の [Actions](https://github.com/check5004/DTXmaniaNXT/actions) で、成功した CI の実行を開き、下の Artifacts から `dtxmanianxt-Windows`（macOS は `dtxmanianxt-macOS`）をダウンロードして展開します。
 
-1. 起動して「フォルダを追加…」で、DTXMania の曲のフォルダ（DTXFiles など）を選びます。フォルダをウィンドウにドロップしても追加できます。
-2. ↑↓ で曲を選び、←→ で難易度、Enter で始めます。BOX は Enter で入り、Backspace で出ます。
+1. 起動して F1 で設定を開き、「DTXManiaNX のフォルダ」で、いま使っている DTXManiaNX のフォルダ（`DTXManiaNX.exe` のあるフォルダ）を選びます。フォルダをウィンドウにドロップしても選べます。NX の画像と効果音（スキン）、NX に登録してある曲のフォルダ、パッドの割り当て（`Config.ini` の `[DrumsKeyAssign]`）を読み、NX と同じ見た目になります。DTXManiaNX のフォルダに置いて起動したときは、それを使います。
+   - NX の画像と音は、このアプリには入っていません（NX のフォルダから読むだけです）。NX が無くても、簡単な見た目で遊べます。
+   - 曲のフォルダは、F1 の設定の「フォルダを追加…」でも足せます。
+2. ↑↓ で曲を選び、←→ で難易度、Enter で始めます。BOX は Enter で入り、Backspace か Esc で出ます。マウスのホイールでも動かせ、曲バーを押すとそこへ動きます（選んでいる曲を押すと始めます）。
 3. 電子ドラムは、つないでおけば起動したときに見つけます。無ければキーボードで叩けます（A S Z D G F H J K L、Q で HH オープン）。
 4. 遊んでいる間は - / = で入力の補正、[ / ] で表示の補正、↑↓ で速さ、M で譜面の音、R でやり直し、Esc で終わります。
 
@@ -62,8 +64,9 @@ cargo test --all
 | `crates/dtx` | DTX の読み込み（文字コード判定、ヘッダ、チップ、BPM と小節長から時刻を計算） |
 | `crates/engine` | 判定、音と MIDI の時計、電子ドラムの入力の正規化、記録からの苦手・克服・叩き方のくせの分析、練習の区間ループの並べ方と段階アップ |
 | `crates/library` | 曲のフォルダの探し方（set.def・box.def・DTXFiles.*） |
+| `crates/nx` | DTXManiaNX のフォルダの読み方（Config.ini、スキンの場所、大文字・小文字を区別しないファイル探し） |
 | `crates/records` | 遊んだ記録（SQLite）の読み書き |
-| `crates/app` | アプリ本体（winit + wgpu + egui、cpal、midir） |
+| `crates/app` | アプリ本体（winit + wgpu + egui、cpal、midir）。NX のスキンの画像を上流と同じ座標で描く（`gfx.rs`・`select.rs`） |
 | `testdata/charts` | テスト譜面と手計算の正解。DTX Web Editor と共有する予定 |
 
 ## 上流について
