@@ -159,6 +159,11 @@ impl Lap {
         self.start_ms + (song_ms - self.song_start_ms) / self.speed
     }
 
+    /// この周での実時間 → 曲の時刻
+    pub fn song_ms(&self, real_ms: f64) -> f64 {
+        self.song_start_ms + (real_ms - self.start_ms) * self.speed
+    }
+
     /// 曲の時刻 `song_ms` の音符を、この周で判定するか。区間の中の音符と、区切るときは着地の音符
     pub fn judges(&self, song_ms: f64) -> bool {
         const EPS: f64 = 1e-6;
@@ -624,6 +629,9 @@ mod tests {
         );
         assert!(close(a.start_ms, 0.0) && close(a.end_ms, 4000.0));
         assert_eq!(a.clicks, vec![-2000.0, -1500.0, -1000.0, -500.0]);
+        // 実時間と曲の時刻は行き来できる
+        assert!(close(a.song_ms(1000.0), 5000.0));
+        assert!(close(a.song_ms(a.real_ms(6500.0)), 6500.0));
         assert!(close(l.next_audio_ms(1.0), 4000.0));
         // 2 周目は区間だけ、切れ目なく
         let b = l.next_lap(1.0);

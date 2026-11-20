@@ -1,7 +1,9 @@
 //! 結果の画面（上流 `CStageResult`）。
 //! 1 ページ目は NX のスキンの画像で、ランク、判定の数と割合、スコア、達成率とスキル、
 //! 進み具合のバー（今回と前回までのベスト）、ジャケットと曲名を上流と同じ配置で出す。
-//! 2 ページ目（←→ で切り替え）は、このアプリで足した分析（苦手な小節、叩き方のくせ、練習の周ごとの成績）。
+//! 1 ページ目の右の空いた場所に、苦手な小節を進み具合のバーの形で足す。
+//! 2 ページ目（←→ で切り替え）は、このアプリで足した分析（苦手な小節、叩き方のくせ）。
+//! 練習の結果は 1 ページだけで、ランクとジャケットの場所に周ごとの成績の表を出す。
 
 use std::f64::consts::FRAC_PI_2;
 use std::path::PathBuf;
@@ -11,6 +13,7 @@ use egui::Color32;
 use engine::judge::Tally;
 use records::{BestScore, PROGRESS_SECTIONS};
 
+use crate::game::Outcome;
 use crate::gfx::{Canvas, Gfx, Opt, fit_scale, src};
 use crate::play_view::{
     Finish, LARGE_RESULT, PanelNumbers, draw_score_digits, draw_skill_panel, rotate_about_center,
@@ -167,12 +170,7 @@ impl ResultView {
             sounds.push((NEW_RECORD_DELAY, Se::NewRecord));
         }
         Self {
-            // 練習は周ごとの成績を先に見せる
-            page: if info.practice {
-                Page::Analysis
-            } else {
-                Page::Summary
-            },
+            page: Page::Summary,
             info,
             entered: Instant::now(),
             rank,
@@ -191,8 +189,11 @@ impl ResultView {
         due.into_iter().map(|(_, se)| se).collect()
     }
 
-    /// ページを切り替える（←→）
+    /// ページを切り替える（←→）。練習の結果は 1 ページだけ
     pub fn turn(&mut self) {
+        if self.info.practice {
+            return;
+        }
         self.page = match self.page {
             Page::Summary => Page::Analysis,
             Page::Analysis => Page::Summary,
@@ -213,18 +214,21 @@ impl ResultView {
     }
 
     /// 1 ページ目（背景は [`Self::draw_background`] で先に描く）
-    pub fn draw_summary(&self, c: &Canvas, g: &mut Gfx) {
+    pub fn draw_summary(&self, c: &Canvas, g: &mut Gfx, o: &Outcome) {
         let elapsed = self.entered.elapsed();
         self.draw_panels(c, g, elapsed);
+        if let Some(p) = &o.practice {
+            // 練習：スコアの場所に合格した周の数、ランクとジャケットの場所に周ごとの成績
+            self.draw_parameters(c, g, Some(p));
+            crate::result_training::draw_practice(c, g, p);
+            self.draw_title(c, g);
+            return;
+        }
         self.draw_image(c, g);
-        self.draw_parameters(c, g);
+        self.draw_parameters(c, g, None);
         self.draw_rank(c, g, elapsed);
-        let hint = if self.info.practice {
-            "→ 周ごとの成績"
-        } else {
-            "→ 詳しい結果（苦手な小節、叩き方のくせ）"
-        };
-        self.draw_page_hint(c, g, hint);
+        crate::result_training::draw_weak(c, g, o);
+        self.draw_page_hint(c, g, "→ 詳しい結果（苦手な小節、叩き方のくせ）");
     }
 
     /// 2 ページ目の上に出す、ページの切り替えの案内
@@ -266,7 +270,7 @@ impl ResultView {
         }
     }
 
-    /// ジャケットと曲名と注意書き（上流 `CActResultImage`）
+    /// ジャケットと曲名（上流 `CActResultImage`）
     fn draw_image(&self, c: &Canvas, g: &mut Gfx) {
         if let Some(t) = g.skin.tex("Graphics/7_JacketPanel.png") {
             c.draw(&t, 467.0, 287.0);
@@ -295,34 +299,28 @@ impl ResultView {
                 },
             );
         }
-        let edge = |px: f32| Style {
-            px,
-            color: Color32::WHITE,
-            bold: false,
-            shadow: None,
-            edge: Some((Color32::BLACK, px / 12.0)),
-            gradient: None,
-        };
+        self.draw_title(c, g);
+    }
+
+    /// 曲名とアーティスト
+    fn draw_title(&self, c: &Canvas, g: &mut Gfx) {
+        let edge = |px: f32| Style::edged(px, Color32::WHITE, Color32::BLACK, px / 12.0);
         if let Some(t) = g.texts.get(&self.info.title, &edge(20.0)) {
             t.draw_fit(c, 500.0, 630.0, 320.0);
         }
         if let Some(t) = g.texts.get(&self.info.artist, &edge(15.0)) {
             t.draw_fit(c, 500.0, 665.0, 320.0);
         }
-        // 上流の「Training feature used」「Score will not be saved」
-        if self.info.practice {
-            let mut y = 360.0;
-            for line in ["練習モード", "スコアと New Record には入りません"] {
-                if let Some(t) = g.texts.get(line, &edge(18.0)) {
-                    t.draw(c, 840.0, y, 1.0, 1.0);
-                }
-                y += 25.0;
-            }
-        }
     }
 
     /// 左のパネル、進み具合のバー、スコア、New Record、早い遅いの数（上流 `CActResultParameterPanel`）
-    fn draw_parameters(&self, c: &Canvas, g: &mut Gfx) {
+    /// 練習なら `practice` を渡す（スコアの代わりに合格した周の数を出す）
+    fn draw_parameters(
+        &self,
+        c: &Canvas,
+        g: &mut Gfx,
+        practice: Option<&crate::game::PracticeOutcome>,
+    ) {
         const X: f32 = 180.0;
         const Y: f32 = 260.0;
         let f = &self.info.finish;
@@ -349,8 +347,13 @@ impl ResultView {
             .and_then(|b| b.progress.as_deref())
             .unwrap_or("");
         draw_progress_bar(c, X + 270.0, Y + 2.0, 4.0, best);
-        if let Some(t) = g.skin.tex("Graphics/7_score numbersGD.png") {
-            draw_score_digits(c, &t, 30.0, 58.0, 30.0, f.score);
+        match practice {
+            Some(p) => draw_passed(c, g, p),
+            None => {
+                if let Some(t) = g.skin.tex("Graphics/7_score numbersGD.png") {
+                    draw_score_digits(c, &t, 30.0, 58.0, 30.0, f.score);
+                }
+            }
         }
         if self.new_record
             && let Some(t) = g.skin.tex("Graphics/8_New Record.png")
@@ -399,6 +402,37 @@ impl ResultView {
             c.draw(&t, X - 165.0, Y + 100.0);
         }
     }
+}
+
+/// 練習の結果のスコアの場所：合格した周の数と、最後まで叩いた周の数
+fn draw_passed(c: &Canvas, g: &mut Gfx, p: &crate::game::PracticeOutcome) {
+    let done = p.laps.iter().filter(|l| l.completed).count();
+    let passed = p
+        .laps
+        .iter()
+        .filter(|l| l.completed && l.passed == Some(true))
+        .count();
+    g.dfp(c, 30.0, 28.0, "PASSED LAPS", false);
+    let text = passed.min(9999).to_string();
+    let mut x = 30.0;
+    match g.skin.tex("Graphics/7_score numbersGD.png") {
+        Some(t) => {
+            for ch in text.chars() {
+                if let Some(d) = ch.to_digit(10) {
+                    c.part(&t, x, 58.0, src(d as f32 * 36.0, 0.0, 36.0, 50.0));
+                }
+                x += 34.0;
+            }
+        }
+        None => {
+            let style = Style::edged(40.0, Color32::from_rgb(220, 240, 120), Color32::BLACK, 3.0);
+            if let Some(t) = g.texts.get(&text, &style) {
+                t.draw(c, x, 58.0, 1.0, 1.0);
+                x += t.w;
+            }
+        }
+    }
+    g.dfp(c, x + 8.0, 80.0, &format!("/ {done}"), false);
 }
 
 /// 進み具合のバー（上流 `txGenerateProgressBarHelper`：64 区間を下から、425 ドットの高さに）
@@ -523,8 +557,11 @@ mod tests {
     }
 
     #[test]
-    fn practice_opens_on_the_analysis_page() {
-        assert_eq!(ResultView::new(info(0.0, None, true)).page, Page::Analysis);
+    fn practice_has_only_the_summary_page() {
+        let mut v = ResultView::new(info(0.0, None, true));
+        assert_eq!(v.page, Page::Summary);
+        v.turn();
+        assert_eq!(v.page, Page::Summary);
         let mut v = ResultView::new(info(70.0, None, false));
         assert_eq!(v.page, Page::Summary);
         v.turn();

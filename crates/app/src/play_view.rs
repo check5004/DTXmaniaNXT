@@ -657,6 +657,9 @@ impl PlayView {
         self.draw_combo(c, g, play, now);
         self.draw_judges(c, g, now);
         self.draw_fire(c, g, now);
+        if let Some(p) = &play.practice {
+            crate::practice_hud::draw(c, g, p, now_ms, play.last_chip_ms);
+        }
         self.draw_failed(c, g, now);
         // 入ってきたときのフェード
         let t = now.saturating_duration_since(self.entered).as_secs_f32() / FADE_IN.as_secs_f32();

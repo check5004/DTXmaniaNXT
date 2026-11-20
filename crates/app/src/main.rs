@@ -9,6 +9,7 @@
 //! - 起動するとタイトル。そこから選曲と設定へ進む
 
 mod audio;
+mod band;
 mod config;
 mod config_view;
 mod fonts;
@@ -19,7 +20,9 @@ mod loading;
 mod midi;
 mod play_view;
 mod practice;
+mod practice_hud;
 mod practice_popup;
+mod result_training;
 mod result_view;
 mod select;
 mod sfx;
@@ -1489,7 +1492,6 @@ impl App {
                         config: &self.config,
                         midi_ports: &ports,
                         show_info: self.show_play_info,
-                        now,
                     },
                 );
                 if let Some(t) = &toast {
@@ -1503,7 +1505,7 @@ impl App {
                 self.gfx.begin(&c, ctx.pixels_per_point());
                 view.draw_background(&c, &mut self.gfx);
                 match view.page {
-                    Page::Summary => view.draw_summary(&c, &mut self.gfx),
+                    Page::Summary => view.draw_summary(&c, &mut self.gfx, o),
                     Page::Analysis => {
                         view.draw_analysis_hint(&c, &mut self.gfx);
                         result_actions = ui::draw_result(ui, o, &self.config);
