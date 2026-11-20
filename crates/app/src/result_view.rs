@@ -247,6 +247,7 @@ impl ResultView {
             bold: false,
             shadow: None,
             edge: Some((Color32::BLACK, 1.5)),
+            gradient: None,
         };
         if let Some(t) = g.texts.get(text, &style) {
             t.draw(c, 1270.0 - t.w, 696.0, 1.0, 1.0);
@@ -300,6 +301,7 @@ impl ResultView {
             bold: false,
             shadow: None,
             edge: Some((Color32::BLACK, px / 12.0)),
+            gradient: None,
         };
         if let Some(t) = g.texts.get(&self.info.title, &edge(20.0)) {
             t.draw_fit(c, 500.0, 630.0, 320.0);

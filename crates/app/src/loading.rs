@@ -87,6 +87,7 @@ impl Loading {
             bold: false,
             shadow: None,
             edge: Some((Color32::BLACK, px / 12.0)),
+            gradient: None,
         };
         if let Some(t) = g.texts.get(&self.head.title, &edge(40.0)) {
             t.draw_fit(c, 190.0, 285.0, 625.0);

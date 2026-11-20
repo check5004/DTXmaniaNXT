@@ -82,6 +82,8 @@ pub struct Style {
     pub shadow: Option<(Color32, f32)>,
     /// 縁取り（色、太さ）
     pub edge: Option<(Color32, f32)>,
+    /// 上から下へのグラデーションの下の色（上は `color`）。NX の選んでいる項目の黄色から橙
+    pub gradient: Option<Color32>,
 }
 
 impl Style {
@@ -92,6 +94,15 @@ impl Style {
             bold: false,
             shadow: None,
             edge: None,
+            gradient: None,
+        }
+    }
+
+    /// 縁取りした文字（NX の `DrawPrivateFont(文字, 色, 縁の色)`）
+    pub fn edged(px: f32, color: Color32, edge: Color32, width: f32) -> Self {
+        Self {
+            edge: Some((edge, width)),
+            ..Self::plain(px, color)
         }
     }
 }
@@ -131,7 +142,7 @@ impl Text {
 #[derive(Hash, PartialEq, Eq)]
 struct Key {
     text: String,
-    style: [u32; 8],
+    style: [u32; 9],
     raster: u32,
 }
 
@@ -152,7 +163,8 @@ fn key(text: &str, s: &Style, raster: f32) -> Key {
             so,
             ec,
             ew,
-            0,
+            s.gradient.map_or(0, |c| u32::from_le_bytes(c.to_array())),
+            u32::from(s.gradient.is_some()),
         ],
         raster: (raster * 100.0).round() as u32,
     }
@@ -194,6 +206,16 @@ impl Texts {
         }
     }
 
+    /// `max_w` に収まるように行を分ける（`\n` でも分ける）。
+    /// 日本語はどの字の間でも分けるが、句読点や閉じ括弧は行の頭に置かず、英数字の語は途中で分けない
+    pub fn wrap(&self, text: &str, px: f32, max_w: f32) -> Vec<String> {
+        let Some(font) = &self.font else {
+            return text.lines().map(str::to_owned).collect();
+        };
+        let sf = font.as_scaled(PxScale::from(px));
+        wrap_with(text, max_w, |ch| sf.h_advance(sf.glyph_id(ch)))
+    }
+
     pub fn get(&mut self, text: &str, style: &Style) -> Option<Text> {
         if text.is_empty() {
             return None;
@@ -219,6 +241,51 @@ impl Texts {
         self.map.insert(k, (t.clone(), frame));
         t
     }
+}
+
+/// 行の頭に置かない字
+fn no_line_start(ch: char) -> bool {
+    "、。，．・：；？！）」』】〕＞ー～…,.:;?!)]".contains(ch)
+}
+
+/// [`Texts::wrap`] の中身（`advance` は字の送り）
+fn wrap_with(text: &str, max_w: f32, advance: impl Fn(char) -> f32) -> Vec<String> {
+    let mut lines = Vec::new();
+    for para in text.split('\n') {
+        let mut line = String::new();
+        let mut w = 0.0f32;
+        // 今の英数字の語の始まり（行の中の位置、そこまでの幅）
+        let mut word: Option<(usize, f32)> = None;
+        for ch in para.chars() {
+            let adv = advance(ch);
+            let in_word = ch.is_ascii_alphanumeric();
+            if w + adv > max_w && !line.is_empty() && !no_line_start(ch) {
+                match word {
+                    Some((i, wi)) if in_word && i > 0 => {
+                        // 語ごと次の行へ
+                        let rest = line.split_off(i);
+                        lines.push(std::mem::replace(&mut line, rest));
+                        w -= wi;
+                        word = Some((0, 0.0));
+                    }
+                    _ => {
+                        lines.push(std::mem::take(&mut line));
+                        w = 0.0;
+                        word = None;
+                    }
+                }
+            }
+            if !in_word {
+                word = None;
+            } else if word.is_none() {
+                word = Some((line.len(), w));
+            }
+            line.push(ch);
+            w += adv;
+        }
+        lines.push(line);
+    }
+    lines
 }
 
 /// 文字の形（0〜1 の濃さ）を並べる。`ascent` の位置に基準線
@@ -360,9 +427,16 @@ fn render(font: &FontArc, text: &str, s: &Style, raster: f32) -> Option<egui::Co
             }
         }
     }
-    for (p, &a) in px_out.iter_mut().zip(&cov) {
+    for (i, (p, &a)) in px_out.iter_mut().zip(&cov).enumerate() {
         if a > 0.0 {
-            *p = over(*p, s.color, a);
+            let color = match s.gradient {
+                Some(bottom) => {
+                    let t = (i / w) as f32 / (h.max(2) - 1) as f32;
+                    s.color.lerp_to_gamma(bottom, t)
+                }
+                None => s.color,
+            };
+            *p = over(*p, color, a);
         }
     }
     let pixels = px_out
@@ -385,6 +459,19 @@ mod tests {
         assert_eq!(p, [0.5, 0.0, 0.0, 0.5]);
         let p = over(p, Color32::WHITE, 1.0);
         assert_eq!(p, [1.0, 1.0, 1.0, 1.0]);
+    }
+
+    #[test]
+    fn wrap_keeps_punctuation_and_words() {
+        let w = |t: &str, max: f32| wrap_with(t, max, |_| 1.0);
+        assert_eq!(w("あいうえお", 2.0), ["あい", "うえ", "お"]);
+        // 句読点は行の頭に置かない
+        assert_eq!(w("あい。う", 2.0), ["あい。", "う"]);
+        // 英数字の語は分けない
+        assert_eq!(w("あ Enter", 5.0), ["あ ", "Enter"]);
+        // 行より長い語は分ける
+        assert_eq!(w("Enter", 3.0), ["Ent", "er"]);
+        assert_eq!(w("a\nb", 9.0), ["a", "b"]);
     }
 
     #[test]

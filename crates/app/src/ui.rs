@@ -17,7 +17,6 @@ use crate::game::{Outcome, Play, PracticeOutcome, WeakMap};
 use crate::gfx::Canvas;
 use crate::history::{OvercomeCheck, TENDENCY_MIN_HITS, TENDENCY_SESSIONS};
 use crate::practice::{LapSummary, Practice, PracticeSetup};
-use crate::songs::SongList;
 use crate::stretch::Pitch;
 
 fn judgement_label(j: Judgement) -> (&'static str, Color32) {
@@ -30,104 +29,15 @@ fn judgement_label(j: Judgement) -> (&'static str, Color32) {
     }
 }
 
-/// 選曲の画面（と設定の窓）で押されたもの
+/// 選曲の画面で押されたもの
 #[derive(Debug, Clone, PartialEq)]
 pub enum SelectAction {
     /// 選んでいる行に入る（BOX なら中へ、曲なら始める）
     Enter,
     Back,
-    AddFolder,
-    RemoveFolder(usize),
     Rescan,
     /// 選んでいる曲の区間を練習する
     Practice,
-    /// DTXManiaNX のフォルダを選ぶ
-    ChooseNx,
-    /// 設定の窓を閉じる
-    CloseSettings,
-}
-
-/// 設定の窓に出すもの
-pub struct SettingsInfo<'a> {
-    pub config: &'a Config,
-    /// 使っているスキンのフォルダ
-    pub skin: Option<&'a std::path::Path>,
-    pub songs: &'a SongList,
-    pub midi_ports: &'a [String],
-    pub message: Option<&'a str>,
-}
-
-/// 設定の窓（F1）。NX の設定画面に置き換えるまでの仮のもの
-pub fn draw_settings(ctx: &egui::Context, info: &SettingsInfo<'_>) -> Vec<SelectAction> {
-    let mut actions = Vec::new();
-    let config = info.config;
-    egui::Window::new("設定（F1 で閉じる）")
-        .collapsible(false)
-        .resizable(false)
-        .default_width(560.0)
-        .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
-        .show(ctx, |ui| {
-            if let Some(m) = info.message {
-                ui.colored_label(Color32::from_rgb(0xF0, 0x80, 0x60), m);
-                ui.separator();
-            }
-            ui.label(RichText::new("DTXManiaNX のフォルダ").strong());
-            ui.label("画面の画像と音、曲のフォルダ、パッドの割り当てをここから読みます。");
-            ui.horizontal(|ui| {
-                match &config.nx_dir {
-                    Some(d) => ui.label(d.display().to_string()),
-                    None => ui.colored_label(Color32::from_rgb(0xF0, 0xC0, 0x60), "未設定"),
-                };
-                if ui.button("選ぶ…").clicked() {
-                    actions.push(SelectAction::ChooseNx);
-                }
-            });
-            if let Some(skin) = info.skin {
-                ui.label(RichText::new(format!("スキン: {}", skin.display())).weak());
-            }
-            ui.add_space(8.0);
-            ui.separator();
-            ui.label(RichText::new("曲のフォルダ").strong());
-            for (i, dir) in config.song_dirs.iter().enumerate() {
-                ui.horizontal(|ui| {
-                    if ui.small_button("×").on_hover_text("一覧から外す").clicked() {
-                        actions.push(SelectAction::RemoveFolder(i));
-                    }
-                    ui.label(dir.display().to_string());
-                });
-            }
-            ui.horizontal(|ui| {
-                if ui.button("フォルダを追加…").clicked() {
-                    actions.push(SelectAction::AddFolder);
-                }
-                if ui
-                    .add_enabled(!config.song_dirs.is_empty(), egui::Button::new("探し直す"))
-                    .on_hover_text("F5")
-                    .clicked()
-                {
-                    actions.push(SelectAction::Rescan);
-                }
-                if let Some(p) = info.songs.scanning() {
-                    ui.spinner();
-                    ui.label(format!("探しています（{} フォルダ、{} 曲）", p.folders, p.songs));
-                }
-            });
-            ui.label("曲のフォルダや NX のフォルダは、このウィンドウにドロップしても追加できます。");
-            ui.separator();
-            ports_label(ui, info.midi_ports);
-            ui.label(format!(
-                "入力の補正 {:+.0}ms / 表示の補正 {:+.0}ms / 速さ {:.2}",
-                config.input_offset_ms, config.visual_offset_ms, config.scroll_px_per_ms
-            ));
-            ui.separator();
-            ui.label("↑↓ で選ぶ、Enter で決定、P で練習、←→ で難易度、Backspace で BOX を出る、Esc で終わる");
-            ui.label("ドラム: HT / LT で選ぶ、CY か RD で決定、LC で戻る、HH を 2 回で難易度");
-            ui.add_space(4.0);
-            if ui.button("閉じる").clicked() {
-                actions.push(SelectAction::CloseSettings);
-            }
-        });
-    actions
 }
 
 /// 結果の画面で押されたもの
@@ -900,14 +810,6 @@ pub fn message_overlay(ctx: &egui::Context, msg: &str) {
                     ui.label(RichText::new(msg).color(Color32::WHITE).size(16.0));
                 });
         });
-}
-
-fn ports_label(ui: &mut egui::Ui, midi_ports: &[String]) {
-    if midi_ports.is_empty() {
-        ui.label("MIDI 入力: 見つかりません（キーボードで叩けます: A S Z D G F H J K L、Q で HH オープン）");
-    } else {
-        ui.label(format!("MIDI 入力: {}", midi_ports.join(", ")));
-    }
 }
 
 /// 演奏中に NX の画面へ重ねるもの

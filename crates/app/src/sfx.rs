@@ -32,10 +32,16 @@ pub enum Se {
     Excellent,
     /// 結果の画面（達成率が自己ベストを超えた）
     NewRecord,
+    /// タイトルの画面に入った
+    Title,
+    /// タイトルで GAME START を決めた
+    GameStart,
+    /// 終わるとき
+    GameEnd,
 }
 
 impl Se {
-    const ALL: [Se; 10] = [
+    const ALL: [Se; 13] = [
         Se::Move,
         Se::Decide,
         Se::Cancel,
@@ -46,6 +52,9 @@ impl Se {
         Se::FullCombo,
         Se::Excellent,
         Se::NewRecord,
+        Se::Title,
+        Se::GameStart,
+        Se::GameEnd,
     ];
 
     fn file(self) -> &'static str {
@@ -60,6 +69,9 @@ impl Se {
             Se::FullCombo => "Sounds/Full combo.ogg",
             Se::Excellent => "Sounds/Excellent.ogg",
             Se::NewRecord => "Sounds/New Record.ogg",
+            Se::Title => "Sounds/Title.ogg",
+            Se::GameStart => "Sounds/Game start.ogg",
+            Se::GameEnd => "Sounds/Game end.ogg",
         }
     }
 }
@@ -68,6 +80,8 @@ impl Se {
 const PREVIEW_TAG: u8 = 1;
 /// 読み込みの音に付ける目印（読み込みをやめたら止める）
 const LOADING_TAG: u8 = 2;
+/// タイトルの音に付ける目印（上流と同じく、ほかの画面へ移ったり終わる音を鳴らしたら止める）
+const TITLE_TAG: u8 = 3;
 
 pub struct Sfx {
     out: Option<AudioOut>,
@@ -123,19 +137,48 @@ impl Sfx {
         }
     }
 
+    /// スキンにその音がある
+    pub fn has(&self, se: Se) -> bool {
+        self.sounds.contains_key(&se)
+    }
+
     pub fn play(&mut self, se: Se) {
         if let (Some(out), Some(s)) = (&mut self.out, self.sounds.get(&se)) {
             out.play_now(s, 1.0);
         }
     }
 
-    /// 読み込みの音を鳴らし、その長さを返す（音が無ければ 0）
-    pub fn play_loading(&mut self) -> Duration {
-        let (Some(out), Some(s)) = (&mut self.out, self.sounds.get(&Se::NowLoading)) else {
+    /// 目印を付けて鳴らし、その長さを返す（音が無ければ 0）
+    fn play_tagged(&mut self, se: Se, tag: u8) -> Duration {
+        let (Some(out), Some(s)) = (&mut self.out, self.sounds.get(&se)) else {
             return Duration::ZERO;
         };
-        out.play_tagged(s, 1.0, LOADING_TAG);
+        out.stop(tag);
+        out.play_tagged(s, 1.0, tag);
         Duration::from_secs_f64(s.frames() as f64 / f64::from(out.rate()))
+    }
+
+    /// 読み込みの音を鳴らし、その長さを返す（音が無ければ 0）
+    pub fn play_loading(&mut self) -> Duration {
+        self.stop_title();
+        self.play_tagged(Se::NowLoading, LOADING_TAG)
+    }
+
+    /// タイトルの音を鳴らす（鳴っていれば頭から）
+    pub fn play_title(&mut self) {
+        self.play_tagged(Se::Title, TITLE_TAG);
+    }
+
+    pub fn stop_title(&mut self) {
+        if let Some(out) = &mut self.out {
+            out.stop(TITLE_TAG);
+        }
+    }
+
+    /// 終わる音を鳴らし、その長さを返す（タイトルの音は止める）
+    pub fn play_end(&mut self) -> Duration {
+        self.stop_title();
+        self.play_tagged(Se::GameEnd, TITLE_TAG)
     }
 
     /// 読み込みの音を止める

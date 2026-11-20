@@ -503,6 +503,7 @@ impl SelectView {
             bold: true,
             shadow: Some((Color32::from_rgba_unmultiplied(10, 10, 10, 0x40), 1.0)),
             edge: None,
+            gradient: None,
         }
     }
 

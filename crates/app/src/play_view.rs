@@ -701,6 +701,7 @@ impl PlayView {
             bold: false,
             shadow: None,
             edge: Some((Color32::BLACK, px / 12.0)),
+            gradient: None,
         };
         if let Some(t) = g.texts.get(&play.title, &edge(20.0)) {
             t.draw_fit(c, 950.0, 630.0, 320.0);
@@ -796,6 +797,7 @@ impl PlayView {
                                 bold: true,
                                 shadow: None,
                                 edge: Some((Color32::BLACK, 1.5)),
+                                gradient: None,
                             },
                         )
                     {
