@@ -3,6 +3,7 @@
 
 use std::path::PathBuf;
 
+use dtx::DrumLane;
 use engine::practice::{LoopStyle, PassRule, SpeedPlan, snap_speed};
 use serde::{Deserialize, Serialize};
 
@@ -40,6 +41,17 @@ pub struct Config {
     pub practice_pitch: String,
     /// ゲージが尽きたら途中で終わる（STAGE FAILED）。書いていなければ NX の Config.ini の `StageFailed` に従う
     pub stage_failed: Option<bool>,
+    /// 設定の画面で変えたパッドの割り当て（Roland の既定と NX の割り当てより優先する）
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub pad_notes: Vec<PadNote>,
+}
+
+/// パッドの割り当て 1 つ（ノート番号 → レーン）
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PadNote {
+    pub note: u8,
+    /// レーンの名前（HH、SD など）
+    pub lane: String,
 }
 
 impl Default for Config {
@@ -59,6 +71,7 @@ impl Default for Config {
             practice_target: SpeedPlan::DEFAULT_TARGET,
             practice_pitch: Pitch::default().name().to_owned(),
             stage_failed: None,
+            pad_notes: Vec::new(),
         }
     }
 }
@@ -159,6 +172,23 @@ impl Config {
         self.practice_pitch = p.pitch.name().to_owned();
     }
 
+    /// ノート番号をレーンに割り当てる（前の割り当ては消す）
+    pub fn assign_pad(&mut self, note: u8, lane: DrumLane) {
+        self.pad_notes.retain(|p| p.note != note);
+        self.pad_notes.push(PadNote {
+            note,
+            lane: lane.name().to_owned(),
+        });
+    }
+
+    /// 変えたパッドの割り当て（読めないレーンの名前は飛ばす）
+    pub fn pad_overrides(&self) -> Vec<(u8, DrumLane)> {
+        self.pad_notes
+            .iter()
+            .filter_map(|p| Some((p.note, DrumLane::from_name(&p.lane)?)))
+            .collect()
+    }
+
     /// 曲のフォルダを足す（同じものは足さない）。足したら true
     pub fn add_song_dir(&mut self, dir: PathBuf) -> bool {
         if self.song_dirs.contains(&dir) {
@@ -221,10 +251,28 @@ mod tests {
     }
 
     #[test]
+    fn pad_notes_replace_the_same_note() {
+        let mut c = Config::default();
+        c.assign_pad(60, DrumLane::HT);
+        c.assign_pad(61, DrumLane::LT);
+        c.assign_pad(60, DrumLane::FT);
+        assert_eq!(
+            c.pad_overrides(),
+            vec![(61, DrumLane::LT), (60, DrumLane::FT)]
+        );
+        let back: Config = toml::from_str(&toml::to_string_pretty(&c).unwrap()).unwrap();
+        assert_eq!(back.pad_overrides(), c.pad_overrides());
+        let c: Config = toml::from_str("[[pad_notes]]\nnote = 1\nlane = \"XX\"\n").unwrap();
+        assert!(c.pad_overrides().is_empty());
+    }
+
+    #[test]
     fn round_trip() {
         let mut c = Config::default();
         c.song_dirs.push(PathBuf::from("曲"));
         c.level = 4;
+        c.stage_failed = Some(false);
+        c.assign_pad(60, DrumLane::HT);
         let back: Config = toml::from_str(&toml::to_string_pretty(&c).unwrap()).unwrap();
         assert_eq!(back, c);
     }

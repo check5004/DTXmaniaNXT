@@ -260,6 +260,24 @@ impl MidiProfile {
     }
 }
 
+impl MidiProfile {
+    /// レーンごとのノート番号（設定の画面に出す）。ハイハットは「オープン」を表すノートを HHO にする
+    pub fn lane_notes(&self) -> BTreeMap<DrumLane, Vec<u8>> {
+        let mut out: BTreeMap<DrumLane, Vec<u8>> = BTreeMap::new();
+        for (&note, m) in &self.notes {
+            let lane = match m.pad {
+                Pad::HiHat if m.hh_open => Some(DrumLane::HHO),
+                Pad::HiHat => Some(DrumLane::HH),
+                pad => pad_lane(pad),
+            };
+            if let Some(lane) = lane {
+                out.entry(lane).or_default().push(note);
+            }
+        }
+        out
+    }
+}
+
 /// ハイハット以外のパッドのレーン
 fn pad_lane(pad: Pad) -> Option<DrumLane> {
     Some(match pad {
@@ -557,5 +575,18 @@ mod tests {
     fn unknown_notes_are_ignored() {
         let mut n = Normalizer::new(MidiProfile::roland_vdrums());
         assert_eq!(n.feed(on(100, 100), 0), None);
+    }
+
+    #[test]
+    fn lane_notes_group_notes_by_lane() {
+        let mut p = MidiProfile::roland_vdrums();
+        p.apply_lanes(&[(60, DrumLane::HT)]);
+        let lanes = p.lane_notes();
+        assert_eq!(lanes[&DrumLane::SD], vec![37, 38, 40]);
+        assert_eq!(lanes[&DrumLane::HH], vec![22, 42]);
+        assert_eq!(lanes[&DrumLane::HHO], vec![26, 46]);
+        assert_eq!(lanes[&DrumLane::HT], vec![48, 50, 60]);
+        // 割り当ての無いパッド（Aux）は出さない
+        assert!(lanes.values().all(|n| !n.contains(&27)));
     }
 }

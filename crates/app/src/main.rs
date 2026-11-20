@@ -6,9 +6,11 @@
 //! - 電子ドラムが無いときはキーボードで叩ける
 //! - 設定（曲のフォルダ・補正値など）は config.toml に残す
 //! - 画面は DTXManiaNX と同じ画像と配置で描く。画像と音はユーザーの PC にある NX のフォルダから読む
+//! - 起動するとタイトル。そこから選曲と設定へ進む
 
 mod audio;
 mod config;
+mod config_view;
 mod fonts;
 mod game;
 mod gfx;
@@ -24,6 +26,7 @@ mod songs;
 mod stretch;
 mod text;
 mod time;
+mod title_view;
 mod ui;
 
 use std::path::PathBuf;
@@ -40,6 +43,7 @@ use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowId};
 
 use crate::config::Config;
+use crate::config_view::{ConfigAction, ConfigInfo, ConfigInput, ConfigView, Setting};
 use crate::game::{Outcome, Play};
 use crate::gfx::{Canvas, Gfx, Skin};
 use crate::history::History;
@@ -52,6 +56,7 @@ use crate::select::{PREVIEW_WAIT, SelectView};
 use crate::sfx::{Se, Sfx};
 use crate::songs::SongList;
 use crate::time::host_us;
+use crate::title_view::{Ending, TitleItem, TitleView};
 
 struct Gpu {
     surface: wgpu::Surface<'static>,
@@ -193,6 +198,12 @@ impl Gpu {
 
 /// いまの画面
 enum Screen {
+    /// タイトル（動きは App の `title` に持つ。カーソルを覚えておくため）
+    Title,
+    /// 設定。`true` なら出たら選曲へ（F1 で開いたとき）、でなければタイトルへ
+    Config(Box<ConfigView>, bool),
+    /// 終わる前の画面
+    End(Ending),
     Select,
     /// 練習する区間を選ぶ
     Setup(Box<PracticeSetup>),
@@ -229,8 +240,10 @@ struct App {
     view: SelectView,
     /// 画面の効果音
     sfx: Sfx,
-    /// 設定の窓を出している
-    settings_open: bool,
+    /// タイトル画面の動き
+    title: TitleView,
+    /// 終わる（次のイベントでループを抜ける）
+    quit: bool,
     /// 選曲画面で決めたもの（暗くし終えたら始める）
     decided: Option<Decided>,
     /// 選曲画面のマウスホイールの、まだ 1 行に満たない分
@@ -263,15 +276,45 @@ const TOAST_FOR: Duration = Duration::from_millis(1500);
 enum Decided {
     Play(PathBuf),
     Practice(PathBuf),
+    /// タイトルへ戻る
+    Title,
 }
 
-/// 電子ドラムのノート番号の割り当て。Roland の既定に、NX で使っていた割り当てを重ねる
-fn midi_profile(nx: Option<&nx::Install>) -> MidiProfile {
+/// 電子ドラムのノート番号の割り当て。Roland の既定に、NX で使っていた割り当て、設定の画面で変えた割り当ての順に重ねる
+fn midi_profile(nx: Option<&nx::Install>, config: &Config) -> MidiProfile {
     let mut p = MidiProfile::roland_vdrums();
     if let Some(nx) = nx {
         p.apply_lanes(&nx.config.midi_notes());
     }
+    p.apply_lanes(&config.pad_overrides());
     p
+}
+
+/// キーボードの割り当て（DTX Web Editor と同じ並び。Q は HH オープン）
+const KEYBOARD: [(KeyCode, DrumLane); 11] = [
+    (KeyCode::KeyA, DrumLane::LC),
+    (KeyCode::KeyS, DrumLane::HH),
+    (KeyCode::KeyQ, DrumLane::HHO),
+    (KeyCode::KeyZ, DrumLane::LP),
+    (KeyCode::KeyD, DrumLane::SD),
+    (KeyCode::KeyG, DrumLane::HT),
+    (KeyCode::KeyF, DrumLane::BD),
+    (KeyCode::KeyH, DrumLane::LT),
+    (KeyCode::KeyJ, DrumLane::FT),
+    (KeyCode::KeyK, DrumLane::CY),
+    (KeyCode::KeyL, DrumLane::RD),
+];
+
+fn key_lane(code: KeyCode) -> Option<DrumLane> {
+    KEYBOARD.iter().find(|(k, _)| *k == code).map(|(_, l)| *l)
+}
+
+/// レーンを叩くキーボードのキー（設定の画面の説明に出す）
+fn keyboard_key(lane: DrumLane) -> Option<String> {
+    KEYBOARD
+        .iter()
+        .find(|(_, l)| *l == lane)
+        .map(|(k, _)| format!("{k:?}").trim_start_matches("Key").to_owned())
 }
 
 /// NX のフォルダを探す。設定に無ければ、NXT の exe が NX のフォルダに置いてあるか見る
@@ -331,14 +374,14 @@ impl App {
         let gfx = Gfx::new(&egui_ctx, nx.as_ref().map(|n| n.skin.clone()));
         let mut sfx = Sfx::new();
         sfx.load(&gfx.skin);
-        let menu_input = Normalizer::new(midi_profile(nx.as_ref()));
+        let menu_input = Normalizer::new(midi_profile(nx.as_ref(), &config));
         Self {
             window: None,
             gpu: None,
             egui_ctx,
             egui_state: None,
             midi,
-            screen: Screen::Select,
+            screen: Screen::Title,
             songs,
             config,
             history: History::open(),
@@ -350,7 +393,8 @@ impl App {
             gfx,
             view: SelectView::new(),
             sfx,
-            settings_open: false,
+            title: TitleView::new(),
+            quit: false,
             decided: None,
             wheel: 0.0,
             show_play_info: false,
@@ -361,8 +405,33 @@ impl App {
 
     /// 選曲画面に戻る（フェードと登場のアニメから）
     fn go_to_select(&mut self) {
+        self.sfx.stop_title();
         self.screen = Screen::Select;
         self.view.enter();
+    }
+
+    /// タイトルへ（白からのフェードから）
+    fn go_to_title(&mut self) {
+        self.message = None;
+        self.screen = Screen::Title;
+        self.title.enter();
+    }
+
+    /// 設定の画面を開く。`from_select` なら出たら選曲へ戻る
+    fn open_config(&mut self, from_select: bool) {
+        self.sfx.preview(None);
+        self.screen = Screen::Config(Box::new(ConfigView::new()), from_select);
+    }
+
+    /// 終わる前の画面を出す（終わりの音が鳴り終えたら閉じる）
+    fn begin_end(&mut self) {
+        let wait = self.sfx.play_end();
+        self.screen = Screen::End(Ending::new(wait));
+    }
+
+    /// パッドの割り当てが変わったので、メニューの操作に使う割り当ても作り直す
+    fn refresh_pads(&mut self) {
+        self.menu_input = Normalizer::new(midi_profile(self.nx.as_ref(), &self.config));
     }
 
     /// DTXManiaNX のフォルダを使う
@@ -387,7 +456,7 @@ impl App {
         self.config.save();
         self.gfx.skin = Skin::new(&self.egui_ctx, Some(i.skin.clone()));
         self.sfx.load(&self.gfx.skin);
-        self.menu_input = Normalizer::new(midi_profile(Some(&i)));
+        self.menu_input = Normalizer::new(midi_profile(Some(&i), &self.config));
         self.nx = Some(i);
         self.message = None;
         if added {
@@ -438,7 +507,7 @@ impl App {
             )?,
             None => Play::load(path, self.config.input_offset_ms, self.config.drum_sounds)?,
         };
-        p.set_midi_profile(midi_profile(self.nx.as_ref()));
+        p.set_midi_profile(midi_profile(self.nx.as_ref(), &self.config));
         if p.practice.is_some() {
             let band = self
                 .history
@@ -610,10 +679,24 @@ impl App {
     /// 届いた MIDI をすべて処理し、時間を進める
     fn pump(&mut self) {
         self.songs.poll();
+        let mut assigned = None;
         match (&self.midi, &mut self.screen) {
             (Some(midi), Screen::Play(play, _)) => {
                 for raw in midi.drain() {
                     play.on_midi(raw);
+                }
+            }
+            (Some(midi), Screen::Config(view, _)) if view.waiting_pad() => {
+                // パッドの割り当て：次に叩いたノートをそのまま使う
+                let note = midi
+                    .drain()
+                    .filter_map(|raw| match MidiMessage::parse(&raw.bytes)? {
+                        MidiMessage::NoteOn { note, .. } => Some(note),
+                        _ => None,
+                    })
+                    .next();
+                if let Some(note) = note {
+                    assigned = Some(view.pad_hit(note));
                 }
             }
             (Some(midi), _) => {
@@ -638,7 +721,11 @@ impl App {
             }
             _ => {}
         }
+        if let Some(r) = assigned {
+            self.config_response(r);
+        }
         self.pump_loading();
+        self.pump_title();
         if let Screen::Result(_, view) = &mut self.screen {
             for se in view.due_sounds() {
                 self.sfx.play(se);
@@ -682,6 +769,7 @@ impl App {
                 match d {
                     Decided::Play(p) => self.start(p),
                     Decided::Practice(p) => self.open_setup(p, None),
+                    Decided::Title => self.go_to_title(),
                 }
             } else if !self.view.fading_out() {
                 // 選んでから少し待ってプレビューの音を鳴らす（上流 CActSelectPresound）
@@ -698,9 +786,189 @@ impl App {
         self.sfx.poll();
     }
 
-    fn on_key(&mut self, event_loop: &ActiveEventLoop, code: KeyCode) {
+    /// タイトル、設定、終わりの画面を進める
+    fn pump_title(&mut self) {
+        match &mut self.screen {
+            Screen::Title => {
+                if self.title.take_title_sound() {
+                    self.sfx.play_title();
+                }
+                match self.title.faded_out() {
+                    Some(TitleItem::GameStart) => self.go_to_select(),
+                    Some(TitleItem::Config) => self.open_config(false),
+                    _ => {}
+                }
+            }
+            Screen::Config(view, _) => {
+                if let Some(a) = view.poll() {
+                    self.config_action(a);
+                }
+            }
+            Screen::End(e) if e.done() => self.quit = true,
+            _ => {}
+        }
+    }
+
+    fn title_move(&mut self, delta: i32) {
+        if self.title.move_by(delta) {
+            self.sfx.play(Se::Move);
+        }
+    }
+
+    fn title_decide(&mut self) {
+        match self.title.decide() {
+            Some(TitleItem::GameStart) => {
+                // 上流と同じく、GAME START の音が無ければ決定の音
+                let se = if self.sfx.has(Se::GameStart) {
+                    Se::GameStart
+                } else {
+                    Se::Decide
+                };
+                self.sfx.play(se);
+            }
+            Some(TitleItem::Config) => self.sfx.play(Se::Decide),
+            Some(TitleItem::Exit) => {
+                self.sfx.play(Se::Decide);
+                self.begin_end();
+            }
+            None => {}
+        }
+    }
+
+    fn on_title_key(&mut self, code: KeyCode) {
+        match code {
+            KeyCode::ArrowUp => self.title_move(-1),
+            KeyCode::ArrowDown => self.title_move(1),
+            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space => self.title_decide(),
+            // 上流と同じく Esc で終わる
+            KeyCode::Escape => self.begin_end(),
+            _ => {}
+        }
+    }
+
+    /// 設定の画面の操作
+    fn config_input(&mut self, input: ConfigInput) {
+        let Screen::Config(view, _) = &mut self.screen else {
+            return;
+        };
+        let info = config_info(&self.config, self.nx.as_ref(), &self.midi, &self.songs);
+        let items = config_view::items(view.list(), &info);
+        let r = view.input(input, &items);
+        self.config_response(r);
+    }
+
+    fn config_response(&mut self, r: config_view::Response) {
+        if let Some(se) = r.se {
+            self.sfx.play(se);
+        }
+        if let Some(a) = r.action {
+            self.config_action(a);
+        }
+    }
+
+    fn config_action(&mut self, action: ConfigAction) {
+        match action {
+            ConfigAction::ChooseNx => {
+                if let Some(dir) = ui::pick_folder("DTXManiaNX のフォルダを選ぶ") {
+                    self.set_nx(dir);
+                }
+            }
+            ConfigAction::AddSongDir => {
+                if let Some(dir) = ui::pick_folder("曲のフォルダを選ぶ") {
+                    self.add_song_dir(dir);
+                }
+            }
+            ConfigAction::RemoveSongDir(i) => {
+                if i < self.config.song_dirs.len() {
+                    self.config.song_dirs.remove(i);
+                    self.config.save();
+                    self.songs.rescan(self.config.song_dirs.clone());
+                }
+            }
+            ConfigAction::Rescan => {
+                if !self.config.song_dirs.is_empty() {
+                    self.songs.rescan(self.config.song_dirs.clone());
+                }
+            }
+            ConfigAction::ReconnectMidi => {
+                // 先に閉じてから開き直す（同じポートを二重に開かない）
+                self.midi = None;
+                self.midi = MidiIn::open_all()
+                    .map_err(|e| log::warn!("MIDI is off: {e:#}"))
+                    .ok();
+            }
+            ConfigAction::Nudge(s, d) => {
+                let c = &mut self.config;
+                let r = config_view::OFFSET_RANGE;
+                let d = f64::from(d);
+                match s {
+                    Setting::InputAdjust => {
+                        c.input_offset_ms = (c.input_offset_ms.round() + d).clamp(-r, r);
+                    }
+                    Setting::VisualAdjust => {
+                        c.visual_offset_ms = (c.visual_offset_ms.round() + d).clamp(-r, r);
+                    }
+                    Setting::ScrollSpeed => {
+                        // 演奏中の ↑↓ と同じ 0.05 刻み
+                        let steps = (f64::from(c.scroll_px_per_ms) * 20.0).round() + d;
+                        c.scroll_px_per_ms = (steps / 20.0).clamp(0.1, 3.0) as f32;
+                    }
+                    Setting::StageFailed | Setting::HitSound => return,
+                }
+                c.save();
+            }
+            ConfigAction::Toggle(s) => {
+                let c = &mut self.config;
+                match s {
+                    // ON → OFF → NX に従う → ON
+                    Setting::StageFailed => {
+                        c.stage_failed = match c.stage_failed {
+                            Some(true) => Some(false),
+                            Some(false) => None,
+                            None => Some(true),
+                        };
+                    }
+                    Setting::HitSound => c.drum_sounds = !c.drum_sounds,
+                    _ => return,
+                }
+                c.save();
+            }
+            ConfigAction::AssignPad(lane, note) => {
+                self.config.assign_pad(note, lane);
+                self.config.save();
+                self.refresh_pads();
+            }
+            ConfigAction::ResetPads => {
+                self.config.pad_notes.clear();
+                self.config.save();
+                self.refresh_pads();
+            }
+            ConfigAction::Leave => {
+                self.message = None;
+                if matches!(self.screen, Screen::Config(_, true)) {
+                    self.go_to_select();
+                } else {
+                    self.go_to_title();
+                }
+            }
+        }
+    }
+
+    fn on_key(&mut self, code: KeyCode) {
         let at = host_us();
         match &mut self.screen {
+            Screen::Title => self.on_title_key(code),
+            Screen::Config(..) => {
+                let input = match code {
+                    KeyCode::ArrowUp => ConfigInput::Up,
+                    KeyCode::ArrowDown => ConfigInput::Down,
+                    KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space => ConfigInput::Decide,
+                    KeyCode::Escape | KeyCode::Backspace => ConfigInput::Cancel,
+                    _ => return,
+                };
+                self.config_input(input);
+            }
+            Screen::End(_) => {}
             Screen::Loading(_) => {
                 // 上流と同じく Esc で読み込みをやめて選曲に戻る
                 if code == KeyCode::Escape {
@@ -715,7 +983,7 @@ impl App {
                 }
                 self.on_play_key(code);
             }
-            Screen::Select => self.on_select_key(event_loop, code),
+            Screen::Select => self.on_select_key(code),
             Screen::Setup(_) => self.on_setup_key(code),
             Screen::Result(_, view) => match code {
                 KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Escape => {
@@ -872,7 +1140,7 @@ impl App {
 
     /// 選曲画面のマウス：ホイールで動かし、曲バーを押すとそこへ動く（選んでいる曲なら決める）
     fn select_mouse(&mut self, mouse: SelectMouse) {
-        if !matches!(self.screen, Screen::Select) || self.settings_open || self.view.fading_out() {
+        if !matches!(self.screen, Screen::Select) || self.view.fading_out() {
             self.wheel = 0.0;
             return;
         }
@@ -890,18 +1158,13 @@ impl App {
         }
     }
 
-    fn on_select_key(&mut self, event_loop: &ActiveEventLoop, code: KeyCode) {
-        if code == KeyCode::F1 {
-            self.settings_open = !self.settings_open;
-            return;
-        }
-        if self.settings_open {
-            if code == KeyCode::Escape {
-                self.settings_open = false;
-            }
-            return;
-        }
+    fn on_select_key(&mut self, code: KeyCode) {
         if self.view.fading_out() {
+            return;
+        }
+        if code == KeyCode::F1 {
+            self.sfx.play(Se::Decide);
+            self.open_config(true);
             return;
         }
         let delta = match code {
@@ -921,11 +1184,14 @@ impl App {
             }
             KeyCode::Backspace => self.select_action(ui::SelectAction::Back),
             KeyCode::Escape => {
+                self.sfx.play(Se::Cancel);
                 if self.songs.back() {
                     self.view.jumped();
-                    self.sfx.play(Se::Cancel);
                 } else {
-                    event_loop.exit();
+                    // 上流と同じく一番上で Esc ならタイトルへ
+                    self.sfx.preview(None);
+                    self.decided = Some(Decided::Title);
+                    self.view.fade_out();
                 }
             }
             KeyCode::ArrowLeft => self.change_level(-1),
@@ -940,8 +1206,25 @@ impl App {
     /// HT で上、LT で下、CY か RD で決定、LC で戻る、HH を 2 回で難易度
     fn on_menu_pad(&mut self, lane: DrumLane, at_us: i64) {
         match &self.screen {
+            Screen::Title => match lane {
+                DrumLane::HT => self.title_move(-1),
+                DrumLane::LT => self.title_move(1),
+                DrumLane::CY | DrumLane::RD => self.title_decide(),
+                _ => {}
+            },
+            Screen::Config(..) => {
+                let input = match lane {
+                    DrumLane::HT => ConfigInput::Up,
+                    DrumLane::LT => ConfigInput::Down,
+                    DrumLane::CY | DrumLane::RD => ConfigInput::Decide,
+                    DrumLane::LC => ConfigInput::Cancel,
+                    _ => return,
+                };
+                self.config_input(input);
+            }
+            Screen::End(_) => {}
             Screen::Select => {
-                if self.view.fading_out() || self.settings_open {
+                if self.view.fading_out() {
                     return;
                 }
                 match lane {
@@ -1037,18 +1320,6 @@ impl App {
                     self.sfx.play(Se::Cancel);
                 }
             }
-            A::AddFolder => {
-                if let Some(dir) = ui::pick_folder("曲のフォルダを選ぶ") {
-                    self.add_song_dir(dir);
-                }
-            }
-            A::RemoveFolder(i) => {
-                if i < self.config.song_dirs.len() {
-                    self.config.song_dirs.remove(i);
-                    self.config.save();
-                    self.songs.rescan(self.config.song_dirs.clone());
-                }
-            }
             A::Rescan => {
                 if !self.config.song_dirs.is_empty() {
                     self.songs.rescan(self.config.song_dirs.clone());
@@ -1062,12 +1333,6 @@ impl App {
                     self.view.fade_out();
                 }
             }
-            A::ChooseNx => {
-                if let Some(dir) = ui::pick_folder("DTXManiaNX のフォルダを選ぶ") {
-                    self.set_nx(dir);
-                }
-            }
-            A::CloseSettings => self.settings_open = false,
         }
     }
 
@@ -1137,7 +1402,6 @@ impl App {
             .as_ref()
             .map(|m| m.ports.clone())
             .unwrap_or_default();
-        let mut select_actions = Vec::new();
         let mut mouse = SelectMouse::default();
         let mut setup_actions = Vec::new();
         let mut result_actions = Vec::new();
@@ -1146,30 +1410,44 @@ impl App {
             .as_ref()
             .filter(|(_, at)| at.elapsed() < TOAST_FOR)
             .map(|(t, _)| t.clone());
+        let scanning = self.songs.scanning().is_some();
         let output = self.egui_ctx.run_ui(input, |ui| match &mut self.screen {
+            Screen::Title => {
+                let ctx = ui.ctx().clone();
+                let painter = ctx.layer_painter(egui::LayerId::background());
+                let c = Canvas::new(&painter, ctx.content_rect());
+                self.gfx.begin(&c, ctx.pixels_per_point());
+                self.title.draw(&c, &mut self.gfx, scanning);
+            }
+            Screen::Config(view, _) => {
+                let ctx = ui.ctx().clone();
+                let painter = ctx.layer_painter(egui::LayerId::background());
+                let c = Canvas::new(&painter, ctx.content_rect());
+                self.gfx.begin(&c, ctx.pixels_per_point());
+                let info = config_info(&self.config, self.nx.as_ref(), &self.midi, &self.songs);
+                let items = config_view::items(view.list(), &info);
+                view.draw(&c, &mut self.gfx, &items, scanning);
+                if let Some(m) = &self.message {
+                    ui::message_overlay(&ctx, m);
+                }
+            }
+            Screen::End(e) => {
+                let ctx = ui.ctx().clone();
+                let painter = ctx.layer_painter(egui::LayerId::background());
+                let c = Canvas::new(&painter, ctx.content_rect());
+                self.gfx.begin(&c, ctx.pixels_per_point());
+                e.draw(&c, &mut self.gfx);
+            }
             Screen::Select => {
                 let ctx = ui.ctx().clone();
                 let painter = ctx.layer_painter(egui::LayerId::background());
                 let c = Canvas::new(&painter, ctx.content_rect());
                 self.gfx.begin(&c, ctx.pixels_per_point());
                 self.view.draw(&c, &mut self.gfx, &self.songs);
-                if self.settings_open {
-                    select_actions = ui::draw_settings(
-                        &ctx,
-                        &ui::SettingsInfo {
-                            config: &self.config,
-                            skin: self.gfx.skin.dir(),
-                            songs: &self.songs,
-                            midi_ports: &ports,
-                            message: self.message.as_deref(),
-                        },
-                    );
-                } else {
-                    if let Some(m) = &self.message {
-                        ui::message_overlay(&ctx, m);
-                    }
-                    mouse = SelectMouse::read(&ctx, &c);
+                if let Some(m) = &self.message {
+                    ui::message_overlay(&ctx, m);
                 }
+                mouse = SelectMouse::read(&ctx, &c);
             }
             Screen::Setup(s) => setup_actions = ui::draw_setup(ui, s),
             Screen::Loading(l) => {
@@ -1228,9 +1506,6 @@ impl App {
         if let Some(gpu) = &mut self.gpu {
             gpu.render(&self.egui_ctx, output);
         }
-        for a in select_actions {
-            self.select_action(a);
-        }
         self.select_mouse(mouse);
         for a in setup_actions {
             self.setup_action(a);
@@ -1241,22 +1516,22 @@ impl App {
     }
 }
 
-/// キーボードの割り当て（DTX Web Editor と同じ並び。Q は HH オープン）
-fn key_lane(code: KeyCode) -> Option<DrumLane> {
-    Some(match code {
-        KeyCode::KeyA => DrumLane::LC,
-        KeyCode::KeyS => DrumLane::HH,
-        KeyCode::KeyQ => DrumLane::HHO,
-        KeyCode::KeyZ => DrumLane::LP,
-        KeyCode::KeyD => DrumLane::SD,
-        KeyCode::KeyG => DrumLane::HT,
-        KeyCode::KeyF => DrumLane::BD,
-        KeyCode::KeyH => DrumLane::LT,
-        KeyCode::KeyJ => DrumLane::FT,
-        KeyCode::KeyK => DrumLane::CY,
-        KeyCode::KeyL => DrumLane::RD,
-        _ => return None,
-    })
+/// 設定の画面の項目を作るのに要るもの
+fn config_info<'a>(
+    config: &'a Config,
+    nx: Option<&'a nx::Install>,
+    midi: &'a Option<MidiIn>,
+    songs: &SongList,
+) -> ConfigInfo<'a> {
+    ConfigInfo {
+        config,
+        nx_root: nx.map(|n| n.root.as_path()),
+        nx_stage_failed: nx.and_then(|n| n.config.stage_failed),
+        lanes: midi_profile(nx, config).lane_notes(),
+        midi_ports: midi.as_ref().map_or(&[], |m| m.ports.as_slice()),
+        scanning: songs.scanning(),
+        song_count: songs.library.songs,
+    }
 }
 
 impl ApplicationHandler for App {
@@ -1320,10 +1595,14 @@ impl ApplicationHandler for App {
             WindowEvent::DroppedFile(path) => self.on_drop(path),
             WindowEvent::KeyboardInput { event, .. } => {
                 if event.state == ElementState::Pressed
-                    && !event.repeat
                     && let PhysicalKey::Code(code) = event.physical_key
                 {
-                    self.on_key(event_loop, code);
+                    // 押し続けたときの繰り返しは、設定の画面の ↑↓ だけ（上流のキーの反復と同じ）
+                    let repeat_ok = matches!(self.screen, Screen::Config(..))
+                        && matches!(code, KeyCode::ArrowUp | KeyCode::ArrowDown);
+                    if !event.repeat || repeat_ok {
+                        self.on_key(code);
+                    }
                 }
             }
             WindowEvent::RedrawRequested => {
@@ -1335,11 +1614,17 @@ impl ApplicationHandler for App {
             }
             _ => {}
         }
+        if self.quit {
+            event_loop.exit();
+        }
     }
 
-    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         // 叩いた音をすぐ鳴らすため、描画を待たずに MIDI を処理する
         self.pump();
+        if self.quit {
+            event_loop.exit();
+        }
     }
 }
 
