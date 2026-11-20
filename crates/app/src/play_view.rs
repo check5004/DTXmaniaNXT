@@ -17,7 +17,7 @@ use egui::Color32;
 use engine::judge::{Judgement, Tally};
 
 use crate::game::{Fx, Play};
-use crate::gfx::{Canvas, Gfx, Glyphs, Opt, Src, fit_scale, src};
+use crate::gfx::{Canvas, Gfx, Glyphs, Opt, Src, Tex, fit_scale, src};
 use crate::text::Style;
 
 /// 判定の線の y（上流 `nJudgeLinePosY.Drums` の既定）
@@ -356,11 +356,71 @@ pub struct PlayView {
     rng: Rng,
     /// STAGE FAILED を始めた時刻と、そのときの曲の時刻（譜面はそこで止める）
     failed: Option<(Instant, f64)>,
+    /// 早く叩いた数と遅く叩いた数（上流 `nTimingHitCount`。見逃しは数えない）
+    early: u32,
+    late: u32,
+    lag_digits: LagDigits,
+}
+
+/// 判定のずれの数字の出し方（NX の `ShowLagTime` と `ShowLagTimeColor`）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LagDigits {
+    pub show: LagShow,
+    /// 早いを赤、遅いを青にする（NX の既定は逆）
+    pub swapped: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LagShow {
+    Off,
+    On,
+    /// PERFECT 以外だけ
+    NotPerfect,
+}
+
+impl LagDigits {
+    /// NX の Config.ini から。NX の設定が無ければ出す
+    pub fn from_nx(c: Option<&nx::NxConfig>) -> Self {
+        let show = match c.map(|c| c.show_lag_time) {
+            None => LagShow::On,
+            Some(Some(0)) => LagShow::Off,
+            Some(Some(2)) => LagShow::NotPerfect,
+            // 上流の既定は出さない（0）
+            Some(None) => LagShow::Off,
+            Some(Some(_)) => LagShow::On,
+        };
+        Self {
+            show,
+            swapped: c.is_some_and(|c| c.lag_color_swapped),
+        }
+    }
+
+    fn shows(self, j: Judgement) -> bool {
+        match self.show {
+            LagShow::Off => false,
+            LagShow::On => true,
+            LagShow::NotPerfect => j != Judgement::Perfect,
+        }
+    }
+}
+
+/// 演奏を終えたときの数字（結果の画面と記録に渡す）
+#[derive(Debug, Clone, PartialEq)]
+pub struct Finish {
+    pub score: i64,
+    /// 達成率（練習は 0）
+    pub rate: f64,
+    /// 進み具合のバー（上流の score.ini と同じ 64 文字）
+    pub progress: String,
+    pub early: u32,
+    pub late: u32,
+    /// 7_Difficulty.png の切り出しの左上
+    pub diff_panel: (f32, f32),
 }
 
 impl PlayView {
     /// `label` は選んだ難易度の名前（set.def の `#L1LABEL` など。無ければ空）
-    pub fn new(play: &Play, skin_dir: Option<&Path>, label: &str) -> Self {
+    pub fn new(play: &Play, skin_dir: Option<&Path>, label: &str, lag_digits: LagDigits) -> Self {
         let now = Instant::now();
         let mut sections = [Section::default(); SECTIONS];
         if play.practice.is_none() {
@@ -397,6 +457,26 @@ impl PlayView {
             notes: play.judge.notes().len(),
             rng: Rng::new(),
             failed: None,
+            early: 0,
+            late: 0,
+            lag_digits,
+        }
+    }
+
+    /// 演奏を終えたときの数字。`now_ms` は曲の時刻（ここまでの区間をたどり着いたことにする）
+    pub fn finish(&self, play: &Play, now_ms: f64) -> Finish {
+        let practice = play.practice.is_some();
+        Finish {
+            score: self.score.truth as i64,
+            rate: self.rate(practice),
+            progress: if practice {
+                String::new()
+            } else {
+                progress_text(&self.sections, play.last_chip_ms, now_ms)
+            },
+            early: self.early,
+            late: self.late,
+            diff_panel: self.diff_panel,
         }
     }
 
@@ -438,6 +518,11 @@ impl PlayView {
                     note_ms,
                 } => {
                     let l = Lane::of(lane);
+                    match offset_ms {
+                        Some(o) if o > 0.0 => self.late += 1,
+                        Some(_) => self.early += 1,
+                        None => {}
+                    }
                     self.judges[l.i()] = Some(JudgeShow {
                         judgement,
                         lag: offset_ms.map(|o| o as i64),
@@ -515,29 +600,12 @@ impl PlayView {
 
     /// XG のスコア（上流 `tProcessChipHit` の「100万/{1275+50×(総ノーツ数-50)}」）
     fn add_score(&mut self, j: Judgement, now: Instant) {
-        let n = self.notes as f64;
-        let base = 1_000_000.0 / (1275.0 + 50.0 * (n - 50.0));
-        let combo = f64::from(self.tally.combo);
-        let mut delta = match j {
-            Judgement::Perfect if combo < n => base,
-            // 最後まで全部 PERFECT なら 100 万に合わせる
-            Judgement::Perfect if f64::from(self.tally.perfect) >= n => {
-                1_000_000.0 - self.score.truth
-            }
-            Judgement::Great => base * 0.5,
-            Judgement::Good => base * 0.2,
-            _ => 0.0,
-        };
-        if combo < 50.0 {
-            delta *= combo;
-        } else if combo != n && f64::from(self.tally.perfect) != n {
-            delta *= 50.0;
-        }
+        let s = &mut self.score;
+        let delta = score_delta(j, &self.tally, self.notes, s.truth);
         if delta <= 0.0 {
             return;
         }
-        let s = &mut self.score;
-        s.truth += delta.trunc();
+        s.truth = (s.truth + delta).min(MAX_SCORE);
         s.step = (((s.truth - s.shown as f64) / 20.0) as i64).max(1);
         s.at = now;
     }
@@ -847,8 +915,7 @@ impl PlayView {
             below = top;
             let blocks = ((f64::from(s.notes) / per_block) as u32 + 1).min(10);
             let w = blocks as f32 * 2.0;
-            let end_ms = (i as f64 + 1.0) * play.last_chip_ms / SECTIONS as f64 - 1.0;
-            let color = if end_ms > now_ms {
+            let color = if section_end_ms(i, play.last_chip_ms) > now_ms {
                 Color32::from_white_alpha(64)
             } else if s.notes == 0 {
                 continue;
@@ -905,20 +972,9 @@ impl PlayView {
             s.shown = (s.shown + s.step).min(s.truth as i64);
             s.at += STEP;
         }
-        let Some(t) = g.skin.tex("Graphics/7_score numbersGD.png") else {
-            return;
-        };
-        for (i, ch) in format!("{:>7}", s.shown).chars().enumerate() {
-            if let Some(d) = ch.to_digit(10) {
-                c.part(
-                    &t,
-                    40.0 + i as f32 * 34.0,
-                    41.0,
-                    src(d as f32 * 36.0, 0.0, 36.0, 50.0),
-                );
-            }
+        if let Some(t) = g.skin.tex("Graphics/7_score numbersGD.png") {
+            draw_score_digits(c, &t, 40.0, 41.0, 13.0, s.shown);
         }
-        c.part(&t, 40.0, 13.0, src(0.0, 50.0, 86.0, 28.0));
     }
 
     /// STAGE FAILED（上流 `CActPerfStageFailure`：7_stage_failed.jpg の左右の半分が真ん中へ閉じる）
@@ -942,76 +998,17 @@ impl PlayView {
 
     /// 左のパネル（上流 `CActPerfDrumsStatusPanel`）
     fn draw_status(&self, c: &Canvas, g: &mut Gfx, play: &Play, practice: bool) {
-        const X: f32 = 22.0;
-        const Y: f32 = 250.0;
-        if let Some(t) = g.skin.tex("Graphics/7_SkillPanel.png") {
-            c.draw(&t, X, Y);
-        }
-        // 名前（上流は Config.ini の名前、無ければ GUEST）
-        if let Some(t) = g.texts.get("GUEST", &Style::plain(20.0, Color32::WHITE)) {
-            t.draw(c, X - 2.0, Y + 26.0, 1.0, 1.0);
-        }
-        let small = g.skin.tex("Graphics/7_Ratenumber_s.png");
-        let large = g.skin.tex("Graphics/7_Ratenumber_l.png");
-        let t = &self.tally;
-        let judged = t.perfect + t.great + t.good + t.poor + t.miss;
-        // 割合は判定した数に対して（練習でも、ここまでの周の割合になる）
-        let percent = |n: u32| {
-            if judged == 0 {
-                0.0
-            } else {
-                (100.0 * f64::from(n) / f64::from(judged)).round()
-            }
-        };
-        let rows = [t.perfect, t.great, t.good, t.poor, t.miss, t.max_combo];
-        for (k, n) in rows.into_iter().enumerate() {
-            let y = Y + 72.0 + k as f32 * 30.0;
-            SMALL.draw(c, small.as_ref(), X + 80.0, y, &format!("{n:>4}"));
-            SMALL.draw(
-                c,
-                small.as_ref(),
-                X + 167.0,
-                y,
-                &format!("{:>3}%", percent(n)),
-            );
-        }
-        let rate = self.rate(practice);
-        if rate >= 100.0 {
-            if let Some(t) = g.skin.tex("Graphics/7_skill max.png") {
-                c.draw(&t, X + 127.0, Y + 277.0);
-            }
-        } else {
-            LARGE.draw(
-                c,
-                large.as_ref(),
-                X + 58.0,
-                Y + 277.0,
-                &format!("{rate:>6.2}"),
-            );
-            if let Some(t) = g.skin.tex("Graphics/7_RatePercent_l.png") {
-                c.draw(&t, X + 217.0, Y + 287.0);
-            }
-        }
-        let level = play.level.unwrap_or(0.0);
-        let skill = rate * level * 0.2;
-        LARGE.draw(
+        draw_skill_panel(
             c,
-            large.as_ref(),
-            X + 88.0,
-            Y + 363.0,
-            &format!("{skill:>6.2}"),
-        );
-        if let Some(t) = g.skin.tex("Graphics/7_Difficulty.png") {
-            let (sx, sy) = self.diff_panel;
-            c.part(&t, X + 14.0, Y + 266.0, src(sx, sy, 60.0, 60.0));
-        }
-        let digits = g.skin.tex("Graphics/7_LevelNumber.png");
-        LEVEL.draw(
-            c,
-            digits.as_ref(),
-            X + 18.0,
-            Y + 290.0,
-            &format!("{level:.2}"),
+            g,
+            (22.0, 250.0),
+            &PanelNumbers {
+                tally: &self.tally,
+                rate: self.rate(practice),
+                level: play.level.unwrap_or(0.0),
+                diff_panel: self.diff_panel,
+            },
+            &LARGE,
         );
     }
 
@@ -1142,6 +1139,7 @@ impl PlayView {
     fn draw_judges(&mut self, c: &Canvas, g: &Gfx, now: Instant) {
         let strings = g.skin.tex("Graphics/7_judge strings.png");
         let lag = g.skin.tex("Graphics/7_lag numbers.png");
+        let digits = self.lag_digits;
         for (i, slot) in self.judges.iter_mut().enumerate() {
             let Some(j) = *slot else { continue };
             let frame = count(j.start, now, 14.0);
@@ -1166,7 +1164,9 @@ impl PlayView {
                     ),
                 );
             }
-            if let (Some(t), Some(ms)) = (&lag, j.lag) {
+            if let (Some(t), Some(ms)) = (&lag, j.lag)
+                && digits.shows(j.judgement)
+            {
                 let text = ms.to_string();
                 let mut x = (xc - text.len() as i32 * 15 / 2) as f32;
                 for ch in text.chars() {
@@ -1175,8 +1175,12 @@ impl PlayView {
                     } else {
                         ch.to_digit(10).unwrap_or(0) as i32
                     };
-                    // 遅れ（プラス）は右下の色の数字
-                    let (ox, oy) = if ms < 0 { (0.0, 0.0) } else { (64.0, 64.0) };
+                    // 早い（マイナス）は左上の色、遅い（プラス）は右下の色の数字（入れ替えの設定なら逆）
+                    let (ox, oy) = if (ms < 0) != digits.swapped {
+                        (0.0, 0.0)
+                    } else {
+                        (64.0, 64.0)
+                    };
                     let s = src(
                         ox + (p % 4) as f32 * 15.0,
                         oy + (p / 4) as f32 * 19.0,
@@ -1289,6 +1293,139 @@ const FAIL_CLOSE: f64 = 200.0;
 /// STAGE FAILED を出しておく時間（上流は 2 ミリ秒 × 1000）
 const FAIL_FOR: Duration = Duration::from_millis(2000);
 
+/// 7_SkillPanel.png に出す数字
+pub struct PanelNumbers<'a> {
+    pub tally: &'a Tally,
+    /// 達成率（0〜100）
+    pub rate: f64,
+    pub level: f64,
+    /// 7_Difficulty.png の切り出しの左上
+    pub diff_panel: (f32, f32),
+}
+
+/// 7_SkillPanel.png と、判定の数と割合、達成率、スキル、難易度とレベル。
+/// 演奏の画面（上流 `CActPerfDrumsStatusPanel`）と結果の画面（`CActResultParameterPanel`）は
+/// 置く場所と大きい数字の送りだけが違う
+pub fn draw_skill_panel(
+    c: &Canvas,
+    g: &mut Gfx,
+    (x, y): (f32, f32),
+    n: &PanelNumbers<'_>,
+    large: &Glyphs<'_>,
+) {
+    if let Some(t) = g.skin.tex("Graphics/7_SkillPanel.png") {
+        c.draw(&t, x, y);
+    }
+    // 名前（上流は Config.ini の名前、無ければ GUEST）
+    if let Some(t) = g.texts.get("GUEST", &Style::plain(20.0, Color32::WHITE)) {
+        t.draw(c, x - 2.0, y + 26.0, 1.0, 1.0);
+    }
+    let small = g.skin.tex("Graphics/7_Ratenumber_s.png");
+    let large_tex = g.skin.tex("Graphics/7_Ratenumber_l.png");
+    let t = n.tally;
+    let judged = t.perfect + t.great + t.good + t.poor + t.miss;
+    // 割合は判定した数に対して（練習でも、ここまでの周の割合になる）
+    let percent = |k: u32| {
+        if judged == 0 {
+            0.0
+        } else {
+            (100.0 * f64::from(k) / f64::from(judged)).round()
+        }
+    };
+    let rows = [t.perfect, t.great, t.good, t.poor, t.miss, t.max_combo];
+    for (k, count) in rows.into_iter().enumerate() {
+        let ry = y + 72.0 + k as f32 * 30.0;
+        SMALL.draw(c, small.as_ref(), x + 80.0, ry, &format!("{count:>4}"));
+        SMALL.draw(
+            c,
+            small.as_ref(),
+            x + 167.0,
+            ry,
+            &format!("{:>3}%", percent(count)),
+        );
+    }
+    if n.rate >= 100.0 {
+        if let Some(t) = g.skin.tex("Graphics/7_skill max.png") {
+            c.draw(&t, x + 127.0, y + 277.0);
+        }
+    } else {
+        large.draw(
+            c,
+            large_tex.as_ref(),
+            x + 58.0,
+            y + 277.0,
+            &format!("{:>6.2}", n.rate),
+        );
+        if let Some(t) = g.skin.tex("Graphics/7_RatePercent_l.png") {
+            c.draw(&t, x + 217.0, y + 287.0);
+        }
+    }
+    let skill = n.rate * n.level * 0.2;
+    large.draw(
+        c,
+        large_tex.as_ref(),
+        x + 88.0,
+        y + 363.0,
+        &format!("{skill:>6.2}"),
+    );
+    if let Some(t) = g.skin.tex("Graphics/7_Difficulty.png") {
+        let (sx, sy) = n.diff_panel;
+        c.part(&t, x + 14.0, y + 266.0, src(sx, sy, 60.0, 60.0));
+    }
+    let digits = g.skin.tex("Graphics/7_LevelNumber.png");
+    LEVEL.draw(
+        c,
+        digits.as_ref(),
+        x + 18.0,
+        y + 290.0,
+        &format!("{:.2}", n.level),
+    );
+}
+
+/// 7_score numbersGD.png のスコア（7 桁の右寄せ）と「SCORE」の文字
+pub fn draw_score_digits(c: &Canvas, t: &Tex, x: f32, y: f32, label_y: f32, score: i64) {
+    for (i, ch) in format!("{score:>7}").chars().enumerate() {
+        if let Some(d) = ch.to_digit(10) {
+            c.part(
+                t,
+                x + i as f32 * 34.0,
+                y,
+                src(d as f32 * 36.0, 0.0, 36.0, 50.0),
+            );
+        }
+    }
+    c.part(t, x, label_y, src(0.0, 50.0, 86.0, 28.0));
+}
+
+/// XG のスコアの満点
+const MAX_SCORE: f64 = 1_000_000.0;
+
+/// XG のスコアの増え方（上流 `tProcessChipHit` の「100万/{1275+50×(総ノーツ数-50)}」）。
+/// `tally` は今の判定を数えたあと、`truth` は今までの本当の点数。
+/// 上流は音符が 50 より少ない曲で 100 万を超えるので、100 万で止める
+fn score_delta(j: Judgement, tally: &Tally, notes: usize, truth: f64) -> f64 {
+    let n = notes as f64;
+    let base = MAX_SCORE / (1275.0 + 50.0 * (n - 50.0));
+    let combo = f64::from(tally.combo);
+    let all_perfect = f64::from(tally.perfect) >= n;
+    let delta = match j {
+        Judgement::Perfect if combo < n => base,
+        // 最後まで全部 PERFECT なら 100 万に合わせる
+        Judgement::Perfect if all_perfect => return (MAX_SCORE - truth).max(0.0),
+        Judgement::Great => base * 0.5,
+        Judgement::Good => base * 0.2,
+        _ => 0.0,
+    };
+    let delta = if combo < 50.0 {
+        delta * combo
+    } else if combo != n && !all_perfect {
+        delta * 50.0
+    } else {
+        delta
+    };
+    delta.trunc().min(MAX_SCORE - truth).max(0.0)
+}
+
 /// XG のゲージの増減（上流 `CActPerfCommonGauge.Damage`、ダメージは普通）
 fn gauge_delta(j: Judgement) -> f64 {
     match j {
@@ -1306,6 +1443,31 @@ fn section_of(ms: f64, last_ms: f64) -> usize {
         return 0;
     }
     ((ms * SECTIONS as f64 / last_ms).max(0.0) as usize).min(SECTIONS - 1)
+}
+
+/// 区間 `i` の終わりの時刻（上流は「(i + 1) × 最後のチップの時刻 / 64 − 1」を過ぎたらたどり着いたとする）
+fn section_end_ms(i: usize, last_ms: f64) -> f64 {
+    (i as f64 + 1.0) * last_ms / SECTIONS as f64 - 1.0
+}
+
+/// 進み具合のバーの文字列（上流 `GetScoreIniString`）。
+/// '0' はたどり着いていない、'1' は取りこぼしあり、'2' は全部叩けた、'3' は音符なし
+fn progress_text(sections: &[Section], last_ms: f64, now_ms: f64) -> String {
+    sections
+        .iter()
+        .enumerate()
+        .map(|(i, s)| {
+            if section_end_ms(i, last_ms) > now_ms {
+                '0'
+            } else if s.notes == 0 {
+                '3'
+            } else if s.hits >= s.notes {
+                '2'
+            } else {
+                '1'
+            }
+        })
+        .collect()
 }
 
 /// 画面の中心を原点に y を上にした座標 (x, y) を、原点のまわりに `angle` 回して、画面の座標にする（上流の `tDraw3D`）
@@ -1359,6 +1521,11 @@ static SMALL: LazyLock<Glyphs<'static>> = LazyLock::new(|| Glyphs {
 static LARGE: LazyLock<Glyphs<'static>> = LazyLock::new(|| Glyphs {
     table: Box::leak(glyph_table(28.0, 42.0, 29.0, &[('.', 280.0)], 10.0, 12.0).into_boxed_slice()),
     missing: 29.0,
+});
+/// 結果の画面の 7_Ratenumber_l.png の文字（上流 `CActResultParameterPanel.tDrawStringLarge`：送りは 28）
+pub static LARGE_RESULT: LazyLock<Glyphs<'static>> = LazyLock::new(|| Glyphs {
+    table: Box::leak(glyph_table(28.0, 42.0, 28.0, &[('.', 280.0)], 10.0, 12.0).into_boxed_slice()),
+    missing: 28.0,
 });
 /// 7_LevelNumber.png の文字（上流 `st難易度数字位置`：16×32、点は幅 5 で送り 5）
 static LEVEL: LazyLock<Glyphs<'static>> = LazyLock::new(|| Glyphs {
@@ -1430,6 +1597,71 @@ mod tests {
         assert_eq!(section_of(1_000.0, 64_000.0), 1);
         assert_eq!(section_of(64_000.0, 64_000.0), 63);
         assert_eq!(section_of(-5.0, 64_000.0), 0);
+    }
+
+    #[test]
+    fn lag_digits_follow_the_nx_config() {
+        let on = LagDigits::from_nx(None);
+        assert_eq!(on.show, LagShow::On);
+        assert!(!on.swapped);
+        // NX の既定（書いていない、または 0）は出さない
+        let c = nx::NxConfig::parse("[System]\n");
+        assert_eq!(LagDigits::from_nx(Some(&c)).show, LagShow::Off);
+        let c = nx::NxConfig::parse("[System]\nShowLagTime=2\nShowLagTimeColor=1\n");
+        let d = LagDigits::from_nx(Some(&c));
+        assert_eq!(d.show, LagShow::NotPerfect);
+        assert!(d.swapped);
+        assert!(!d.shows(Judgement::Perfect));
+        assert!(d.shows(Judgement::Great));
+    }
+
+    /// 全部 PERFECT で叩いたときのスコア
+    fn all_perfect_score(notes: usize) -> f64 {
+        let mut t = Tally::default();
+        let mut truth = 0.0;
+        for _ in 0..notes {
+            t.add(Judgement::Perfect);
+            truth = (truth + score_delta(Judgement::Perfect, &t, notes, truth)).min(MAX_SCORE);
+        }
+        truth
+    }
+
+    #[test]
+    fn all_perfect_is_exactly_a_million() {
+        assert_eq!(all_perfect_score(37), MAX_SCORE);
+        assert_eq!(all_perfect_score(50), MAX_SCORE);
+        assert_eq!(all_perfect_score(400), MAX_SCORE);
+        assert_eq!(all_perfect_score(1234), MAX_SCORE);
+    }
+
+    #[test]
+    fn score_grows_with_the_combo_up_to_50() {
+        let mut t = Tally::default();
+        t.add(Judgement::Perfect);
+        t.add(Judgement::Perfect);
+        // 400 音符：100 万 / (1275 + 50 × 350) = 53.28…、コンボ 2 なら 2 倍
+        assert_eq!(score_delta(Judgement::Perfect, &t, 400, 0.0), 106.0);
+        assert_eq!(score_delta(Judgement::Great, &t, 400, 0.0), 53.0);
+        assert_eq!(score_delta(Judgement::Miss, &t, 400, 0.0), 0.0);
+    }
+
+    #[test]
+    fn progress_text_marks_each_section() {
+        let mut sections = [Section::default(); SECTIONS];
+        sections[0] = Section { notes: 4, hits: 4 };
+        sections[1] = Section { notes: 4, hits: 3 };
+        sections[2] = Section { notes: 4, hits: 0 };
+        // 区間 3 は音符なし
+        sections[4] = Section { notes: 1, hits: 1 };
+        // 64 秒の曲の 4.5 秒まで：区間 0〜3 にたどり着いた
+        let t = progress_text(&sections, 64_000.0, 4_500.0);
+        assert_eq!(t.len(), SECTIONS);
+        assert_eq!(&t[..6], "211300");
+        assert!(t[4..].chars().all(|c| c == '0'));
+        // 最後まで
+        let t = progress_text(&sections, 64_000.0, 66_000.0);
+        assert_eq!(&t[..5], "21132");
+        assert!(t[5..].chars().all(|c| c == '3'));
     }
 
     #[test]

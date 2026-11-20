@@ -149,10 +149,10 @@ pub fn draw_result(ui: &mut egui::Ui, o: &Outcome, config: &Config) -> Vec<Resul
         return draw_practice_result(ui, o, p);
     }
     let mut actions = Vec::new();
-    egui::CentralPanel::default().show(ui, |ui| {
+    result_page(ui, |ui| {
         egui::ScrollArea::vertical().show(ui, |ui| {
             ui.vertical_centered(|ui| {
-                ui.add_space(40.0);
+                ui.add_space(8.0);
                 ui.heading(RichText::new(&o.title).size(28.0));
                 if !o.artist.is_empty() {
                     ui.label(&o.artist);
@@ -246,6 +246,34 @@ pub fn draw_result(ui: &mut egui::Ui, o: &Outcome, config: &Config) -> Vec<Resul
         });
     });
     actions
+}
+
+/// 結果の 2 ページ目の枠。NX の結果の背景の上に、半透明の黒い板を真ん中に置く
+fn result_page(ui: &mut egui::Ui, body: impl FnOnce(&mut egui::Ui)) {
+    egui::CentralPanel::default()
+        .frame(egui::Frame::NONE.inner_margin(egui::Margin {
+            left: 16,
+            right: 16,
+            top: 16,
+            bottom: 40,
+        }))
+        .show(ui, |ui| {
+            let width = ui.available_width().min(1000.0);
+            let height = ui.available_height();
+            ui.vertical_centered(|ui| {
+                egui::Frame::new()
+                    .fill(Color32::from_black_alpha(215))
+                    .corner_radius(6.0)
+                    .inner_margin(egui::Margin::same(16))
+                    .show(ui, |ui| {
+                        ui.set_width(width - 32.0);
+                        ui.set_max_height(height - 32.0);
+                        // 背景が透けるので、文字を明るくする（弱い文字はこれを薄めた色になる）
+                        ui.visuals_mut().override_text_color = Some(Color32::from_gray(225));
+                        body(ui);
+                    });
+            });
+        });
 }
 
 /// 練習でクリアした区間を、今回のプレイで克服したか
@@ -381,9 +409,9 @@ fn tendency_color(mean_ms: f64) -> Color32 {
 /// 練習の結果。周ごとの成績を並べる
 fn draw_practice_result(ui: &mut egui::Ui, o: &Outcome, p: &PracticeOutcome) -> Vec<ResultAction> {
     let mut actions = Vec::new();
-    egui::CentralPanel::default().show(ui, |ui| {
+    result_page(ui, |ui| {
         ui.vertical_centered(|ui| {
-            ui.add_space(32.0);
+            ui.add_space(8.0);
             ui.heading(RichText::new(&o.title).size(28.0));
             if !o.artist.is_empty() {
                 ui.label(&o.artist);
