@@ -1,4 +1,4 @@
-//! 画面。egui で描く。選曲・練習の区間選び・プレイ（練習中も）・結果。
+//! 画面。egui で描く。結果の 2 ページ目（分析）と、演奏中の情報の窓、知らせ。
 //! 画面の関数は状態を変えず、押されたものを返す（変えるのは main.rs）。
 
 use std::path::PathBuf;
@@ -7,16 +7,12 @@ use dtx::DrumLane;
 use egui::{Align2, Color32, FontId, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, Vec2};
 use engine::analysis::{NOTABLE_MEAN_MS, Subdivision, Tendency, WeakPhrase, notable_tendencies};
 use engine::judge::Judgement;
-use engine::practice::{
-    FAILS_TO_DOWN, LoopStyle, PASSES_TO_UP, PassRule, Section, SpeedChange, SpeedPlan,
-    speed_percent,
-};
+use engine::practice::Section;
 
 use crate::config::Config;
-use crate::game::{Outcome, Play, PracticeOutcome, WeakMap};
+use crate::game::{Outcome, Play, WeakMap};
 use crate::gfx::Canvas;
 use crate::history::{OvercomeCheck, TENDENCY_MIN_HITS, TENDENCY_SESSIONS};
-use crate::practice::{LapSummary, Practice};
 
 fn judgement_label(j: Judgement) -> (&'static str, Color32) {
     match j {
@@ -54,9 +50,6 @@ pub enum ResultAction {
 const MIN_HITS_FOR_OFFSET: u32 = 20;
 
 pub fn draw_result(ui: &mut egui::Ui, o: &Outcome, config: &Config) -> Vec<ResultAction> {
-    if let Some(p) = &o.practice {
-        return draw_practice_result(ui, o, p);
-    }
     let mut actions = Vec::new();
     result_page(ui, |ui| {
         egui::ScrollArea::vertical().show(ui, |ui| {
@@ -315,137 +308,8 @@ fn tendency_color(mean_ms: f64) -> Color32 {
     }
 }
 
-/// 練習の結果。周ごとの成績を並べる
-fn draw_practice_result(ui: &mut egui::Ui, o: &Outcome, p: &PracticeOutcome) -> Vec<ResultAction> {
-    let mut actions = Vec::new();
-    result_page(ui, |ui| {
-        ui.vertical_centered(|ui| {
-            ui.add_space(8.0);
-            ui.heading(RichText::new(&o.title).size(28.0));
-            if !o.artist.is_empty() {
-                ui.label(&o.artist);
-            }
-            ui.label(
-                RichText::new(format!(
-                    "練習 {}（{}・合格の基準 {}・{}）",
-                    section_text(p.options.section),
-                    style_name(p.options.style),
-                    rule_name(p.options.rule),
-                    plan_text(p.options.speed)
-                ))
-                .size(18.0),
-            );
-            ui.add_space(16.0);
-            let done: Vec<&LapSummary> = p.laps.iter().filter(|l| l.completed).collect();
-            if done.is_empty() {
-                ui.label("最後まで叩いた周はありませんでした。");
-            } else {
-                let passed = done.iter().filter(|l| l.passed == Some(true)).count();
-                let rate = done.iter().map(|l| l.perfect_rate()).sum::<f64>() / done.len() as f64;
-                ui.label(
-                    RichText::new(format!(
-                        "{} 周のうち合格 {} 周、PERFECT の割合の平均 {:.0}%",
-                        done.len(),
-                        passed,
-                        rate * 100.0
-                    ))
-                    .size(18.0),
-                );
-                let top = done
-                    .iter()
-                    .filter(|l| l.passed == Some(true))
-                    .map(|l| speed_percent(l.speed))
-                    .max();
-                if let Some(top) = top {
-                    ui.label(format!("合格した一番速い速度 {top}%"));
-                }
-            }
-            if p.cleared
-                && let SpeedPlan::Ladder { target, .. } = p.options.speed
-            {
-                ui.label(
-                    RichText::new(format!(
-                        "クリア！ 目標の {target}% で {PASSES_TO_UP} 周続けて合格しました"
-                    ))
-                    .size(20.0)
-                    .color(PASS_COLOR),
-                );
-            }
-            if p.laps.len() > done.len() {
-                ui.label(RichText::new("途中でやめた周は数えず、記録にも残しません。").weak());
-            }
-            if !done.is_empty() {
-                ui.add_space(12.0);
-                egui::ScrollArea::vertical()
-                    .max_height(ui.available_height() - 140.0)
-                    .show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            ui.add_space(((ui.available_width() - LAP_TABLE_WIDTH) / 2.0).max(0.0));
-                            lap_table(ui, &done);
-                        });
-                    });
-            }
-            ui.add_space(16.0);
-            if ui.button("もう一度（R）").clicked() {
-                actions.push(ResultAction::Retry);
-            }
-            if ui.button("区間を選び直す（P）").clicked() {
-                actions.push(ResultAction::Practice(None));
-            }
-            if ui
-                .button("選曲に戻る（Enter、ドラムは CY か RD）")
-                .clicked()
-            {
-                actions.push(ResultAction::Back);
-            }
-        });
-    });
-    actions
-}
-
-/// 周ごとの成績の表のおおよその幅（真ん中に寄せるのに使う）
-const LAP_TABLE_WIDTH: f32 = 640.0;
-
-/// 合格・クリアの色
+/// 合格・克服の色
 const PASS_COLOR: Color32 = Color32::from_rgb(0x70, 0xE0, 0x90);
-
-/// 周ごとの成績の表
-fn lap_table(ui: &mut egui::Ui, laps: &[&LapSummary]) {
-    egui::Grid::new("laps")
-        .striped(true)
-        .spacing(Vec2::new(18.0, 4.0))
-        .show(ui, |ui| {
-            for h in [
-                "周",
-                "速度",
-                "PERFECT",
-                "GREAT",
-                "GOOD",
-                "POOR",
-                "MISS",
-                "空打ち",
-                "ずれ",
-                "",
-            ] {
-                ui.label(RichText::new(h).strong());
-            }
-            ui.end_row();
-            for l in laps {
-                let t = &l.tally;
-                ui.label(format!("{}", l.index + 1));
-                ui.label(format!("{}%", speed_percent(l.speed)));
-                ui.label(format!("{} ({:.0}%)", t.perfect, l.perfect_rate() * 100.0));
-                ui.label(t.great.to_string());
-                ui.label(t.good.to_string());
-                ui.label(t.poor.to_string());
-                ui.label(t.miss.to_string());
-                ui.label(t.stray.to_string());
-                ui.label(offset_text(l));
-                ui.label(verdict(l));
-                ui.end_row();
-            }
-        });
-}
 
 fn section_text(s: Section) -> String {
     if s.first == s.last {
@@ -462,47 +326,6 @@ fn phrase_text(p: &WeakPhrase) -> String {
         p.weakness,
         p.notes
     )
-}
-
-fn style_name(s: LoopStyle) -> &'static str {
-    match s {
-        LoopStyle::Connect => "つなぐ",
-        LoopStyle::Restart => "区切る",
-    }
-}
-
-fn rule_name(r: PassRule) -> &'static str {
-    match r {
-        PassRule::Easy => "ゆるめ",
-        PassRule::Normal => "ふつう",
-        PassRule::Strict => "きびしめ",
-    }
-}
-
-/// 速度の決め方を短く
-fn plan_text(p: SpeedPlan) -> String {
-    match p {
-        SpeedPlan::Fixed(s) => format!("速度 {s}%"),
-        SpeedPlan::Ladder { start, target } => format!("段階アップ {start}%→{target}%"),
-    }
-}
-
-/// 周のずれ（平均とばらつき）
-fn offset_text(l: &LapSummary) -> String {
-    match (l.offset_mean_ms, l.offset_sd_ms) {
-        (Some(m), Some(sd)) => format!("{m:+.1}ms ±{sd:.1}"),
-        (Some(m), None) => format!("{m:+.1}ms"),
-        _ => "-".to_owned(),
-    }
-}
-
-/// 周の合否
-fn verdict(l: &LapSummary) -> RichText {
-    match l.passed {
-        Some(true) => RichText::new("合格").color(PASS_COLOR),
-        Some(false) => RichText::new("不合格").color(Color32::from_rgb(0xF0, 0x80, 0x60)),
-        None => RichText::new("途中").weak(),
-    }
 }
 
 /// 苦手度をどの記録から出したか
@@ -572,34 +395,11 @@ pub struct PlayOverlay<'a> {
     pub midi_ports: &'a [String],
     /// 設定と入力の情報を出す（I で切り替え）
     pub show_info: bool,
-    /// 表示の補正を足した曲の時刻
-    pub now: f64,
 }
 
-/// 演奏中の重ね書き。練習の欄（左上、スコアの場所）、助走のカウント、情報の窓（左、I で切り替え）
+/// 演奏中の重ね書き。情報の窓（左、I で切り替え）。練習中の表示は practice_hud で NX の部品で描く
 pub fn draw_play_overlay(ctx: &egui::Context, c: &Canvas, o: &PlayOverlay<'_>) {
     let s = c.scale();
-    if let Some(p) = &o.play.practice {
-        nx_panel(ctx, "practice", c.pos(6.0, 6.0), 282.0 * s, |ui| {
-            practice_panel(ui, p, o.now, s);
-        });
-        if let Some(text) = count_in(p, o.now) {
-            let painter = ctx.layer_painter(egui::LayerId::new(
-                egui::Order::Foreground,
-                egui::Id::unique("count-in"),
-            ));
-            let at = c.pos(574.0, 300.0);
-            let font = FontId::proportional(72.0 * s);
-            painter.text(
-                at + Vec2::splat(3.0 * s),
-                Align2::CENTER_CENTER,
-                &text,
-                font.clone(),
-                Color32::from_black_alpha(200),
-            );
-            painter.text(at, Align2::CENTER_CENTER, &text, font, Color32::WHITE);
-        }
-    }
     if o.show_info {
         nx_panel(ctx, "play-info", c.pos(6.0, 250.0), 282.0 * s, |ui| {
             play_info(ui, o, s);
@@ -697,123 +497,6 @@ fn play_info(ui: &mut egui::Ui, o: &PlayOverlay<'_>, s: f32) {
 /// 無いときは「-」と出す
 fn opt<T: std::fmt::Debug>(v: Option<T>) -> String {
     v.map_or_else(|| "-".to_owned(), |v| format!("{v:?}"))
-}
-
-/// 助走のカウント（1〜4）。カウントの前は「助走」、周の中は None
-fn count_in(p: &Practice, now: f64) -> Option<String> {
-    let lap = p.laps.iter().find(|l| {
-        !l.plan.clicks.is_empty() && now >= l.plan.audio.at_ms && now < l.plan.start_ms
-    })?;
-    let n = lap.plan.clicks.iter().filter(|&&c| c <= now).count();
-    Some(if n == 0 {
-        "助走".to_owned()
-    } else {
-        n.to_string()
-    })
-}
-
-/// 練習の欄（左上）。区間、何周目と速度、段階アップの進み、直近の周の成績。`s` は画面の拡大率
-fn practice_panel(ui: &mut egui::Ui, p: &Practice, now: f64, s: f32) {
-    let o = p.options;
-    let text = |t: String, size: f32| RichText::new(t).size(size * s);
-    ui.label(text(format!("練習 {}", section_text(o.section)), 14.0));
-    ui.label(text(
-        format!("{}・合格の基準 {}", style_name(o.style), rule_name(o.rule)),
-        11.0,
-    ));
-    let width = ui.available_width();
-    // 区間の枠は帯の上下に 3 ポイントはみ出すので、そのぶん空ける
-    ui.add_space(4.0);
-    measure_band(
-        ui,
-        &p.band,
-        &[],
-        Some(o.section),
-        Vec2::new(width, 10.0 * s),
-        false,
-    );
-    ui.add_space(4.0);
-    let current = p.current_lap(now);
-    let lap = match current {
-        Some(i) => format!("{} 周目", i + 1),
-        None => "助走".to_owned(),
-    };
-    // 今鳴っている周の速度（助走中は 1 周目の速度）
-    let speed = current
-        .or((!p.laps.is_empty()).then_some(0))
-        .map_or(p.ladder().speed(), |i| speed_percent(p.laps[i].plan.speed));
-    ui.label(
-        text(format!("{lap}　速度 {speed}%"), 18.0)
-            .strong()
-            .color(Color32::WHITE),
-    );
-    let ladder = p.ladder();
-    let (passes, fails) = ladder.streaks();
-    match ladder.plan() {
-        SpeedPlan::Ladder { target, .. } => {
-            ui.label(text(
-                format!(
-                    "段階アップ（目標 {target}%）合格 {passes}/{PASSES_TO_UP}・不合格 {fails}/{FAILS_TO_DOWN}"
-                ),
-                11.0,
-            ));
-        }
-        SpeedPlan::Fixed(_) => {
-            ui.label(text(
-                format!("速度は固定　連続合格 {}", p.pass_streak()),
-                11.0,
-            ));
-        }
-    }
-    // 決めた速度がまだ並べていない周からのとき
-    if p.last_speed().is_some_and(|sp| sp != ladder.speed()) {
-        ui.label(
-            text(
-                format!("{}% は {} 周目から", ladder.speed(), p.laps.len() + 1),
-                11.0,
-            )
-            .color(SELECTION_COLOR),
-        );
-    }
-    if ladder.cleared() {
-        ui.label(text("クリア！".to_owned(), 18.0).strong().color(PASS_COLOR));
-    }
-    if let Some(c) = p.speed_note(now) {
-        let t = match c.change {
-            SpeedChange::Up => format!("合格が続いたので {}% に上げます", c.speed),
-            SpeedChange::Down => format!("不合格が続いたので {}% に下げます", c.speed),
-            SpeedChange::Cleared => format!("{}% で合格が続きました", c.speed),
-            SpeedChange::Stay => String::new(),
-        };
-        if !t.is_empty() {
-            ui.label(text(t, 11.0).color(SELECTION_COLOR));
-        }
-    }
-    let done: Vec<LapSummary> = p
-        .summaries(now)
-        .into_iter()
-        .filter(|l| l.completed)
-        .collect();
-    let passed = done.iter().filter(|l| l.passed == Some(true)).count();
-    ui.label(text(format!("合格 {passed} / {} 周", done.len()), 11.0));
-    for l in done.iter().rev().take(3) {
-        ui.horizontal(|ui| {
-            ui.label(
-                RichText::new(format!(
-                    "{:>3} {:>3}% P{:>3.0}% M{} P{} {}",
-                    l.index + 1,
-                    speed_percent(l.speed),
-                    l.perfect_rate() * 100.0,
-                    l.tally.miss,
-                    l.tally.poor,
-                    offset_text(l)
-                ))
-                .monospace()
-                .size(10.0 * s),
-            );
-            ui.label(verdict(l).size(10.0 * s));
-        });
-    }
 }
 
 /// 苦手な小節の帯の幅の上限

@@ -7,15 +7,15 @@
 //! 操作は上流のポップアップと同じ。↑↓（HT / LT）で選び、Enter（CY / RD）で決め、Esc（LC）で閉じる。
 //! 数の項目は Enter で値を変える状態になり、↑↓ で変えて Enter で戻る。
 
-use egui::{Color32, Pos2, Stroke, StrokeKind};
+use egui::{Color32, Pos2};
 use engine::practice::{LoopStyle, PassRule, Section, SpeedPlan};
 
+use crate::band::{Band, BandData};
 use crate::gfx::{Canvas, DFP, Gfx, src};
 use crate::practice::{PracticeOptions, PracticeSetup};
 use crate::sfx::Se;
 use crate::stretch::Pitch;
 use crate::text::Style;
-use crate::ui::weakness_color;
 
 /// ポップアップの左上と 1 行の高さ。上流のソートのポップアップは (460, 150) だが、
 /// そこだと小節の帯に重なるので、曲のリストの上に出す
@@ -27,20 +27,16 @@ const H: f32 = 450.0;
 
 /// 難易度パネル（`5_status panel.png`）の場所と大きさ。小節の帯をここに重ねる
 const PANEL: (f32, f32, f32, f32) = (130.0, 350.0, 561.0, 342.0);
-/// 小節の帯の左と幅、上
-const BAND_X: f32 = PANEL.0 + 16.0;
-const BAND_W: f32 = PANEL.2 - 32.0;
-const BAND_Y: f32 = PANEL.1 + 44.0;
-/// 帯の 1 段の高さと、段の送り（下に小節の番号）
-const CELL_H: f32 = 24.0;
-const ROW_PITCH: f32 = 40.0;
-/// 1 段に並べる小節の数の目安
-const PER_ROW: usize = 64;
-
-/// 選んだ区間の色
-const SELECTION_COLOR: Color32 = Color32::from_rgb(0x40, 0xC8, 0xFF);
-/// 練習でクリアした区間の印の色
-const CLEARED_COLOR: Color32 = Color32::from_rgb(0x70, 0xE0, 0x90);
+/// 小節の帯（難易度パネルの中）
+const BAND: Band = Band {
+    x: PANEL.0 + 16.0,
+    y: PANEL.1 + 44.0,
+    w: PANEL.2 - 32.0,
+    cell_h: 24.0,
+    row_pitch: 40.0,
+    max_rows: 4,
+    striped: false,
+};
 
 /// ポップアップの行
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -277,14 +273,14 @@ impl PracticePopup {
     /// マウス：行を押すとその行を決め、帯を押すかドラッグすると区間を選ぶ
     pub fn mouse(&mut self, m: PopupMouse) -> Response {
         let n = self.setup.measure_count();
-        self.hover = m.hover.and_then(|p| measure_at(n, p));
+        self.hover = m.hover.and_then(|p| BAND.measure_at(n, p));
         if let Some(p) = m.pressed {
             if let Some(i) = row_at(p) {
                 self.editing = false;
                 self.cursor = i;
                 return self.input(PopupInput::Decide);
             }
-            self.drag = measure_at(n, p);
+            self.drag = BAND.measure_at(n, p);
         }
         if let Some(from) = self.drag {
             if let Some(to) = self.hover {
@@ -508,7 +504,7 @@ impl PracticePopup {
         }
         let n = s.measure_count();
         let cleared: Vec<Section> = s.cleared_sections().iter().map(|c| c.0).collect();
-        let bottom = draw_band(
+        let bottom = BAND.draw(
             c,
             g,
             &BandData {
@@ -541,7 +537,7 @@ impl PracticePopup {
         };
         let big = Style::edged(18.0, Color32::WHITE, Color32::BLACK, 1.5);
         if let Some(t) = g.texts.get(&info, &big) {
-            t.draw(c, BAND_X, y, 1.0, 1.0);
+            t.draw(c, BAND.x, y, 1.0, 1.0);
         }
         y += 28.0;
         // 苦手なフレーズ（今の区間は黄色）
@@ -550,7 +546,7 @@ impl PracticePopup {
             .texts
             .get(&format!("苦手なフレーズ（{}）", weak_source(s)), &small)
         {
-            t.draw(c, BAND_X, y, 1.0, 1.0);
+            t.draw(c, BAND.x, y, 1.0, 1.0);
         }
         y += 20.0;
         let current = self.weak_index();
@@ -574,55 +570,11 @@ impl PracticePopup {
                 .texts
                 .get(&line, &Style::edged(16.0, color, Color32::BLACK, 1.0))
             {
-                t.draw(c, BAND_X, y, 1.0, 1.0);
+                t.draw(c, BAND.x, y, 1.0, 1.0);
             }
             y += 21.0;
         }
     }
-}
-
-/// 帯に描くもの
-pub struct BandData<'a> {
-    /// 小節ごとの苦手度（記録が無ければ None）
-    pub weakness: &'a [Option<f64>],
-    /// 白い枠で囲む区間（苦手なフレーズ）
-    pub phrases: Vec<Section>,
-    /// 青く塗る区間
-    pub selected: Option<Section>,
-    /// 下に緑の印を付ける区間（練習でクリアした）
-    pub cleared: Vec<Section>,
-}
-
-/// 帯の段の数と、1 段の小節の数、1 小節の幅
-fn band_layout(n: usize) -> (usize, usize, f32) {
-    let rows = n.div_ceil(PER_ROW).clamp(1, 4);
-    let per_row = n.div_ceil(rows).max(1);
-    (rows, per_row, BAND_W / per_row as f32)
-}
-
-/// 小節 `m` の左上
-fn cell_pos(n: usize, m: usize) -> (f32, f32) {
-    let (_, per_row, cw) = band_layout(n);
-    let (r, col) = (m / per_row, m % per_row);
-    (BAND_X + cw * col as f32, BAND_Y + ROW_PITCH * r as f32)
-}
-
-/// 帯の上の点にある小節
-fn measure_at(n: usize, p: Pos2) -> Option<u32> {
-    if n == 0 {
-        return None;
-    }
-    let (rows, per_row, cw) = band_layout(n);
-    let (dx, dy) = (p.x - BAND_X, p.y - BAND_Y);
-    if !(0.0..BAND_W).contains(&dx) || dy < 0.0 {
-        return None;
-    }
-    let r = (dy / ROW_PITCH) as usize;
-    if r >= rows || dy - r as f32 * ROW_PITCH > CELL_H {
-        return None;
-    }
-    let m = r * per_row + (dx / cw) as usize;
-    (m < n).then_some(m as u32)
 }
 
 /// ポップアップの上の点にある行
@@ -632,77 +584,6 @@ fn row_at(p: Pos2) -> Option<usize> {
     }
     let i = ((p.y - (Y + 38.0)) / ROW_H).floor();
     (i >= 0.0 && (i as usize) < ROWS.len()).then_some(i as usize)
-}
-
-/// 小節の帯。苦手なほど赤く、記録の無い小節は暗い灰色。長い曲は 4 段まで折り返す。下の端の y を返す
-pub fn draw_band(c: &Canvas, g: &mut Gfx, d: &BandData<'_>) -> f32 {
-    let n = d.weakness.len();
-    if n == 0 {
-        return BAND_Y;
-    }
-    let (rows, per_row, cw) = band_layout(n);
-    let gap = if cw >= 4.0 { 1.0 } else { 0.0 };
-    for (m, v) in d.weakness.iter().enumerate() {
-        let (x, y) = cell_pos(n, m);
-        c.fill(x, y, cw - gap, CELL_H, weakness_color(*v));
-    }
-    let stroke = |x: f32, y: f32, w: f32, h: f32, color: Color32, width: f32| {
-        c.painter().rect_stroke(
-            c.rect(x, y, w, h),
-            0.0,
-            Stroke::new(width * c.scale(), color),
-            StrokeKind::Outside,
-        );
-    };
-    // 区間を段ごとに分けて (x, y, 幅) にする
-    let spans = |s: Section| -> Vec<(f32, f32, f32)> {
-        let (first, last) = (s.first as usize, (s.last as usize).min(n - 1));
-        let mut out = Vec::new();
-        let mut m = first;
-        while m <= last {
-            let row_end = (m / per_row + 1) * per_row - 1;
-            let end = last.min(row_end);
-            let (x, y) = cell_pos(n, m);
-            out.push((x, y, cw * (end - m + 1) as f32 - gap));
-            m = end + 1;
-        }
-        out
-    };
-    for &p in &d.phrases {
-        for (x, y, w) in spans(p) {
-            stroke(x, y, w, CELL_H, Color32::WHITE, 2.0);
-        }
-    }
-    for &s in &d.cleared {
-        for (x, y, w) in spans(s) {
-            c.fill(x, y + CELL_H + 2.0, w, 3.0, CLEARED_COLOR);
-        }
-    }
-    if let Some(s) = d.selected {
-        for (x, y, w) in spans(s) {
-            c.fill(
-                x,
-                y - 3.0,
-                w,
-                CELL_H + 6.0,
-                SELECTION_COLOR.gamma_multiply(0.3),
-            );
-            stroke(x, y - 3.0, w, CELL_H + 6.0, SELECTION_COLOR, 2.5);
-        }
-    }
-    // 小節の番号（DTX の小節番号）。重ならない間隔で
-    let step = [1, 2, 4, 8, 16, 32, 64]
-        .into_iter()
-        .find(|&s| cw * s as f32 >= 32.0)
-        .unwrap_or(128);
-    let style = Style::plain(11.0, Color32::from_gray(170));
-    for m in (0..n).step_by(step) {
-        let (x, y) = cell_pos(n, m);
-        if let Some(t) = g.texts.get(&m.to_string(), &style) {
-            t.draw(c, x, y + CELL_H + 6.0, 1.0, 1.0);
-        }
-    }
-    BAND_Y + ROW_PITCH * (rows - 1) as f32 + CELL_H + 20.0
 }
 
 fn section_text(s: Section) -> String {
@@ -834,25 +715,10 @@ mod tests {
     }
 
     #[test]
-    fn band_wraps_long_songs() {
-        assert_eq!(band_layout(40), (1, 40, BAND_W / 40.0));
-        assert_eq!(band_layout(150).0, 3);
-        assert_eq!(band_layout(1000).0, 4);
-        // 2 段目の頭の小節
-        let (_, per_row, _) = band_layout(150);
-        let (x, y) = cell_pos(150, per_row);
-        assert_eq!(
-            measure_at(150, Pos2::new(x + 1.0, y + 1.0)),
-            Some(per_row as u32)
-        );
-        assert_eq!(measure_at(150, Pos2::new(BAND_X - 1.0, BAND_Y + 1.0)), None);
-    }
-
-    #[test]
     fn dragging_on_the_band_selects_a_range() {
         let mut p = popup(16);
         let at = |m: usize| {
-            let (x, y) = cell_pos(16, m);
+            let (x, y) = BAND.cell_pos(16, m);
             Pos2::new(x + 2.0, y + 2.0)
         };
         p.mouse(PopupMouse {
