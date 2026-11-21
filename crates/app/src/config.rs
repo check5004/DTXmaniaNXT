@@ -13,7 +13,8 @@ use crate::stretch::Pitch;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
-    /// DTXManiaNX のフォルダ（画面の画像と音、曲のフォルダ、パッドの割り当てをここから読む）
+    /// DTXManiaNX のフォルダ。選んだときに、使っているスキン（画面の画像と音）と Config.ini を
+    /// 設定のフォルダの `nx` へ写し（[`Config::nx_copy_dir`]）、曲のフォルダをここから足す
     pub nx_dir: Option<PathBuf>,
     /// 曲のフォルダ
     pub song_dirs: Vec<PathBuf>,
@@ -77,8 +78,25 @@ impl Default for Config {
 }
 
 impl Config {
+    /// 設定のフォルダ（Windows は %APPDATA%\DTXmaniaNXT）
+    pub fn dir() -> Option<PathBuf> {
+        Some(dirs::config_dir()?.join("DTXmaniaNXT"))
+    }
+
     pub fn path() -> Option<PathBuf> {
-        Some(dirs::config_dir()?.join("DTXmaniaNXT").join("config.toml"))
+        Some(Self::dir()?.join("config.toml"))
+    }
+
+    /// NX から写したスキンと Config.ini を置くフォルダ（NX のフォルダと同じ形）
+    pub fn nx_copy_dir() -> Option<PathBuf> {
+        Some(Self::dir()?.join("nx"))
+    }
+
+    /// 曲のフォルダのどれかが NX のフォルダの中にある（NX を消すと曲も消える）
+    pub fn songs_in_nx(&self) -> bool {
+        self.nx_dir
+            .as_deref()
+            .is_some_and(|nx| self.song_dirs.iter().any(|d| d.starts_with(nx)))
     }
 
     pub fn load() -> Self {

@@ -3,12 +3,16 @@
 //! - `Config.ini`（UTF-16LE）から曲のフォルダ（`DTXPath`）、スキン（`SkinPath`）、パッドの割り当て（`[DrumsKeyAssign]`）
 //! - 使うスキンのフォルダ（`System/<スキン>/`）を上流 DTXManiaNX（`CSkin.cs`）と同じ順で選ぶ
 //!
-//! スキンの画像や音は NXT に同梱しない。ユーザーの PC にある NX のフォルダから読む。
+//! - 使うスキンと Config.ini を NXT のフォルダへ写す（NX のフォルダを消しても同じ画面で動くように）
+//!
+//! スキンの画像や音は NXT のリポジトリに同梱しない。ユーザーの PC の中で、NX のフォルダから写して使う。
 
 mod config;
+mod copy;
 mod skin;
 
 pub use config::{KeyAssign, NxConfig};
+pub use copy::copy_install;
 pub use skin::{find_file, is_install, is_skin, skin_dir};
 
 use std::path::{Path, PathBuf};

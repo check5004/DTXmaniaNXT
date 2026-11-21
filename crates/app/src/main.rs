@@ -322,16 +322,50 @@ fn keyboard_key(lane: DrumLane) -> Option<String> {
         .map(|(k, _)| format!("{k:?}").trim_start_matches("Key").to_owned())
 }
 
-/// NX のフォルダを探す。設定に無ければ、NXT の exe が NX のフォルダに置いてあるか見る
+/// 使う NX（画面の画像と音、Config.ini）。NX から写したものがあればそれを使う。
+/// まだ写していなければ、設定の NX のフォルダか、NXT の exe が置いてある NX のフォルダから写す
 fn find_nx(config: &mut Config) -> Option<nx::Install> {
-    if let Some(i) = config.nx_dir.as_deref().and_then(nx::Install::open) {
+    if let Some(i) = Config::nx_copy_dir().and_then(|d| nx::Install::open(&d)) {
         return Some(i);
     }
-    let exe_dir = std::env::current_exe().ok()?.parent()?.to_owned();
-    let i = nx::Install::open(&exe_dir).filter(|i| nx::is_skin(&i.skin))?;
-    config.nx_dir = Some(exe_dir);
+    let original = match config.nx_dir.as_deref().and_then(nx::Install::open) {
+        Some(i) => i,
+        None => {
+            let exe_dir = std::env::current_exe().ok()?.parent()?.to_owned();
+            let i = nx::Install::open(&exe_dir).filter(|i| nx::is_skin(&i.skin))?;
+            config.nx_dir = Some(exe_dir);
+            i
+        }
+    };
+    let (i, _) = adopt_nx(config, &original);
     config.save();
     Some(i)
+}
+
+/// NX を使い始める：スキンと Config.ini を設定のフォルダへ写し、曲のフォルダを足す。
+/// 写したもの（写せなければ NX そのもの）と、曲のフォルダを足したかを返す。保存は呼ぶ側で
+fn adopt_nx(config: &mut Config, original: &nx::Install) -> (nx::Install, bool) {
+    let mut added = false;
+    for d in original.song_dirs().into_iter().filter(|d| d.is_dir()) {
+        added |= config.add_song_dir(d);
+    }
+    let copied = Config::nx_copy_dir().map(|d| nx::copy_install(original, &d));
+    let i = match copied {
+        Some(Ok(i)) => {
+            log::info!(
+                "copied the NX skin {} to {}",
+                original.skin.display(),
+                i.root.display()
+            );
+            i
+        }
+        Some(Err(e)) => {
+            log::warn!("cannot copy the NX skin: {e}");
+            original.clone()
+        }
+        None => original.clone(),
+    };
+    (i, added)
 }
 
 /// 2 回叩きと見なす間（上流と同じ 0.5 秒）
@@ -354,11 +388,6 @@ impl App {
                 n.root.display(),
                 n.skin.display()
             );
-            // 曲のフォルダがまだ無ければ NX の DTXPath を使う
-            if config.song_dirs.is_empty() {
-                config.song_dirs = n.song_dirs().into_iter().filter(|d| d.is_dir()).collect();
-                config.save();
-            }
         }
         let mut pending = None;
         // 引数がフォルダなら曲のフォルダに足し、譜面ならすぐ遊ぶ
@@ -456,10 +485,8 @@ impl App {
             i.skin.display()
         );
         self.config.nx_dir = Some(dir);
-        let mut added = false;
-        for d in i.song_dirs().into_iter().filter(|d| d.is_dir()) {
-            added |= self.config.add_song_dir(d);
-        }
+        // 選ぶたびに写し直す（NX でスキンや割り当てを変えたときも、選び直せば揃う）
+        let (i, added) = adopt_nx(&mut self.config, &i);
         self.config.save();
         self.gfx.skin = Skin::new(&self.egui_ctx, Some(i.skin.clone()));
         self.sfx.load(&self.gfx.skin);
@@ -1539,7 +1566,9 @@ fn config_info<'a>(
 ) -> ConfigInfo<'a> {
     ConfigInfo {
         config,
-        nx_root: nx.map(|n| n.root.as_path()),
+        nx_root: config.nx_dir.as_deref(),
+        nx_found: config.nx_dir.as_deref().is_some_and(nx::is_install),
+        nx_copied: nx.is_some_and(|n| Config::nx_copy_dir().is_some_and(|d| n.root == d)),
         nx_stage_failed: nx.and_then(|n| n.config.stage_failed),
         lanes: midi_profile(nx, config).lane_notes(),
         midi_ports: midi.as_ref().map_or(&[], |m| m.ports.as_slice()),
