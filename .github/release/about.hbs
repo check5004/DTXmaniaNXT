@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DTXmaniaNXT が使っているライブラリのライセンス</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 2rem auto; max-width: 60rem; padding: 0 1rem; line-height: 1.6; color: #222; background: #fff; }
+  h1 { font-size: 1.5rem; }
+  h2 { font-size: 1.2rem; margin-top: 2.5rem; border-bottom: 1px solid #ccc; }
+  ul.crates { columns: 2; }
+  pre { white-space: pre-wrap; background: #f6f6f6; padding: 1rem; font-size: 0.85rem; }
+  @media (prefers-color-scheme: dark) { body { color: #ddd; background: #181818; } pre { background: #242424; } a { color: #8ab4f8; } }
+</style>
+</head>
+<body>
+<h1>DTXmaniaNXT が使っているライブラリのライセンス</h1>
+<p>DTXmaniaNXT（MIT ライセンス、<a href="https://github.com/check5004/DTXmaniaNXT">https://github.com/check5004/DTXmaniaNXT</a>）の実行ファイルには、次のライブラリが入っています。各ライブラリのソースはリンク先で手に入ります。</p>
+<h2>ライセンスの一覧</h2>
+<ul>
+{{#each overview}}
+  <li><a href="#{{id}}">{{name}}</a>（{{count}}）</li>
+{{/each}}
+</ul>
+{{#each licenses}}
+<h2 id="{{id}}">{{name}}</h2>
+<p>使っているライブラリ:</p>
+<ul class="crates">
+{{#each used_by}}
+  <li><a href="{{#if crate.repository}}{{crate.repository}}{{else}}https://crates.io/crates/{{crate.name}}{{/if}}">{{crate.name}} {{crate.version}}</a></li>
+{{/each}}
+</ul>
+<pre>{{text}}</pre>
+{{/each}}
+</body>
+</html>
