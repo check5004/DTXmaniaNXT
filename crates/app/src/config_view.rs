@@ -118,8 +118,12 @@ pub enum List {
 /// 項目を作るのに要るもの
 pub struct ConfigInfo<'a> {
     pub config: &'a Config,
-    /// 使っている DTXManiaNX のフォルダ
+    /// 選んだ DTXManiaNX のフォルダ
     pub nx_root: Option<&'a Path>,
+    /// 選んだ NX のフォルダが今もある
+    pub nx_found: bool,
+    /// NX から写したスキンを使っている
+    pub nx_copied: bool,
     /// NX の Config.ini の STAGE FAILED
     pub nx_stage_failed: Option<bool>,
     /// 今の割り当て（レーン → ノート番号）
@@ -155,6 +159,33 @@ fn folder_name(p: &Path) -> String {
     )
 }
 
+/// NX Folder の説明。写したか、NX を消してよいか、曲のフォルダが NX の中にあるか
+fn nx_description(info: &ConfigInfo<'_>) -> String {
+    let Some(root) = info.nx_root else {
+        return "DTXManiaNX のフォルダを選ぶと、画像と音、パッドの割り当てを NXT に写して、NX と同じ画面にします。"
+            .to_owned();
+    };
+    let state = match (info.nx_copied, info.nx_found) {
+        (true, true) => {
+            "画像と音、パッドの割り当ては NXT に写してあります。選び直すと写し直します。"
+        }
+        (true, false) => "NX は見つかりませんが、写した画像と音で動いています。",
+        (false, _) => "画像と音を NXT に写せませんでした。NX のフォルダから読んでいます。",
+    };
+    let note = match (info.config.songs_in_nx(), info.nx_found) {
+        (true, true) => {
+            "曲のフォルダが NX の中にあります。NX を消す前に曲を別の場所へ移してください。"
+                .to_owned()
+        }
+        (true, false) => {
+            "NX の中にあった曲のフォルダも見つかりません。曲を移した先を Add Song Folder で選んでください。"
+                .to_owned()
+        }
+        (false, _) => root.display().to_string(),
+    };
+    format!("{state}\n{note}")
+}
+
 fn item(id: ItemId, name: &str, value: String, desc: String) -> Item {
     Item {
         id,
@@ -183,11 +214,7 @@ pub fn items(list: List, info: &ConfigInfo<'_>) -> Vec<Item> {
                 ItemId::NxDir,
                 "NX Folder",
                 info.nx_root.map_or("未設定".to_owned(), folder_name),
-                format!(
-                    "DTXManiaNX のフォルダです。画像と音、曲のフォルダ、パッドの割り当てをここから読みます。\n{}",
-                    info.nx_root
-                        .map_or("未設定".to_owned(), |p| p.display().to_string())
-                ),
+                nx_description(info),
             ));
             v.push(item(
                 ItemId::AddSongDir,
@@ -778,12 +805,41 @@ mod tests {
         ConfigInfo {
             config,
             nx_root: None,
+            nx_found: false,
+            nx_copied: false,
             nx_stage_failed: None,
             lanes: BTreeMap::from([(DrumLane::SD, vec![38, 40])]),
             midi_ports: &[],
             scanning: None,
             song_count: 3,
         }
+    }
+
+    #[test]
+    fn nx_folder_tells_whether_nx_can_be_deleted() {
+        let mut c = Config::default();
+        assert!(nx_description(&info(&c)).contains("写して"));
+        let nx = std::path::PathBuf::from("/nx");
+        c.nx_dir = Some(nx.clone());
+        c.song_dirs = vec![nx.join("Songs")];
+        let mut i = info(&c);
+        i.nx_root = Some(&nx);
+        i.nx_copied = true;
+        i.nx_found = true;
+        let d = nx_description(&i);
+        assert!(d.contains("写してあります") && d.contains("NX を消す前に"));
+        // NX を消したあと
+        i.nx_found = false;
+        let d = nx_description(&i);
+        assert!(d.contains("写した画像と音で動いています") && d.contains("Add Song Folder"));
+        // 曲が NX の外なら場所を出す
+        let mut c2 = c.clone();
+        c2.song_dirs = vec![std::path::PathBuf::from("/songs")];
+        let mut i = info(&c2);
+        i.nx_root = Some(&nx);
+        i.nx_copied = true;
+        i.nx_found = true;
+        assert!(nx_description(&i).ends_with(&nx.display().to_string()));
     }
 
     fn ready() -> ConfigView {
