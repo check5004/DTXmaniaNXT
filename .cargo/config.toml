@@ -1,0 +1,4 @@
+# Windows の exe に C のランタイム（vcruntime140.dll）を入れる。
+# VC++ の再頒布パッケージが入っていない PC でも、配った exe がそのまま起動するように
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
