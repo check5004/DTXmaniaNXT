@@ -465,15 +465,20 @@ pub fn lane_color(lane: DrumLane) -> Color32 {
 /// 画面の下の案内 1 つ（叩くパッドと、することの名前）
 pub type Hint<'a> = (&'a [Pad], &'a str);
 
-/// 画面の下に、パッドの役目を並べる（y = 690 から 30 の高さ）
+/// 画面の下の案内の帯の上端と高さ
+pub const LEGEND_Y: f32 = 690.0;
+pub const LEGEND_H: f32 = 30.0;
+
+/// 画面の下に、パッドの役目を並べる（[`LEGEND_Y`] から [`LEGEND_H`] の高さ）。
+/// パッドの無い案内（キーボードだけの操作）は、名前だけを出す
 pub fn legend(c: &Canvas, g: &mut Gfx, hints: &[Hint<'_>]) {
-    const Y: f32 = 690.0;
+    const Y: f32 = LEGEND_Y;
     hgrad(
         c,
         0.0,
         Y,
         1280.0,
-        30.0,
+        LEGEND_H,
         Color32::from_black_alpha(217),
         Color32::from_black_alpha(140),
     );

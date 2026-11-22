@@ -20,6 +20,7 @@ mod capture;
 mod chart_sound;
 mod config;
 mod config_view;
+mod editor;
 mod fonts;
 mod frames;
 mod game;
@@ -1937,6 +1938,20 @@ impl App {
                 }
             }
             ItemId::ReconnectMidi => self.reopen_midi(),
+            ItemId::OpenEditor => match editor::open() {
+                Ok(editor::Opened::Opened) => {
+                    log::info!("opened the chart editor: {}", editor::URL);
+                    self.config_toast("ブラウザで譜面エディタを開きました".to_owned());
+                }
+                Ok(editor::Opened::Recently) => {}
+                Err(e) => {
+                    log::warn!("could not open the chart editor: {e}");
+                    self.config_toast(format!(
+                        "ブラウザを開けませんでした。{} を開いてください",
+                        editor::URL
+                    ));
+                }
+            },
             ItemId::ApplyAdvice => {
                 if let Some(a) = self.timing.as_ref().map(|t| t.advice)
                     && a.changes()
