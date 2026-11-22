@@ -137,6 +137,8 @@ pub struct LaneGroups {
     pub ft: FtGroup,
     pub cy: CyGroup,
     pub bd: BdGroup,
+    /// 左シンバルと右シンバルを叩き分けない（上流の CymbalFree）。ライドも共通にするかは `cy` に従う
+    pub cymbal_free: bool,
 }
 
 impl LaneGroups {
@@ -179,7 +181,9 @@ impl LaneGroups {
             BdGroup::BassDrumsCommon => pair(BD, LBD),
             BdGroup::Common => pair(BD, LP) || pair(BD, LBD) || pair(LP, LBD),
         };
-        hh || ft || cy || bd
+        let free =
+            self.cymbal_free && (pair(LC, CY) || (self.cy == CyGroup::Common && pair(LC, RD)));
+        hh || ft || cy || bd || free
     }
 }
 
@@ -776,5 +780,19 @@ mod tests {
         }
         .ordered();
         assert_eq!((w.great, w.good, w.poor), (50.0, 100.0, 100.0));
+    }
+
+    #[test]
+    fn cymbal_free_joins_the_left_and_right_cymbals() {
+        let mut g = LaneGroups {
+            cymbal_free: true,
+            ..Default::default()
+        };
+        assert!(g.accepts(CY, LC) && g.accepts(LC, CY));
+        // ライドはシンバルの寄せ方に従う
+        assert!(!g.accepts(LC, RD) && !g.accepts(RD, LC));
+        g.cy = CyGroup::Common;
+        assert!(g.accepts(LC, RD) && g.accepts(RD, CY));
+        assert!(!LaneGroups::default().accepts(CY, LC));
     }
 }

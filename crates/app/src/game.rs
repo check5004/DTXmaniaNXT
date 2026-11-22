@@ -70,7 +70,32 @@ pub struct Rules {
     /// 音符の無いところを叩くと MISS（上流の Tight。練習では使わない）
     pub tight: bool,
     pub gauge: GaugeRule,
+    /// 叩き分け（譜面に無いレーンは共通に寄せてから使う）
+    pub groups: LaneGroups,
+    pub hit_sounds: HitSoundRule,
 }
+
+/// 叩いた音の鳴らし方（上流の HH / FT / CY Priority と Muting LP）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HitSoundRule {
+    /// 共通にしたレーンで別のレーンの音符を取ったとき、叩いたパッドのレーンの音を鳴らす
+    /// （ハイハットと左シンバル、ロータムとフロアタム、シンバルとライドの順）
+    pub pad_first: [bool; 3],
+    /// 左ペダルを踏んだら、叩いて鳴っているハイハットの音を止める
+    pub muting_lp: bool,
+}
+
+impl Default for HitSoundRule {
+    fn default() -> Self {
+        Self {
+            pad_first: [false; 3],
+            muting_lp: true,
+        }
+    }
+}
+
+/// 叩いたハイハットの音に付ける目印（左ペダルで止める）
+const HH_TAG: u8 = 1;
 
 /// ゲージの増え方と減り方（上流 `CActPerfCommonGauge`）。演奏の画面がこれでゲージを動かす
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -229,6 +254,7 @@ pub struct Play {
     tight: bool,
     /// ゲージの決まり（演奏の画面が使う）
     pub gauge: GaugeRule,
+    hit_sounds: HitSoundRule,
 }
 
 impl Play {
@@ -294,7 +320,7 @@ impl Play {
                 .map(|n| (n.ms, n.wav)),
         );
         // 叩き分けの寄せ方は曲全体の音符で決める（練習の区間によって判定が変わらないように）
-        let groups = LaneGroups::default().effective_for(&notes);
+        let groups = rules.groups.effective_for(&notes);
         let (mut judge, practice) = match practice {
             None => (Judge::with_groups(notes, rules.windows, groups), None),
             Some(options) => (
@@ -402,6 +428,7 @@ impl Play {
             skipped: false,
             tight,
             gauge: rules.gauge,
+            hit_sounds: rules.hit_sounds,
         };
         play.lay_laps(start_ms);
         play.lay_auto(start_ms);
@@ -727,13 +754,25 @@ impl Play {
             // 取った音符の音を鳴らす。空打ちなら空打ちの音、無ければそのレーンの一番近い音符の音
             let wav = events
                 .first()
-                .map(|e| self.judge.notes()[e.note].wav)
+                .map(|e| self.hit_wav(lane, &self.judge.notes()[e.note], ms))
                 .or_else(|| self.stray_wav(lane, ms));
-            if let (Some(a), Some(w)) = (self.audio.as_mut(), wav)
-                && let Some(s) = self.sounds.get(&w)
-            {
-                let (gain, pan) = self.chart_sounds.gain_pan(w);
-                a.play_now_panned(s, gain * f32::from(velocity) / 127.0, pan);
+            // 上流の Muting LP: 左ペダルで、叩いて鳴っているハイハットを止める
+            let muting = self.hit_sounds.muting_lp && lane == DrumLane::LP;
+            let tag = if matches!(lane, DrumLane::HH | DrumLane::HHO) {
+                HH_TAG
+            } else {
+                0
+            };
+            if let Some(a) = self.audio.as_mut() {
+                if muting {
+                    a.stop(HH_TAG);
+                }
+                if let Some(w) = wav
+                    && let Some(s) = self.sounds.get(&w)
+                {
+                    let (gain, pan) = self.chart_sounds.gain_pan(w);
+                    a.play_now_panned(s, gain * f32::from(velocity) / 127.0, pan, tag);
+                }
             }
         }
         self.show(&events);
@@ -743,6 +782,40 @@ impl Play {
     /// 無ければそのレーンの一番近い音符（見えない音符 0x31〜 も含む）の音。
     /// 練習は周ごとに時刻を並べ直すので、並べた音符のうち一番近いものの音にする
     fn stray_wav(&self, lane: DrumLane, ms: f64) -> Option<u16> {
+        if self.practice.is_none()
+            && let Some(w) = self.chart_sounds.empty_hit(lane, ms)
+        {
+            return Some(w);
+        }
+        self.lane_wav(lane, ms)
+    }
+
+    /// 叩いて音符 `note` を取ったときの音。叩いたパッドのレーン `lane` と音符のレーンが違い（叩き分けを共通にした）、
+    /// パッドの音を先にする設定なら、そのパッドのレーンの一番近い音符の音（上流 `tProcessDrumHit` の P>C）。
+    /// 譜面に無いレーンは、上流と同じく開いたハイハットと左シンバルを閉じたハイハット、ライドを右シンバルとして探す
+    fn hit_wav(&self, lane: DrumLane, note: &dtx::DrumNote, ms: f64) -> u16 {
+        use DrumLane::*;
+        let family = match lane {
+            HH | HHO | LC => 0,
+            LT | FT => 1,
+            CY | RD => 2,
+            _ => return note.wav,
+        };
+        if note.lane == lane || !self.hit_sounds.pad_first[family] {
+            return note.wav;
+        }
+        let has = |l: DrumLane| self.judge.notes().iter().any(|n| n.lane == l);
+        let pad = match lane {
+            HHO | LC if !has(lane) => HH,
+            RD if !has(RD) => CY,
+            l => l,
+        };
+        self.lane_wav(pad, ms).unwrap_or(note.wav)
+    }
+
+    /// レーン `lane` の音符（見えない音符 0x31〜 も含む）のうち、曲の時刻 `ms` に一番近いものの音。
+    /// 練習は周ごとに時刻を並べ直すので、並べた音符のうち一番近いものの音にする
+    fn lane_wav(&self, lane: DrumLane, ms: f64) -> Option<u16> {
         let nearest = self
             .judge
             .notes()
@@ -752,9 +825,6 @@ impl Play {
             .map(|n| (n.ms, n.wav));
         if self.practice.is_some() {
             return nearest.map(|(_, w)| w);
-        }
-        if let Some(w) = self.chart_sounds.empty_hit(lane, ms) {
-            return Some(w);
         }
         match (nearest, self.chart_sounds.nearest_hidden(lane, ms)) {
             (Some(n), Some(h)) => Some(if (h.0 - ms).abs() < (n.0 - ms).abs() {
@@ -870,6 +940,10 @@ impl Play {
         }
         if self.tight {
             settings += ",\"tight\":true";
+        }
+        let groups = self.judge.groups();
+        if groups != LaneGroups::default() {
+            settings += &format!(",\"groups\":\"{groups:?}\"");
         }
         let g = self.gauge;
         if g != GaugeRule::default() {
@@ -1064,6 +1138,55 @@ fn load_sounds(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 譜面 `text` を一時ファイルに書いて読む（音は鳴らさない）
+    fn load_text(name: &str, text: &str, rules: &Rules) -> Play {
+        let path = std::env::temp_dir().join(format!("nxt-{name}-{}.dtx", std::process::id()));
+        std::fs::write(&path, text).unwrap();
+        let play = Play::load(&path, 0.0, false, rules);
+        std::fs::remove_file(&path).unwrap();
+        play.unwrap()
+    }
+
+    #[test]
+    fn pad_sound_first_plays_the_pad_lane() {
+        // BPM 60 で 1 小節 4000ms。HH（wav 01）は 4000ms と 12000ms、LC（wav 02）は 7500ms
+        let text = "#BPM 60\n#00111: 01\n#0011A: 0000000000000002\n#00311: 01\n";
+        let common = LaneGroups {
+            hh: engine::judge::HhGroup::Common,
+            ..Default::default()
+        };
+        let chip_first = load_text(
+            "chip-first",
+            text,
+            &Rules {
+                groups: common,
+                ..Default::default()
+            },
+        );
+        let hh = chip_first.judge.notes()[0].clone();
+        assert_eq!(hh.lane, DrumLane::HH);
+        // 左シンバルで閉じたハイハットの音符を取っても、ふだん（C>P）は譜面の音
+        assert_eq!(chip_first.hit_wav(DrumLane::LC, &hh, 4000.0), 1);
+        let pad_first = load_text(
+            "pad-first",
+            text,
+            &Rules {
+                groups: common,
+                hit_sounds: HitSoundRule {
+                    pad_first: [true, false, false],
+                    muting_lp: true,
+                },
+                ..Default::default()
+            },
+        );
+        // P>C なら叩いた左シンバルのレーンの音
+        assert_eq!(pad_first.hit_wav(DrumLane::LC, &hh, 4000.0), 2);
+        // 譜面に開いたハイハットが無ければ、閉じたハイハットの音
+        assert_eq!(pad_first.hit_wav(DrumLane::HHO, &hh, 4000.0), 1);
+        // 同じレーンなら譜面の音のまま
+        assert_eq!(pad_first.hit_wav(DrumLane::HH, &hh, 4000.0), 1);
+    }
 
     #[test]
     fn beat_lines_follow_bar_lengths() {

@@ -8,7 +8,7 @@
 use std::collections::BTreeMap;
 
 use dtx::DrumLane;
-use engine::judge::HitWindows;
+use engine::judge::{BdGroup, CyGroup, FtGroup, HhGroup, HitWindows, LaneGroups};
 use serde::{Deserialize, Serialize};
 
 /// 分類（設定の画面を作り直すときの 8 つの分類。名前は [`Group::label`]）
@@ -258,6 +258,87 @@ const fn view_choice(
     }
 }
 
+/// 叩き分け（上流の HH / FT / CY / BD Group と CymbalFree）
+pub const HH_GROUP: &str = "hh_group";
+pub const FT_GROUP: &str = "ft_group";
+pub const CY_GROUP: &str = "cy_group";
+pub const BD_GROUP: &str = "bd_group";
+pub const CYMBAL_FREE: &str = "cymbal_free";
+/// 叩き分けを共通にしたとき、譜面の音とパッドの音のどちらを鳴らすか（上流の HH / FT / CY Priority）
+pub const HH_PRIORITY: &str = "hh_priority";
+pub const FT_PRIORITY: &str = "ft_priority";
+pub const CY_PRIORITY: &str = "cy_priority";
+/// 左ペダルで鳴っているハイハットの音を止める（上流の Muting LP）
+pub const MUTING_LP: &str = "muting_lp";
+
+const GROUP_SECTION: &str = "叩き分け";
+const HIT_SOUND_SECTION: &str = "叩いた音";
+
+/// 上流 `EHHGroup` の並び
+const HH_GROUP_CHOICES: &[Choice] = choices![
+    "hh0" => "HH-0（全部叩き分ける）",
+    "hh1" => "HH-1（左シンバルはハイハットと共通）",
+    "hh2" => "HH-2（ハイハットの開閉は共通）",
+    "hh3" => "HH-3（全部共通）",
+];
+const FT_GROUP_CHOICES: &[Choice] = choices![
+    "ft0" => "FT-0（叩き分ける）",
+    "ft1" => "FT-1（ロータムと共通）",
+];
+const CY_GROUP_CHOICES: &[Choice] = choices![
+    "cy0" => "CY-0（叩き分ける）",
+    "cy1" => "CY-1（ライドと共通）",
+];
+/// 上流 `EBDGroup` の並び
+const BD_GROUP_CHOICES: &[Choice] = choices![
+    "bd0" => "BD-0（全部叩き分ける）",
+    "bd1" => "BD-1（左バスドラムは右と共通）",
+    "bd2" => "BD-2（左ペダルと左バスドラムが共通）",
+    "bd3" => "BD-3（全部共通）",
+];
+/// 上流 `EPlaybackPriority`
+const PRIORITY_CHOICES: &[Choice] = choices![
+    "chip" => "C>P（譜面の音）",
+    "pad" => "P>C（叩いたパッドの音）",
+];
+
+/// 叩き分けの選択肢
+const fn group_choice(
+    key: &'static str,
+    name: &'static str,
+    choices: &'static [Choice],
+    desc: &'static str,
+) -> Def {
+    Def {
+        key,
+        group: Group::Play,
+        section: GROUP_SECTION,
+        name,
+        kind: Kind::Choice {
+            choices,
+            default: 0,
+        },
+        desc,
+        in_play: false,
+    }
+}
+
+/// 鳴らす音の優先
+const fn priority(key: &'static str, name: &'static str, desc: &'static str) -> Def {
+    Def {
+        key,
+        group: Group::Sound,
+        section: HIT_SOUND_SECTION,
+        name,
+        kind: Kind::Choice {
+            choices: PRIORITY_CHOICES,
+            default: 0,
+        },
+        desc,
+        in_play: false,
+    }
+}
+
 const RULE_SECTION: &str = "演奏の決まり";
 
 /// ゲージの減り方の選択肢（上流 `EDamageLevel`。並びは MISS の減りにかける数 [`DAMAGE_FACTORS`] と同じ）
@@ -409,6 +490,39 @@ pub const ALL: &[Def] = &[
         desc: "音符の無いところを叩くと MISS を出し、コンボが切れてゲージが減ります（MISS の数には入れません）。\n区間の練習では効きません。",
         in_play: false,
     },
+    group_choice(
+        HH_GROUP,
+        "ハイハットの叩き分け（HH Group）",
+        HH_GROUP_CHOICES,
+        "左シンバル・ハイハット（閉）・ハイハット（開）を叩き分けるかを選びます。共通にしたものは、どれを叩いても取れます。\n譜面に無いレーンは、叩き分けようがないので共通にします。",
+    ),
+    group_choice(
+        FT_GROUP,
+        "フロアタムの叩き分け（FT Group）",
+        FT_GROUP_CHOICES,
+        "ロータムとフロアタムを叩き分けるかを選びます。",
+    ),
+    group_choice(
+        CY_GROUP,
+        "シンバルの叩き分け（CY Group）",
+        CY_GROUP_CHOICES,
+        "右シンバルとライドを叩き分けるかを選びます。譜面にライドが無ければ共通にします。",
+    ),
+    group_choice(
+        BD_GROUP,
+        "ペダルの叩き分け（BD Group）",
+        BD_GROUP_CHOICES,
+        "左ペダル・左バスドラム・バスドラムを叩き分けるかを選びます。",
+    ),
+    Def {
+        key: CYMBAL_FREE,
+        group: Group::Play,
+        section: GROUP_SECTION,
+        name: "シンバルフリー（CymbalFree）",
+        kind: Kind::Toggle { default: false },
+        desc: "左シンバルと右シンバルを叩き分けません（どちらで叩いても取れます）。\nライドも共通にするかは、シンバルの叩き分けに従います。",
+        in_play: false,
+    },
     Def {
         key: SKIP_MS,
         group: Group::App,
@@ -503,6 +617,30 @@ pub const ALL: &[Def] = &[
             zero: None,
         },
         desc: "コンボがこの数になったら、コンボの数を出します。",
+        in_play: false,
+    },
+    priority(
+        HH_PRIORITY,
+        "ハイハットの音（HH Priority）",
+        "ハイハットや左シンバルを共通にしたとき、別のレーンの音符を取ったら、譜面の音符の音を鳴らすか、叩いたパッドの音を鳴らすかを選びます。",
+    ),
+    priority(
+        FT_PRIORITY,
+        "フロアタムの音（FT Priority）",
+        "ロータムとフロアタムを共通にしたとき、譜面の音符の音を鳴らすか、叩いたパッドの音を鳴らすかを選びます。",
+    ),
+    priority(
+        CY_PRIORITY,
+        "シンバルの音（CY Priority）",
+        "シンバルとライドを共通にしたとき、譜面の音符の音を鳴らすか、叩いたパッドの音を鳴らすかを選びます。",
+    ),
+    Def {
+        key: MUTING_LP,
+        group: Group::Sound,
+        section: HIT_SOUND_SECTION,
+        name: "左ペダルでハイハットを止める（Muting LP）",
+        kind: Kind::Toggle { default: true },
+        desc: "左ペダルを踏むと、鳴っているハイハットの音（叩いた音）を止めます。",
         in_play: false,
     },
     hit_window(
@@ -688,6 +826,38 @@ impl Values {
         self.0.insert(key.to_owned(), v);
     }
 
+    /// 叩き分け（上流の HH / FT / CY / BD Group と CymbalFree）
+    pub fn lane_groups(&self) -> LaneGroups {
+        LaneGroups {
+            hh: match self.choice(HH_GROUP) {
+                1 => HhGroup::HiHatOnly,
+                2 => HhGroup::LeftCymbalOnly,
+                3 => HhGroup::Common,
+                _ => HhGroup::Separate,
+            },
+            ft: match self.choice(FT_GROUP) {
+                1 => FtGroup::Common,
+                _ => FtGroup::Separate,
+            },
+            cy: match self.choice(CY_GROUP) {
+                1 => CyGroup::Common,
+                _ => CyGroup::Separate,
+            },
+            bd: match self.choice(BD_GROUP) {
+                1 => BdGroup::BassDrumsCommon,
+                2 => BdGroup::LeftPedalsCommon,
+                3 => BdGroup::Common,
+                _ => BdGroup::Separate,
+            },
+            cymbal_free: self.flag(CYMBAL_FREE),
+        }
+    }
+
+    /// 叩き分けを共通にしたとき、叩いたパッドの音を先にするか（ハイハット・フロアタム・シンバルの順）
+    pub fn pad_sound_first(&self) -> [bool; 3] {
+        [HH_PRIORITY, FT_PRIORITY, CY_PRIORITY].map(|k| self.choice(k) == 1)
+    }
+
     /// MISS のゲージの減りにかける数
     pub fn damage_factor(&self) -> f64 {
         DAMAGE_FACTORS[self.choice(DAMAGE_LEVEL)]
@@ -843,6 +1013,26 @@ mod tests {
         assert!(v.flag(JUDGE_LINE_DISP));
         v.change(DARK, -1);
         assert_eq!(v.choice(LANE_DISP), 0);
+    }
+
+    #[test]
+    fn lane_groups_follow_the_upstream_order() {
+        let mut v = Values::default();
+        assert_eq!(v.lane_groups(), LaneGroups::default());
+        assert_eq!(v.pad_sound_first(), [false; 3]);
+        assert!(v.flag(MUTING_LP));
+        v.change(HH_GROUP, 1);
+        v.change(BD_GROUP, 1);
+        v.change(CYMBAL_FREE, 1);
+        v.change(CY_PRIORITY, 1);
+        let g = v.lane_groups();
+        // HH-1 は左シンバルとハイハットが共通、BD-1 は左バスドラムとバスドラムが共通
+        assert_eq!(g.hh, HhGroup::HiHatOnly);
+        assert_eq!(g.bd, BdGroup::BassDrumsCommon);
+        assert!(g.cymbal_free);
+        assert_eq!(v.pad_sound_first(), [false, false, true]);
+        v.change(BD_GROUP, 1);
+        assert_eq!(v.lane_groups().bd, BdGroup::LeftPedalsCommon);
     }
 
     #[test]
