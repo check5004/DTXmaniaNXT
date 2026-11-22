@@ -13,6 +13,7 @@
 // 開発中（debug）は、ログが見えるようにコンソールを残す
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
+mod app_icon;
 mod audio;
 mod band;
 mod capture;
@@ -2385,6 +2386,7 @@ impl ApplicationHandler for App {
                 return;
             }
         };
+        app_icon::apply(&window);
         let opened = match mode {
             DisplayMode::Fullscreen => DisplayMode::Fullscreen,
             _ => DisplayMode::Window,
