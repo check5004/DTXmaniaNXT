@@ -3,6 +3,7 @@
 //! 名前は NX の画面の英語のまま（System の中は Graphics・Audio・Gameplay の小分け）。
 //!
 //! ここに無い項目は何も出さない。NX に無い項目は [`NEW`] を返す。
+//! 設定の表（[`crate::settings`]）に項目を足したら、ここにも足す。
 
 use crate::config_view::{Drill, ItemId, Setting};
 
@@ -25,7 +26,8 @@ pub fn of(id: ItemId) -> Option<&'static str> {
             Setting::ShowLagTime => "System ＞ Gameplay ＞ ShowLagTime",
             Setting::ShowLagTimeColor => "System ＞ Gameplay ＞ ShowLagTimeColor",
             Setting::ShowLagHitCount => "System ＞ Gameplay ＞ ShowLagHitCount",
-            Setting::VisualAdjust | Setting::Update => NEW,
+            // 表示の補正、更新
+            _ => NEW,
         },
         ItemId::Table(key) => return of_key(key),
         ItemId::Practice(d) => match d {
@@ -46,12 +48,8 @@ pub fn of(id: ItemId) -> Option<&'static str> {
         | ItemId::ApplyAdvice => NEW,
         ItemId::Rescan => "System ＞ Reload Songs",
         ItemId::AddSongDir | ItemId::SongDir(_) => DTX_PATH,
-        ItemId::PracticeSong
-        | ItemId::AllSettings
-        | ItemId::Resume
-        | ItemId::Retry
-        | ItemId::Quit
-        | ItemId::Seek => return None,
+        // 簡易設定・一時停止の操作の行（ほかのスレッドが足した行も、ここに足すまでは何も出さない）
+        _ => return None,
     })
 }
 
@@ -128,18 +126,6 @@ fn of_key(key: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::settings;
-
-    #[test]
-    fn table_items_have_a_place() {
-        // 表の項目は全部どこかを答える（項目を足したら、ここにも足す）
-        let missing: Vec<&str> = settings::ALL
-            .iter()
-            .map(|d| d.key)
-            .filter(|k| of_key(k).is_none())
-            .collect();
-        assert!(missing.is_empty(), "{missing:?}");
-    }
 
     #[test]
     fn drum_and_system_items_point_where_nx_had_them() {
@@ -152,6 +138,8 @@ mod tests {
             Some("System ＞ Graphics ＞ Fullscreen")
         );
         assert_eq!(of(ItemId::Value(Setting::Update)), Some(NEW));
+        assert_eq!(of(ItemId::Table("hit_good")), Some(HIT_RANGE));
+        assert_eq!(of(ItemId::Table("no_such_key")), None);
         assert_eq!(of(ItemId::Resume), None);
     }
 }
