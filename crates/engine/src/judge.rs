@@ -185,7 +185,7 @@ pub struct JudgeEvent {
     /// `Judge::notes()` の添字
     pub note: usize,
     pub judgement: Judgement,
-    /// 叩いた時刻 − 音符の時刻（マイナスは早い）。見逃しは `None`
+    /// 叩いた時刻 − 音符の時刻（マイナスは早い）。見逃しと、自動で叩いた音符は `None`
     pub offset_ms: Option<f64>,
     pub velocity: Option<u8>,
 }
@@ -234,6 +234,8 @@ pub struct Judge {
     /// これより前の音符はすべて判定済み（見逃しの確認をここから始める）
     first_open: usize,
     tally: Tally,
+    /// 自動で叩くレーン（音符のレーン。`DrumLane as usize` の添字）
+    auto: [bool; 12],
 }
 
 impl Judge {
@@ -255,7 +257,27 @@ impl Judge {
             groups,
             first_open: 0,
             tally: Tally::default(),
+            auto: [false; 12],
         }
+    }
+
+    /// 自動で叩くレーンを決める（上流の AutoPlay）。そのレーンの音符は、時刻が来たら [`Judge::advance`] が
+    /// PERFECT で取り、叩いても取らない
+    pub fn set_auto(&mut self, lanes: &[DrumLane]) {
+        self.auto = [false; 12];
+        for &l in lanes {
+            self.auto[l as usize] = true;
+        }
+    }
+
+    /// レーン `lane` の音符を自動で叩くか
+    pub fn is_auto(&self, lane: DrumLane) -> bool {
+        self.auto[lane as usize]
+    }
+
+    /// 自動で叩くレーンがあるか
+    pub fn has_auto(&self) -> bool {
+        self.auto.iter().any(|&a| a)
     }
 
     pub fn notes(&self) -> &[DrumNote] {
@@ -299,7 +321,7 @@ impl Judge {
     pub fn hit(&mut self, hit: Hit) -> Vec<JudgeEvent> {
         let mut candidates: Vec<usize> = DrumLane::ALL
             .into_iter()
-            .filter(|&lane| self.groups.accepts(hit.lane, lane))
+            .filter(|&lane| !self.is_auto(lane) && self.groups.accepts(hit.lane, lane))
             .filter_map(|lane| self.nearest_open(lane, hit.ms))
             .collect();
         let Some(earliest) = candidates
@@ -328,9 +350,24 @@ impl Judge {
             .collect()
     }
 
-    /// 時刻 `now_ms` までに判定の幅を過ぎた音符を見逃しにする
+    /// 時刻 `now_ms` までに来た自動で叩くレーンの音符を PERFECT で取り、判定の幅を過ぎた音符を見逃しにする
     pub fn advance(&mut self, now_ms: f64) -> Vec<JudgeEvent> {
         let mut out = Vec::new();
+        if self.has_auto() {
+            let mut i = self.first_open;
+            while i < self.notes.len() && self.notes[i].ms <= now_ms {
+                if !self.done[i] && self.is_auto(self.notes[i].lane) {
+                    self.close(i, Judgement::Perfect);
+                    out.push(JudgeEvent {
+                        note: i,
+                        judgement: Judgement::Perfect,
+                        offset_ms: None,
+                        velocity: None,
+                    });
+                }
+                i += 1;
+            }
+        }
         let mut i = self.first_open;
         while i < self.notes.len() && self.notes[i].ms + self.windows.poor < now_ms {
             if !self.done[i] {
@@ -532,6 +569,44 @@ mod tests {
             LaneGroups::default(),
         );
         assert_eq!(j.groups().hh, HhGroup::Separate);
+    }
+
+    #[test]
+    fn auto_lanes_are_taken_on_time_and_not_by_hits() {
+        let mut j = Judge::new(
+            vec![note(1000.0, BD), note(1000.0, SD), note(1500.0, BD)],
+            HitWindows::default(),
+            LaneGroups::default(),
+        );
+        j.set_auto(&[BD]);
+        assert!(j.is_auto(BD) && !j.is_auto(SD) && j.has_auto());
+        // 叩いても自動のレーンの音符は取らない
+        assert!(
+            j.hit(Hit {
+                ms: 1495.0,
+                lane: BD,
+                velocity: 100
+            })
+            .is_empty()
+        );
+        // 時刻が来たら PERFECT で取る（ずれは無し）。叩くレーンはそのまま
+        assert!(j.advance(999.0).is_empty());
+        let ev = j.advance(1000.0);
+        assert_eq!(ev.len(), 1);
+        assert_eq!(
+            (ev[0].note, ev[0].judgement, ev[0].offset_ms),
+            (0, Judgement::Perfect, None)
+        );
+        let ev = j.hit(Hit {
+            ms: 1010.0,
+            lane: SD,
+            velocity: 100,
+        });
+        assert_eq!(ev[0].note, 1);
+        let ev = j.advance(2000.0);
+        assert_eq!(ev.iter().map(|e| e.note).collect::<Vec<_>>(), vec![2]);
+        assert_eq!(j.tally().perfect, 3);
+        assert_eq!(j.tally().miss, 0);
     }
 
     #[test]

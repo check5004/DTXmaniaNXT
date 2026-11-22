@@ -22,6 +22,7 @@ use winit::keyboard::KeyCode;
 use crate::config::{Config, MASTER_VOLUME_STEP};
 use crate::gfx::{Canvas, Gfx, src};
 use crate::inputs::{LaneSource, lane_label};
+use crate::settings::{self, Group};
 use crate::sfx::Se;
 use crate::text::Style;
 use crate::title_view::draw_scanning;
@@ -55,6 +56,8 @@ pub enum ConfigAction {
     Nudge(Setting, i32),
     /// ON と OFF などを切り替える
     Toggle(Setting),
+    /// 設定の表（[`crate::settings`]）の項目を 1 段変える（ON / OFF は切り替え、選択肢は次へ、数は刻み）
+    Change(&'static str, i32),
     /// MIDI のポート（何番目か）のノート番号をレーンに割り当てる
     AssignPad(DrumLane, usize, u8),
     /// キーボードのキーをレーンに割り当てる
@@ -101,6 +104,8 @@ pub enum ItemId {
     SongDir(usize),
     Rescan,
     Value(Setting),
+    /// 設定の表（[`crate::settings`]）の項目（キー）
+    Table(&'static str),
     /// パッドの割り当ての一覧へ
     DrumsKeys,
     Pad(DrumLane),
@@ -123,6 +128,9 @@ pub enum ItemId {
 impl ItemId {
     /// Enter で値を変える状態になる数の項目
     fn is_integer(self) -> bool {
+        if let ItemId::Table(key) = self {
+            return matches!(settings::def(key).kind, settings::Kind::Number { .. });
+        }
         matches!(
             self,
             ItemId::Value(
@@ -234,6 +242,18 @@ fn item(id: ItemId, name: &str, value: String, desc: String) -> Item {
         name: name.to_owned(),
         value,
         desc,
+    }
+}
+
+/// 設定の表の分類 `group` の項目を足す
+fn push_table(v: &mut Vec<Item>, c: &Config, group: Group) {
+    for d in settings::in_group(group) {
+        v.push(item(
+            ItemId::Table(d.key),
+            d.name,
+            c.settings.label(d.key),
+            d.desc.to_owned(),
+        ));
     }
 }
 
@@ -383,8 +403,12 @@ pub fn items(list: List, info: &ConfigInfo<'_>) -> Vec<Item> {
                 "ON にすると、起動したときに新しい版を GitHub から落とし、終了したときに入れ替えます。\nSetup.exe で入れたときだけ働きます。切り替えは次の起動から効きます。"
                     .to_owned(),
             ));
+            push_table(&mut v, c, Group::Songs);
+            push_table(&mut v, c, Group::App);
         }
         List::Drums => {
+            // 上流と同じく、自動演奏（AutoPlay）を先頭に
+            push_table(&mut v, c, Group::Play);
             v.push(item(
                 ItemId::Value(Setting::ScrollSpeed),
                 "譜面の速さ",
@@ -436,6 +460,15 @@ pub fn items(list: List, info: &ConfigInfo<'_>) -> Vec<Item> {
                     device_names(&info.devices)
                 ),
             ));
+            for g in [
+                Group::View,
+                Group::Timing,
+                Group::Sound,
+                Group::Input,
+                Group::Practice,
+            ] {
+                push_table(&mut v, c, g);
+            }
         }
         List::DrumsKeys => {
             for lane in PADS {
@@ -737,6 +770,9 @@ impl ConfigView {
                         ItemId::DeviceMinVelocity(i) => {
                             Response::action(Se::Move, ConfigAction::NudgeMinVelocity(i, -d as i32))
                         }
+                        ItemId::Table(key) => {
+                            Response::action(Se::Move, ConfigAction::Change(key, -d as i32))
+                        }
                         _ => Response::default(),
                     };
                 }
@@ -778,6 +814,7 @@ impl ConfigView {
                     ItemId::Rescan => ConfigAction::Rescan,
                     ItemId::ReconnectMidi => ConfigAction::ReconnectMidi,
                     ItemId::Value(s) => ConfigAction::Toggle(s),
+                    ItemId::Table(key) => ConfigAction::Change(key, 1),
                     ItemId::ResetPads => ConfigAction::ResetPads,
                     ItemId::DeviceUse(i) => ConfigAction::ToggleDevice(i),
                     ItemId::DevicePreset(i) => ConfigAction::NextPreset(i),
@@ -1164,8 +1201,10 @@ mod tests {
         assert_eq!(v.list(), List::Drums);
         v.input(ConfigInput::Decide, &list);
         // 譜面の速さを選んで値を変える状態に
-        v.input(ConfigInput::Down, &list);
-        assert_eq!(list[v.cursor].id, ItemId::Value(Setting::ScrollSpeed));
+        v.cursor = list
+            .iter()
+            .position(|i| i.id == ItemId::Value(Setting::ScrollSpeed))
+            .unwrap();
         assert_eq!(v.input(ConfigInput::Decide, &list).action, None);
         assert_eq!(
             v.input(ConfigInput::Up, &list).action,
@@ -1178,6 +1217,26 @@ mod tests {
         // Esc で値の変更をやめても一覧に残る
         v.input(ConfigInput::Cancel, &list);
         assert!(v.focus_list && !v.editing);
+    }
+
+    #[test]
+    fn auto_play_is_at_the_top_of_drums() {
+        let mut config = Config::default();
+        let list = items(List::Drums, &info(&config));
+        assert_eq!(list[1].id, ItemId::Table(settings::AUTO_ALL));
+        assert_eq!(list[1].value, "OFF");
+        assert_eq!(list[2].name, "　左シンバル");
+        let mut v = ready();
+        v.input(ConfigInput::Down, &list);
+        v.input(ConfigInput::Decide, &list);
+        v.cursor = 1;
+        assert_eq!(
+            v.input(ConfigInput::Decide, &list).action,
+            Some(ConfigAction::Change(settings::AUTO_ALL, 1))
+        );
+        config.settings.change("auto_bd", 1);
+        let list = items(List::Drums, &info(&config));
+        assert_eq!(list[1].value, "-");
     }
 
     #[test]

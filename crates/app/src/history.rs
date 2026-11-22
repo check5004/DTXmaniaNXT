@@ -79,7 +79,8 @@ impl History {
         let (Some(records), Some(mut session)) = (self.records.as_mut(), play.session()) else {
             return None;
         };
-        if play.practice.is_none() {
+        // 自動で叩くレーンがあるプレイは、ベストの記録（スコア）に入れない
+        if play.practice.is_none() && !play.has_auto() {
             session.score = score;
         }
         let path = play.path.to_string_lossy();

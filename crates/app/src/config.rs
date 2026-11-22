@@ -9,6 +9,7 @@ use engine::practice::{LoopStyle, PassRule, SpeedPlan, snap_speed};
 use serde::{Deserialize, Serialize};
 
 use crate::practice::PracticePrefs;
+use crate::settings::Values;
 use crate::stretch::Pitch;
 
 /// 設定の画面で全体の音量を 1 回で変える幅（%）
@@ -68,6 +69,9 @@ pub struct Config {
     pub keys: Vec<KeyBind>,
     /// 起動したときに GitHub のリリースから新しい版を落とし、終えるときに入れ替える（Setup.exe で入れたときだけ）
     pub auto_update: bool,
+    /// 設定の表（[`crate::settings`]）の項目の値（config.toml の `[settings]`）。書いていないものは既定
+    #[serde(skip_serializing_if = "Values::is_empty")]
+    pub settings: Values,
 }
 
 /// パッドの割り当て 1 つ（ノート番号 → レーン）
@@ -148,6 +152,7 @@ impl Default for Config {
             midi_devices: Vec::new(),
             keys: Vec::new(),
             auto_update: true,
+            settings: Values::default(),
         }
     }
 }
