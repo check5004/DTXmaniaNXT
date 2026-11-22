@@ -882,7 +882,8 @@ pub struct PlayPos {
     pub end_ms: f64,
 }
 
-/// パッドの割り当ての並び（上流 `tSetupItemList_KeyAssignDrums`）。順に割り当てるときもこの順
+/// 順に叩いて割り当てるレーン（上流 `tSetupItemList_KeyAssignDrums` の並び）。左バスドラムは別のパッドを
+/// 持つ人だけが使うので聞かない（キックを踏んで、バスドラムのノートを左バスドラムに取られないように）
 pub const PADS: [DrumLane; 11] = [
     DrumLane::LC,
     DrumLane::HH,
@@ -896,6 +897,17 @@ pub const PADS: [DrumLane; 11] = [
     DrumLane::RD,
     DrumLane::LP,
 ];
+
+/// 割り当ての一覧と配置図に出すレーン（[`PADS`] と左バスドラム）
+pub const LANES: [DrumLane; 12] = {
+    let mut lanes = [DrumLane::LBD; 12];
+    let mut i = 0;
+    while i < PADS.len() {
+        lanes[i] = PADS[i];
+        i += 1;
+    }
+    lanes
+};
 
 fn folder_name(p: &Path) -> String {
     p.file_name().map_or_else(
@@ -1175,19 +1187,25 @@ pub fn rows(page: Page, info: &ConfigInfo<'_>) -> Vec<Row> {
                     ItemId::AssignAll,
                     "順に叩いて割り当てる",
                     String::new(),
-                    "左シンバルからライドまで、言われたレーンのパッドを順に叩いて割り当てます。叩いた機器の割り当てになります。\n叩かずに 4 秒たつと次のレーンへ飛ばします。"
+                    "左シンバルから左ペダルまで、言われたレーンのパッドを順に叩いて割り当てます。叩いた機器の割り当てになります。\n叩かずに 4 秒たつと次のレーンへ飛ばします。左バスドラムは下の一覧から足します。"
                         .to_owned(),
                     None,
                 )
             });
             let lanes = s.at("レーン");
-            for lane in PADS {
+            for lane in LANES {
                 let sources = info.lanes.get(&lane).map_or(&[][..], Vec::as_slice);
                 let mut desc: String = sources
                     .iter()
                     .map(|s| format!("{}: {}\n", s.source, s.inputs.join(", ")))
                     .collect();
-                if sources.is_empty() {
+                if lane == DrumLane::LBD {
+                    desc.push_str(if sources.is_empty() {
+                        "割り当てが無いので、バスドラムで左バスドラムの音符も取れます（ペダルの叩き分けが BD-2 なら左ペダルで）。別のパッドやキーで踏むときだけ足します。\n"
+                    } else {
+                        "左バスドラムをバスドラムでも取るかは、演奏の「ペダルの叩き分け」で決めます。\n"
+                    });
+                } else if sources.is_empty() {
                     desc.push_str("割り当てがありません。\n");
                 }
                 desc.push_str(
@@ -2759,7 +2777,7 @@ fn preview_kit(
     lit: Option<DrumLane>,
     (x, y, w, h): (f32, f32, f32, f32),
 ) {
-    for lane in PADS {
+    for lane in LANES {
         let p = ui::lane_spot_in(lane, x + 30.0, y + 26.0, w - 60.0, h - 66.0);
         let sources = info.lanes.get(&lane).map_or(&[][..], Vec::as_slice);
         let notes = sources
@@ -2794,7 +2812,7 @@ fn preview_kit(
 /// 自動演奏の見本（自動で叩くレーンを光らせる）
 fn preview_auto(c: &Canvas, g: &mut Gfx, cfg: &Config, (x, y, w, h): (f32, f32, f32, f32)) {
     let auto = cfg.settings.auto_lanes();
-    for lane in PADS {
+    for lane in LANES {
         let p = ui::lane_spot_in(lane, x + 30.0, y + 26.0, w - 60.0, h - 66.0);
         let on = auto.contains(&lane);
         ui::pad_circle(

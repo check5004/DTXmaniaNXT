@@ -834,7 +834,10 @@ impl App {
                 risky: v.number(settings::RISKY) as u32,
                 hazard: v.flag(settings::HAZARD),
             },
-            groups: v.lane_groups(),
+            // 左バスドラムに入力が無ければ、バスドラムで取れるように
+            groups: v.lane_groups().for_inputs(
+                inputs::lane_sources(&self.config, self.ports()).contains_key(&DrumLane::LBD),
+            ),
             hit_sounds: HitSoundRule {
                 pad_first: v.pad_sound_first(),
                 muting_lp: v.flag(settings::MUTING_LP),
@@ -2502,6 +2505,7 @@ impl App {
                 let c = Canvas::new(&painter, ctx.content_rect());
                 self.gfx.begin(&c, ctx.pixels_per_point());
                 self.view.update(&mut self.songs);
+                self.view.left_bass_apart = self.config.settings.left_bass_apart();
                 self.view.draw(&c, &mut self.gfx, &self.songs);
                 if let Some(p) = &self.popup {
                     p.draw(&c, &mut self.gfx);

@@ -160,6 +160,16 @@ impl LaneGroups {
         self
     }
 
+    /// 左バスドラムを叩く入力（パッドやキー）が無ければ叩き分けようがないので、バスドラムで取れるようにする
+    /// （BD-0 を BD-1 に寄せる。ツインペダルで同じキックのパッドを踏むときや、右足 1 本で踏むとき）。
+    /// 左ペダルと共通（BD-2）や全部共通（BD-3）は選んだとおりにする
+    pub fn for_inputs(mut self, left_bass_input: bool) -> Self {
+        if !left_bass_input && self.bd == BdGroup::Separate {
+            self.bd = BdGroup::BassDrumsCommon;
+        }
+        self
+    }
+
     /// `hit` のレーンを叩いたとき、`note` のレーンの音符を取れるか
     pub fn accepts(&self, hit: DrumLane, note: DrumLane) -> bool {
         use DrumLane::*;
@@ -753,6 +763,33 @@ mod tests {
             ..Default::default()
         };
         assert!(g.accepts(LP, BD));
+    }
+
+    #[test]
+    fn left_bass_falls_back_to_the_bass_drum_without_its_own_input() {
+        let mut j = Judge::new(
+            vec![note(1000.0, BD), note(1100.0, LBD), note(1200.0, LP)],
+            HitWindows::default(),
+            LaneGroups::default().for_inputs(false),
+        );
+        assert_eq!(j.groups().bd, BdGroup::BassDrumsCommon);
+        let bd = |ms| Hit {
+            ms,
+            lane: BD,
+            velocity: 100,
+        };
+        assert_eq!(j.hit(bd(1000.0))[0].note, 0);
+        // 左バスドラムの音符をバスドラムで取れる。左ペダルの音符は取れない
+        assert_eq!(j.hit(bd(1100.0))[0].note, 1);
+        assert!(j.hit(bd(1200.0)).is_empty());
+        // 左バスドラムの入力があれば、選んだ叩き分け（BD-0）のまま
+        assert_eq!(LaneGroups::default().for_inputs(true).bd, BdGroup::Separate);
+        // BD-2（左ペダルと共通）は選んだとおり
+        let g = LaneGroups {
+            bd: BdGroup::LeftPedalsCommon,
+            ..Default::default()
+        };
+        assert_eq!(g.for_inputs(false), g);
     }
 
     #[test]

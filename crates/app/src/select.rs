@@ -111,25 +111,46 @@ enum Preimage {
 struct Details {
     /// 音符の数
     total: usize,
-    /// レーン（LC, HH, LP, SD, HT, BD, LT, FT, CY）ごと、曲の頭から終わりまでを `BINS` に分けた音符の数
-    bins: Box<[[u16; BINS]; 9]>,
-    /// `bins` の一番大きい数
-    peak: u16,
+    /// レーン（LC, HH, LP, SD, HT, BD, LT, FT, CY と、最後に左バスドラム）ごと、
+    /// 曲の頭から終わりまでを `BINS` に分けた音符の数。左バスドラムは描くときに LP か BD の列に足す
+    bins: Box<[[u16; BINS]; 10]>,
 }
 
-/// レーンの並び（graph_fg_drums.png の下のアイコンの順。HH は開きを、LP は左バスを、CY はライドを含む）
+/// グラフの列の数（graph_fg_drums.png の下のアイコンの数）
+const GRAPH_LANES: usize = 9;
+/// `Details::bins` の左バスドラムの行
+const LEFT_BASS_ROW: usize = GRAPH_LANES;
+
+/// レーンの並び（graph_fg_drums.png の下のアイコンの順。HH は開きを、CY はライドを含む）。
+/// 左バスドラムは [`LEFT_BASS_ROW`]
 fn lane_index(lane: dtx::DrumLane) -> usize {
     use dtx::DrumLane as L;
     match lane {
         L::LC => 0,
         L::HH | L::HHO => 1,
-        L::LP | L::LBD => 2,
+        L::LP => 2,
         L::SD => 3,
         L::HT => 4,
         L::BD => 5,
         L::LT => 6,
         L::FT => 7,
         L::CY | L::RD => 8,
+        L::LBD => LEFT_BASS_ROW,
+    }
+}
+
+impl Details {
+    /// グラフの列ごとの音符の数と、その一番大きい数。左バスドラムは、演奏の画面で LP と分けて出すなら
+    /// （BD のレーンか、足したレーン）BD の列に、LP のレーンに出すなら LP の列に足す
+    fn columns(&self, left_bass_apart: bool) -> ([[u16; BINS]; GRAPH_LANES], u16) {
+        let mut cols = [[0u16; BINS]; GRAPH_LANES];
+        cols.copy_from_slice(&self.bins[..GRAPH_LANES]);
+        let to = if left_bass_apart { 5 } else { 2 };
+        for (cell, add) in cols[to].iter_mut().zip(self.bins[LEFT_BASS_ROW]) {
+            *cell = cell.saturating_add(add);
+        }
+        let peak = cols.iter().flatten().copied().max().unwrap_or(0);
+        (cols, peak)
     }
 }
 
@@ -142,7 +163,7 @@ fn read_details(path: &Path) -> Option<Details> {
 }
 
 fn details_of(notes: &[dtx::DrumNote]) -> Details {
-    let mut bins = Box::new([[0u16; BINS]; 9]);
+    let mut bins = Box::new([[0u16; BINS]; 10]);
     let first = notes.iter().map(|n| n.ms).fold(f64::INFINITY, f64::min);
     let last = notes.iter().map(|n| n.ms).fold(f64::NEG_INFINITY, f64::max);
     let span = (last - first).max(1.0);
@@ -151,11 +172,9 @@ fn details_of(notes: &[dtx::DrumNote]) -> Details {
         let cell = &mut bins[lane_index(n.lane)][b];
         *cell = cell.saturating_add(1);
     }
-    let peak = bins.iter().flatten().copied().max().unwrap_or(0);
     Details {
         total: notes.len(),
         bins,
-        peak,
     }
 }
 
@@ -184,6 +203,8 @@ pub struct SelectView {
     /// 読み終えた譜面の混み具合（読めなかったものは None）
     details: HashMap<PathBuf, Option<Details>>,
     details_jobs: Jobs<PathBuf, Option<Details>>,
+    /// 左バスドラムを LP と分けて出す（密度のグラフで BD の列に数える）。設定から毎回入れる
+    pub left_bass_apart: bool,
 }
 
 impl Default for SelectView {
@@ -207,6 +228,7 @@ impl SelectView {
             found: HashMap::new(),
             details: HashMap::new(),
             details_jobs: Jobs::new("chart details", 1, |path: &PathBuf| read_details(path)),
+            left_bass_apart: true,
         }
     }
 
@@ -662,15 +684,16 @@ impl SelectView {
         let Some(d) = chart.and_then(|ch| self.details(&ch.path)) else {
             return;
         };
-        if d.peak > 0 {
+        let (cols, peak) = d.columns(self.left_bass_apart);
+        if peak > 0 {
             let cell = GRAPH_H / BINS as f32;
-            for (lane, bins) in d.bins.iter().enumerate() {
+            for (lane, bins) in cols.iter().enumerate() {
                 let x = GRAPH_LANE_X + lane as f32 * GRAPH_LANE_STEP;
                 for (b, &count) in bins.iter().enumerate() {
                     if count == 0 {
                         continue;
                     }
-                    let a = 0.35 + 0.65 * f32::from(count) / f32::from(d.peak);
+                    let a = 0.35 + 0.65 * f32::from(count) / f32::from(peak);
                     let y = GRAPH_TOP + GRAPH_H - (b + 1) as f32 * cell;
                     c.fill(
                         x,
@@ -1171,6 +1194,30 @@ mod tests {
         assert_eq!(d.bins[1][0], 1);
         assert_eq!(d.bins[1][BINS / 2], 1);
         assert_eq!(d.bins[8][BINS - 1], 1);
-        assert_eq!(d.peak, 1);
+        assert_eq!(d.columns(true).1, 1);
+    }
+
+    #[test]
+    fn left_bass_goes_to_the_lane_it_is_shown_in() {
+        use dtx::{DrumLane, DrumNote, NotePos};
+        let note = |ms: f64, lane| DrumNote {
+            ms,
+            lane,
+            wav: 0,
+            at: NotePos::new(0, 0, 1),
+            beat: 0.0,
+        };
+        let d = details_of(&[
+            note(1000.0, DrumLane::BD),
+            note(1000.0, DrumLane::LBD),
+            note(1000.0, DrumLane::LP),
+            note(5000.0, DrumLane::SD),
+        ]);
+        assert_eq!(d.total, 4);
+        // LP と分けて出すなら BD の列（5）に、LP のレーンに出すなら LP の列（2）に足す
+        let (cols, peak) = d.columns(true);
+        assert_eq!((cols[5][0], cols[2][0], peak), (2, 1, 2));
+        let (cols, peak) = d.columns(false);
+        assert_eq!((cols[5][0], cols[2][0], peak), (1, 2, 2));
     }
 }
