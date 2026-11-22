@@ -1,5 +1,6 @@
 //! 曲を読み込むあいだの画面（上流 `CStageSongLoading`）。
 //! スキンの 6_ の画像で、ジャケット、曲名、アーティスト、パートと難易度のパネル、レベルを出す。
+//! 配置は NX v2.0（BocuD 版 20260121）に合わせる：ジャケットは回さずに左に、曲名とアーティストはその右に。
 //! 上流と同じく、読み込みが終わっても「Now loading」の音が鳴り終わるまでは出しておく。
 //!
 //! 曲は別のスレッドで読む。画面のスレッドで読むと、読み終わるまで描画もキーも止まる
@@ -16,8 +17,14 @@ use library::ChartHead;
 
 use crate::game::Play;
 use crate::gfx::{Canvas, Gfx, Glyphs, Opt, fit_scale, src};
-use crate::play_view::{difficulty_cell, rotate_about_center};
+use crate::play_view::difficulty_cell;
 use crate::text::Style;
+
+/// ジャケットの中心（v2：画面の中心から左へ 348、上へ 84）
+const JACKET_CX: f32 = 640.0 - 348.0;
+const JACKET_CY: f32 = 360.0 - 84.0;
+/// 曲名とアーティストの左（v2。1.4 は 190）
+const TEXT_X: f32 = 500.0;
 
 /// 読み込みの画面
 pub struct Loading {
@@ -73,19 +80,13 @@ impl Loading {
             None => c.cover(Color32::BLACK),
         }
         self.draw_jacket(c, g);
-        let edge = |px: f32| Style {
-            px,
-            color: Color32::WHITE,
-            bold: false,
-            shadow: None,
-            edge: Some((Color32::BLACK, px / 12.0)),
-            gradient: None,
-        };
+        // 曲名とアーティスト（上流：黒い文字を白で縁取る。縁の太さは文字の 1/6 のペンなので、外へ 1/12）
+        let edge = |px: f32| Style::edged(px, Color32::BLACK, Color32::WHITE, px / 12.0);
         if let Some(t) = g.texts.get(&self.head.title, &edge(40.0)) {
-            t.draw_fit(c, 190.0, 285.0, 625.0);
+            t.draw_fit(c, TEXT_X, 285.0, 625.0);
         }
         if let Some(t) = g.texts.get(&self.head.artist, &edge(30.0)) {
-            t.draw_fit(c, 190.0, 360.0, 625.0);
+            t.draw_fit(c, TEXT_X, 360.0, 625.0);
         }
         // ドラムのパートのパネル（6_Part.png の 1 段目）と難易度のパネル
         if let Some(t) = g.skin.tex("Graphics/6_Part.png") {
@@ -107,7 +108,8 @@ impl Loading {
         }
     }
 
-    /// ジャケット（上流は 384 に縮めて (206, 66) へ動かし、画面の中心のまわりに 0.28 ラジアン回す）
+    /// ジャケット（v2：長い辺を 384 に合わせ、回さずに中心を画面の中心から (-348, 84)（上が正）へ。
+    /// 1.4 は右上で 0.28 ラジアン回していた）
     fn draw_jacket(&self, c: &Canvas, g: &mut Gfx) {
         let default = "Graphics/5_preimage default.png";
         let jacket = match &self.preimage {
@@ -121,12 +123,11 @@ impl Loading {
             return;
         };
         let f = fit_scale(&t, 384.0);
-        let (cx, cy) = rotate_about_center(206.0, 66.0, 0.28);
         c.draw_rot(
             &t,
-            cx,
-            cy,
-            0.28,
+            JACKET_CX,
+            JACKET_CY,
+            0.0,
             Opt {
                 sx: f,
                 sy: f,
