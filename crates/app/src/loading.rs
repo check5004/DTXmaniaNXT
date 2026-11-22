@@ -1,25 +1,26 @@
 //! 曲を読み込むあいだの画面（上流 `CStageSongLoading`）。
 //! スキンの 6_ の画像で、ジャケット、曲名、アーティスト、パートと難易度のパネル、レベルを出す。
 //! 上流と同じく、読み込みが終わっても「Now loading」の音が鳴り終わるまでは出しておく。
+//!
+//! 曲は別のスレッドで読む。画面のスレッドで読むと、読み終わるまで描画もキーも止まる
+//! （Windows では、読み込み中に Esc で戻ると画面が読み込みのまま固まることがあった）。
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
+use std::sync::mpsc::{Receiver, TryRecvError, channel};
 use std::time::{Duration, Instant};
 
+use anyhow::{Result, anyhow};
 use egui::Color32;
 use library::ChartHead;
 
 use crate::game::Play;
 use crate::gfx::{Canvas, Gfx, Glyphs, Opt, fit_scale, src};
 use crate::play_view::{difficulty_cell, rotate_about_center};
-use crate::practice::PracticeOptions;
 use crate::text::Style;
 
 /// 読み込みの画面
 pub struct Loading {
-    pub path: PathBuf,
-    /// 練習なら区間とつなぎ方
-    pub practice: Option<PracticeOptions>,
     head: ChartHead,
     preimage: Option<PathBuf>,
     /// 6_Difficulty.png の切り出しの左上
@@ -27,21 +28,16 @@ pub struct Loading {
     started: Instant,
     /// 「Now loading」の音の長さ
     wait: Duration,
-    /// 描いた回数（1 回描いてから読み込む。でないと読み込みのあいだ画面が出ない）
-    frames: u32,
+    /// 別のスレッドで読んでいる曲（結果を受け取ったら None）
+    job: Option<Job<Play>>,
     /// 読み終えた曲
     pub play: Option<Box<Play>>,
 }
 
 impl Loading {
-    /// `label` は難易度の名前（選曲画面で選んだもの）
-    pub fn new(
-        path: PathBuf,
-        practice: Option<PracticeOptions>,
-        label: &str,
-        wait: Duration,
-    ) -> Self {
-        let head = library::scan::read_head(&path).unwrap_or_default();
+    /// `path` は譜面、`label` は難易度の名前（選曲画面で選んだもの）。`job` は曲を読んでいるスレッド
+    pub fn new(path: &Path, label: &str, wait: Duration, job: Job<Play>) -> Self {
+        let head = library::scan::read_head(path).unwrap_or_default();
         let preimage = path
             .parent()
             .zip(Some(head.preimage.trim()))
@@ -49,21 +45,21 @@ impl Loading {
             .and_then(|(dir, name)| library::scan::resolve(dir, name));
         let diff_panel = difficulty_cell("6", label).unwrap_or((0.0, 0.0));
         Self {
-            path,
-            practice,
             head,
             preimage,
             diff_panel,
             started: Instant::now(),
             wait,
-            frames: 0,
+            job: Some(job),
             play: None,
         }
     }
 
-    /// 画面を 1 回は出したので、読み込んでよい
-    pub fn ready_to_load(&self) -> bool {
-        self.frames >= 1 && self.play.is_none()
+    /// 読み終えていれば、その結果（1 回だけ返す）
+    pub fn take_result(&mut self) -> Option<Result<Play>> {
+        let r = self.job.as_ref()?.poll()?;
+        self.job = None;
+        Some(r)
     }
 
     /// 読み込みが終わり、音も鳴り終えた
@@ -71,8 +67,7 @@ impl Loading {
         self.play.is_some() && self.started.elapsed() >= self.wait
     }
 
-    pub fn draw(&mut self, c: &Canvas, g: &mut Gfx) {
-        self.frames = self.frames.saturating_add(1);
+    pub fn draw(&self, c: &Canvas, g: &mut Gfx) {
         match g.skin.tex("Graphics/6_background.jpg") {
             Some(t) => c.draw(&t, 0.0, 0.0),
             None => c.cover(Color32::BLACK),
@@ -141,6 +136,40 @@ impl Loading {
     }
 }
 
+/// 別のスレッドでしている仕事 1 つ。結果を受け取らずに捨てたら、結果はそのスレッドで捨てる
+/// （読み込み中に Esc で戻ったとき、読み終えた曲は画面のスレッドを止めずに捨てられる）
+pub struct Job<T>(Receiver<Result<T>>);
+
+impl<T: Send + 'static> Job<T> {
+    /// `work` を別のスレッドで始める
+    pub fn spawn(name: &str, work: impl FnOnce() -> Result<T> + Send + 'static) -> Self {
+        let (tx, rx) = channel();
+        let spawned = std::thread::Builder::new()
+            .name(name.to_owned())
+            .spawn(move || {
+                // 受け取る側がもう無ければ、結果はここで捨てる
+                let _ = tx.send(work());
+            });
+        if let Err(e) = spawned {
+            // スレッドを作れなかった。`tx` も捨てられたので、`poll` はエラーを返す
+            log::error!("cannot start {name}: {e}");
+        }
+        Self(rx)
+    }
+
+    /// 終わっていれば結果。まだなら None（待たない）
+    pub fn poll(&self) -> Option<Result<T>> {
+        match self.0.try_recv() {
+            Ok(r) => Some(r),
+            Err(TryRecvError::Empty) => None,
+            // 結果を送らずにスレッドが終わった（パニックか、スレッドを作れなかった）
+            Err(TryRecvError::Disconnected) => {
+                Some(Err(anyhow!("曲を読むスレッドが途中で止まりました")))
+            }
+        }
+    }
+}
+
 /// レベル 8.25 を (8, 25) に分ける
 fn level_parts(level: f64) -> (u32, u32) {
     let hundredths = (level * 100.0).round().max(0.0) as u32;
@@ -164,6 +193,55 @@ static BIG: LazyLock<Glyphs<'static>> = LazyLock::new(|| Glyphs {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `poll` が結果を返すまで待つ（テスト用）
+    fn wait<T: Send + 'static>(job: &Job<T>) -> Result<T> {
+        let until = Instant::now() + Duration::from_secs(10);
+        loop {
+            if let Some(r) = job.poll() {
+                return r;
+            }
+            assert!(Instant::now() < until, "the job did not finish");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    #[test]
+    fn job_runs_on_another_thread_without_blocking() {
+        let (go, gate) = std::sync::mpsc::channel::<()>();
+        let job = Job::spawn("test job", move || {
+            gate.recv()?;
+            Ok(42)
+        });
+        // 仕事が終わるまでは待たずに None
+        assert!(job.poll().is_none());
+        go.send(()).unwrap();
+        assert_eq!(wait(&job).unwrap(), 42);
+    }
+
+    #[test]
+    fn job_reports_errors_and_panics() {
+        let failed = Job::<u32>::spawn("failing job", || Err(anyhow!("no such file")));
+        assert_eq!(wait(&failed).unwrap_err().to_string(), "no such file");
+        let panicked = Job::<u32>::spawn("panicking job", || panic!("boom"));
+        assert!(wait(&panicked).is_err());
+    }
+
+    #[test]
+    fn dropping_a_job_does_not_wait_for_it() {
+        // Esc で戻ったときと同じく、終わっていない仕事を捨てても待たない
+        let (go, gate) = std::sync::mpsc::channel::<()>();
+        let (done_tx, done) = std::sync::mpsc::channel::<()>();
+        let job = Job::spawn("dropped job", move || {
+            gate.recv()?;
+            done_tx.send(())?;
+            Ok(1)
+        });
+        drop(job);
+        // 仕事のほうは続き、終われば結果を捨てる
+        go.send(()).unwrap();
+        done.recv_timeout(Duration::from_secs(10)).unwrap();
+    }
 
     #[test]
     fn level_is_split_like_the_xg_display() {
