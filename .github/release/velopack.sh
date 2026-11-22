@@ -4,6 +4,7 @@
 #
 # - 前のリリースの更新の材料を落としてきて、前の版との差分（delta）も作る。落とせなければ全体だけ
 # - Setup.exe は管理者の権限なしで %LocalAppData%\DTXmaniaNXT に入れ、スタートメニューとデスクトップに置く
+# - Setup.exe と Update.exe（アプリと機能の一覧）のアイコンは --icon。ショートカットは exe に埋め込んだアイコン（crates/app/build.rs）
 # - リリースに載せるのは package.sh（Setup.exe、この版の .nupkg、releases.win.json）
 set -euo pipefail
 
@@ -46,6 +47,7 @@ vpk pack \
   --mainExe DTXmaniaNXT.exe \
   --packTitle DTXmaniaNXT \
   --packAuthors check5004 \
+  --icon assets/icon/dtxmanianxt.ico \
   --noPortable \
   --outputDir "$out"
 ls -l "$out"
