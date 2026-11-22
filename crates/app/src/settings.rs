@@ -160,6 +160,9 @@ pub const LBD_GRAPHICS: &str = "lbd_graphics";
 pub const RIM_GRAPHICS: &str = "rim_graphics";
 /// ずれのバー（叩いた音符のずれを、判定の線の時刻を真ん中にした横の目盛りに印で出す）
 pub const HIT_ERROR_BAR: &str = "hit_error_bar";
+/// 譜面の動画（上流 `bAVIEnabled` と `nMovieAlpha`）
+pub const AVI: &str = "avi";
+pub const MOVIE_ALPHA: &str = "movie_alpha";
 
 /// 選択肢の表を `[key, label]` の並びから作る
 macro_rules! choices {
@@ -283,6 +286,7 @@ const RIM_GRAPHICS_CHOICES: &[Choice] = choices![
 const VIEW_LANES: &str = "画面の部品";
 const VIEW_ORDER: &str = "レーンとチップ";
 const VIEW_HIDE: &str = "見えにくくする";
+const VIEW_MOVIE: &str = "動画";
 
 /// 0〜100 の数（判定ラインの高さ、シャッター）
 const fn percent(
@@ -819,6 +823,31 @@ pub const ALL: &[Def] = &[
             zero: None,
         },
         desc: "コンボがこの数になったら、コンボの数を出します。",
+        in_play: false,
+    },
+    Def {
+        key: AVI,
+        group: Group::View,
+        section: VIEW_MOVIE,
+        name: "動画（AVI）",
+        kind: Kind::Toggle { default: true },
+        desc: "譜面の動画（#AVI）をレーンの後ろに流します。\n今は Windows だけで、MP4 や AVI を Windows の機能で読みます。",
+        in_play: false,
+    },
+    Def {
+        key: MOVIE_ALPHA,
+        group: Group::View,
+        section: VIEW_MOVIE,
+        name: "レーンの透け具合（MovieAlpha）",
+        kind: Kind::Number {
+            min: 0,
+            max: 100,
+            step: 10,
+            default: 0,
+            unit: " %",
+            zero: None,
+        },
+        desc: "レーンの板をどれだけ透かすか（0〜100 %）。上げると後ろの動画や背景が見えます。",
         in_play: false,
     },
     priority(

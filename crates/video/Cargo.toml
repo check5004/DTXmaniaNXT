@@ -1,0 +1,32 @@
+[package]
+name = "video"
+description = "Reads the movies of DTX charts (#AVI) for DTXmaniaNXT"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+anyhow = "1"
+log = "0.4"
+
+[target.'cfg(windows)'.dependencies]
+# Windows の Media Foundation で読む（MP4 の H.264、AVI の Xvid・DivX など）。OS に入っているので exe は大きくならない。
+# Media Foundation の DLL は使うときに読み込む（入っていない Windows でもアプリは起動できるように）
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Media_MediaFoundation",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Variant",
+] }
+
+# ワークスペースは unsafe を禁じているが、Media Foundation を呼ぶところ（src/mf.rs）だけは要る。
+# ほかは今までどおり禁じたまま（deny なので、mf.rs だけ allow で外す）
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
