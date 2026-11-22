@@ -23,6 +23,18 @@ impl Default for HitWindows {
 }
 
 impl HitWindows {
+    /// 狭い幅が広い幅を越えないようにそろえる（PERFECT ≤ GREAT ≤ GOOD ≤ POOR。越えた幅は前の幅まで広げる）
+    pub fn ordered(self) -> Self {
+        let great = self.great.max(self.perfect);
+        let good = self.good.max(great);
+        Self {
+            perfect: self.perfect,
+            great,
+            good,
+            poor: self.poor.max(good),
+        }
+    }
+
     pub fn classify(&self, offset_ms: f64) -> Option<Judgement> {
         let d = offset_ms.abs();
         if d <= self.perfect {
@@ -125,6 +137,8 @@ pub struct LaneGroups {
     pub ft: FtGroup,
     pub cy: CyGroup,
     pub bd: BdGroup,
+    /// 左シンバルと右シンバルを叩き分けない（上流の CymbalFree）。ライドも共通にするかは `cy` に従う
+    pub cymbal_free: bool,
 }
 
 impl LaneGroups {
@@ -167,7 +181,9 @@ impl LaneGroups {
             BdGroup::BassDrumsCommon => pair(BD, LBD),
             BdGroup::Common => pair(BD, LP) || pair(BD, LBD) || pair(LP, LBD),
         };
-        hh || ft || cy || bd
+        let free =
+            self.cymbal_free && (pair(LC, CY) || (self.cy == CyGroup::Common && pair(LC, RD)));
+        hh || ft || cy || bd || free
     }
 }
 
@@ -230,6 +246,8 @@ pub struct Judge {
     notes: Vec<DrumNote>,
     done: Vec<bool>,
     windows: HitWindows,
+    /// ペダル（BD・LP・LBD）の判定の幅（上流 `stDrumPedalHitRanges`）
+    pedal_windows: HitWindows,
     groups: LaneGroups,
     /// これより前の音符はすべて判定済み（見逃しの確認をここから始める）
     first_open: usize,
@@ -254,6 +272,7 @@ impl Judge {
             notes,
             done,
             windows,
+            pedal_windows: windows,
             groups,
             first_open: 0,
             tally: Tally::default(),
@@ -268,6 +287,16 @@ impl Judge {
         for &l in lanes {
             self.auto[l as usize] = true;
         }
+    }
+
+    /// ペダル（BD・LP・LBD）の音符の判定の幅を決める。決めなければほかのレーンと同じ
+    pub fn set_pedal_windows(&mut self, windows: HitWindows) {
+        self.pedal_windows = windows;
+    }
+
+    /// コンボを切る（上流の Tight で、音符の無いところを叩いたとき。判定の数は変えない）
+    pub fn break_combo(&mut self) {
+        self.tally.combo = 0;
     }
 
     /// レーン `lane` の音符を自動で叩くか
@@ -311,8 +340,27 @@ impl Judge {
         self.groups
     }
 
+    /// ペダル以外の判定の幅
     pub fn windows(&self) -> HitWindows {
         self.windows
+    }
+
+    pub fn pedal_windows(&self) -> HitWindows {
+        self.pedal_windows
+    }
+
+    /// レーン `lane` の音符の判定の幅
+    pub fn windows_for(&self, lane: DrumLane) -> HitWindows {
+        if matches!(lane, DrumLane::BD | DrumLane::LP | DrumLane::LBD) {
+            self.pedal_windows
+        } else {
+            self.windows
+        }
+    }
+
+    /// POOR の幅のうち広いほう（空打ちがどの周のものかを決めるのに使う）
+    pub fn widest_poor(&self) -> f64 {
+        self.windows.poor.max(self.pedal_windows.poor)
     }
 
     /// 1 打を判定する。取れるレーンごとに、まだ判定していない一番近い音符を探し、
@@ -338,7 +386,10 @@ impl Judge {
             .into_iter()
             .map(|i| {
                 let offset = hit.ms - self.notes[i].ms;
-                let judgement = self.windows.classify(offset).unwrap_or(Judgement::Poor);
+                let judgement = self
+                    .windows_for(self.notes[i].lane)
+                    .classify(offset)
+                    .unwrap_or(Judgement::Poor);
                 self.close(i, judgement);
                 JudgeEvent {
                     note: i,
@@ -368,9 +419,14 @@ impl Judge {
                 i += 1;
             }
         }
+        // POOR の幅はレーンで違うことがある（ペダル）。狭いほうの幅を過ぎた音符まで見て、
+        // その音符のレーンの幅を過ぎていれば見逃しにする
+        let narrowest = self.windows.poor.min(self.pedal_windows.poor);
         let mut i = self.first_open;
-        while i < self.notes.len() && self.notes[i].ms + self.windows.poor < now_ms {
-            if !self.done[i] {
+        let mut first_open = None;
+        while i < self.notes.len() && self.notes[i].ms + narrowest < now_ms {
+            let n = &self.notes[i];
+            if !self.done[i] && n.ms + self.windows_for(n.lane).poor < now_ms {
                 self.close(i, Judgement::Miss);
                 out.push(JudgeEvent {
                     note: i,
@@ -379,10 +435,26 @@ impl Judge {
                     velocity: None,
                 });
             }
+            if !self.done[i] && first_open.is_none() {
+                first_open = Some(i);
+            }
             i += 1;
         }
-        self.first_open = i;
+        self.first_open = first_open.unwrap_or(i);
         out
+    }
+
+    /// 曲の時刻 `ms` へ飛ぶ（早送り・巻き戻し。上流 `tJumpInSong`）。`ms` より前のまだ判定していない音符は
+    /// 数えずに済んだことにし、`ms` から後の音符はもう一度叩けるようにする。集計はそのまま（飛んだプレイは記録しない）
+    pub fn jump_to(&mut self, ms: f64) {
+        let at = self.notes.partition_point(|n| n.ms < ms);
+        for d in &mut self.done[..at] {
+            *d = true;
+        }
+        for d in &mut self.done[at..] {
+            *d = false;
+        }
+        self.first_open = at;
     }
 
     fn close(&mut self, i: usize, j: Judgement) {
@@ -392,12 +464,9 @@ impl Judge {
 
     /// `lane` のまだ判定していない音符のうち、判定の幅の中で `ms` に一番近いもの
     fn nearest_open(&self, lane: DrumLane, ms: f64) -> Option<usize> {
-        let lo = self
-            .notes
-            .partition_point(|n| n.ms < ms - self.windows.poor);
-        let hi = self
-            .notes
-            .partition_point(|n| n.ms <= ms + self.windows.poor);
+        let poor = self.windows_for(lane).poor;
+        let lo = self.notes.partition_point(|n| n.ms < ms - poor);
+        let hi = self.notes.partition_point(|n| n.ms <= ms + poor);
         (lo..hi)
             .filter(|&i| !self.done[i] && self.notes[i].lane == lane)
             .min_by(|&a, &b| {
@@ -610,6 +679,37 @@ mod tests {
     }
 
     #[test]
+    fn jumping_skips_or_reopens_notes() {
+        let mut j = Judge::new(
+            vec![note(1000.0, SD), note(2000.0, SD), note(3000.0, SD)],
+            HitWindows::default(),
+            LaneGroups::default(),
+        );
+        // 早送り: 飛ばした音符は見逃しにも数えない
+        j.jump_to(2500.0);
+        assert!(j.is_done(0) && j.is_done(1) && !j.is_done(2));
+        assert!(j.advance(2600.0).is_empty());
+        assert_eq!(j.tally().miss, 0);
+        j.hit(Hit {
+            ms: 3000.0,
+            lane: SD,
+            velocity: 100,
+        });
+        // 巻き戻し: 先の音符をもう一度叩ける
+        j.jump_to(1500.0);
+        assert!(j.is_done(0) && !j.is_done(1) && !j.is_done(2));
+        assert_eq!(
+            j.hit(Hit {
+                ms: 2000.0,
+                lane: SD,
+                velocity: 100
+            })[0]
+                .note,
+            1
+        );
+    }
+
+    #[test]
     fn bd_groups() {
         let g = LaneGroups {
             bd: BdGroup::LeftPedalsCommon,
@@ -622,5 +722,77 @@ mod tests {
             ..Default::default()
         };
         assert!(g.accepts(LP, BD));
+    }
+
+    #[test]
+    fn pedals_use_their_own_windows() {
+        let mut j = judge(vec![note(1000.0, SD), note(1000.0, BD), note(3000.0, BD)]);
+        j.set_pedal_windows(HitWindows {
+            perfect: 10.0,
+            great: 20.0,
+            good: 30.0,
+            poor: 40.0,
+        });
+        assert_eq!(j.widest_poor(), 117.0);
+        // 50 ms 遅れ: スネアは GREAT、バスドラムは幅の外で空打ち
+        assert_eq!(j.hit(hit(1050.0, SD))[0].judgement, Judgement::Great);
+        assert!(j.hit(hit(1050.0, BD)).is_empty());
+        // バスドラムは 40 ms を過ぎたら見逃し（スネアの幅を待たない）
+        let missed = j.advance(1041.0);
+        assert_eq!(missed.len(), 1);
+        assert_eq!(missed[0].note, 1);
+        assert_eq!(j.hit(hit(3015.0, BD))[0].judgement, Judgement::Great);
+    }
+
+    #[test]
+    fn narrow_pedal_window_does_not_skip_open_notes() {
+        let mut j = judge(vec![note(1000.0, SD), note(1010.0, BD)]);
+        j.set_pedal_windows(HitWindows {
+            perfect: 10.0,
+            great: 20.0,
+            good: 30.0,
+            poor: 40.0,
+        });
+        // バスドラムは見逃しになるが、スネアはまだ叩ける
+        assert_eq!(j.advance(1060.0).len(), 1);
+        assert_eq!(j.hit(hit(1100.0, SD))[0].judgement, Judgement::Poor);
+        assert_eq!(j.advance(5000.0).len(), 0);
+    }
+
+    #[test]
+    fn breaking_the_combo_keeps_the_counts() {
+        let mut j = judge(vec![note(1000.0, SD), note(2000.0, SD)]);
+        j.hit(hit(1000.0, SD));
+        assert_eq!(j.tally().combo, 1);
+        j.break_combo();
+        j.hit(hit(2000.0, SD));
+        let t = j.tally();
+        assert_eq!((t.perfect, t.miss, t.combo, t.max_combo), (2, 0, 1, 1));
+    }
+
+    #[test]
+    fn windows_are_put_in_order() {
+        let w = HitWindows {
+            perfect: 50.0,
+            great: 40.0,
+            good: 100.0,
+            poor: 90.0,
+        }
+        .ordered();
+        assert_eq!((w.great, w.good, w.poor), (50.0, 100.0, 100.0));
+    }
+
+    #[test]
+    fn cymbal_free_joins_the_left_and_right_cymbals() {
+        let mut g = LaneGroups {
+            cymbal_free: true,
+            ..Default::default()
+        };
+        assert!(g.accepts(CY, LC) && g.accepts(LC, CY));
+        // ライドはシンバルの寄せ方に従う
+        assert!(!g.accepts(LC, RD) && !g.accepts(RD, LC));
+        g.cy = CyGroup::Common;
+        assert!(g.accepts(LC, RD) && g.accepts(RD, CY));
+        assert!(!LaneGroups::default().accepts(CY, LC));
     }
 }

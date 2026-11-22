@@ -14,7 +14,7 @@ use engine::practice::{SpeedPlan, place};
 use records::{Lap, NoteHit, SectionClear, Session, SessionKind, StrayHit};
 
 use crate::audio::{AudioOut, Sound, click, load_sound};
-use crate::chart_sound::ChartSounds;
+use crate::chart_sound::{AutoMix, ChartSounds, METRONOME_BAR, METRONOME_BEAT};
 use crate::history::OvercomeCheck;
 use crate::midi::RawMidi;
 use crate::practice::{LapSummary, Practice, PracticeOptions, count_per_measure};
@@ -54,6 +54,75 @@ pub enum Fx {
         offset_ms: Option<f64>,
         note_ms: f64,
     },
+    /// 音符の無いところを叩いて MISS にした（上流の Tight）。`lane` は叩いたパッドのレーン
+    StrayMiss { lane: DrumLane },
+}
+
+/// 判定の決まり（設定から）
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Rules {
+    /// 自動で叩くレーン（上流の AutoPlay）
+    pub auto: Vec<DrumLane>,
+    /// 判定の幅（ペダル以外）
+    pub windows: HitWindows,
+    /// バスドラム・左ペダル・左バスドラムの判定の幅
+    pub pedal_windows: HitWindows,
+    /// 音符の無いところを叩くと MISS（上流の Tight。練習では使わない）
+    pub tight: bool,
+    pub gauge: GaugeRule,
+    /// 叩き分け（譜面に無いレーンは共通に寄せてから使う）
+    pub groups: LaneGroups,
+    pub hit_sounds: HitSoundRule,
+    /// 自動で鳴らす音の音量・BGM の有無・ずらし
+    pub auto_mix: AutoMix,
+    /// メトロノームを鳴らす
+    pub metronome: bool,
+}
+
+/// 叩いた音の鳴らし方（上流の HH / FT / CY Priority と Muting LP）
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct HitSoundRule {
+    /// 共通にしたレーンで別のレーンの音符を取ったとき、叩いたパッドのレーンの音を鳴らす
+    /// （ハイハットと左シンバル、ロータムとフロアタム、シンバルとライドの順）
+    pub pad_first: [bool; 3],
+    /// 左ペダルを踏んだら、叩いて鳴っているハイハットの音を止める
+    pub muting_lp: bool,
+    /// 叩いた音の音量にかける数（上流の ChipVolume）
+    pub volume: f32,
+}
+
+impl Default for HitSoundRule {
+    fn default() -> Self {
+        Self {
+            pad_first: [false; 3],
+            muting_lp: true,
+            volume: 1.0,
+        }
+    }
+}
+
+/// 叩いたハイハットの音に付ける目印（左ペダルで止める）
+const HH_TAG: u8 = 1;
+
+/// ゲージの増え方と減り方（上流 `CActPerfCommonGauge`）。演奏の画面がこれでゲージを動かす
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GaugeRule {
+    /// MISS の減りにかける数（上流 `fDamageLevelFactor`。ふつうは 0.5）
+    pub miss_factor: f64,
+    /// ミスの許容数（上流の Risky。0 なら使わない）
+    pub risky: u32,
+    /// GREAT と GOOD でも MISS と同じだけ減る（上流の HAZARD）
+    pub hazard: bool,
+}
+
+impl Default for GaugeRule {
+    fn default() -> Self {
+        Self {
+            miss_factor: 0.5,
+            risky: 0,
+            hazard: false,
+        }
+    }
 }
 
 /// 取り出されないまま溜められる効果の数（画面を描いていないあいだに増え続けないように）
@@ -184,6 +253,15 @@ pub struct Play {
     /// 音が出ないときの時計の起点（ホスト時刻）。この時刻が時間軸の `start_ms`
     fallback_origin_us: i64,
     start_ms: f64,
+    /// 一時停止しているなら、止めた曲の時刻
+    paused_ms: Option<f64>,
+    /// 早送りか巻き戻しをした（上流の練習扱い。記録に残さず、STAGE FAILED にもしない）
+    skipped: bool,
+    /// 空打ちを MISS にする（練習では使わない）
+    tight: bool,
+    /// ゲージの決まり（演奏の画面が使う）
+    pub gauge: GaugeRule,
+    hit_sounds: HitSoundRule,
 }
 
 impl Play {
@@ -196,14 +274,14 @@ impl Play {
             .collect();
     }
 
-    /// `auto` は自動で叩くレーン（上流の AutoPlay）
+    /// `rules` は自動で叩くレーンや判定の幅
     pub fn load(
         path: &Path,
         input_offset_ms: f64,
         drum_sounds: bool,
-        auto: &[DrumLane],
+        rules: &Rules,
     ) -> Result<Self> {
-        Self::open(path, input_offset_ms, drum_sounds, auto, None)
+        Self::open(path, input_offset_ms, drum_sounds, rules, None)
     }
 
     /// 区間を練習する
@@ -211,19 +289,20 @@ impl Play {
         path: &Path,
         input_offset_ms: f64,
         drum_sounds: bool,
-        auto: &[DrumLane],
+        rules: &Rules,
         options: PracticeOptions,
     ) -> Result<Self> {
-        Self::open(path, input_offset_ms, drum_sounds, auto, Some(options))
+        Self::open(path, input_offset_ms, drum_sounds, rules, Some(options))
     }
 
     fn open(
         path: &Path,
         input_offset_ms: f64,
         drum_sounds: bool,
-        auto: &[DrumLane],
+        rules: &Rules,
         practice: Option<PracticeOptions>,
     ) -> Result<Self> {
+        let auto = rules.auto.as_slice();
         let bytes =
             std::fs::read(path).with_context(|| format!("{} を読めません", path.display()))?;
         let chart = dtx::load(&bytes);
@@ -239,7 +318,7 @@ impl Play {
             .map(|c| tempo.chip_ms(c))
             .fold(0.0, f64::max);
         let end_ms = last_chip_ms + 2000.0;
-        let mut chart_sounds = ChartSounds::new(&chart, &tempo);
+        let mut chart_sounds = ChartSounds::mixed(&chart, &tempo, rules.auto_mix);
         // 自動で叩くレーンの音は、BGM と同じく時刻を決めて鳴らす（叩いた音の設定に関わらず）
         chart_sounds.add_auto_notes(
             notes
@@ -247,19 +326,22 @@ impl Play {
                 .filter(|n| auto.contains(&n.lane))
                 .map(|n| (n.ms, n.wav)),
         );
+        let lines = beat_lines(&tempo);
+        if rules.metronome {
+            chart_sounds.add_metronome(lines.iter().map(|l| (l.ms, l.bar)));
+        }
         // 叩き分けの寄せ方は曲全体の音符で決める（練習の区間によって判定が変わらないように）
-        let groups = LaneGroups::default().effective_for(&notes);
+        let groups = rules.groups.effective_for(&notes);
         let (mut judge, practice) = match practice {
-            None => (
-                Judge::with_groups(notes, HitWindows::default(), groups),
-                None,
-            ),
+            None => (Judge::with_groups(notes, rules.windows, groups), None),
             Some(options) => (
-                Judge::with_groups(Vec::new(), HitWindows::default(), groups),
+                Judge::with_groups(Vec::new(), rules.windows, groups),
                 Some(Practice::new(options, &tempo, notes)),
             ),
         };
         judge.set_auto(auto);
+        judge.set_pedal_windows(rules.pedal_windows);
+        let tight = rules.tight && practice.is_none();
         let start_ms = practice
             .as_ref()
             .map_or(-LEAD_IN_MS, |p| p.first_audio_ms() - PRACTICE_LEAD_IN_MS);
@@ -271,7 +353,7 @@ impl Play {
                 None
             }
         };
-        let sounds = match &audio {
+        let mut sounds = match &audio {
             Some(a) => load_sounds(
                 &chart,
                 &chart_sounds,
@@ -280,6 +362,11 @@ impl Play {
             ),
             None => HashMap::new(),
         };
+        // メトロノームの音は NX のスキンに無いので、数え始めと同じ作った音を使う
+        if let (true, Some(a)) = (rules.metronome, &audio) {
+            sounds.insert(METRONOME_BAR, click(a.rate(), true));
+            sounds.insert(METRONOME_BEAT, click(a.rate(), false));
+        }
         let mut section_audio = None;
         // 練習でなければ、自動で鳴らす音（BGM・効果音など）は時刻が近づいたものから出力に渡す（`lay_auto`）。
         // 練習は区間の自動で鳴らす音を 1 本にまとめ、周の速度に伸ばして鳴らす
@@ -327,7 +414,7 @@ impl Play {
             input_offset_ms,
             drum_sounds,
             fx: Vec::new(),
-            lines: beat_lines(&tempo),
+            lines,
             bpm: 60_000.0 / (tempo.beat_to_ms(1.0) - tempo.beat_to_ms(0.0)).max(1.0),
             last_chip_ms,
             preimage: preimage_path(&chart, path),
@@ -353,6 +440,11 @@ impl Play {
             mappers: HashMap::new(),
             fallback_origin_us: host_us(),
             start_ms,
+            paused_ms: None,
+            skipped: false,
+            tight,
+            gauge: rules.gauge,
+            hit_sounds: rules.hit_sounds,
         };
         play.lay_laps(start_ms);
         play.lay_auto(start_ms);
@@ -391,7 +483,7 @@ impl Play {
         if let Some(sa) = self.section_audio.as_mut() {
             sa.poll();
         }
-        p.settle(now_ms, self.judge.windows().poor);
+        p.settle(now_ms, self.judge.widest_poor());
         let ahead = self.view_ahead_ms + LAY_MARGIN_MS;
         while p.wants_lap(now_ms, ahead) {
             // 決めた速度の音がまだできていなければ、できるまで前の周の速度で回す
@@ -465,8 +557,11 @@ impl Play {
         &self.notes_per_measure
     }
 
-    /// ホスト時刻 `host_us` の曲の時刻
+    /// ホスト時刻 `host_us` の曲の時刻（一時停止しているあいだは止めた時刻）
     pub fn song_ms_at(&self, at_us: i64) -> f64 {
+        if let Some(ms) = self.paused_ms {
+            return ms;
+        }
         self.audio
             .as_ref()
             .and_then(|a| a.song_ms_at(at_us))
@@ -482,8 +577,84 @@ impl Play {
         self.practice.is_none() && self.now_ms() > self.end_ms
     }
 
+    /// 一時停止する・つづける（上流 Pause）。止めているあいだは音も曲の時刻も止まり、叩いても数えない。
+    /// 止めたら true
+    pub fn toggle_pause(&mut self) -> bool {
+        match self.paused_ms.take() {
+            Some(ms) => {
+                if let Some(a) = &self.audio {
+                    a.set_paused(false);
+                }
+                // 音が出ないときの時計は、止めていたぶん起点を後ろへずらす
+                self.fallback_origin_us = host_us() - ((ms - self.start_ms) * 1000.0) as i64;
+                false
+            }
+            None => {
+                let ms = self.now_ms();
+                if let Some(a) = &self.audio {
+                    a.set_paused(true);
+                }
+                self.paused_ms = Some(ms);
+                true
+            }
+        }
+    }
+
+    pub fn paused(&self) -> bool {
+        self.paused_ms.is_some()
+    }
+
+    /// 早送りか巻き戻しをした
+    pub fn skipped(&self) -> bool {
+        self.skipped
+    }
+
+    /// 曲の時刻を `delta_ms` だけ先へ（マイナスなら前へ）飛ぶ（上流 SkipForward / SkipBackward）。
+    /// 練習では使わない（None）。飛んだプレイは上流と同じく練習扱いで、記録に残さない。飛んだ先の時刻を返す
+    pub fn seek(&mut self, delta_ms: f64) -> Option<f64> {
+        if self.practice.is_some() {
+            return None;
+        }
+        let now = self.now_ms();
+        let to = (now + delta_ms).clamp(self.start_ms, self.end_ms.max(self.start_ms));
+        let d = to - now;
+        self.skipped = true;
+        if d == 0.0 {
+            return Some(to);
+        }
+        if let Some(a) = self.audio.as_mut() {
+            a.seek(d);
+        }
+        self.fallback_origin_us -= (d * 1000.0) as i64;
+        if self.paused_ms.is_some() {
+            self.paused_ms = Some(to);
+        }
+        self.judge.jump_to(to);
+        // 飛んだ先でまだ鳴っているはずの自動の音（長い BGM など）は途中から鳴らし直し、その先は `lay_auto` に任せる
+        self.auto_next = self.chart_sounds.auto.partition_point(|v| v.ms < to);
+        if let Some(a) = self.audio.as_mut() {
+            let rate = f64::from(a.rate());
+            for v in &self.chart_sounds.auto[..self.auto_next] {
+                let Some(s) = self.sounds.get(&v.wav) else {
+                    continue;
+                };
+                let len =
+                    (s.frames() as f64 / rate * 1000.0).min(v.len_ms.unwrap_or(f64::INFINITY));
+                if v.ms + len > to {
+                    a.play_chip(s, v.ms, v.len_ms, v.gain, v.pan);
+                }
+            }
+        }
+        self.lay_auto(to);
+        log::info!("jumped from {now:.0}ms to {to:.0}ms");
+        Some(to)
+    }
+
     /// 時間を進め、見逃しを判定する
     pub fn update(&mut self) {
+        if self.paused() {
+            return;
+        }
         let now = self.now_ms();
         self.lay_laps(now);
         self.lay_auto(now);
@@ -568,6 +739,10 @@ impl Play {
         articulation: Option<Articulation>,
         hh_pedal: Option<u8>,
     ) {
+        // 上流と同じく、止めているあいだは叩いても何もしない
+        if self.paused() {
+            return;
+        }
         let ms = self.song_ms_at(at_us) - self.input_offset_ms;
         self.push_fx(Fx::Hit { lane, velocity });
         let events = self.judge.hit(Hit { ms, lane, velocity });
@@ -581,8 +756,13 @@ impl Play {
                 hh_pedal,
             };
             match self.practice.as_mut() {
-                Some(p) => p.on_stray(stray, self.judge.windows().poor),
+                Some(p) => p.on_stray(stray, self.judge.widest_poor()),
                 None => self.strays.push(stray),
+            }
+            // 上流の Tight: MISS を出し、コンボを切り、ゲージを減らす（MISS の数には入れない）
+            if self.tight {
+                self.judge.break_combo();
+                self.push_fx(Fx::StrayMiss { lane });
             }
         }
         self.record(&events, articulation, hh_pedal);
@@ -590,13 +770,26 @@ impl Play {
             // 取った音符の音を鳴らす。空打ちなら空打ちの音、無ければそのレーンの一番近い音符の音
             let wav = events
                 .first()
-                .map(|e| self.judge.notes()[e.note].wav)
+                .map(|e| self.hit_wav(lane, &self.judge.notes()[e.note], ms))
                 .or_else(|| self.stray_wav(lane, ms));
-            if let (Some(a), Some(w)) = (self.audio.as_mut(), wav)
-                && let Some(s) = self.sounds.get(&w)
-            {
-                let (gain, pan) = self.chart_sounds.gain_pan(w);
-                a.play_now_panned(s, gain * f32::from(velocity) / 127.0, pan);
+            // 上流の Muting LP: 左ペダルで、叩いて鳴っているハイハットを止める
+            let muting = self.hit_sounds.muting_lp && lane == DrumLane::LP;
+            let tag = if matches!(lane, DrumLane::HH | DrumLane::HHO) {
+                HH_TAG
+            } else {
+                0
+            };
+            if let Some(a) = self.audio.as_mut() {
+                if muting {
+                    a.stop(HH_TAG);
+                }
+                if let Some(w) = wav
+                    && let Some(s) = self.sounds.get(&w)
+                {
+                    let (gain, pan) = self.chart_sounds.gain_pan(w);
+                    let gain = gain * self.hit_sounds.volume * f32::from(velocity) / 127.0;
+                    a.play_now_panned(s, gain, pan, tag);
+                }
             }
         }
         self.show(&events);
@@ -606,6 +799,40 @@ impl Play {
     /// 無ければそのレーンの一番近い音符（見えない音符 0x31〜 も含む）の音。
     /// 練習は周ごとに時刻を並べ直すので、並べた音符のうち一番近いものの音にする
     fn stray_wav(&self, lane: DrumLane, ms: f64) -> Option<u16> {
+        if self.practice.is_none()
+            && let Some(w) = self.chart_sounds.empty_hit(lane, ms)
+        {
+            return Some(w);
+        }
+        self.lane_wav(lane, ms)
+    }
+
+    /// 叩いて音符 `note` を取ったときの音。叩いたパッドのレーン `lane` と音符のレーンが違い（叩き分けを共通にした）、
+    /// パッドの音を先にする設定なら、そのパッドのレーンの一番近い音符の音（上流 `tProcessDrumHit` の P>C）。
+    /// 譜面に無いレーンは、上流と同じく開いたハイハットと左シンバルを閉じたハイハット、ライドを右シンバルとして探す
+    fn hit_wav(&self, lane: DrumLane, note: &dtx::DrumNote, ms: f64) -> u16 {
+        use DrumLane::*;
+        let family = match lane {
+            HH | HHO | LC => 0,
+            LT | FT => 1,
+            CY | RD => 2,
+            _ => return note.wav,
+        };
+        if note.lane == lane || !self.hit_sounds.pad_first[family] {
+            return note.wav;
+        }
+        let has = |l: DrumLane| self.judge.notes().iter().any(|n| n.lane == l);
+        let pad = match lane {
+            HHO | LC if !has(lane) => HH,
+            RD if !has(RD) => CY,
+            l => l,
+        };
+        self.lane_wav(pad, ms).unwrap_or(note.wav)
+    }
+
+    /// レーン `lane` の音符（見えない音符 0x31〜 も含む）のうち、曲の時刻 `ms` に一番近いものの音。
+    /// 練習は周ごとに時刻を並べ直すので、並べた音符のうち一番近いものの音にする
+    fn lane_wav(&self, lane: DrumLane, ms: f64) -> Option<u16> {
         let nearest = self
             .judge
             .notes()
@@ -615,9 +842,6 @@ impl Play {
             .map(|n| (n.ms, n.wav));
         if self.practice.is_some() {
             return nearest.map(|(_, w)| w);
-        }
-        if let Some(w) = self.chart_sounds.empty_hit(lane, ms) {
-            return Some(w);
         }
         match (nearest, self.chart_sounds.nearest_hidden(lane, ms)) {
             (Some(n), Some(h)) => Some(if (h.0 - ms).abs() < (n.0 - ms).abs() {
@@ -713,9 +937,9 @@ impl Play {
     }
 
     /// 記録に残す形にする。何も叩かず何も過ぎていなければ None（すぐやめたときは残さない）。
-    /// 音符をすべて自動で叩いたときも残さない（上流と同じ）
+    /// 音符をすべて自動で叩いたときと、早送りか巻き戻しをしたときも残さない（上流と同じ）
     pub fn session(&self) -> Option<Session> {
-        if self.all_auto() {
+        if self.all_auto() || self.skipped {
             return None;
         }
         let w = self.judge.windows();
@@ -724,6 +948,27 @@ impl Play {
             "{{\"input_offset_ms\":{},\"windows_ms\":[{},{},{},{}],\"drum_sounds\":{}",
             self.input_offset_ms, w.perfect, w.great, w.good, w.poor, self.drum_sounds
         );
+        let pw = self.judge.pedal_windows();
+        if pw != w {
+            settings += &format!(
+                ",\"pedal_windows_ms\":[{},{},{},{}]",
+                pw.perfect, pw.great, pw.good, pw.poor
+            );
+        }
+        if self.tight {
+            settings += ",\"tight\":true";
+        }
+        let groups = self.judge.groups();
+        if groups != LaneGroups::default() {
+            settings += &format!(",\"groups\":\"{groups:?}\"");
+        }
+        let g = self.gauge;
+        if g != GaugeRule::default() {
+            settings += &format!(
+                ",\"gauge\":{{\"miss_factor\":{},\"risky\":{},\"hazard\":{}}}",
+                g.miss_factor, g.risky, g.hazard
+            );
+        }
         let auto: Vec<String> = DrumLane::ALL
             .into_iter()
             .filter(|&l| self.judge.is_auto(l))
@@ -910,6 +1155,84 @@ fn load_sounds(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 譜面 `text` を一時ファイルに書いて読む（音は鳴らさない）
+    fn load_text(name: &str, text: &str, rules: &Rules) -> Play {
+        let path = std::env::temp_dir().join(format!("nxt-{name}-{}.dtx", std::process::id()));
+        std::fs::write(&path, text).unwrap();
+        let play = Play::load(&path, 0.0, false, rules);
+        std::fs::remove_file(&path).unwrap();
+        play.unwrap()
+    }
+
+    #[test]
+    fn pad_sound_first_plays_the_pad_lane() {
+        // BPM 60 で 1 小節 4000ms。HH（wav 01）は 4000ms と 12000ms、LC（wav 02）は 7500ms
+        let text = "#BPM 60\n#00111: 01\n#0011A: 0000000000000002\n#00311: 01\n";
+        let common = LaneGroups {
+            hh: engine::judge::HhGroup::Common,
+            ..Default::default()
+        };
+        let chip_first = load_text(
+            "chip-first",
+            text,
+            &Rules {
+                groups: common,
+                ..Default::default()
+            },
+        );
+        let hh = chip_first.judge.notes()[0].clone();
+        assert_eq!(hh.lane, DrumLane::HH);
+        // 左シンバルで閉じたハイハットの音符を取っても、ふだん（C>P）は譜面の音
+        assert_eq!(chip_first.hit_wav(DrumLane::LC, &hh, 4000.0), 1);
+        let pad_first = load_text(
+            "pad-first",
+            text,
+            &Rules {
+                groups: common,
+                hit_sounds: HitSoundRule {
+                    pad_first: [true, false, false],
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        );
+        // P>C なら叩いた左シンバルのレーンの音
+        assert_eq!(pad_first.hit_wav(DrumLane::LC, &hh, 4000.0), 2);
+        // 譜面に開いたハイハットが無ければ、閉じたハイハットの音
+        assert_eq!(pad_first.hit_wav(DrumLane::HHO, &hh, 4000.0), 1);
+        // 同じレーンなら譜面の音のまま
+        assert_eq!(pad_first.hit_wav(DrumLane::HH, &hh, 4000.0), 1);
+    }
+
+    #[test]
+    fn metronome_and_bgm_follow_the_rules() {
+        // BPM 120（1 小節 2000ms）。BGM（wav 01）は小節 1 の頭、HH（wav 02）は小節 2 の頭
+        let text = "#BPM 120\n#00101: 01\n#00211: 02\n";
+        let wavs = |p: &Play| -> Vec<(f64, u16)> {
+            p.chart_sounds.auto.iter().map(|v| (v.ms, v.wav)).collect()
+        };
+        let plain = load_text("metronome-off", text, &Rules::default());
+        assert_eq!(wavs(&plain), vec![(2000.0, 1)]);
+        let on = load_text(
+            "metronome-on",
+            text,
+            &Rules {
+                metronome: true,
+                auto_mix: AutoMix {
+                    bgm: false,
+                    shift_ms: 30.0,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        );
+        let all = wavs(&on);
+        // BGM は鳴らさず、メトロノームは BGMAdjust でずらさない
+        assert!(all.iter().all(|&(_, w)| w != 1));
+        assert_eq!(all[..2], [(0.0, METRONOME_BAR), (500.0, METRONOME_BEAT)]);
+        assert!(all.contains(&(4000.0, METRONOME_BAR)));
+    }
 
     #[test]
     fn beat_lines_follow_bar_lengths() {

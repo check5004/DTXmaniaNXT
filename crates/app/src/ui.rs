@@ -487,9 +487,9 @@ fn play_info(ui: &mut egui::Ui, o: &PlayOverlay<'_>, s: f32) {
         crate::HIT_SOUND_KEY_NAME
     )));
     ui.label(small(if play.practice.is_some() {
-        "←→ 区間を 1 小節ずらす、, . 速度 ±5%、R 最初から、Esc 結果へ".to_owned()
+        "←→ 区間を 1 小節ずらす、, . 速度 ±5%、R 最初から、Esc か Space 一時停止（やめるのもここから）".to_owned()
     } else {
-        "R やり直し、Esc 結果へ".to_owned()
+        "←→ 巻き戻し・早送り、R やり直し、Esc か Space 一時停止（やめるのもここから）".to_owned()
     }));
     ui.separator();
     match &play.last_input {

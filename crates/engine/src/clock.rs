@@ -18,6 +18,8 @@ pub struct AudioClock {
     /// 再生の速さ（練習モードの速度変更。1.0 が等速）
     speed: f64,
     anchor: Option<Anchor>,
+    /// 一時停止で出力が止まっている（曲の時刻は進めない）
+    held: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -33,6 +35,7 @@ impl AudioClock {
             start_ms,
             speed: 1.0,
             anchor: None,
+            held: false,
         }
     }
 
@@ -43,16 +46,38 @@ impl AudioClock {
     /// 音声出力のバッファごとに呼ぶ。`play_host_us` はそのバッファの最初のサンプルが鳴るホスト時刻、
     /// `frames_before` はそれまでに出したフレーム数
     pub fn on_buffer(&mut self, play_host_us: i64, frames_before: u64) {
-        let song_ms = self.start_ms + frames_before as f64 / self.sample_rate * 1000.0 * self.speed;
         self.anchor = Some(Anchor {
             host_us: play_host_us,
-            song_ms,
+            song_ms: self.ms_of(frames_before),
         });
+        self.held = false;
+    }
+
+    /// 一時停止のあいだ、音声出力のバッファごとに `on_buffer` の代わりに呼ぶ。
+    /// 出力は `frames_before` のまま進まないので、曲の時刻もそこで止める
+    pub fn on_hold(&mut self, play_host_us: i64, frames_before: u64) {
+        self.on_buffer(play_host_us, frames_before);
+        self.held = true;
+    }
+
+    /// 曲の時刻を `delta_ms` だけずらす（早送り・巻き戻し）。出力のフレームと曲の時刻の対応が変わる
+    pub fn shift(&mut self, delta_ms: f64) {
+        self.start_ms += delta_ms;
+        if let Some(a) = self.anchor.as_mut() {
+            a.song_ms += delta_ms;
+        }
+    }
+
+    fn ms_of(&self, frames: u64) -> f64 {
+        self.start_ms + frames as f64 / self.sample_rate * 1000.0 * self.speed
     }
 
     /// ホスト時刻 `host_us` の曲の時刻。まだ音が出ていなければ `None`
     pub fn song_ms_at(&self, host_us: i64) -> Option<f64> {
         let a = self.anchor?;
+        if self.held {
+            return Some(a.song_ms);
+        }
         Some(a.song_ms + (host_us - a.host_us) as f64 / 1000.0 * self.speed)
     }
 }
@@ -140,6 +165,21 @@ mod tests {
         // 48000 フレーム（1 秒）後のバッファ。ホストの時計が 2ms 進んでいても、音の位置が正
         c.on_buffer(6_002_000, 48_000);
         assert_eq!(c.song_ms_at(6_002_000), Some(0.0));
+    }
+
+    #[test]
+    fn audio_clock_holds_and_shifts() {
+        let mut c = AudioClock::new(48_000, 0.0);
+        c.on_buffer(1_000_000, 48_000);
+        // 止めているあいだはホストの時計が進んでも曲の時刻は進まない
+        c.on_hold(1_500_000, 48_000);
+        assert_eq!(c.song_ms_at(9_000_000), Some(1000.0));
+        // 早送りすると同じフレームが 5 秒先になる
+        c.shift(5000.0);
+        assert_eq!(c.song_ms_at(9_000_000), Some(6000.0));
+        // 動かし直すと次のバッファから進む
+        c.on_buffer(2_000_000, 48_000);
+        assert_eq!(c.song_ms_at(2_500_000), Some(6500.0));
     }
 
     #[test]

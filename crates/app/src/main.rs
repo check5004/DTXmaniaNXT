@@ -36,6 +36,7 @@ mod result_training;
 mod result_view;
 mod select;
 mod settings;
+mod settings_ui;
 mod sfx;
 mod shutter;
 mod skin;
@@ -63,9 +64,12 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowId};
 
+use crate::chart_sound::AutoMix;
 use crate::config::Config;
-use crate::config_view::{ConfigAction, ConfigInfo, ConfigInput, ConfigView, Setting};
-use crate::game::{Outcome, Play};
+use crate::config_view::{
+    ConfigAction, ConfigInfo, ConfigInput, ConfigView, ItemId, PlayPos, Setting,
+};
+use crate::game::{GaugeRule, HitSoundRule, Outcome, Play, Rules};
 use crate::gfx::{Canvas, Gfx};
 use crate::history::History;
 use crate::loading::{Job, Loading};
@@ -246,8 +250,8 @@ impl Gpu {
 struct LoadSettings {
     input_offset_ms: f64,
     drum_sounds: bool,
-    /// 自動で叩くレーン
-    auto: Vec<DrumLane>,
+    /// 自動で叩くレーン、判定の幅、ゲージの決まりなど
+    rules: Rules,
     /// MIDI のポートごとの名前と割り当て（[`MidiIn::ports`] と同じ並び）
     inputs: Vec<(String, MidiProfile)>,
 }
@@ -258,9 +262,9 @@ impl LoadSettings {
         let started = Instant::now();
         let mut p = match practice {
             Some(o) => {
-                Play::load_practice(path, self.input_offset_ms, self.drum_sounds, &self.auto, o)?
+                Play::load_practice(path, self.input_offset_ms, self.drum_sounds, &self.rules, o)?
             }
-            None => Play::load(path, self.input_offset_ms, self.drum_sounds, &self.auto)?,
+            None => Play::load(path, self.input_offset_ms, self.drum_sounds, &self.rules)?,
         };
         p.set_inputs(self.inputs);
         // 「叩いても音が出ない」と言われたとき、ログで分かるように
@@ -332,6 +336,10 @@ struct App {
     after_close: Option<AfterClose>,
     /// 選曲画面に重ねる、練習の決めごとのポップアップ
     popup: Option<Box<PracticePopup>>,
+    /// 選曲の簡易設定か、演奏中の一時停止の板（設定の画面と同じ行）
+    quick: Option<Box<ConfigView>>,
+    /// 選曲の画面で最後に BD を叩いた時刻（2 回で簡易設定）
+    last_bd_us: Option<i64>,
     /// 選曲画面のマウスホイールの、まだ 1 行に満たない分
     wheel: f32,
     /// 演奏中に設定と入力の情報を出す（I で切り替え）
@@ -379,7 +387,7 @@ enum AfterClose {
     Title,
     /// 設定。`true` なら出たら選曲へ
     Config(bool),
-    /// 演奏を Esc でやめた。結果の画面へ（数はやめた時刻の曲の時刻 `at_ms` までで）
+    /// 演奏を一時停止の板の「演奏をやめる」でやめた。結果の画面へ（数はやめた時刻の曲の時刻 `at_ms` までで）
     Result {
         at_ms: f64,
     },
@@ -468,6 +476,8 @@ impl App {
             shutter: Shutter::new(),
             after_close: None,
             popup: None,
+            quick: None,
+            last_bd_us: None,
             wheel: 0.0,
             show_play_info: false,
             toast: None,
@@ -481,6 +491,7 @@ impl App {
     fn go_to_select(&mut self) {
         self.sfx.stop_title();
         self.popup = None;
+        self.quick = None;
         self.screen = Screen::Select;
         self.view.enter();
         self.shutter.open(SELECT_OPEN_DELAY);
@@ -496,7 +507,8 @@ impl App {
     /// 設定の画面を開く。`from_select` なら出たら選曲へ戻る。v2 と同じくシャッターを開いて入る
     fn open_config(&mut self, from_select: bool) {
         self.sfx.preview(None);
-        self.screen = Screen::Config(Box::new(ConfigView::new()), from_select);
+        self.quick = None;
+        self.screen = Screen::Config(Box::default(), from_select);
         self.shutter.open(CONFIG_OPEN_DELAY);
     }
 
@@ -615,18 +627,46 @@ impl App {
         LoadSettings {
             input_offset_ms: self.config.input_offset_ms,
             drum_sounds: self.config.drum_sounds,
-            // 開発用の DTXMANIANXT_AUTOPLAY=1 なら全部
-            auto: if self.autoplay {
-                DrumLane::ALL.to_vec()
-            } else {
-                self.config.settings.auto_lanes()
-            },
+            rules: self.rules(),
             inputs: self
                 .ports()
                 .iter()
                 .map(|p| p.name.clone())
                 .zip(inputs::profiles(&self.config, self.ports()))
                 .collect(),
+        }
+    }
+
+    /// 判定の決まり（設定の表から）
+    fn rules(&self) -> Rules {
+        let v = &self.config.settings;
+        Rules {
+            // 開発用の DTXMANIANXT_AUTOPLAY=1 なら全部
+            auto: if self.autoplay {
+                DrumLane::ALL.to_vec()
+            } else {
+                v.auto_lanes()
+            },
+            windows: v.hit_windows(false),
+            pedal_windows: v.hit_windows(true),
+            tight: v.flag(settings::TIGHT),
+            gauge: GaugeRule {
+                miss_factor: v.damage_factor(),
+                risky: v.number(settings::RISKY) as u32,
+                hazard: v.flag(settings::HAZARD),
+            },
+            groups: v.lane_groups(),
+            hit_sounds: HitSoundRule {
+                pad_first: v.pad_sound_first(),
+                muting_lp: v.flag(settings::MUTING_LP),
+                volume: v.number(settings::CHIP_VOLUME) as f32 / 100.0,
+            },
+            auto_mix: AutoMix {
+                gain: v.number(settings::AUTO_VOLUME) as f32 / 100.0,
+                bgm: v.flag(settings::BGM_SOUND),
+                shift_ms: v.number(settings::BGM_ADJUST) as f64,
+            },
+            metronome: v.flag(settings::METRONOME),
         }
     }
 
@@ -656,8 +696,10 @@ impl App {
         let label = self.songs.chart_label(&play.path);
         play.begin();
         let lag = play_view::LagDigits::from_config(&self.config);
-        let view = PlayView::new(&play, &label, lag);
+        let looks = play_view::Looks::from_settings(&self.config.settings);
+        let view = PlayView::new(&play, &label, lag, looks);
         self.message = None;
+        self.quick = None;
         // 譜面の音を切ったままだと、叩いても音が出ないわけが分からない。始めにしばらく知らせる
         if !play.drum_sounds {
             self.toast_for(
@@ -791,6 +833,7 @@ impl App {
 
     /// 曲（練習）を終える。結果の画面へ。`at_ms`（曲の時刻）があればそこでやめたことにする
     fn finish_play(&mut self, at_ms: Option<f64>) {
+        self.quick = None;
         let Screen::Play(p, view) = &self.screen else {
             return;
         };
@@ -800,8 +843,9 @@ impl App {
         let cleared = p.finished();
         let session = self.history.save(p, Some(play_score(&finish, cleared)));
         let stats = self.history.chart_stats();
-        // New Record と前回のベストのバーは、今回より前のプレイと比べる。自動で叩くレーンがあれば比べない
-        let best = if p.has_auto() {
+        // New Record と前回のベストのバーは、今回より前のプレイと比べる。自動で叩くレーンがあるときと、
+        // 早送りか巻き戻しをしたときは比べない
+        let best = if p.has_auto() || p.skipped() {
             None
         } else {
             self.history.best_score(&p.path, session)
@@ -886,16 +930,18 @@ impl App {
                 .collect(),
             None => Vec::new(),
         };
+        let paused_panel = self.quick.is_some();
         match &mut self.screen {
             // シャッターを閉じているあいだは叩いても何もしない（演奏をやめたあとの音符も数えない）
             _ if closing => {}
-            Screen::Play(play, _) => {
+            // 一時停止の板を開いているあいだは、パッドで板を操作する
+            Screen::Play(play, _) if !paused_panel => {
                 for (raw, msgs) in &received {
                     play.on_midi(raw, msgs);
                 }
             }
-            Screen::Config(view, _) if view.waiting_pad() => {
-                // パッドの割り当て：次に叩いたノートを、叩いた機器の割り当てにする
+            Screen::Config(view, _) if view.wants_raw() => {
+                // パッドの割り当て：叩いたノートを、叩いた機器の割り当てにする
                 let hit = received.iter().find_map(|(raw, msgs)| {
                     msgs.iter().find_map(|m| match *m {
                         MidiMessage::NoteOn { note, .. } => Some((raw.port, note)),
@@ -928,6 +974,12 @@ impl App {
                 }
             }
         }
+        if let Screen::Config(view, _) = &mut self.screen
+            && !closing
+            && let Some(r) = view.tick()
+        {
+            assigned.get_or_insert(r);
+        }
         if let Some(r) = assigned {
             self.config_response(r);
         }
@@ -952,7 +1004,8 @@ impl App {
                 play.view_ahead_ms = play_view::view_ahead_ms(self.config.scroll_px_per_ms);
                 play.update();
                 view.feed(play);
-                if stage_failed && play.practice.is_none() && view.gauge_empty() {
+                if stage_failed && play.practice.is_none() && !play.skipped() && view.gauge_empty()
+                {
                     // 上流と同じく、音を止めて STAGE FAILED を出し、選曲に戻る（記録は残す）
                     view.start_failure(play.now_ms() + self.config.visual_offset_ms);
                     play.silence();
@@ -1053,8 +1106,8 @@ impl App {
             return;
         };
         let info = config_info(&self.config, &self.midi, &self.monitor, &self.songs);
-        let items = config_view::items(view.list(), &info);
-        let r = view.input(input, &items);
+        let rows = config_view::rows(view.page(), &info);
+        let r = view.input(input, &rows);
         self.config_response(r);
     }
 
@@ -1069,68 +1122,46 @@ impl App {
 
     fn config_action(&mut self, action: ConfigAction) {
         match action {
-            ConfigAction::AddSongDir => {
-                if let Some(dir) = ui::pick_folder("曲のフォルダを選ぶ") {
-                    self.add_song_dir(dir);
-                }
-            }
-            ConfigAction::RemoveSongDir(i) => {
-                if i < self.config.song_dirs.len() {
-                    self.config.song_dirs.remove(i);
-                    self.config.save();
-                    self.songs.rescan(self.config.song_dirs.clone());
-                }
-            }
-            ConfigAction::Rescan => {
-                if !self.config.song_dirs.is_empty() {
-                    self.songs.rescan(self.config.song_dirs.clone());
-                }
-            }
-            ConfigAction::ReconnectMidi => self.reopen_midi(),
-            ConfigAction::Nudge(s, d) => {
-                let c = &mut self.config;
-                let r = config_view::OFFSET_RANGE;
-                let steps = d;
-                let d = f64::from(d);
-                match s {
-                    Setting::MasterVolume => {
-                        c.nudge_master_volume(steps);
-                        audio::set_master_volume(c.master_volume());
-                    }
-                    Setting::InputAdjust => {
-                        c.input_offset_ms = (c.input_offset_ms.round() + d).clamp(-r, r);
-                    }
-                    Setting::VisualAdjust => {
-                        c.visual_offset_ms = (c.visual_offset_ms.round() + d).clamp(-r, r);
-                    }
-                    Setting::ScrollSpeed => {
-                        // 演奏中の ↑↓ と同じ 0.05 刻み
-                        let steps = (f64::from(c.scroll_px_per_ms) * 20.0).round() + d;
-                        c.scroll_px_per_ms = (steps / 20.0).clamp(0.1, 3.0) as f32;
-                    }
-                    _ => return,
-                }
-                c.save();
-            }
-            ConfigAction::Toggle(s) => {
-                let c = &mut self.config;
-                match s {
-                    Setting::StageFailed => c.stage_failed = Some(!c.stage_failed()),
-                    Setting::HitSound => c.drum_sounds = !c.drum_sounds,
-                    // OFF → ON → GREAT- → OFF（上流と同じ並び）
-                    Setting::ShowLagTime => c.show_lag_time = (c.show_lag_time + 1) % 3,
-                    Setting::ShowLagTimeColor => {
-                        c.show_lag_time_color = 1 - c.show_lag_time_color.min(1)
-                    }
-                    Setting::ShowLagHitCount => c.show_lag_hit_count = !c.show_lag_hit_count,
-                    Setting::AutoUpdate => c.auto_update = !c.auto_update,
-                    _ => return,
-                }
-                c.save();
-            }
-            ConfigAction::Change(key, delta) => {
-                self.config.settings.change(key, delta);
+            ConfigAction::Set(id, v) => self.config_set(id, v),
+            ConfigAction::Run(id) => self.config_run(id),
+            ConfigAction::TogglePad(lane, port, note) => {
+                let ports = self.ports().to_vec();
+                let added = inputs::toggle_note(&mut self.config, &ports, port, note, lane);
+                let device = self
+                    .midi
+                    .as_ref()
+                    .map_or("MIDI", |m| m.name(port))
+                    .to_owned();
+                log::info!(
+                    "{} note {note} of {device} {} {}",
+                    if added { "assigned" } else { "removed" },
+                    if added { "to" } else { "from" },
+                    lane.name()
+                );
                 self.config.save();
+                self.refresh_pads();
+                self.config_toast(if added {
+                    format!(
+                        "ノート {note} を{}に足しました（{device}）",
+                        inputs::lane_label(lane)
+                    )
+                } else {
+                    format!(
+                        "ノート {note} を{}から外しました（{device}）",
+                        inputs::lane_label(lane)
+                    )
+                });
+            }
+            ConfigAction::ToggleKey(lane, code) => {
+                let added = inputs::toggle_key(&mut self.config, code, lane);
+                self.config.save();
+                self.refresh_pads();
+                let key = inputs::key_label(code);
+                self.config_toast(if added {
+                    format!("キー {key} を{}に足しました", inputs::lane_label(lane))
+                } else {
+                    format!("キー {key} を{}から外しました", inputs::lane_label(lane))
+                });
             }
             ConfigAction::AssignPad(lane, port, note) => {
                 let ports = self.ports().to_vec();
@@ -1153,54 +1184,10 @@ impl App {
                 inputs::clear_lane(&mut self.config, &ports, lane);
                 self.config.save();
                 self.refresh_pads();
-            }
-            ConfigAction::ResetPads => {
-                inputs::reset_all(&mut self.config);
-                self.config.save();
-                self.refresh_pads();
-            }
-            ConfigAction::ToggleDevice(port) => {
-                let ports = self.ports().to_vec();
-                if let Some(d) = inputs::device_mut(&mut self.config, &ports, port) {
-                    d.disabled = !d.disabled;
-                    self.config.save();
-                    self.reopen_midi();
-                }
-            }
-            ConfigAction::NextPreset(port) => {
-                let ports = self.ports().to_vec();
-                let preset = inputs::preset_for(
-                    inputs::device(&self.config, &ports, port),
-                    ports.get(port).map_or("", |p| p.name.as_str()),
-                );
-                if let Some(d) = inputs::device_mut(&mut self.config, &ports, port) {
-                    d.preset = preset.next().name().to_owned();
-                    self.config.save();
-                    self.refresh_pads();
-                }
-            }
-            ConfigAction::NudgeChannel(port, d) => {
-                let ports = self.ports().to_vec();
-                if let Some(dev) = inputs::device_mut(&mut self.config, &ports, port) {
-                    // すべて（0）→ 1 → … → 16 → すべて
-                    dev.channel = (i32::from(dev.channel.min(16)) + d).rem_euclid(17) as u8;
-                    self.config.save();
-                    self.refresh_pads();
-                }
-            }
-            ConfigAction::NudgeMinVelocity(port, d) => {
-                let ports = self.ports().to_vec();
-                if let Some(dev) = inputs::device_mut(&mut self.config, &ports, port) {
-                    dev.min_velocity = (i32::from(dev.min_velocity) + d).clamp(0, 127) as u8;
-                    self.config.save();
-                    self.refresh_pads();
-                }
-            }
-            ConfigAction::ResetDevice(port) => {
-                let ports = self.ports().to_vec();
-                inputs::reset_device(&mut self.config, &ports, port);
-                self.config.save();
-                self.refresh_pads();
+                self.config_toast(format!(
+                    "{}の割り当てを全部外しました",
+                    inputs::lane_label(lane)
+                ));
             }
             ConfigAction::Leave => {
                 self.message = None;
@@ -1211,6 +1198,261 @@ impl App {
                 };
                 self.close_then(next, Duration::ZERO);
             }
+        }
+    }
+
+    /// 設定の画面の下に短い知らせを出す
+    fn config_toast(&mut self, text: String) {
+        if let Some(q) = &mut self.quick {
+            q.toast(text);
+        } else if let Screen::Config(view, _) = &mut self.screen {
+            view.toast(text);
+        }
+    }
+
+    /// 簡易設定の板の項目を作るのに要るもの（選んでいる曲、演奏中なら曲の位置）
+    fn quick_info(&self) -> ConfigInfo<'_> {
+        let mut info = config_info(&self.config, &self.midi, &self.monitor, &self.songs);
+        info.song = self.songs.selected_chart().is_some();
+        if let Screen::Play(p, _) = &self.screen {
+            info.play = Some(PlayPos {
+                practice: p.practice.is_some(),
+                at_ms: p.now_ms(),
+                end_ms: p.end_ms,
+            });
+        }
+        info
+    }
+
+    /// 選曲の簡易設定（BD 2 回）を開く
+    fn open_quick(&mut self) {
+        if self.quick.is_some() || self.popup.is_some() {
+            return;
+        }
+        self.sfx.play(Se::Decide);
+        self.quick = Some(Box::new(ConfigView::panel(config_view::Page::Quick)));
+    }
+
+    /// 演奏を一時停止して、一時停止の板を開く（Esc・Space・Pause）
+    fn open_pause(&mut self) {
+        let Screen::Play(play, _) = &mut self.screen else {
+            return;
+        };
+        if !play.paused() {
+            play.toggle_pause();
+        }
+        self.sfx.play(Se::Decide);
+        self.quick = Some(Box::new(ConfigView::panel(config_view::Page::Pause)));
+    }
+
+    /// 一時停止の板を閉じて、演奏を続ける
+    fn resume_play(&mut self) {
+        self.quick = None;
+        if let Screen::Play(play, _) = &mut self.screen
+            && play.paused()
+        {
+            play.toggle_pause();
+        }
+    }
+
+    /// 簡易設定の板の操作
+    fn quick_input(&mut self, input: ConfigInput) {
+        let Some(page) = self.quick.as_ref().map(|q| q.page()) else {
+            return;
+        };
+        let rows = config_view::rows(page, &self.quick_info());
+        let Some(q) = &mut self.quick else {
+            return;
+        };
+        let r = q.input(input, &rows);
+        if let Some(se) = r.se {
+            self.sfx.play(se);
+        }
+        if let Some(a) = r.action {
+            self.quick_action(a);
+        }
+    }
+
+    fn quick_action(&mut self, action: ConfigAction) {
+        match action {
+            ConfigAction::Set(ItemId::Seek, v) => {
+                // 上流 SkipForward / SkipBackward。飛んだプレイは記録に残さない
+                if let Screen::Play(play, _) = &mut self.screen {
+                    let d = v as f64 * 1000.0 - play.now_ms();
+                    play.seek(d);
+                }
+            }
+            ConfigAction::Set(id, v) => {
+                self.config_set(id, v);
+                // 演奏が持っている値も合わせる
+                if let Screen::Play(play, _) = &mut self.screen {
+                    play.input_offset_ms = self.config.input_offset_ms;
+                    play.drum_sounds = self.config.drum_sounds;
+                }
+            }
+            ConfigAction::Run(ItemId::Resume) | ConfigAction::Leave => {
+                if matches!(self.screen, Screen::Play(..)) {
+                    self.resume_play();
+                } else {
+                    self.quick = None;
+                }
+            }
+            ConfigAction::Run(ItemId::Retry) => {
+                if let Screen::Play(play, _) = &self.screen {
+                    let path = play.path.clone();
+                    let practice = play.practice.as_ref().map(|p| p.restart_options());
+                    self.quick = None;
+                    self.restart(path, practice);
+                }
+            }
+            ConfigAction::Run(ItemId::Quit) => {
+                if let Screen::Play(play, _) = &self.screen {
+                    // Esc でやめていたときと同じく、シャッターを閉じてから結果へ
+                    let at_ms = play.now_ms();
+                    self.quick = None;
+                    self.close_then(AfterClose::Result { at_ms }, Duration::ZERO);
+                }
+            }
+            ConfigAction::Run(ItemId::PracticeSong) => {
+                self.quick = None;
+                self.select_action(ui::SelectAction::Practice);
+            }
+            ConfigAction::Run(ItemId::AllSettings) => {
+                self.quick = None;
+                self.sfx.preview(None);
+                self.close_then(AfterClose::Config(true), Duration::ZERO);
+            }
+            ConfigAction::Run(id) => self.config_run(id),
+            // 簡易設定の板には割り当ての行が無い
+            _ => {}
+        }
+    }
+
+    /// 簡易設定・一時停止の板を開いているときのキー
+    fn on_quick_key(&mut self, code: KeyCode) {
+        let paused = matches!(self.screen, Screen::Play(..));
+        let input = match code {
+            KeyCode::ArrowUp => ConfigInput::Up,
+            KeyCode::ArrowDown => ConfigInput::Down,
+            KeyCode::ArrowLeft => ConfigInput::Left,
+            KeyCode::ArrowRight => ConfigInput::Right,
+            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space => ConfigInput::Decide,
+            KeyCode::Escape | KeyCode::Backspace => ConfigInput::Cancel,
+            KeyCode::Pause if paused => {
+                self.resume_play();
+                return;
+            }
+            KeyCode::KeyR if paused => {
+                self.quick_action(ConfigAction::Run(ItemId::Retry));
+                return;
+            }
+            KeyCode::KeyP if !paused => {
+                self.quick_action(ConfigAction::Run(ItemId::PracticeSong));
+                return;
+            }
+            KeyCode::F1 if !paused => {
+                self.sfx.play(Se::Decide);
+                self.quick_action(ConfigAction::Run(ItemId::AllSettings));
+                return;
+            }
+            _ => return,
+        };
+        self.quick_input(input);
+    }
+
+    /// 設定の画面で値を決めた（ON / OFF は 1 と 0、選択肢は何番目か）
+    fn config_set(&mut self, id: ItemId, v: i64) {
+        match id {
+            ItemId::Value(s) => {
+                config_view::set(s, &mut self.config, v);
+                if s == Setting::MasterVolume {
+                    audio::set_master_volume(self.config.master_volume());
+                }
+                self.config.save();
+            }
+            ItemId::Table(key) => {
+                self.config.settings.set_raw(key, v);
+                self.config.save();
+            }
+            ItemId::Practice(d) => {
+                config_view::set_drill(d, &mut self.config, v);
+                self.config.save();
+            }
+            ItemId::DeviceUse(port) => {
+                let ports = self.ports().to_vec();
+                if let Some(d) = inputs::device_mut(&mut self.config, &ports, port) {
+                    d.disabled = v == 0;
+                    self.config.save();
+                    self.reopen_midi();
+                }
+            }
+            ItemId::DevicePreset(port) => {
+                let ports = self.ports().to_vec();
+                let preset = engine::input::Preset::ALL
+                    [v.clamp(0, engine::input::Preset::ALL.len() as i64 - 1) as usize];
+                if let Some(d) = inputs::device_mut(&mut self.config, &ports, port) {
+                    d.preset = preset.name().to_owned();
+                    self.config.save();
+                    self.refresh_pads();
+                }
+            }
+            ItemId::DeviceChannel(port) => {
+                let ports = self.ports().to_vec();
+                if let Some(d) = inputs::device_mut(&mut self.config, &ports, port) {
+                    // 0 はすべて、1〜16
+                    d.channel = v.clamp(0, 16) as u8;
+                    self.config.save();
+                    self.refresh_pads();
+                }
+            }
+            ItemId::DeviceMinVelocity(port) => {
+                let ports = self.ports().to_vec();
+                if let Some(d) = inputs::device_mut(&mut self.config, &ports, port) {
+                    d.min_velocity = v.clamp(0, 127) as u8;
+                    self.config.save();
+                    self.refresh_pads();
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// 設定の画面の動かす項目
+    fn config_run(&mut self, id: ItemId) {
+        match id {
+            ItemId::AddSongDir => {
+                if let Some(dir) = ui::pick_folder("曲のフォルダを選ぶ") {
+                    self.add_song_dir(dir);
+                }
+            }
+            ItemId::SongDir(i) => {
+                if i < self.config.song_dirs.len() {
+                    self.config.song_dirs.remove(i);
+                    self.config.save();
+                    self.songs.rescan(self.config.song_dirs.clone());
+                    self.config_toast("曲のフォルダを一覧から外しました".to_owned());
+                }
+            }
+            ItemId::Rescan => {
+                if !self.config.song_dirs.is_empty() {
+                    self.songs.rescan(self.config.song_dirs.clone());
+                }
+            }
+            ItemId::ReconnectMidi => self.reopen_midi(),
+            ItemId::ResetPads => {
+                inputs::reset_all(&mut self.config);
+                self.config.save();
+                self.refresh_pads();
+                self.config_toast("割り当てを既定に戻しました".to_owned());
+            }
+            ItemId::DeviceReset(port) => {
+                let ports = self.ports().to_vec();
+                inputs::reset_device(&mut self.config, &ports, port);
+                self.config.save();
+                self.refresh_pads();
+                self.config_toast("この機器の割り当てをプリセットに戻しました".to_owned());
+            }
+            _ => {}
         }
     }
 
@@ -1230,6 +1472,8 @@ impl App {
                 let input = match code {
                     KeyCode::ArrowUp => ConfigInput::Up,
                     KeyCode::ArrowDown => ConfigInput::Down,
+                    KeyCode::ArrowLeft => ConfigInput::Left,
+                    KeyCode::ArrowRight => ConfigInput::Right,
                     KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space => ConfigInput::Decide,
                     KeyCode::Escape | KeyCode::Backspace => ConfigInput::Cancel,
                     _ => return,
@@ -1244,6 +1488,7 @@ impl App {
                     self.close_then(AfterClose::Select, LOADING_CANCEL_CLOSE_DELAY);
                 }
             }
+            Screen::Play(..) if self.quick.is_some() => self.on_quick_key(code),
             Screen::Play(play, _) => {
                 if let Some(lane) = lane {
                     play.on_key(lane, at);
@@ -1268,14 +1513,17 @@ impl App {
     }
 
     fn on_play_key(&mut self, code: KeyCode) {
-        let Screen::Play(play, _) = &mut self.screen else {
+        let Screen::Play(play, view) = &mut self.screen else {
             return;
         };
+        let failing = view.frozen_ms().is_some();
         let toast = match code {
-            KeyCode::Escape => {
-                // v2 と同じくシャッターを閉じてから移る。数はここまで（閉じるあいだの音符は数えない）
-                let at_ms = play.now_ms();
-                self.close_then(AfterClose::Result { at_ms }, Duration::ZERO);
+            // 一時停止して、一時停止の板を開く（上流 Pause。やめるのは板の「演奏をやめる」から）。
+            // STAGE FAILED を出しているあいだは止めない（出し終えると選曲に戻る）
+            KeyCode::Escape | KeyCode::Space | KeyCode::Pause => {
+                if !failing {
+                    self.open_pause();
+                }
                 return;
             }
             KeyCode::KeyR => {
@@ -1293,6 +1541,23 @@ impl App {
                     self.restart(path, Some(o));
                 }
                 return;
+            }
+            KeyCode::ArrowLeft | KeyCode::ArrowRight => {
+                // 上流 SkipForward / SkipBackward
+                let width = self.config.settings.number(settings::SKIP_MS) as f64;
+                let d = if code == KeyCode::ArrowLeft {
+                    -width
+                } else {
+                    width
+                };
+                let Some(to) = play.seek(d) else {
+                    return;
+                };
+                format!(
+                    "{} {:.0} 秒へ（このプレイは記録に残しません）",
+                    if d < 0.0 { "巻き戻し" } else { "早送り" },
+                    to.max(0.0) / 1000.0
+                )
             }
             KeyCode::Comma | KeyCode::Period if play.practice.is_some() => {
                 play.nudge_speed(if code == KeyCode::Comma { -1 } else { 1 });
@@ -1350,7 +1615,10 @@ impl App {
 
     /// 選曲画面のマウス：ホイールで動かし、曲バーを押すとそこへ動く（選んでいる曲なら決める）
     fn select_mouse(&mut self, mouse: SelectMouse) {
-        if !matches!(self.screen, Screen::Select) || self.after_close.is_some() {
+        if !matches!(self.screen, Screen::Select)
+            || self.after_close.is_some()
+            || self.quick.is_some()
+        {
             self.wheel = 0.0;
             return;
         }
@@ -1381,8 +1649,17 @@ impl App {
     }
 
     fn on_select_key(&mut self, code: KeyCode) {
+        if self.quick.is_some() {
+            self.on_quick_key(code);
+            return;
+        }
         if self.popup.is_some() {
             self.on_popup_key(code);
+            return;
+        }
+        // 簡易設定（パッドなら BD を 2 回）
+        if code == KeyCode::F2 {
+            self.open_quick();
             return;
         }
         if code == KeyCode::F1 {
@@ -1459,6 +1736,20 @@ impl App {
         if self.after_close.is_some() {
             return;
         }
+        if self.quick.is_some() && matches!(self.screen, Screen::Select | Screen::Play(..)) {
+            // 設定の画面と同じパッドの役目
+            let input = match lane {
+                DrumLane::HT => ConfigInput::Up,
+                DrumLane::LT => ConfigInput::Down,
+                DrumLane::SD => ConfigInput::Left,
+                DrumLane::FT => ConfigInput::Right,
+                DrumLane::CY | DrumLane::RD => ConfigInput::Decide,
+                DrumLane::LC => ConfigInput::Cancel,
+                _ => return,
+            };
+            self.quick_input(input);
+            return;
+        }
         match &self.screen {
             Screen::Title => match lane {
                 DrumLane::HT => self.title_move(-1),
@@ -1467,9 +1758,12 @@ impl App {
                 _ => {}
             },
             Screen::Config(..) => {
+                // パッドの役目は設定の画面の下に出す（HT 上、LT 下、SD 左、FT 右、CY・RD 決定、LC 戻る）
                 let input = match lane {
                     DrumLane::HT => ConfigInput::Up,
                     DrumLane::LT => ConfigInput::Down,
+                    DrumLane::SD => ConfigInput::Left,
+                    DrumLane::FT => ConfigInput::Right,
                     DrumLane::CY | DrumLane::RD => ConfigInput::Decide,
                     DrumLane::LC => ConfigInput::Cancel,
                     _ => return,
@@ -1504,6 +1798,15 @@ impl App {
                             self.cycle_level();
                         } else {
                             self.last_hh_us = Some(at_us);
+                        }
+                    }
+                    // BD を 2 回で簡易設定
+                    DrumLane::BD => {
+                        if self.last_bd_us.is_some_and(|t| at_us - t <= DOUBLE_HIT_US) {
+                            self.last_bd_us = None;
+                            self.open_quick();
+                        } else {
+                            self.last_bd_us = Some(at_us);
                         }
                     }
                     _ => {}
@@ -1746,8 +2049,8 @@ impl App {
                 let c = Canvas::new(&painter, ctx.content_rect());
                 self.gfx.begin(&c, ctx.pixels_per_point());
                 let info = config_info(&self.config, &self.midi, &self.monitor, &self.songs);
-                let items = config_view::items(view.list(), &info);
-                view.draw(&c, &mut self.gfx, &items, scanning);
+                let rows = config_view::rows(view.page(), &info);
+                view.draw(&c, &mut self.gfx, &rows, &info);
                 if let Some(m) = &self.message {
                     ui::message_overlay(&ctx, m);
                 }
@@ -1768,6 +2071,13 @@ impl App {
                 self.view.draw(&c, &mut self.gfx, &self.songs);
                 if let Some(p) = &self.popup {
                     p.draw(&c, &mut self.gfx);
+                }
+                if let Some(q) = &mut self.quick {
+                    let mut info =
+                        config_info(&self.config, &self.midi, &self.monitor, &self.songs);
+                    info.song = self.songs.selected_chart().is_some();
+                    let rows = config_view::rows(q.page(), &info);
+                    q.draw_panel(&c, &mut self.gfx, &rows, &info);
                 }
                 if let Some(m) = &self.message {
                     ui::message_overlay(&ctx, m);
@@ -1802,6 +2112,17 @@ impl App {
                 );
                 if let Some(t) = toast {
                     ui::play_toast(&ctx, &c, t);
+                }
+                if let Some(q) = &mut self.quick {
+                    let mut info =
+                        config_info(&self.config, &self.midi, &self.monitor, &self.songs);
+                    info.play = Some(PlayPos {
+                        practice: play.practice.is_some(),
+                        at_ms: play.now_ms(),
+                        end_ms: play.end_ms,
+                    });
+                    let rows = config_view::rows(q.page(), &info);
+                    q.draw_panel(&c, &mut self.gfx, &rows, &info);
                 }
             }
             Screen::Result(o, view) => {
@@ -1849,6 +2170,7 @@ fn config_info<'a>(
                 error: p.error.clone(),
                 disabled: d.is_some_and(|d| d.disabled),
                 preset: inputs::preset_for(d, &p.name),
+                default_preset: engine::input::Preset::detect(midi::base_name(&p.name)),
                 channel: profiles[i].channel.map_or(0, |c| c + 1),
                 min_velocity: profiles[i].min_velocity,
                 changes: d.map_or(config.pad_notes.len(), |d| d.notes.len()),
@@ -1862,6 +2184,8 @@ fn config_info<'a>(
         devices,
         scanning: songs.scanning(),
         song_count: songs.library.songs,
+        song: false,
+        play: None,
     }
 }
 
@@ -1934,11 +2258,22 @@ impl ApplicationHandler for App {
                         }
                         return;
                     }
-                    // 押し続けたときの繰り返しは、設定の画面と選曲の画面の ↑↓ だけ（上流のキーの反復と同じ。
-                    // 選曲は v2 と同じく、練習のポップアップを開いていないとき）
-                    let repeat_ok = (matches!(self.screen, Screen::Config(..))
-                        || matches!(self.screen, Screen::Select) && self.popup.is_none())
-                        && matches!(code, KeyCode::ArrowUp | KeyCode::ArrowDown);
+                    // 押し続けたときの繰り返しは、設定の画面の矢印（左右は値を続けて変える）と、
+                    // 選曲の画面の ↑↓ だけ（上流のキーの反復と同じ。選曲は v2 と同じく、上に何も開いていないとき）
+                    let repeat_ok = match self.screen {
+                        Screen::Config(..) => matches!(
+                            code,
+                            KeyCode::ArrowUp
+                                | KeyCode::ArrowDown
+                                | KeyCode::ArrowLeft
+                                | KeyCode::ArrowRight
+                        ),
+                        Screen::Select => {
+                            self.popup.is_none()
+                                && matches!(code, KeyCode::ArrowUp | KeyCode::ArrowDown)
+                        }
+                        _ => false,
+                    };
                     if !event.repeat || repeat_ok {
                         self.on_key(code);
                     }
