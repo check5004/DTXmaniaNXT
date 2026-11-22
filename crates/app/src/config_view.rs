@@ -1,6 +1,7 @@
 //! 設定の画面（上流 `CStageConfig` と `CActConfigList`）。
 //! スキンの 4_ の画像で、左のメニュー（System / Drums / Exit）と、右の項目の一覧、説明のパネルを出す。
 //! 項目は NXT のもの（曲のフォルダ、入力と表示の補正、スクロールの速さ、パッドの割り当てなど）。
+//! 出入りは NX v2.0 と同じくシャッター（`shutter`）で、白いフェードは使わない。
 //!
 //! 操作は上流と同じ。↑↓（HT / LT）で選び、Enter（CY / RD）で決め、Esc（LC）で戻る。
 //! 数の項目は Enter で値を変える状態になり、↑↓ で値を変えて、もう一度 Enter で戻る。
@@ -28,9 +29,6 @@ const ITEM_X: f32 = 420.0;
 const ITEM_Y: f32 = 189.0;
 const ITEM_STEP: f32 = 67.0;
 
-/// 白いフェードの長さ（上流 `CActFIFOWhite`）
-const FADE: Duration = Duration::from_millis(500);
-
 /// 説明のパネルを出すまでの間（上流 `ctDisplayWait`：0〜350 を 1 ミリ秒ずつ）
 const DESCRIPTION_WAIT: Duration = Duration::from_millis(350);
 
@@ -55,7 +53,7 @@ pub enum ConfigAction {
     AssignPad(DrumLane, u8),
     /// このアプリで変えたパッドの割り当てを消す
     ResetPads,
-    /// 設定の画面を出る（フェードを終えた）
+    /// 設定の画面を出る（App がシャッターを閉じてから移る）
     Leave,
 }
 
@@ -407,8 +405,8 @@ pub struct ConfigView {
     /// 叩くのを待っているパッド
     waiting: Option<DrumLane>,
     entered: Instant,
-    /// 出ていくフェードの始まり
-    leaving: Option<Instant>,
+    /// 出ると決めた（あとは操作を受け付けない）
+    leaving: bool,
 }
 
 impl ConfigView {
@@ -425,7 +423,7 @@ impl ConfigView {
             moved_at: now,
             waiting: None,
             entered: now,
-            leaving: None,
+            leaving: false,
         }
     }
 
@@ -446,19 +444,10 @@ impl ConfigView {
         }
     }
 
-    /// 出ていくフェードを終えたら `Leave`
-    pub fn poll(&mut self) -> Option<ConfigAction> {
-        self.leaving
-            .filter(|at| at.elapsed() >= FADE)
-            .map(|_| ConfigAction::Leave)
-    }
-
-    fn ready(&self) -> bool {
-        self.leaving.is_none() && self.entered.elapsed() >= FADE
-    }
-
-    fn leave(&mut self) {
-        self.leaving = Some(Instant::now());
+    /// 出る（v2 と同じく、白へは消さずに App がシャッターを閉じる）
+    fn leave(&mut self, se: Se) -> Response {
+        self.leaving = true;
+        Response::action(se, ConfigAction::Leave)
     }
 
     fn set_list(&mut self, list: List) {
@@ -474,7 +463,7 @@ impl ConfigView {
     }
 
     pub fn input(&mut self, input: ConfigInput, items: &[Item]) -> Response {
-        if !self.ready() {
+        if self.leaving {
             return Response::default();
         }
         if self.waiting.is_some() {
@@ -578,17 +567,13 @@ impl ConfigView {
             }
             ConfigInput::Decide => {
                 if self.menu == MENU_EXIT {
-                    self.leave();
-                } else {
-                    self.focus_list = true;
-                    self.moved();
+                    return self.leave(Se::Decide);
                 }
+                self.focus_list = true;
+                self.moved();
                 Response::se(Se::Decide)
             }
-            ConfigInput::Cancel => {
-                self.leave();
-                Response::se(Se::Cancel)
-            }
+            ConfigInput::Cancel => self.leave(Se::Cancel),
         }
     }
 
@@ -649,60 +634,54 @@ impl ConfigView {
         if scanning {
             draw_scanning(c, g, self.entered);
         }
-        // 白いフェード
-        let a = match self.leaving {
-            Some(at) => (at.elapsed().as_secs_f32() / FADE.as_secs_f32()).min(1.0),
-            None => 1.0 - (self.entered.elapsed().as_secs_f32() / FADE.as_secs_f32()).min(1.0),
-        };
-        if a > 0.0 {
-            c.cover(Color32::from_white_alpha((a * 255.0) as u8));
-        }
     }
 
-    /// 左のメニュー（上流：4_menu panel.png に、4_menu cursor.png を 170 の幅に伸ばして重ねる）
+    /// 左のメニュー（v2：4_menu panel.png を (245, 140) に、4_menu cursor.png を 170×28 に伸ばして重ね、
+    /// 18 ピクセルの文字を x = 340 の中央、y = 144 から 32 ずつに）
     fn draw_menu(&self, c: &Canvas, g: &mut Gfx) {
         if let Some(t) = g.skin.tex("Graphics/4_menu panel.png") {
-            // 上流は 5 行ぶんの枠。3 行ぶんに縮め、下の縁は残す
+            // v2 は 5 行ぶんの枠。3 行ぶんに縮め、下の縁は残す
             let h = 12.0 + MENU.len() as f32 * 32.0;
             let edge = 8.0f32.min(t.h);
             c.part(&t, 245.0, 140.0, src(0.0, 0.0, t.w, h - edge));
             c.part(&t, 245.0, 140.0 + h - edge, src(0.0, t.h - edge, t.w, edge));
         }
         if let Some(t) = g.skin.tex("Graphics/4_menu cursor.png") {
+            // v2 は左右の 16 ピクセルを伸ばさずに、間だけ横へ伸ばす（`ERenderMode.Sliced`）
             let alpha = if self.focus_list { 0.5 } else { 1.0 };
-            let (x, y, w) = (250.0, 146.0 + self.menu as f32 * 32.0, 170.0);
-            let h = t.h.min(32.0);
-            let part = |x: f32, s| {
+            let (x, y, w, h) = (250.0, 146.0 + self.menu as f32 * 32.0, 170.0, 28.0);
+            let cap = 16.0f32.min(t.w / 2.0);
+            let mid = t.w - cap * 2.0;
+            let sy = h / t.h;
+            let part = |x: f32, s: crate::gfx::Src, sx: f32| {
                 c.draw_opt(
                     &t,
                     x,
                     y,
                     crate::gfx::Opt {
                         src: Some(s),
+                        sx,
+                        sy,
                         alpha,
                         ..Default::default()
                     },
                 );
             };
-            part(x, src(0.0, 0.0, 16.0, h));
-            part(x + w - 16.0, src(16.0, 0.0, 16.0, h));
-            let mut left = w - 32.0;
-            let mut px = x + 16.0;
-            while left > 0.0 {
-                let pw = left.min(16.0);
-                part(px, src(8.0, 0.0, pw, h));
-                px += pw;
-                left -= pw;
+            part(x, src(0.0, 0.0, cap, t.h), 1.0);
+            if mid > 0.0 {
+                part(x + cap, src(cap, 0.0, mid, t.h), (w - cap * 2.0) / mid);
             }
+            part(x + w - cap, src(t.w - cap, 0.0, cap, t.h), 1.0);
         }
         for (i, name) in MENU.iter().enumerate() {
+            // v2 `UIBasicButton`：ふだんは縁取りした白、選んでいると黄から橙のグラデーション
             let style = if i == self.menu {
                 Style {
                     gradient: Some(Color32::from_rgb(255, 69, 0)),
-                    ..Style::edged(24.0, Color32::from_rgb(255, 255, 0), Color32::BLACK, 2.0)
+                    ..Style::edged(18.0, Color32::from_rgb(255, 255, 0), Color32::BLACK, 2.0)
                 }
             } else {
-                Style::edged(24.0, Color32::WHITE, Color32::BLACK, 2.0)
+                Style::edged(18.0, Color32::WHITE, Color32::BLACK, 2.0)
             };
             if let Some(t) = g.texts.get(name, &style) {
                 t.draw(c, 340.0 - t.w / 2.0, 144.0 + i as f32 * 32.0, 1.0, 1.0);
@@ -836,9 +815,7 @@ mod tests {
     }
 
     fn ready() -> ConfigView {
-        let mut v = ConfigView::new();
-        v.entered -= FADE;
-        v
+        ConfigView::new()
     }
 
     #[test]
@@ -929,7 +906,7 @@ mod tests {
     }
 
     #[test]
-    fn exit_and_escape_leave_after_the_fade() {
+    fn exit_and_escape_leave() {
         let config = Config::default();
         let list = items(List::System, &info(&config));
         let mut v = ready();
@@ -937,10 +914,17 @@ mod tests {
         assert_eq!(v.menu, MENU_EXIT);
         // Exit を選んでも一覧は前のまま
         assert_eq!(v.list(), List::System);
-        v.input(ConfigInput::Decide, &list);
-        assert_eq!(v.poll(), None);
-        v.leaving = v.leaving.map(|t| t - FADE);
-        assert_eq!(v.poll(), Some(ConfigAction::Leave));
+        assert_eq!(
+            v.input(ConfigInput::Decide, &list).action,
+            Some(ConfigAction::Leave)
+        );
+        // 出ると決めたあとは動かない
+        assert_eq!(v.input(ConfigInput::Down, &list), Response::default());
+        let mut v = ready();
+        assert_eq!(
+            v.input(ConfigInput::Cancel, &list),
+            Response::action(Se::Cancel, ConfigAction::Leave)
+        );
     }
 
     #[test]

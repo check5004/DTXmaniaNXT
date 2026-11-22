@@ -1,7 +1,9 @@
-//! 選曲画面。上流 DTXManiaNX の `CStageSongSelection` とその部品（`CActSelectSongList`、
-//! `CActSelectStatusPanel`、`CActSelectPreimagePanel`、`CActSelectArtistComment`、
-//! `CActSelectInformation`、`CActSelectShowCurrentPosition`）と同じ画像を同じ座標と順で描く。
-//! 座標と動きの速さは上流のコードから写している。
+//! 選曲画面。NX v2.0（BocuD 版 20260121）の `CStageSongSelectionNew` とその部品
+//! （`SongSelectionContainer`・`SongSelectionElement`・`StatusPane`・`SortMenuContainer`・
+//! `DensityGraph`）と同じ画像を同じ座標と順で描く。座標と動きの速さは v2 のコードから写している。
+//!
+//! v2 との違い：背景の動画（5_background.mp4）は同梱せず、止まった絵（5_background.jpg）を出す。
+//! v2 の 20260121 では中身の無い密度のグラフに、レーンごとの音符の混み具合を描く。
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -9,62 +11,79 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::{Duration, Instant};
 
 use egui::{Color32, Pos2};
-use library::{LEVELS, Node, Song, SongChart};
+use library::{LEVELS, Node, Song, SongChart, SortKind};
 
-use crate::gfx::{Canvas, Gfx, Glyphs, H, Opt, Src, Tex, src};
+use crate::gfx::{Canvas, Gfx, Glyphs, Opt, Tex, src};
 use crate::songs::{Entry, SongList};
-use crate::text::Style;
+use crate::text::{Style, Text};
 
-/// 13 本の曲バーの基本の y 座標（上流 `ptバーの基本座標`）。6 本目（5）が選んでいる曲
-const BAR_Y: [f32; 13] = [
-    5.0, 56.0, 107.0, 158.0, 209.0, 270.0, 362.0, 413.0, 464.0, 515.0, 566.0, 617.0, 668.0,
-];
-/// 曲バーの x（選んでいる曲のバーは少し左）
-const BAR_X: f32 = 673.0;
-const SELECTED_BAR_X: f32 = 665.0;
-/// 選んでいる曲のバーの文字の y（バーはこの 30 上）
-const SELECTED_Y: f32 = 269.0;
-/// 曲名の最大の幅（長い曲名は横に縮める）
-const TITLE_MAX_W: f32 = 510.0;
-/// フェードの長さ（上流 `CActFIFOBlack`：0〜100 を 5 ミリ秒ずつ）
-const FADE: Duration = Duration::from_millis(500);
-/// 選んでから大きなジャケットを出すまで（上流の既定 100 ミリ秒、そこから 100 ミリ秒で濃くなる）
-const PREIMAGE_WAIT_MS: f64 = 100.0;
+/// 曲の帯の並びの原点（選んでいる帯の左上）と間隔（v2 `SongSelectionContainer`）
+const LIST_X: f32 = 765.0;
+const LIST_Y: f32 = 320.0;
+const SPACING: f32 = 85.0;
+/// 選んでいる帯に近いほど左へ出す（離れが `OFFSET_RANGE` より近ければ、最大 `OFFSET_DISTANCE`）
+const OFFSET_RANGE: f32 = 90.0;
+const OFFSET_DISTANCE: f32 = 25.0;
+/// 選んでいる帯より上と下に描く帯の数
+const ROWS_AROUND: i64 = 5;
+/// 曲名とアーティストの幅の上限（長ければ切り、選んでいる帯では流す）
+const TEXT_MAX_W: f32 = 460.0;
+/// 長い文字を流す速さ（ピクセル毎秒）と、流れる文字のつなぎ目の間
+const SCROLL_SPEED: f32 = 50.0;
+const SCROLL_GAP: f32 = 60.0;
+/// 大きなジャケット
+const ART_X: f32 = 320.0;
+const ART_Y: f32 = 35.0;
+const ART_SIZE: f32 = 300.0;
+/// 並べ替えメニュー（v2 `SortMenuContainer`：右上を (1281, 35) に合わせた 662×92。
+/// アイコンは 90 ごとに並び、3 つ目が選んでいるもので 18 下がる）
+const SORT_X: f32 = 1281.0 - 662.0;
+const SORT_Y: f32 = 35.0;
+const SORT_SPACING: f32 = 90.0;
+const SORT_SELECTED: usize = 2;
+const SORT_DIP: f32 = 18.0;
+/// 難易度のパネル（v2 `StatusPane`：左下を (430, 720) に合わせる。難易度ごとに 74 上へ）
+const PANE_X: f32 = 430.0;
+const PANE_Y: f32 = 720.0;
+const PANE_SPACING: f32 = 74.0;
+/// 密度のグラフ（v2 `DensityGraph`）
+const GRAPH_X: f32 = 212.0;
+const GRAPH_Y: f32 = 355.0;
+/// グラフのレーン（graph_fg_drums.png の黒い縦の帯：(30, 15) に置いた絵の左から 5、幅 6、間隔 12、高さ 270）
+const GRAPH_LANE_X: f32 = GRAPH_X + 30.0 + 5.0;
+const GRAPH_LANE_W: f32 = 6.0;
+const GRAPH_LANE_STEP: f32 = 12.0;
+const GRAPH_TOP: f32 = GRAPH_Y + 15.0;
+const GRAPH_H: f32 = 270.0;
+/// グラフを縦に分ける数（1 つ 3 ピクセル）
+const BINS: usize = 90;
+/// 動きの速さ（v2：残りの 10 倍毎秒で近づき、1 フレーム（60 分の 1 秒）に 10 ピクセルまで）
+const SPEED: f32 = 10.0;
+const MAX_SPEED: f32 = 600.0;
 /// 選んでからプレビューの音を鳴らすまで（上流の既定 1000 ミリ秒）
 pub const PREVIEW_WAIT: Duration = Duration::from_millis(1000);
 
-/// 曲バーの種類（上流 `EBarType`）
+/// 帯の絵の種類
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum BarType {
-    Score,
+enum Bar {
+    Song,
+    /// 閉じた BOX
     Box,
-    Other,
+    /// 開いた BOX（`<< BACK`）
+    Back,
 }
 
-impl BarType {
-    fn bar(self) -> &'static str {
-        match self {
-            Self::Score => "Graphics/5_bar score.png",
-            Self::Box => "Graphics/5_bar box.png",
-            Self::Other => "Graphics/5_bar other.png",
-        }
-    }
-
-    fn selected_bar(self) -> &'static str {
-        match self {
-            Self::Score => "Graphics/5_bar score selected.png",
-            Self::Box => "Graphics/5_bar box selected.png",
-            Self::Other => "Graphics/5_bar other selected.png",
-        }
-    }
-}
-
-/// 1 行に出すもの
+/// 帯 1 本に出すもの（v2 `SongSelectionElement.UpdateSongNode`）
 struct Row {
     title: String,
-    kind: BarType,
-    /// ジャケット（無ければスキンの既定の画像）
+    /// 下の小さい文字（アーティスト、BOX の曲の数など）
+    sub: String,
+    bar: Bar,
     preimage: Preimage,
+    /// クリアした一番上の難易度 + 1（0 は無し）。曲だけ
+    lamp: Option<usize>,
+    /// 一番高いスキルと、その譜面の最大のスキルとの比
+    skill: Option<(f64, f64)>,
 }
 
 #[derive(Clone)]
@@ -73,66 +92,72 @@ enum Preimage {
     Skin(&'static str),
 }
 
-/// 選んでいる譜面を読んで分かること（選曲のパネルに出す）
-#[derive(Debug, Clone, Default)]
+/// 選んでいる譜面を読んで分かること（密度のグラフに出す）
+#[derive(Debug, Clone)]
 struct Details {
-    duration_ms: f64,
-    /// LC, HH, LP, SD, HT, BD, LT, FT, CY の数（上流の並び。HH は開きを、LP は左バスを、CY はライドを含む）
-    lanes: [usize; 9],
+    /// 音符の数
     total: usize,
+    /// レーン（LC, HH, LP, SD, HT, BD, LT, FT, CY）ごと、曲の頭から終わりまでを `BINS` に分けた音符の数
+    bins: Box<[[u16; BINS]; 9]>,
+    /// `bins` の一番大きい数
+    peak: u16,
+}
+
+/// レーンの並び（graph_fg_drums.png の下のアイコンの順。HH は開きを、LP は左バスを、CY はライドを含む）
+fn lane_index(lane: dtx::DrumLane) -> usize {
+    use dtx::DrumLane as L;
+    match lane {
+        L::LC => 0,
+        L::HH | L::HHO => 1,
+        L::LP | L::LBD => 2,
+        L::SD => 3,
+        L::HT => 4,
+        L::BD => 5,
+        L::LT => 6,
+        L::FT => 7,
+        L::CY | L::RD => 8,
+    }
 }
 
 fn read_details(path: &Path) -> Option<Details> {
-    use dtx::DrumLane as L;
     let bytes = std::fs::read(path).ok()?;
     let chart = dtx::load(&bytes);
     let tempo = dtx::TempoMap::build(&chart);
     let notes = tempo.drum_notes(&chart);
-    let mut lanes = [0usize; 9];
-    for n in &notes {
-        let i = match n.lane {
-            L::LC => 0,
-            L::HH | L::HHO => 1,
-            L::LP | L::LBD => 2,
-            L::SD => 3,
-            L::HT => 4,
-            L::BD => 5,
-            L::LT => 6,
-            L::FT => 7,
-            L::CY | L::RD => 8,
-        };
-        lanes[i] += 1;
+    Some(details_of(&notes))
+}
+
+fn details_of(notes: &[dtx::DrumNote]) -> Details {
+    let mut bins = Box::new([[0u16; BINS]; 9]);
+    let first = notes.iter().map(|n| n.ms).fold(f64::INFINITY, f64::min);
+    let last = notes.iter().map(|n| n.ms).fold(f64::NEG_INFINITY, f64::max);
+    let span = (last - first).max(1.0);
+    for n in notes {
+        let b = (((n.ms - first) / span * BINS as f64) as usize).min(BINS - 1);
+        let cell = &mut bins[lane_index(n.lane)][b];
+        *cell = cell.saturating_add(1);
     }
-    let duration_ms = chart
-        .chips
-        .iter()
-        .map(|c| tempo.chip_ms(c))
-        .fold(0.0, f64::max);
-    Some(Details {
-        duration_ms,
-        lanes,
+    let peak = bins.iter().flatten().copied().max().unwrap_or(0);
+    Details {
         total: notes.len(),
-    })
+        bins,
+        peak,
+    }
 }
 
-/// フェード
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Fade {
-    In,
-    Out,
-}
+/// 選んでいるものを見分ける（並べ替え、BOX の深さ、行、難易度）
+type SelectionKey = (SortKind, usize, usize, usize);
 
-/// 選曲画面の動き（スクロールや登場のアニメ）
+/// 選曲画面の動き（スクロールや並べ替えメニューのアニメ）
 pub struct SelectView {
-    /// 画面に入った時刻（登場のアニメ）
-    entered: Instant,
-    /// 目標までのスクロールの残り（1 行 = 100。上流 `nTargetScrollCounter - nCurrentScrollCounter`）
-    pending: i64,
-    scroll_tick: Instant,
-    /// 選んでいるものが変わった時刻（ジャケットの遅れた表示やコメントの流れ）
+    /// 帯の並びの、目標の位置までの残り（ピクセル。下が正）
+    pending: f32,
+    /// 並べ替えメニューの、目標の位置までの残り（ピクセル。右が正）
+    sort_pending: f32,
+    tick: Instant,
+    /// 選んでいるものが変わった時刻（プレビューの音と、長い曲名を流すのに使う）
     changed: Instant,
-    selected_key: Option<(usize, usize, usize)>,
-    fade: Option<(Fade, Instant)>,
+    selected_key: Option<SelectionKey>,
     /// 曲のフォルダの中のファイル名（大文字・小文字を区別しない OS のため）
     found: HashMap<(PathBuf, String), Option<PathBuf>>,
     details: HashMap<PathBuf, Option<Details>>,
@@ -160,12 +185,11 @@ impl SelectView {
         });
         let now = Instant::now();
         Self {
-            entered: now,
-            pending: 0,
-            scroll_tick: now,
+            pending: 0.0,
+            sort_pending: 0.0,
+            tick: now,
             changed: now,
             selected_key: None,
-            fade: Some((Fade::In, now)),
             found: HashMap::new(),
             details: HashMap::new(),
             details_tx,
@@ -173,80 +197,53 @@ impl SelectView {
         }
     }
 
-    /// 画面に入り直す（登場のアニメとフェードから）
+    /// 画面に入り直す（v2 と同じく、出入りはシャッターなのでこの画面ではフェードしない）
     pub fn enter(&mut self) {
-        let now = Instant::now();
-        self.entered = now;
-        self.pending = 0;
-        self.scroll_tick = now;
-        self.fade = Some((Fade::In, now));
+        self.pending = 0.0;
+        self.sort_pending = 0.0;
+        self.tick = Instant::now();
         self.selected_key = None;
     }
 
-    /// カーソルを `delta` 行動かした（`SongList::move_by` の後に呼ぶ）
+    /// カーソルを `delta` 行動かした（`SongList::move_by` の後に呼ぶ）。
+    /// v2 と同じく、先へ進めるのは 2 本分まで
     pub fn moved(&mut self, delta: isize) {
-        self.pending += delta as i64 * 100;
+        self.pending = (self.pending + delta as f32 * SPACING).clamp(-2.0 * SPACING, 2.0 * SPACING);
     }
 
     /// BOX の出入りなどで一覧が変わった（スクロールせずに切り替える）
     pub fn jumped(&mut self) {
-        self.pending = 0;
+        self.pending = 0.0;
     }
 
-    /// 決めたので暗くする
-    pub fn fade_out(&mut self) {
-        if !matches!(self.fade, Some((Fade::Out, _))) {
-            self.fade = Some((Fade::Out, Instant::now()));
-        }
-    }
-
-    pub fn fading_out(&self) -> bool {
-        matches!(self.fade, Some((Fade::Out, _)))
-    }
-
-    /// 暗くし終えた
-    pub fn faded_out(&self) -> bool {
-        matches!(self.fade, Some((Fade::Out, t)) if t.elapsed() >= FADE)
+    /// 並べ替えを `delta` 個となりへ変えた（`SongList::set_sort` の後に呼ぶ）
+    pub fn sorted(&mut self, delta: isize) {
+        self.pending = 0.0;
+        self.sort_pending = (self.sort_pending + delta as f32 * SORT_SPACING)
+            .clamp(-2.0 * SORT_SPACING, 2.0 * SORT_SPACING);
     }
 
     /// スクロールが止まっていて、選んでから `wait` 経った
     pub fn settled_for(&self, songs: &SongList, wait: Duration) -> bool {
-        self.pending == 0
+        self.pending == 0.0
             && self.selected_key == Some(selection_key(songs))
             && self.changed.elapsed() >= wait
     }
 
-    /// 時間を進める（上流と同じく 2 ミリ秒ごとに、遠いほど速く近づく）
+    /// 時間を進める
     pub fn update(&mut self, songs: &SongList) {
         let now = Instant::now();
-        while now.duration_since(self.scroll_tick) >= Duration::from_millis(2) {
-            self.scroll_tick += Duration::from_millis(2);
-            let d = self.pending.abs();
-            if d == 0 {
-                continue;
-            }
-            let step = match d {
-                0..=100 => 2,
-                101..=300 => 3,
-                301..=500 => 4,
-                _ => 8,
-            };
-            self.pending -= self.pending.signum() * step.min(d);
-        }
-        if self.pending == 0 {
-            self.scroll_tick = now;
-        }
+        let dt = now.duration_since(self.tick).as_secs_f32().min(0.1);
+        self.tick = now;
+        approach(&mut self.pending, dt);
+        approach(&mut self.sort_pending, dt);
         for (path, d) in self.details_rx.try_iter() {
             self.details.insert(path, d);
         }
-        // 選んでいるものが変わったか（スクロール中は変わったことにしない）
         let key = selection_key(songs);
-        if self.pending == 0 && self.selected_key != Some(key) {
+        if self.selected_key != Some(key) {
             self.selected_key = Some(key);
             self.changed = now;
-        }
-        if matches!(self.fade, Some((Fade::In, t)) if t.elapsed() >= FADE) {
-            self.fade = None;
         }
     }
 
@@ -285,6 +282,9 @@ impl SelectView {
         match self.details.get(path) {
             Some(d) => d.clone(),
             None => {
+                if self.details.len() > 500 {
+                    self.details.clear();
+                }
                 self.details.insert(path.to_owned(), None);
                 let _ = self.details_tx.send(path.to_owned());
                 None
@@ -296,13 +296,19 @@ impl SelectView {
         match e {
             Entry::Back => Row {
                 title: "<< BACK".into(),
-                kind: BarType::Box,
+                sub: "BOX を出ます。".into(),
+                bar: Bar::Back,
                 preimage: Preimage::Skin("Graphics/5_preimage backbox.png"),
+                lamp: None,
+                skill: None,
             },
             Entry::Random => Row {
                 title: "< RANDOM SELECT >".into(),
-                kind: BarType::Other,
+                sub: "この中から 1 曲を選びます。".into(),
+                bar: Bar::Song,
                 preimage: Preimage::Skin("Graphics/5_preimage random.png"),
+                lamp: None,
+                skill: None,
             },
             Entry::Node(Node::Box(b)) => {
                 let name = b.preimage.trim();
@@ -311,11 +317,18 @@ impl SelectView {
                     .flatten();
                 Row {
                     title: b.title.clone(),
-                    kind: BarType::Box,
+                    sub: match b.nodes.len() {
+                        0 => "Empty collection".to_owned(),
+                        1 => "1 song".to_owned(),
+                        n => format!("{n} songs"),
+                    },
+                    bar: Bar::Box,
                     preimage: file.map_or(
                         Preimage::Skin("Graphics/5_preimage default.png"),
                         Preimage::File,
                     ),
+                    lamp: None,
+                    skill: None,
                 }
             }
             Entry::Node(Node::Song(s)) => {
@@ -327,13 +340,34 @@ impl SelectView {
                     }
                     self.find(c.path.parent()?, name)
                 });
+                let artist = chart
+                    .map(|c| c.head.artist.clone())
+                    .filter(|a| !a.is_empty())
+                    .unwrap_or_else(|| s.artist.clone());
+                // クリアした一番上の難易度（v2 `UpdateLamp`）
+                let lamp = (0..LEVELS)
+                    .rev()
+                    .find(|&i| {
+                        s.charts[i]
+                            .as_ref()
+                            .and_then(|c| songs.stats(&c.path))
+                            .is_some_and(|st| st.best_rank.is_some())
+                    })
+                    .map_or(0, |i| i + 1);
+                let skill = library::sort::top_skill(s, songs.all_stats()).and_then(|(i, v)| {
+                    let max = s.charts[i].as_ref()?.head.level? * 20.0;
+                    Some((v, (v / max).clamp(0.0, 1.0)))
+                });
                 Row {
                     title: s.title.clone(),
-                    kind: BarType::Score,
+                    sub: artist,
+                    bar: Bar::Song,
                     preimage: file.map_or(
                         Preimage::Skin("Graphics/5_preimage default.png"),
                         Preimage::File,
                     ),
+                    lamp: Some(lamp),
+                    skill,
                 }
             }
         }
@@ -341,49 +375,39 @@ impl SelectView {
 
     pub fn draw(&mut self, c: &Canvas, g: &mut Gfx, songs: &SongList) {
         self.update(songs);
-        let ms = self.entered.elapsed().as_secs_f64() * 1000.0;
-        // 背景
+        // 背景（v2 は上に動画を重ねる）
         if let Some(t) = g.skin.tex("Graphics/5_background.jpg") {
             c.draw(&t, 0.0, 0.0);
         } else {
             c.fill(0.0, 0.0, 1280.0, 720.0, Color32::from_rgb(20, 24, 40));
         }
-        if let Some(t) = g.skin.tex("Graphics/5_BPM.png") {
-            c.draw(&t, 32.0, 258.0);
+        self.draw_list(c, g, songs);
+        // 左の飾りの紙（v2 は左上を軸に回す。右回りが正）
+        if let Some(t) = g.skin.tex("Graphics/SongSelect/back1.png") {
+            draw_turned(c, &t, 174.0, 393.0, 1.63);
         }
-        self.draw_preimage(c, g, songs);
-        self.draw_artist_comment(c, g, songs);
-        self.draw_list(c, g, songs, ms);
+        if let Some(t) = g.skin.tex("Graphics/SongSelect/back2.png") {
+            draw_turned(c, &t, 126.0, 336.0, -0.06);
+        }
+        self.draw_graph(c, g, songs);
         self.draw_status(c, g, songs);
-        // 演奏の記録の欄（上流 `CActSelectPerfHistoryPanel`：0〜100 を 5 ミリ秒ずつ、下から上がる）。中身はまだ
-        if let Some(t) = g.skin.tex_keyed("Graphics/5_play history panel.png") {
-            let k = (ms / 5.0).min(100.0) / 100.0;
-            let q = ((1.5 + 0.5 * k) * std::f64::consts::PI).cos();
-            c.draw(&t, 700.0, 570.0 + (t.h as f64 * (1.0 - q * q)) as f32);
-        }
-        // 上の帯（上流 ct登場時アニメ用共通：0〜100 を 3 ミリ秒ずつ、sin で下りてくる）
-        let common = (ms / 3.0).min(100.0) / 100.0;
-        if let Some(t) = g.skin.tex("Graphics/5_header panel.png") {
-            let y = (t.h as f64 * (std::f64::consts::FRAC_PI_2 * common).sin()) as f32 - t.h;
-            c.draw(&t, 0.0, y);
-        }
-        draw_information(c, g, ms);
-        if let Some(t) = g.skin.tex("Graphics/5_footer panel.png") {
-            c.draw(&t, 0.0, 720.0 - t.h);
-        }
-        self.draw_scrollbar(c, g, songs, common);
-        if let Some((kind, t)) = self.fade {
-            let p = (t.elapsed().as_secs_f32() / FADE.as_secs_f32()).min(1.0);
-            let a = match kind {
-                Fade::In => 1.0 - p,
-                Fade::Out => p,
-            };
-            c.cover(Color32::from_black_alpha((a * 255.0) as u8));
+        self.draw_sort_menu(c, g, songs);
+        self.draw_art(c, g, songs);
+        if let Some(t) = g.skin.tex("Graphics/SongSelect/top_bar.png") {
+            c.draw_opt(
+                &t,
+                0.0,
+                0.0,
+                Opt {
+                    sx: 1280.0 / t.w,
+                    ..Default::default()
+                },
+            );
         }
     }
 
-    /// 曲バーの一覧（上流 `CActSelectSongList.OnUpdateAndDraw`）
-    fn draw_list(&mut self, c: &Canvas, g: &mut Gfx, songs: &SongList, ms: f64) {
+    /// 曲の帯の並び（v2 `SongSelectionContainer.Draw`）
+    fn draw_list(&mut self, c: &Canvas, g: &mut Gfx, songs: &SongList) {
         let n = songs.len();
         if n == 0 {
             let msg = if songs.scanning().is_some() {
@@ -391,75 +415,107 @@ impl SelectView {
             } else {
                 "曲が見つかりません"
             };
-            if let Some(t) = g.texts.get(msg, &Style::plain(24.0, Color32::WHITE)) {
-                t.draw(c, 800.0, 280.0, 1.0, 1.0);
+            if let Some(t) = g.texts.get(
+                msg,
+                &Style::edged(24.0, Color32::BLACK, Color32::WHITE, 2.0),
+            ) {
+                t.draw(c, LIST_X + 78.0, LIST_Y + 38.0 - t.h / 2.0, 1.0, 1.0);
             }
-            self.draw_list_panels(c, g, 1.0);
             return;
         }
-        // 表示の位置（1 行 = 100）。スクロール中は目標の手前
-        let pos = songs.cursor as i64 * 100 - self.pending;
-        let sel = pos.div_euclid(100);
-        let frac = pos.rem_euclid(100) as f32 / 100.0;
-        let item = |i: usize| (sel - 5 + i as i64).rem_euclid(n as i64) as usize;
-        // 登場のアニメ（上流 ct登場アニメ用[i]：-i*10 から 100 まで、3 ミリ秒ずつ）
-        let appear = |i: usize| (ms / 3.0 - i as f64 * 10.0).min(100.0);
-        let appearing = appear(12) < 100.0;
-        for (i, &base_y) in BAR_Y.iter().enumerate() {
-            let a = appear(i);
-            if appearing && a < 0.0 {
+        // 下の帯から描く（上の帯が手前）
+        for k in (-ROWS_AROUND..=ROWS_AROUND).rev() {
+            let rel = k as f32 * SPACING + self.pending;
+            let y = LIST_Y + rel;
+            if y > 720.0 || y + SPACING < 0.0 {
                 continue;
             }
-            if !appearing && i == 0 && frac > 0.0 {
-                // 一番上の行は、上へ動いているあいだは出さない
-                continue;
-            }
-            let Some(entry) = songs.entry(item(i)) else {
+            let t = (OFFSET_RANGE - rel.abs()).clamp(0.0, OFFSET_RANGE) / OFFSET_RANGE;
+            let x = LIST_X - t * OFFSET_DISTANCE;
+            let i = (songs.cursor as i64 + k).rem_euclid(n as i64) as usize;
+            let Some(entry) = songs.entry(i) else {
                 continue;
             };
             let row = self.row(songs, entry);
-            if i == 5 && (appearing || frac == 0.0) {
-                self.draw_selected_bar(c, g, &row);
-                continue;
-            }
-            let (x, y) = if appearing {
-                (BAR_X + 500.0 - (a / 100.0 * 500.0) as f32, base_y)
-            } else {
-                let next = if i == 0 { 0 } else { i - 1 };
-                (BAR_X, base_y + (BAR_Y[next] - base_y) * frac)
-            };
-            self.draw_bar(c, g, &row, x, y);
-        }
-        let panels = if appearing {
-            (appear(0) / 100.0).max(0.0) as f32
-        } else {
-            1.0
-        };
-        self.draw_list_panels(c, g, panels);
-        // 何番目か（上流 tアイテム数の描画。右詰め）
-        if let Some(t) = g.skin.tex("Graphics/5_skill number on gauge etc.png") {
-            let s = format!("{}/{}", songs.cursor + 1, n);
-            let mut x = 1260.0;
-            for ch in s.chars().rev() {
-                let (dx, dy) = match ch {
-                    '/' => (96.0, 0.0),
-                    d => {
-                        let v = d.to_digit(10).unwrap_or(0) as f32;
-                        ((v % 6.0) * 16.0, (v / 6.0).floor() * 16.0)
-                    }
-                };
-                c.part(&t, x, 620.0, src(dx, dy, 16.0, 16.0));
-                x -= 16.0;
-            }
+            self.draw_row(c, g, &row, x, y, k == 0);
         }
     }
 
-    fn draw_list_panels(&self, c: &Canvas, g: &Gfx, p: f32) {
-        if let Some(t) = g.skin.tex("Graphics/5_header song list.png") {
-            c.draw(&t, 0.0, t.h * p - t.h);
+    /// 帯 1 本（v2 `SongSelectionElement`。(x, y) は要素の左上）
+    fn draw_row(&mut self, c: &Canvas, g: &mut Gfx, row: &Row, x: f32, y: f32, selected: bool) {
+        let bar = match row.bar {
+            Bar::Song => g.skin.tex("Graphics/5_bar.png"),
+            Bar::Box => g.skin.tex("Graphics/5_box_closed.png"),
+            Bar::Back => g.skin.tex("Graphics/5_box_open.png"),
+        };
+        match bar {
+            // BOX の絵は左の 1 列を切って 1 右に置く（v2 の絵の端のずれの直し）
+            Some(t) if row.bar != Bar::Song => {
+                c.part(
+                    &t,
+                    x - 39.0,
+                    y + 42.0 - t.h / 2.0,
+                    src(1.0, 0.0, t.w - 1.0, t.h),
+                );
+            }
+            Some(t) => c.draw(&t, x - 40.0, y + 42.0 - t.h / 2.0),
+            None => c.fill(
+                x - 40.0,
+                y + 1.0,
+                638.0,
+                82.0,
+                Color32::from_rgba_unmultiplied(40, 40, 40, 220),
+            ),
         }
-        if let Some(t) = g.skin.tex("Graphics/5_footer song list.png") {
-            c.draw(&t, 0.0, 720.0 - t.h * p);
+        // スキルの帯（中身が下、枠が上）
+        if let Some((skill, ratio)) = row.skill {
+            if let Some(t) = g.skin.tex("Graphics/5_skillbar_fill.png") {
+                c.draw_opt(
+                    &t,
+                    x + 161.0,
+                    y + 12.0,
+                    Opt {
+                        sx: 286.0 * ratio as f32 / t.w,
+                        sy: 8.0 / t.h,
+                        ..Default::default()
+                    },
+                );
+            }
+            if let Some(t) = g.skin.tex("Graphics/5_skillbar.png") {
+                c.draw(&t, x + 82.0, y + 15.0 - t.h / 2.0);
+            }
+            let style = Style::edged(16.0, Color32::WHITE, Color32::from_black_alpha(160), 1.0);
+            if let Some(t) = g.texts.get(&format!("{skill:.2}"), &style) {
+                t.draw(c, x + 105.0, y + 16.0 - t.h / 2.0, 1.0, 1.0);
+            }
+        }
+        if let Some(t) = self.thumbnail(g, &row.preimage) {
+            c.draw_opt(
+                &t,
+                x + 40.0 - 32.5,
+                y + 40.0 - 32.5,
+                Opt {
+                    sx: 65.0 / t.w,
+                    sy: 65.0 / t.h,
+                    ..Default::default()
+                },
+            );
+        }
+        let scroll = selected.then(|| self.changed.elapsed().as_secs_f32() * SCROLL_SPEED);
+        let title = Style::edged(24.0, Color32::BLACK, Color32::WHITE, 2.0);
+        if let Some(t) = g.texts.get(&row.title, &title) {
+            draw_clipped(c, &t, x + 78.0, y + 38.0 - t.h / 2.0, scroll);
+        }
+        let sub = Style::edged(16.0, Color32::BLACK, Color32::WHITE, 1.5);
+        if !row.sub.trim().is_empty()
+            && let Some(t) = g.texts.get(&row.sub, &sub)
+        {
+            draw_clipped(c, &t, x + 80.0, y + 60.0 - t.h / 2.0, scroll);
+        }
+        if let Some(lamp) = row.lamp
+            && let Some(t) = g.skin.tex(&format!("Graphics/Lamp/{lamp:02}.png"))
+        {
+            c.draw(&t, x - 40.0 - t.w / 2.0, y + 40.0 - t.h / 2.0);
         }
     }
 
@@ -474,379 +530,278 @@ impl SelectView {
         }
     }
 
-    /// ジャケットを `size` の正方形に収めて描く（縦横の比は保ち、真ん中に寄せる）
-    fn draw_fit(c: &Canvas, t: &Tex, x: f32, y: f32, size: f32, scale: f32, alpha: f32) {
-        let f = (size / t.w).min(size / t.h) * scale;
-        let (w, h) = (t.w * f, t.h * f);
-        c.draw_opt(
-            t,
-            x + ((size - w) / 2.0).floor(),
-            y + ((size - h) / 2.0).floor(),
-            Opt {
-                sx: f,
-                sy: f,
-                alpha,
-                ..Default::default()
-            },
-        );
-    }
-
-    fn title_style() -> Style {
-        // 上流：曲名は太字の 20 ピクセル（2 倍で描いて半分に）、影は (10,10,10) の 1/4 の濃さを 1 ピクセル右下
-        Style {
-            px: 20.0,
-            color: Color32::WHITE,
-            bold: true,
-            shadow: Some((Color32::from_rgba_unmultiplied(10, 10, 10, 0x40), 1.0)),
-            edge: None,
-            gradient: None,
-        }
-    }
-
-    fn draw_bar(&mut self, c: &Canvas, g: &mut Gfx, row: &Row, x: f32, y: f32) {
-        match g.skin.tex(row.kind.bar()) {
-            Some(t) => c.draw(&t, x, y),
-            None => c.fill(
-                x,
-                y,
-                620.0,
-                48.0,
-                Color32::from_rgba_unmultiplied(60, 50, 40, 200),
-            ),
-        }
-        if let Some(t) = g.texts.get(&row.title, &Self::title_style()) {
-            // 文字は高さ 37 の帯の真ん中
-            t.draw_fit(c, x + 78.0, y + 5.0 + (37.0 - t.h) / 2.0, TITLE_MAX_W);
-        }
-        if let Some(t) = self.thumbnail(g, &row.preimage) {
-            Self::draw_fit(c, &t, x + 31.0, y + 2.0, 44.0, 1.0, 1.0);
-        }
-    }
-
-    fn draw_selected_bar(&mut self, c: &Canvas, g: &mut Gfx, row: &Row) {
-        let (x, y) = (SELECTED_BAR_X, SELECTED_Y);
-        match g.skin.tex(row.kind.selected_bar()) {
-            Some(t) => c.draw(&t, x, y - 30.0),
-            None => c.fill(
-                x,
-                y - 30.0,
-                640.0,
-                96.0,
-                Color32::from_rgba_unmultiplied(150, 60, 60, 220),
-            ),
-        }
-        if let Some(t) = self.thumbnail(g, &row.preimage) {
-            Self::draw_fit(c, &t, x + 7.0, y - 3.0, 44.0, 1.0, 1.0);
-        }
-        if let Some(t) = g.texts.get(&row.title, &Self::title_style()) {
-            t.draw_fit(c, x + 55.0, y + (37.0 - t.h) / 2.0, TITLE_MAX_W);
-        }
-    }
-
-    /// 画面の点（NX の座標）にある曲バーが、選んでいる曲から何本先か（上は負）
+    /// 画面の点（NX の座標）にある曲の帯が、選んでいる帯から何本先か（上は負）
     pub fn row_at(p: Pos2) -> Option<isize> {
-        if p.x < SELECTED_BAR_X || !(0.0..H).contains(&p.y) {
+        if p.x < LIST_X - 40.0 || !(36.0..720.0).contains(&p.y) || Self::sort_at(p).is_some() {
             return None;
         }
-        let top = |i: usize| if i == 5 { SELECTED_Y - 30.0 } else { BAR_Y[i] };
-        (0..13)
-            .rev()
-            .find(|&i| p.y >= top(i))
-            .map(|i| i as isize - 5)
+        Some(((p.y - LIST_Y) / SPACING).floor() as isize)
     }
 
-    /// 大きなジャケット（上流 `CActSelectPreimagePanel`）
-    fn draw_preimage(&mut self, c: &Canvas, g: &mut Gfx, songs: &SongList) {
-        let (bx, by) = (250.0, 34.0);
-        match g.skin.tex("Graphics/5_preimage panel.png") {
-            Some(t) => c.draw(&t, bx, by),
-            None => c.frame(bx, by, 313.0, 313.0, Color32::GRAY),
+    /// 画面の点（NX の座標）にある並べ替えのアイコンが、選んでいるものから何個先か（左は負）
+    pub fn sort_at(p: Pos2) -> Option<isize> {
+        if !(SORT_Y..SORT_Y + 92.0).contains(&p.y) || p.x < ART_X + ART_SIZE {
+            return None;
         }
-        if self.pending != 0 {
-            return;
-        }
-        // 選んでから 100 ミリ秒待ち、100 ミリ秒で 90% から 100% の大きさへ濃くなる
-        let t_ms = self.changed.elapsed().as_secs_f64() * 1000.0 - PREIMAGE_WAIT_MS;
-        if t_ms <= 0.0 {
-            return;
-        }
-        let p = (t_ms / 100.0).min(1.0) as f32;
+        let j = ((p.x - SORT_X) / SORT_SPACING).round() as isize;
+        Some(j - SORT_SELECTED as isize)
+    }
+
+    /// 大きなジャケット（v2 `bigAlbumArt`：300×300 に引き伸ばす）
+    fn draw_art(&mut self, c: &Canvas, g: &mut Gfx, songs: &SongList) {
         let Some(entry) = songs.selected_entry() else {
             return;
         };
         let row = self.row(songs, entry);
         if let Some(t) = self.thumbnail(g, &row.preimage) {
-            Self::draw_fit(c, &t, bx + 8.0, by + 8.0, 292.0, 0.9 + 0.1 * p, p);
-        }
-    }
-
-    /// アーティスト名とコメント（上流 `CActSelectArtistComment`）
-    fn draw_artist_comment(&mut self, c: &Canvas, g: &mut Gfx, songs: &SongList) {
-        if let Some(t) = g.skin.tex_keyed("Graphics/5_comment bar.png") {
-            c.draw(&t, 560.0, 257.0);
-        }
-        let (artist, comment) = match songs.selected_entry() {
-            Some(Entry::Node(Node::Song(s))) => {
-                let chart = chart_for(songs, s);
-                let artist = chart
-                    .map(|c| c.head.artist.clone())
-                    .filter(|a| !a.is_empty())
-                    .unwrap_or_else(|| s.artist.clone());
-                (
-                    artist,
-                    chart.map(|c| c.head.comment.clone()).unwrap_or_default(),
-                )
-            }
-            // 上流と同じく、box.def に無ければ決まった文
-            Some(Entry::Node(Node::Box(b))) => (
-                b.artist.clone(),
-                if b.comment.is_empty() {
-                    "BOX に移動します。".to_owned()
-                } else {
-                    b.comment.clone()
+            c.draw_opt(
+                &t,
+                ART_X,
+                ART_Y,
+                Opt {
+                    sx: ART_SIZE / t.w,
+                    sy: ART_SIZE / t.h,
+                    ..Default::default()
                 },
-            ),
-            Some(Entry::Back) => (String::new(), "BOX を出ます。".to_owned()),
-            Some(Entry::Random) => (
-                String::new(),
-                format!(
-                    "難易度レベル {} 付近の曲をランダムに選択します。難易度レベルを持たない曲も選択候補となります。",
-                    songs.level + 1
-                ),
-            ),
-            _ => (String::new(), String::new()),
-        };
-        let white = Style::plain(20.0, Color32::WHITE);
-        if let Some(t) = g.texts.get(&artist, &white) {
-            // 右寄せ（右端 1235）。510 より長ければ縮める
-            let w = t.w.min(510.0);
-            t.draw_fit(c, 1260.0 - 25.0 - w, 320.0, 510.0);
+            );
         }
-        if let Some(t) = g.texts.get(&comment, &white) {
-            let (x, y) = (683.0, 339.0);
-            let room = 1250.0 - x;
-            if t.w < room {
-                t.draw(c, x, y, 1.0, 1.0);
-            } else {
-                // 長いコメントは流す（上流：-740 から 10 ミリ秒に 1 ピクセル）
-                let span = 740.0 + t.w;
-                let off = ((self.changed.elapsed().as_secs_f32() * 100.0) % span) - 740.0;
-                let clip = c
-                    .painter()
-                    .clip_rect()
-                    .intersect(c.rect(x, y - 2.0, 1250.0 - x, 30.0));
-                let sub = c.with_clip(clip);
-                t.draw(&sub, x - off, y, 1.0, 1.0);
+    }
+
+    /// 並べ替えメニュー（v2 `SortMenuContainer`）
+    fn draw_sort_menu(&self, c: &Canvas, g: &mut Gfx, songs: &SongList) {
+        if let Some(t) = g.skin.tex("Graphics/5_sortmenu_bg.png") {
+            c.draw(&t, SORT_X, SORT_Y);
+        }
+        let center = SORT_X + SORT_SELECTED as f32 * SORT_SPACING;
+        let n = SortKind::ALL.len() as isize;
+        for j in -1..=n {
+            let kind = songs.sort().step(j - SORT_SELECTED as isize);
+            let x = SORT_X + j as f32 * SORT_SPACING + self.sort_pending;
+            let t = (OFFSET_RANGE - (center - x).abs()).clamp(0.0, OFFSET_RANGE) / OFFSET_RANGE;
+            let y = SORT_Y + 40.0 + t * SORT_DIP;
+            if let Some(tex) = g.skin.tex(&format!("Graphics/Sorting/{}.png", kind.icon())) {
+                c.draw(&tex, x - tex.w / 2.0, y - tex.h / 2.0);
             }
         }
     }
 
-    /// 難易度や BPM のパネル（上流 `CActSelectStatusPanel`）
-    fn draw_status(&mut self, c: &Canvas, g: &mut Gfx, songs: &SongList) {
-        let entry = songs.selected_entry();
-        let song = match entry {
-            Some(Entry::Node(Node::Song(s))) => Some(s.as_ref()),
+    /// 密度のグラフ（v2 `DensityGraph`。下が曲の頭、上が終わり）
+    fn draw_graph(&mut self, c: &Canvas, g: &mut Gfx, songs: &SongList) {
+        if let Some(t) = g.skin.tex("Graphics/SongSelect/graph_panel_drums.png") {
+            c.draw(&t, GRAPH_X, GRAPH_Y);
+        }
+        if let Some(t) = g.skin.tex("Graphics/SongSelect/graph_fg_drums.png") {
+            c.draw(&t, GRAPH_X + 30.0, GRAPH_Y + 15.0);
+        }
+        let chart = match songs.selected_entry() {
+            Some(Entry::Node(Node::Song(s))) => chart_for(songs, s),
             _ => None,
         };
-        let chart = song.and_then(|s| chart_for(songs, s));
-        let details = chart.and_then(|ch| self.details(&ch.path));
-        // BPM と長さ
-        let bpm_font = g.skin.tex("Graphics/5_bpm font.png");
-        if let Some(ch) = chart {
-            let (bx, by) = (90.0, 275.0);
-            let bpm = ch
-                .head
-                .bpm
-                .map(|b| format!("{:>3}", b.round() as i64))
-                .unwrap_or_default();
-            BPM_GLYPHS.draw(c, bpm_font.as_ref(), bx + 45.0, by + 23.0, &bpm);
-            if let Some(d) = &details {
-                let secs = (d.duration_ms / 1000.0) as u64;
-                let len = format!("{}:{:02}", secs / 60, secs % 60);
-                BPM_GLYPHS.draw(c, bpm_font.as_ref(), bx + 42.0, by - 7.0, &len);
-            }
-        }
-        if let Some(t) = g.skin.tex("Graphics/5_skill point panel.png") {
-            c.draw(&t, 32.0, 180.0);
-        }
-        // レーンごとのチップの数のグラフ
-        let (gx, gy) = (15.0, 368.0);
-        if let Some(t) = g.skin.tex("Graphics/5_graph panel drums.png") {
-            c.draw(&t, gx, gy);
-        }
-        if let Some(d) = &details {
-            if d.total > 0 {
-                let s = d.total.to_string();
-                let x = gx + 66.0 - (s.len() as f32 - 1.0) * 6.0;
-                BPM_GLYPHS.draw(c, bpm_font.as_ref(), x, gy + 298.0, &s);
-            }
-            for (i, &n) in d.lanes.iter().enumerate() {
-                let h = (n as f32 * 252.0 / 300.0).floor().min(252.0);
-                if h > 0.0 {
+        let Some(d) = chart.and_then(|ch| self.details(&ch.path)) else {
+            return;
+        };
+        if d.peak > 0 {
+            let cell = GRAPH_H / BINS as f32;
+            for (lane, bins) in d.bins.iter().enumerate() {
+                let x = GRAPH_LANE_X + lane as f32 * GRAPH_LANE_STEP;
+                for (b, &count) in bins.iter().enumerate() {
+                    if count == 0 {
+                        continue;
+                    }
+                    let a = 0.35 + 0.65 * f32::from(count) / f32::from(d.peak);
+                    let y = GRAPH_TOP + GRAPH_H - (b + 1) as f32 * cell;
                     c.fill(
-                        gx + 31.0 + i as f32 * 8.0,
-                        gy + 21.0 + 252.0 - h,
-                        4.0,
-                        h,
-                        LANE_COLORS[i],
+                        x,
+                        y,
+                        GRAPH_LANE_W,
+                        cell,
+                        LANE_COLORS[lane].gamma_multiply(a),
                     );
                 }
             }
         }
-        // 難易度の表
-        let (px, py) = (130.0, 350.0);
-        let body = g.skin.tex("Graphics/5_status panel.png");
-        let (bw, bh) = body.as_ref().map_or((561.0, 342.0), |t| (t.w, t.h));
-        match &body {
-            Some(t) => c.draw(t, px, py),
-            None => c.frame(px, py, bw, bh, Color32::GRAY),
+        // 音符の数（パネルの「Total Notes」の下に右寄せ）
+        let s = d.total.to_string();
+        let font = g.skin.tex("Graphics/5_bpm font.png");
+        let right = GRAPH_X + 149.0;
+        BPM_GLYPHS.draw(
+            c,
+            font.as_ref(),
+            right - BPM_GLYPHS.width(&s),
+            GRAPH_Y + 316.0,
+            &s,
+        );
+    }
+
+    /// 難易度のパネル（v2 `StatusPane`）
+    fn draw_status(&mut self, c: &Canvas, g: &mut Gfx, songs: &SongList) {
+        if let Some(t) = g.skin.tex("Graphics/5_difficulty_panel.png") {
+            c.draw(&t, PANE_X, PANE_Y - t.h);
         }
-        let panel = g.skin.tex("Graphics/5_difficulty panel.png");
-        let (cw, ch_) = panel.as_ref().map_or((187.0, 58.0), |t| {
-            ((t.w / 3.0).floor(), (t.h * 2.0 / 11.0).floor())
-        });
-        let frame = g.skin.tex("Graphics/5_difficulty frame.png");
-        let numbers = g.skin.tex("Graphics/5_level number.png");
-        let labels: [Option<String>; LEVELS] = match entry {
-            Some(Entry::Node(Node::Song(s))) => level_labels(s),
-            Some(Entry::Random) => std::array::from_fn(|i| Some(format!("L{}", i + 1))),
-            _ => Default::default(),
+        let song = match songs.selected_entry() {
+            Some(Entry::Node(Node::Song(s))) => Some(s.as_ref()),
+            _ => None,
         };
-        let single = song.is_some_and(|s| {
-            labels.iter().all(Option::is_none) && s.charts.iter().any(Option::is_some)
-        });
-        let selected_level = song.and_then(|s| songs.level_for(s)).unwrap_or(songs.level);
-        for col in 0..3 {
-            let x = px + bw + cw * (col as f32 - 3.0);
-            let y = py + bh - (ch_ * 11.0 / 2.0).floor() - 5.0;
-            if let Some(t) = &panel {
-                c.part(t, x, y, src(cw * col as f32, 0.0, cw, t.h));
-            }
-            for (i, label) in labels.iter().enumerate() {
-                if label.is_none() {
-                    continue;
-                }
-                let by = 389.0 + (4 - i) as f32 * 60.0;
-                if col == 0
-                    && selected_level == i
-                    && let Some(t) = &frame
-                {
-                    c.draw(t, x, by);
-                }
-                let level = if col == 0 {
-                    song.and_then(|s| s.charts[i].as_ref())
-                        .and_then(|c| c.head.level)
-                } else {
-                    None
-                };
-                let s = level.map_or_else(|| "-.--".to_owned(), |l| format!("{l:.2}"));
-                LEVEL_GLYPHS.draw(c, numbers.as_ref(), x + cw - 77.0, by + ch_ - 35.0, &s);
-            }
-            if single {
-                // set.def の無い曲は一番上の段に 1 つだけ
-                let by = 389.0;
-                if col == 0
-                    && let Some(t) = &frame
-                {
-                    c.draw(t, x, by);
-                }
-                let level = if col == 0 {
-                    chart.and_then(|c| c.head.level)
-                } else {
-                    None
-                };
-                let s = level.map_or_else(|| "-.--".to_owned(), |l| format!("{l:4.2}"));
-                LEVEL_GLYPHS.draw(c, numbers.as_ref(), x + cw - 77.0, by + ch_ - 35.0, &s);
-            }
+        let level = song.and_then(|s| songs.level_for(s)).unwrap_or(songs.level);
+        if let Some(t) = g.skin.tex("Graphics/5_difficultyframe.png") {
+            c.draw(
+                &t,
+                PANE_X - 7.0,
+                PANE_Y + 5.0 - PANE_SPACING * level as f32 - t.h,
+            );
         }
-        // 難易度の名前（上流は 8×16 の文字の画像。選んでいる難易度は赤）
-        let console = g.skin.tex("Graphics/Console font 8x16.png");
-        for (i, label) in labels.iter().enumerate() {
-            if let Some(l) = label {
-                let font = if selected_level == i { 1 } else { 0 };
-                console_print(
+        let numbers = g.skin.tex("Graphics/5_level number.png");
+        let skill_charts = songs.skill_charts();
+        for i in 0..LEVELS {
+            let (tx, ty) = (PANE_X + 125.0, PANE_Y - 41.0 - PANE_SPACING * i as f32);
+            let chart = song.and_then(|s| s.charts[i].as_ref());
+            let Some(chart) = chart else {
+                draw_level_number(c, numbers.as_ref(), tx, ty, 1.0, "-.--");
+                continue;
+            };
+            let text = chart
+                .head
+                .level
+                .map_or_else(|| "-.--".to_owned(), |l| format!("{l:.2}"));
+            draw_level_number(c, numbers.as_ref(), tx, ty, 1.0, &text);
+            let Some(st) = songs.stats(&chart.path) else {
+                continue;
+            };
+            let Some(rank) = st.best_rank else {
+                continue;
+            };
+            // ランクとスキルのアイコン（27×27）、達成率
+            let icon_y = PANE_Y - 49.0 - PANE_SPACING * i as f32 - 27.0;
+            if skill_charts.contains(&chart.path)
+                && let Some(t) = g.skin.tex("Graphics/Rank/skill.png")
+            {
+                draw_square(c, &t, PANE_X + 14.0, icon_y, 27.0);
+            }
+            if let Some(t) = g.skin.tex(&format!("Graphics/Rank/rank_{rank}.png")) {
+                draw_square(c, &t, PANE_X + 60.0, icon_y, 27.0);
+            }
+            if let Some(rate) = st.best_rate {
+                draw_level_number(
                     c,
-                    console.as_ref(),
-                    140.0 + i as f32 * 110.0,
-                    352.0,
-                    font,
-                    l,
+                    numbers.as_ref(),
+                    tx - 102.0,
+                    ty + 11.0,
+                    0.6,
+                    &format!("{rate:.2}%"),
                 );
             }
         }
     }
+}
 
-    /// スクロールバー（上流 `CActSelectShowCurrentPosition`）
-    fn draw_scrollbar(&self, c: &Canvas, g: &Gfx, songs: &SongList, common: f64) {
-        let Some(t) = g.skin.tex("Graphics/5_scrollbar.png") else {
-            return;
-        };
-        let x = 1280.0 - 24.0 + 50.0 - (common * 100.0 / 2.0) as f32;
-        let y = 120.0;
-        c.part(&t, x, y, src(0.0, 0.0, 12.0, 492.0));
-        let n = songs.len();
-        if n > 1 {
-            let d = (492.0 - 12.0) / (n - 1) as f32;
-            let py = d * songs.cursor as f32 - d * self.pending as f32 / 100.0;
-            if (0.0..=480.0).contains(&py) {
-                c.part(&t, x, y + py, src(0.0, 492.0, 12.0, 12.0));
-            }
-        } else {
-            c.part(&t, x, y, src(0.0, 492.0, 12.0, 12.0));
+/// 残りを 0 へ近づける（v2：残りの `SPEED` 倍毎秒、1 秒に `MAX_SPEED` ピクセルまで）
+fn approach(v: &mut f32, dt: f32) {
+    if v.abs() < 0.5 {
+        *v = 0.0;
+        return;
+    }
+    let step = (*v * (1.0 - (-SPEED * dt).exp())).clamp(-MAX_SPEED * dt, MAX_SPEED * dt);
+    *v -= step;
+}
+
+/// 左上を (x, y) に置き、そこを軸に右回りに `angle` ラジアン回して描く（v2 の UIImage の rotation）
+fn draw_turned(c: &Canvas, t: &Tex, x: f32, y: f32, angle: f32) {
+    let (sin, cos) = angle.sin_cos();
+    let (hw, hh) = (t.w / 2.0, t.h / 2.0);
+    let cx = x + cos * hw - sin * hh;
+    let cy = y + sin * hw + cos * hh;
+    c.draw_rot(t, cx, cy, -angle, Opt::default());
+}
+
+/// 画像を `size` の正方形に引き伸ばして描く
+fn draw_square(c: &Canvas, t: &Tex, x: f32, y: f32, size: f32) {
+    c.draw_opt(
+        t,
+        x,
+        y,
+        Opt {
+            sx: size / t.w,
+            sy: size / t.h,
+            ..Default::default()
+        },
+    );
+}
+
+/// 幅が `TEXT_MAX_W` を超える文字は切る。`scroll`（流した距離）があれば右から左へ流す
+/// （v2 `HorizontallyScrollingText`）
+fn draw_clipped(c: &Canvas, t: &Text, x: f32, y: f32, scroll: Option<f32>) {
+    if t.w <= TEXT_MAX_W {
+        t.draw(c, x, y, 1.0, 1.0);
+        return;
+    }
+    let clip = c
+        .painter()
+        .clip_rect()
+        .intersect(c.rect(x, y - 4.0, TEXT_MAX_W, t.h + 8.0));
+    let sub = c.with_clip(clip);
+    match scroll {
+        Some(d) => {
+            let span = t.w + SCROLL_GAP;
+            let off = d % span;
+            t.draw(&sub, x - off, y, 1.0, 1.0);
+            t.draw(&sub, x - off + span, y, 1.0, 1.0);
         }
+        None => t.draw(&sub, x, y, 1.0, 1.0),
     }
 }
 
-/// 選んでいるものを見分ける（BOX の深さ、行、難易度）
-fn selection_key(songs: &SongList) -> (usize, usize, usize) {
-    (songs.breadcrumbs().len(), songs.cursor, songs.level)
+/// `5_level number.png` で数を書く（v2 `StatusPane.tDrawDifficulty`）。
+/// 小数点より前の文字は 1.35 倍にして、下をそろえるように上げる。絵は 1 文字 20×28 の何倍かの大きさ
+fn draw_level_number(c: &Canvas, t: Option<&Tex>, x: f32, y: f32, scale: f32, text: &str) {
+    let Some(t) = t else {
+        return;
+    };
+    let mult = t.h / 28.0;
+    let mut x = x;
+    let mut decimal = false;
+    for ch in text.chars() {
+        let Some(&(_, s, _)) = LEVEL_GLYPHS.table.iter().find(|(k, _, _)| *k == ch) else {
+            continue;
+        };
+        if ch == '.' {
+            decimal = true;
+        }
+        let k = if decimal { scale } else { scale * 1.35 };
+        let raise = if decimal {
+            0.0
+        } else {
+            (s.h * k - s.h * scale) * 111.0 / 128.0
+        };
+        c.draw_opt(
+            t,
+            x,
+            y - raise,
+            Opt {
+                src: Some(src(s.x * mult, s.y * mult, s.w * mult, s.h * mult)),
+                sx: k / mult,
+                sy: k / mult,
+                ..Default::default()
+            },
+        );
+        x += s.w * k;
+    }
 }
 
-/// 曲の難易度ごとの名前（set.def の名前。set.def の無い曲は無し）
-fn level_labels(s: &Song) -> [Option<String>; LEVELS] {
-    std::array::from_fn(|i| {
-        s.charts[i]
-            .as_ref()
-            .map(|c| c.label.clone())
-            .filter(|l| !l.is_empty())
-    })
+/// 選んでいるものを見分ける
+fn selection_key(songs: &SongList) -> SelectionKey {
+    (
+        songs.sort(),
+        songs.breadcrumbs().len(),
+        songs.cursor,
+        songs.level,
+    )
 }
 
 fn chart_for<'a>(songs: &SongList, s: &'a Song) -> Option<&'a SongChart> {
     songs.level_for(s).and_then(|l| s.charts[l].as_ref())
 }
 
-/// 上の帯の流れる案内（上流 `CActSelectInformation`：6 秒ごとに 42 ピクセルの段を入れ替える）
-fn draw_information(c: &Canvas, g: &Gfx, ms: f64) {
-    let Some(t) = g.skin.tex("Graphics/5_information.png") else {
-        return;
-    };
-    let rows = 8i64;
-    let cycle = (ms / 6000.0).floor() as i64;
-    let lower = cycle.rem_euclid(rows) as f32;
-    let upper = (cycle - 1).rem_euclid(rows) as f32;
-    let v = ms % 6000.0;
-    if v <= 250.0 && cycle > 0 {
-        let r = (v / 250.0) as f32;
-        let top_h = (42.0 * (1.0 - r)).round();
-        c.part(
-            &t,
-            4.0,
-            0.0,
-            src(0.0, upper * 42.0 + (42.0 * r).floor(), 240.0, top_h),
-        );
-        c.part(
-            &t,
-            4.0,
-            (42.0 * (1.0 - r)).floor(),
-            src(0.0, lower * 42.0, 240.0, (42.0 * r).floor()),
-        );
-    } else {
-        c.part(&t, 4.0, 0.0, src(0.0, lower * 42.0, 240.0, 42.0));
-    }
-}
-
-/// レーンのグラフの色（上流 `clDrumChipsBarColors`）
+/// レーンのグラフの色（v2 `DensityGraph.clDrumChipsBarColors`）
 const LANE_COLORS: [Color32; 9] = [
     Color32::from_rgb(219, 112, 147), // PaleVioletRed
     Color32::from_rgb(0, 191, 255),   // DeepSkyBlue
@@ -872,13 +827,11 @@ const BPM_GLYPHS: Glyphs<'static> = Glyphs {
         ('7', src(84.0, 0.0, 12.0, 20.0), 12.0),
         ('8', src(96.0, 0.0, 12.0, 20.0), 12.0),
         ('9', src(108.0, 0.0, 12.0, 20.0), 12.0),
-        (':', src(123.0, 0.0, 6.0, 20.0), 6.0),
-        ('p', src(132.0, 0.0, 12.0, 20.0), 12.0),
     ],
     missing: 12.0,
 };
 
-/// `5_level number.png`（上流 `stDifficultyNumber`。`tDrawDifficulty` は 1 文字 20、`.` は 10）
+/// `5_level number.png` の 1 文字（v2 `stDifficultyNumber`。28 の高さの絵での座標）
 const LEVEL_GLYPHS: Glyphs<'static> = Glyphs {
     table: &[
         ('0', src(0.0, 0.0, 20.0, 28.0), 20.0),
@@ -894,36 +847,10 @@ const LEVEL_GLYPHS: Glyphs<'static> = Glyphs {
         ('.', src(200.0, 0.0, 10.0, 28.0), 10.0),
         ('-', src(210.0, 0.0, 20.0, 28.0), 20.0),
         ('?', src(230.0, 0.0, 20.0, 28.0), 20.0),
+        ('%', src(250.0, 0.0, 20.0, 28.0), 20.0),
     ],
     missing: 20.0,
 };
-
-/// 8×16 の文字の画像で書く（上流 `CCharacterConsole.tPrint`。font は 0 白、1 赤、2 灰）
-pub fn console_print(c: &Canvas, t: Option<&Tex>, x: f32, y: f32, font: usize, s: &str) {
-    const CHARS: &str = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~ ";
-    let Some(t) = t else {
-        return;
-    };
-    let mut x = x;
-    for ch in s.chars() {
-        if let Some(j) = CHARS.find(ch) {
-            let sx = (font / 2) as f32 * 128.0 + (j % 16) as f32 * 8.0;
-            let sy = (font % 2) as f32 * 128.0 + (j / 16) as f32 * 16.0;
-            c.part(
-                t,
-                x,
-                y,
-                Src {
-                    x: sx,
-                    y: sy,
-                    w: 8.0,
-                    h: 16.0,
-                },
-            );
-        }
-        x += 8.0;
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -932,16 +859,68 @@ mod tests {
 
     #[test]
     fn row_at_finds_the_bar_under_the_pointer() {
-        // 選んでいる曲のバー（文字の 30 上から）
-        assert_eq!(SelectView::row_at(pos2(900.0, 245.0)), Some(0));
-        assert_eq!(SelectView::row_at(pos2(900.0, 300.0)), Some(0));
-        // その上下
-        assert_eq!(SelectView::row_at(pos2(900.0, 220.0)), Some(-1));
-        assert_eq!(SelectView::row_at(pos2(900.0, 380.0)), Some(1));
-        assert_eq!(SelectView::row_at(pos2(900.0, 10.0)), Some(-5));
-        assert_eq!(SelectView::row_at(pos2(900.0, 700.0)), Some(7));
-        // 曲バーの外
-        assert_eq!(SelectView::row_at(pos2(400.0, 300.0)), None);
-        assert_eq!(SelectView::row_at(pos2(900.0, 730.0)), None);
+        // 選んでいる帯は 320 から 85
+        assert_eq!(SelectView::row_at(pos2(900.0, 330.0)), Some(0));
+        assert_eq!(SelectView::row_at(pos2(900.0, 404.0)), Some(0));
+        assert_eq!(SelectView::row_at(pos2(900.0, 300.0)), Some(-1));
+        assert_eq!(SelectView::row_at(pos2(900.0, 410.0)), Some(1));
+        assert_eq!(SelectView::row_at(pos2(900.0, 700.0)), Some(4));
+        assert_eq!(SelectView::row_at(pos2(900.0, 200.0)), Some(-2));
+        // 帯の外、上の帯、並べ替えメニュー
+        assert_eq!(SelectView::row_at(pos2(400.0, 330.0)), None);
+        assert_eq!(SelectView::row_at(pos2(900.0, 20.0)), None);
+        assert_eq!(SelectView::row_at(pos2(900.0, 80.0)), None);
+    }
+
+    #[test]
+    fn sort_at_finds_the_icon_under_the_pointer() {
+        // 選んでいるアイコンは x = 619 + 180
+        assert_eq!(SelectView::sort_at(pos2(799.0, 90.0)), Some(0));
+        assert_eq!(SelectView::sort_at(pos2(889.0, 70.0)), Some(1));
+        assert_eq!(SelectView::sort_at(pos2(700.0, 70.0)), Some(-1));
+        assert_eq!(SelectView::sort_at(pos2(799.0, 200.0)), None);
+        assert_eq!(SelectView::sort_at(pos2(500.0, 70.0)), None);
+    }
+
+    #[test]
+    fn approach_slows_down_and_stops() {
+        let mut v = 40.0;
+        approach(&mut v, 1.0 / 60.0);
+        // 残りの 10 倍毎秒（1 フレームで約 15%）、10 ピクセルまで
+        assert!(
+            (v - (40.0 - 40.0 * (1.0 - (-10.0f32 / 60.0).exp()))).abs() < 1e-3,
+            "{v}"
+        );
+        let mut far = 170.0;
+        approach(&mut far, 1.0 / 60.0);
+        assert!((far - 160.0).abs() < 1e-3, "{far}");
+        for _ in 0..200 {
+            approach(&mut v, 1.0 / 60.0);
+        }
+        assert_eq!(v, 0.0);
+    }
+
+    #[test]
+    fn density_spreads_notes_from_start_to_end() {
+        use dtx::{DrumLane, DrumNote, NotePos};
+        let note = |ms: f64, lane| DrumNote {
+            ms,
+            lane,
+            wav: 0,
+            at: NotePos::new(0, 0, 1),
+            beat: 0.0,
+        };
+        let d = details_of(&[
+            note(1000.0, DrumLane::BD),
+            note(1000.0, DrumLane::HHO),
+            note(3000.0, DrumLane::HH),
+            note(5000.0, DrumLane::RD),
+        ]);
+        assert_eq!(d.total, 4);
+        assert_eq!(d.bins[5][0], 1);
+        assert_eq!(d.bins[1][0], 1);
+        assert_eq!(d.bins[1][BINS / 2], 1);
+        assert_eq!(d.bins[8][BINS - 1], 1);
+        assert_eq!(d.peak, 1);
     }
 }

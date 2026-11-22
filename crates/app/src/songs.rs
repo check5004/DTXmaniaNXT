@@ -1,11 +1,13 @@
-//! 選曲の状態。曲のフォルダを別のスレッドで探し、BOX の出入りと、選んでいる曲・難易度を持つ。
+//! 選曲の状態。曲のフォルダを別のスレッドで探し、並べ替え（NX v2.0 の並べ替えメニュー）と
+//! BOX の出入りと、選んでいる曲・難易度を持つ。
 
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, channel};
 
-use library::{LEVELS, Library, Node, Progress, Song};
+use library::{ChartStats, LEVELS, Library, Node, Progress, Song, SortKind, Stats};
 
 /// 選曲の一覧の 1 行
 #[derive(Debug, Clone, Copy)]
@@ -52,9 +54,26 @@ impl Drop for Scanning {
     }
 }
 
+/// 今の時刻（UNIX 秒）
+fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64)
+}
+
 #[derive(Default)]
 pub struct SongList {
     pub library: Library,
+    /// 並べ替えの種類
+    sort: SortKind,
+    /// 並べ替えた木（`SortKind::Default` のときは使わない）
+    sorted: Vec<Node>,
+    /// ほかの並べ替えで最後にいた場所（BOX までの道とカーソル）
+    places: HashMap<SortKind, (Vec<usize>, usize)>,
+    /// 譜面ごとの記録
+    stats: Stats,
+    /// スキルに数える譜面（スキルの高い 50 曲の譜面）
+    skill_charts: HashSet<PathBuf>,
     /// 今いる BOX までの道（各階層で開いた BOX の位置）
     path: Vec<usize>,
     pub cursor: usize,
@@ -115,17 +134,79 @@ impl SongList {
                 return;
             }
             self.library = lib;
-            // 前の場所がまだあればそこに、無ければ一番上に
-            if self.try_nodes(&self.path).is_none() {
-                self.path.clear();
-                self.cursor = 0;
-            }
-            self.cursor = self.cursor.min(self.len().saturating_sub(1));
+            self.rebuild();
+        }
+    }
+
+    /// 並べ替えの木を作り直し、前の場所がまだあればそこに、無ければ一番上にする
+    fn rebuild(&mut self) {
+        self.skill_charts = library::sort::skill_charts(&self.library, &self.stats);
+        self.sorted = match self.sort {
+            SortKind::Default => Vec::new(),
+            kind => library::sort::sorted(&self.library, kind, &self.stats, unix_now()),
+        };
+        self.fix_place();
+    }
+
+    fn fix_place(&mut self) {
+        if self.try_nodes(&self.path).is_none() {
+            self.path.clear();
+            self.cursor = 0;
+        }
+        self.cursor = self.cursor.min(self.len().saturating_sub(1));
+    }
+
+    /// 今の並べ替え
+    pub fn sort(&self) -> SortKind {
+        self.sort
+    }
+
+    /// 並べ替えを変える（それぞれの並べ替えで最後にいた場所に戻る）
+    pub fn set_sort(&mut self, kind: SortKind) {
+        if kind == self.sort {
+            return;
+        }
+        let here = (std::mem::take(&mut self.path), self.cursor);
+        self.places.insert(self.sort, here);
+        self.sort = kind;
+        (self.path, self.cursor) = self.places.remove(&kind).unwrap_or_default();
+        self.rebuild();
+    }
+
+    /// 遊んだ記録を入れ替える（記録で分ける並べ替えなら作り直す）
+    pub fn set_stats(&mut self, stats: Stats) {
+        self.stats = stats;
+        if self.sort.uses_records() {
+            self.rebuild();
+        } else {
+            self.skill_charts = library::sort::skill_charts(&self.library, &self.stats);
+        }
+    }
+
+    /// スキルに数える譜面
+    pub fn skill_charts(&self) -> &HashSet<PathBuf> {
+        &self.skill_charts
+    }
+
+    /// 譜面の記録
+    pub fn stats(&self, chart: &Path) -> Option<&ChartStats> {
+        self.stats.get(chart)
+    }
+
+    pub fn all_stats(&self) -> &Stats {
+        &self.stats
+    }
+
+    /// 並べ替えた木の一番上
+    fn root(&self) -> &[Node] {
+        match self.sort {
+            SortKind::Default => &self.library.nodes,
+            _ => &self.sorted,
         }
     }
 
     fn try_nodes(&self, path: &[usize]) -> Option<&[Node]> {
-        let mut nodes = self.library.nodes.as_slice();
+        let mut nodes = self.root();
         for &i in path {
             match nodes.get(i)? {
                 Node::Box(b) => nodes = &b.nodes,
@@ -143,7 +224,7 @@ impl SongList {
     /// 今いる BOX の名前の並び（外から）
     pub fn breadcrumbs(&self) -> Vec<&str> {
         let mut out = Vec::new();
-        let mut nodes = self.library.nodes.as_slice();
+        let mut nodes = self.root();
         for &i in &self.path {
             if let Some(Node::Box(b)) = nodes.get(i) {
                 out.push(b.title.as_str());
@@ -199,6 +280,19 @@ impl SongList {
     /// 曲に合わせた難易度（選んでいる難易度が無ければ近いもの）
     pub fn level_for(&self, song: &Song) -> Option<usize> {
         song.nearest_level(self.level)
+    }
+
+    /// 今いる BOX の中の曲か BOX を 1 つ選ぶ（上流 v2 の R キー）
+    pub fn pick_random(&mut self) {
+        let n = self.nodes().len();
+        if n == 0 {
+            return;
+        }
+        let seed = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(1);
+        self.cursor = self.back_rows() + pick(seed, n);
     }
 
     /// 上下に動く（端から端へ回る）
@@ -278,9 +372,11 @@ impl SongList {
         }
     }
 
-    /// 難易度をひとつ上へ。いちばん上の次はいちばん下に戻る（上流の HH 2 回と同じ）
+    /// 難易度をひとつ上へ。いちばん上の次はいちばん下に戻る（上流の HH 2 回と同じ。
+    /// 曲を選んでいなければ、そのまま次の難易度へ）
     pub fn cycle_level(&mut self) {
         let Some(song) = self.selected_song() else {
+            self.level = (self.level + 1) % LEVELS;
             return;
         };
         let Some(mut level) = self.level_for(song) else {
@@ -293,21 +389,6 @@ impl SongList {
             }
         }
         self.level = level;
-    }
-
-    /// 難易度を変える（選んでいる曲にある難易度だけをたどる）
-    pub fn change_level(&mut self, delta: isize) {
-        let Some(song) = self.selected_song() else {
-            return;
-        };
-        let levels: Vec<usize> = song.levels().collect();
-        if levels.is_empty() {
-            return;
-        }
-        let cur = self.level_for(song).unwrap_or(levels[0]);
-        let pos = levels.iter().position(|&l| l == cur).unwrap_or(0) as isize;
-        let next = (pos + delta).clamp(0, levels.len() as isize - 1) as usize;
-        self.level = levels[next];
     }
 }
 
@@ -401,25 +482,60 @@ mod tests {
     }
 
     #[test]
+    fn each_sort_keeps_its_own_place() {
+        let mut l = list();
+        l.enter();
+        l.move_by(2);
+        // 曲名の順：A（a）、B（b と BOX の外の c は C）
+        l.set_sort(SortKind::Title);
+        assert_eq!(l.sort(), SortKind::Title);
+        assert!(l.breadcrumbs().is_empty());
+        assert_eq!(
+            l.nodes().iter().map(Node::title).collect::<Vec<_>>(),
+            ["A", "B", "C"]
+        );
+        l.move_by(1);
+        l.enter();
+        assert_eq!(l.breadcrumbs(), vec!["B"]);
+        // 戻すと BOX の中の b のまま
+        l.set_sort(SortKind::Default);
+        assert_eq!(l.breadcrumbs(), vec!["BOX"]);
+        assert_eq!(l.cursor, 2);
+        l.set_sort(SortKind::Title);
+        assert_eq!(l.breadcrumbs(), vec!["B"]);
+        // 記録が変わっても場所はそのまま
+        l.set_stats(Stats::new());
+        assert_eq!(l.breadcrumbs(), vec!["B"]);
+    }
+
+    #[test]
+    fn random_pick_stays_in_the_box() {
+        let mut l = list();
+        l.enter();
+        for _ in 0..20 {
+            l.pick_random();
+            assert!(matches!(
+                l.selected_entry(),
+                Some(Entry::Node(Node::Song(_)))
+            ));
+        }
+    }
+
+    #[test]
+    fn cycle_level_moves_on_without_a_song() {
+        let mut l = list();
+        // 一番上の BOX を選んでいる
+        l.level = 4;
+        l.cycle_level();
+        assert_eq!(l.level, 0);
+    }
+
+    #[test]
     fn move_wraps_around() {
         let mut l = list();
         l.move_by(-1);
         assert_eq!(l.cursor, 2);
         l.move_by(1);
         assert_eq!(l.cursor, 0);
-    }
-
-    #[test]
-    fn level_follows_the_song() {
-        let mut l = list();
-        l.enter();
-        l.move_by(1);
-        // a は 0 と 3。いまは 3 扱いなので、下げると 0
-        l.change_level(-1);
-        assert_eq!(l.level, 0);
-        l.change_level(-1);
-        assert_eq!(l.level, 0);
-        l.change_level(1);
-        assert_eq!(l.level, 3);
     }
 }

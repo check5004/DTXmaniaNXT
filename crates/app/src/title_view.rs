@@ -1,5 +1,6 @@
 //! タイトルの画面（上流 `CStageTitle`）と、終わるときの画面（上流 `CStageEnd`）。
-//! スキンの 2_ の画像で、背景とメニュー（GAME START / CONFIGURATION / EXIT）を出す。
+//! スキンの 2_ の画像で、背景とロゴとメニュー（GAME START / CONFIGURATION / EXIT）を出す。
+//! 入るときは白からフェードし、決めたら App がシャッター（`shutter`）を閉じて次の画面へ移る（NX v2.0）。
 //! 曲を探しているあいだは左上に「曲を探しています」の画像を明滅させる（上流 `CActEnumSongs`）。
 //! 新しい版を落とし終えたら左下に知らせる（このアプリだけ。版の表示と同じ白い縁取りの文字）。
 
@@ -45,8 +46,8 @@ pub struct TitleView {
     entered: Instant,
     /// フェードを終えてタイトルの音を鳴らした
     sounded: bool,
-    /// 決めた項目と、白へのフェードの始まり
-    chosen: Option<(TitleItem, Instant)>,
+    /// 決めた項目（決めたあとは操作を受け付けない。画面はシャッターを閉じてから移る）
+    chosen: Option<TitleItem>,
     /// 落とし終えた新しい版（終えると入れ替わる）
     update: Option<String>,
 }
@@ -110,23 +111,14 @@ impl TitleView {
         TitleItem::ALL[self.cursor]
     }
 
-    /// 決める。EXIT のほかは白へフェードしてから移る
+    /// 決める（v2 と同じく、EXIT のほかは App がシャッターを閉じてから移る）
     pub fn decide(&mut self) -> Option<TitleItem> {
         if !self.ready() {
             return None;
         }
         let item = self.selected();
-        if item != TitleItem::Exit {
-            self.chosen = Some((item, Instant::now()));
-        }
+        self.chosen = Some(item);
         Some(item)
-    }
-
-    /// 白へのフェードを終えた項目
-    pub fn faded_out(&self) -> Option<TitleItem> {
-        self.chosen
-            .filter(|(_, at)| at.elapsed() >= FADE)
-            .map(|(item, _)| item)
     }
 
     /// カーソルの移動のアニメの値（0〜100。1 ミリ秒に 1 進む）
@@ -148,11 +140,15 @@ impl TitleView {
             Some(t) => c.draw(&t, 0.0, 0.0),
             None => c.cover(Color32::from_rgb(20, 24, 40)),
         }
-        // 版（上流は左上 (2, 2) に白い文字で出す）
+        // ロゴ（NX v2.0 は背景の動画の上に透明な 2_background.png を重ねる。動画の代わりは上の静止画）
+        if let Some(t) = g.skin.tex_optional("Graphics/2_background.png") {
+            c.draw(&t, 0.0, 0.0);
+        }
+        // 版（v2 は左上 (0, 0) に 12 ピクセルの縁取りした白い文字で出す）
         let version = concat!("DTXmaniaNXT ", env!("CARGO_PKG_VERSION"));
-        let style = Style::edged(14.0, Color32::WHITE, Color32::BLACK, 1.0);
+        let style = Style::edged(12.0, Color32::WHITE, Color32::BLACK, 1.0);
         if let Some(t) = g.texts.get(version, &style) {
-            t.draw(c, 2.0, 2.0, 1.0, 1.0);
+            t.draw(c, 0.0, 0.0, 1.0, 1.0);
         }
         if let Some(t) = g.skin.tex("Graphics/2_menu.png") {
             let mut y = MENU_Y + self.cursor as f32 * MENU_H;
@@ -202,11 +198,8 @@ impl TitleView {
                 t.draw(c, 4.0, 720.0 - t.h - 4.0, 1.0, 1.0);
             }
         }
-        // 白いフェード
-        let a = match self.chosen {
-            Some((_, at)) => (at.elapsed().as_secs_f32() / FADE.as_secs_f32()).min(1.0),
-            None => 1.0 - (self.entered.elapsed().as_secs_f32() / FADE.as_secs_f32()).min(1.0),
-        };
+        // 白からのフェード（出ていくときは v2 と同じくシャッターなので、白へは消さない）
+        let a = 1.0 - (self.entered.elapsed().as_secs_f32() / FADE.as_secs_f32()).min(1.0);
         if a > 0.0 {
             c.cover(Color32::from_white_alpha((a * 255.0) as u8));
         }
