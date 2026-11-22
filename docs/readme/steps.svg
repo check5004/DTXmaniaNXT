@@ -1,0 +1,82 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="250" viewBox="0 0 960 250" role="img" aria-labelledby="title desc">
+<title id="title">3 steps to play</title>
+<desc id="desc">1. Download and run Setup.exe 2. Add your song folder 3. Plug in your drums and play</desc>
+<style>
+text{font-family:'Segoe UI','Inter','Helvetica Neue',Arial,'Hiragino Sans','Yu Gothic UI','Meiryo','Noto Sans JP',system-ui,sans-serif}
+.mono{font-family:'JetBrains Mono','SF Mono','Cascadia Mono',Consolas,Menlo,monospace}
+.fb{transform-box:fill-box;transform-origin:50% 50%}
+@keyframes w2{0.000%{opacity:0}0.000%{opacity:0}0.000%{opacity:1}33.333%{opacity:1}37.500%{opacity:0}100.000%{opacity:0}}
+.w2{opacity:0;animation:w2 6.0s linear infinite}
+@keyframes prog{0%{width:0}25%{width:100px}100%{width:100px}}.pg{animation:prog 6.0s ease-in-out infinite}
+@keyframes w3{0.000%{opacity:0}23.333%{opacity:0}26.667%{opacity:1}96.667%{opacity:1}100.000%{opacity:0}100.000%{opacity:0}}
+.w3{opacity:0;animation:w3 6.0s linear infinite}
+@keyframes w5{0.000%{opacity:0}29.167%{opacity:0}33.333%{opacity:1}66.667%{opacity:1}70.833%{opacity:0}100.000%{opacity:0}}
+.w5{opacity:0;animation:w5 6.0s linear infinite}
+@keyframes drop{0%,30%{transform:translate(70px,-46px);opacity:0}38%{opacity:1}55%,85%{transform:translate(0,0);opacity:1}95%,100%{transform:translate(0,0);opacity:0}}.dp{animation:drop 6.0s ease-in-out infinite}
+@keyframes w6{0.000%{opacity:0}53.333%{opacity:0}56.667%{opacity:1}95.000%{opacity:1}98.333%{opacity:0}100.000%{opacity:0}}
+.w6{opacity:0;animation:w6 6.0s linear infinite}
+@keyframes w8{0.000%{opacity:0}62.500%{opacity:0}66.667%{opacity:1}100.000%{opacity:1}100.000%{opacity:0}100.000%{opacity:0}}
+.w8{opacity:0;animation:w8 6.0s linear infinite}
+@keyframes w9{0.000%{opacity:0}68.333%{opacity:0}70.000%{opacity:1}73.000%{opacity:1}74.667%{opacity:0}100.000%{opacity:0}}
+.w9{opacity:0;animation:w9 6.0s linear infinite}
+@keyframes w10{0.000%{opacity:0}73.000%{opacity:0}74.667%{opacity:1}77.667%{opacity:1}79.333%{opacity:0}100.000%{opacity:0}}
+.w10{opacity:0;animation:w10 6.0s linear infinite}
+@keyframes w11{0.000%{opacity:0}77.667%{opacity:0}79.333%{opacity:1}82.333%{opacity:1}84.000%{opacity:0}100.000%{opacity:0}}
+.w11{opacity:0;animation:w11 6.0s linear infinite}
+@keyframes w12{0.000%{opacity:0}82.333%{opacity:0}84.000%{opacity:1}87.000%{opacity:1}88.667%{opacity:0}100.000%{opacity:0}}
+.w12{opacity:0;animation:w12 6.0s linear infinite}
+@keyframes w13{0.000%{opacity:0}87.000%{opacity:0}88.667%{opacity:1}91.667%{opacity:1}93.333%{opacity:0}100.000%{opacity:0}}
+.w13{opacity:0;animation:w13 6.0s linear infinite}
+@media (prefers-reduced-motion:reduce){*{animation:none!important}}
+</style>
+<defs><linearGradient id="bg1" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#0B1018"/><stop offset="1" stop-color="#151B2E"/></linearGradient><linearGradient id="bg4" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#0B1018"/><stop offset="1" stop-color="#151B2E"/></linearGradient><linearGradient id="bg7" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#0B1018"/><stop offset="1" stop-color="#151B2E"/></linearGradient></defs>
+<rect x="9" y="7" width="304" height="236" rx="16" fill="url(#bg1)" stroke="#263247"/>
+<rect x="24" y="22" width="274" height="122" rx="10" fill="#0E1522" stroke="#1F2A3D"/>
+<rect class="w2" x="10" y="8" width="302" height="234" rx="15" fill="none" stroke="#5CE1E6" stroke-width="2"/>
+<rect x="91" y="43" width="140" height="84" rx="8" fill="#121B2B" stroke="#2C3A52"/>
+<rect x="91" y="43" width="140" height="18" rx="8" fill="#1B2638"/>
+<circle cx="101" cy="52" r="3" fill="#FF6B6B"/>
+<circle cx="111" cy="52" r="3" fill="#FFD54F"/>
+<circle cx="121" cy="52" r="3" fill="#66BB6A"/>
+<text x="161" y="81" font-size="10" fill="#9AA8BC" font-weight="600" text-anchor="middle" class="mono">DTXmaniaNXT-Setup.exe</text>
+<rect x="109" y="97" width="104" height="10" rx="5" fill="#0A0F18" stroke="#2C3A52"/>
+<rect class="pg" x="111" y="99" height="6" rx="3" width="0" fill="#5CE1E6"/>
+<g class="w3"><circle cx="219" cy="43" r="13" fill="#7CF29A"/><path d="M213 43 l4 4 l8 -8" stroke="#06121B" stroke-width="3" fill="none" stroke-linecap="round"/></g>
+<circle cx="42" cy="178" r="14" fill="none" stroke="#5CE1E6" stroke-width="2"/>
+<text x="42" y="183" font-size="14" fill="#5CE1E6" font-weight="800" text-anchor="middle">1</text>
+<text x="66" y="184" font-size="19" fill="#E8EEF7" font-weight="800" text-anchor="start">Install</text>
+<text x="30" y="210" font-size="13" fill="#9AA8BC" font-weight="400" text-anchor="start">Run DTXmaniaNXT-Setup.exe.</text>
+<text x="30" y="229" font-size="13" fill="#9AA8BC" font-weight="400" text-anchor="start">No admin rights, no NX needed.</text>
+<rect x="327" y="7" width="304" height="236" rx="16" fill="url(#bg4)" stroke="#263247"/>
+<rect x="342" y="22" width="274" height="122" rx="10" fill="#0E1522" stroke="#1F2A3D"/>
+<rect class="w5" x="328" y="8" width="302" height="234" rx="15" fill="none" stroke="#5CE1E6" stroke-width="2"/>
+<rect x="401" y="53" width="156" height="72" rx="8" fill="none" stroke="#3A4A66" stroke-dasharray="5 5"/>
+<text x="479" y="109" font-size="11" fill="#9AA8BC" font-weight="600" text-anchor="middle" class="mono">DTXFiles</text>
+<g class="dp"><path d="M453 69 h18 l6 6 h28 v32 h-52 z" fill="#FFD54F" stroke="#B8901C"/><path d="M453 79 h52 v22 h-52 z" fill="#FFE38A"/></g>
+<g class="w6"><rect x="509" y="37" width="64" height="22" rx="11" fill="#7CF29A"/><text x="541" y="52" font-size="12" fill="#06121B" font-weight="800" text-anchor="middle">+6 songs</text></g>
+<circle cx="360" cy="178" r="14" fill="none" stroke="#5CE1E6" stroke-width="2"/>
+<text x="360" y="183" font-size="14" fill="#5CE1E6" font-weight="800" text-anchor="middle">2</text>
+<text x="384" y="184" font-size="19" fill="#E8EEF7" font-weight="800" text-anchor="start">Add your songs</text>
+<text x="348" y="210" font-size="13" fill="#9AA8BC" font-weight="400" text-anchor="start">Pick your DTX song folder</text>
+<text x="348" y="229" font-size="13" fill="#9AA8BC" font-weight="400" text-anchor="start">or drop it on the window.</text>
+<rect x="645" y="7" width="304" height="236" rx="16" fill="url(#bg7)" stroke="#263247"/>
+<rect x="660" y="22" width="274" height="122" rx="10" fill="#0E1522" stroke="#1F2A3D"/>
+<rect class="w8" x="646" y="8" width="302" height="234" rx="15" fill="none" stroke="#5CE1E6" stroke-width="2"/>
+<circle cx="735" cy="75" r="18" fill="#141B28" stroke="#4FC3F7" stroke-width="3"/>
+<circle class="w9" cx="735" cy="75" r="18" fill="#4FC3F7" fill-opacity="0.75"/>
+<circle cx="775" cy="101" r="20" fill="#141B28" stroke="#FFD54F" stroke-width="3"/>
+<circle class="w10" cx="775" cy="101" r="20" fill="#FFD54F" fill-opacity="0.75"/>
+<circle cx="803" cy="65" r="16" fill="#141B28" stroke="#66BB6A" stroke-width="3"/>
+<circle class="w11" cx="803" cy="65" r="16" fill="#66BB6A" fill-opacity="0.75"/>
+<circle cx="849" cy="101" r="20" fill="#141B28" stroke="#FF9800" stroke-width="3"/>
+<circle class="w12" cx="849" cy="101" r="20" fill="#FF9800" fill-opacity="0.75"/>
+<circle cx="859" cy="57" r="20" fill="#141B28" stroke="#42A5F5" stroke-width="3"/>
+<circle class="w13" cx="859" cy="57" r="20" fill="#42A5F5" fill-opacity="0.75"/>
+<path d="M679 127 q 40 -10 70 -18" stroke="#3A4A66" stroke-width="3" fill="none"/>
+<text x="679" y="141" font-size="10" fill="#9AA8BC" font-weight="700" text-anchor="start" class="mono">USB-MIDI</text>
+<circle cx="678" cy="178" r="14" fill="none" stroke="#5CE1E6" stroke-width="2"/>
+<text x="678" y="183" font-size="14" fill="#5CE1E6" font-weight="800" text-anchor="middle">3</text>
+<text x="702" y="184" font-size="19" fill="#E8EEF7" font-weight="800" text-anchor="start">Plug in and play</text>
+<text x="666" y="210" font-size="13" fill="#9AA8BC" font-weight="400" text-anchor="start">Connect your e-drum by USB-MIDI.</text>
+<text x="666" y="229" font-size="13" fill="#9AA8BC" font-weight="400" text-anchor="start">Found automatically.</text>
+</svg>

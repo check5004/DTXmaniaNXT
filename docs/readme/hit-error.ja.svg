@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="210" viewBox="0 0 960 210" role="img" aria-labelledby="title desc">
+<title id="title">ずれのバー</title>
+<desc id="desc">叩くたびに、ずれた所に線が出る。左が早い、右が遅い。▼ は直近 20 打の平均。</desc>
+<style>
+text{font-family:'Hiragino Sans','Hiragino Kaku Gothic ProN','Yu Gothic UI','Yu Gothic','Meiryo','Noto Sans JP','Noto Sans CJK JP',system-ui,sans-serif}
+.mono{font-family:'JetBrains Mono','SF Mono','Cascadia Mono',Consolas,Menlo,monospace}
+.fb{transform-box:fill-box;transform-origin:50% 50%}
+@keyframes tk{0%{opacity:1}50.00%{opacity:0}100%{opacity:0}}.tk{opacity:0;animation:tk 8.0s linear infinite}
+@keyframes av{0.0%{transform:translateX(0.0px)}12.5%{transform:translateX(-56.1px)}25.0%{transform:translateX(-40.8px)}37.5%{transform:translateX(-24.3px)}50.0%{transform:translateX(-25.0px)}62.5%{transform:translateX(-19.9px)}75.0%{transform:translateX(-13.1px)}87.5%{transform:translateX(-6.7px)}100.0%{transform:translateX(-10.2px)}}.av{animation:av 8.0s ease-in-out infinite}
+@media (prefers-reduced-motion:reduce){*{animation:none!important}}
+</style>
+<defs><linearGradient id="bg1" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#0B1018"/><stop offset="1" stop-color="#151B2E"/></linearGradient></defs>
+<rect x="1" y="1" width="958" height="208" rx="18" fill="url(#bg1)" stroke="#263247"/>
+<text x="40" y="44" font-size="20" fill="#E8EEF7" font-weight="800" text-anchor="start">叩きながら、早い・遅いが分かる</text>
+<rect x="105.59999999999997" y="106" width="748.8000000000001" height="28" rx="4" fill="#FF9800" fill-opacity="0.1"/>
+<rect x="211.2" y="106" width="537.6" height="28" rx="4" fill="#FFD54F" fill-opacity="0.12"/>
+<rect x="265.6" y="106" width="428.8" height="28" rx="4" fill="#7CF29A" fill-opacity="0.14"/>
+<rect x="371.2" y="106" width="217.60000000000002" height="28" rx="4" fill="#5CE1E6" fill-opacity="0.22"/>
+<line x1="480" y1="98" x2="480" y2="142" stroke="#fff" stroke-width="2"/>
+<text x="93.59999999999997" y="125" font-size="14" fill="#7FB8FF" font-weight="800" text-anchor="end">早い</text>
+<text x="866.4000000000001" y="125" font-size="14" fill="#FF8F8F" font-weight="800" text-anchor="start">遅い</text>
+<rect class="tk" style="animation-delay:-7.900s" x="386.3" y="104" width="3" height="32" fill="#5CE1E6"/>
+<rect class="tk" style="animation-delay:-7.554s" x="473.4" y="104" width="3" height="32" fill="#5CE1E6"/>
+<rect class="tk" style="animation-delay:-7.290s" x="380.6" y="104" width="3" height="32" fill="#5CE1E6"/>
+<rect class="tk" style="animation-delay:-7.077s" x="449.3" y="104" width="3" height="32" fill="#5CE1E6"/>
+<rect class="tk" style="animation-delay:-6.804s" x="386.8" y="104" width="3" height="32" fill="#5CE1E6"/>
+<rect class="tk" style="animation-delay:-6.608s" x="382.6" y="104" width="3" height="32" fill="#5CE1E6"/>
+<rect class="tk" style="animation-delay:-6.373s" x="536.3" y="104" width="3" height="32" fill="#5CE1E6"/>
+<rect class="tk" style="animation-delay:-6.068s" x="506.3" y="104" width="3" height="32" fill="#5CE1E6"/>
+<rect class="tk" style="animation-delay:-5.881s" x="592.7" y="104" width="3" height="32" fill="#7CF29A"/>
+<rect class="tk" style="animation-delay:-5.583s" x="437.2" y="104" width="3" height="32" fill="#5CE1E6"/>
+<rect class="tk" style="animation-delay:-5.292s" x="458.1" y="104" width="3" height="32" fill="#5CE1E6"/>
+<rect class="tk" style="animation-delay:-5.017s" x="460.8" y="104" width="3" height="32" fill="#5CE1E6"/>
+<rect class="tk" style="animation-delay:-4.826s" x="467.8" y="104" width="3" height="32" fill="#5CE1E6"/>
+<rect class="tk" style="animation-delay:-4.641s" x="490.6" y="104" width="3" height="32" fill="#5CE1E6"/>
+<rect class="tk" style="animation-delay:-4.377s" x="355.5" y="104" width="3" height="32" fill="#7CF29A"/>
+<rect class="tk" style="animation-delay:-4.104s" x="491.1" y="104" width="3" height="32" fill="#5CE1E6"/>
+<rect class="tk" style="animation-delay:-3.809s" x="372.7" y="104" width="3" height="32" fill="#5CE1E6"/>
+<rect class="tk" style="animation-delay:-3.546s" x="453.0" y="104" width="3" height="32" fill="#5CE1E6"/>
+<rect class="tk" style="animation-delay:-3.316s" x="632.4" y="104" width="3" height="32" fill="#7CF29A"/>
+<rect class="tk" style="animation-delay:-2.985s" x="450.3" y="104" width="3" height="32" fill="#5CE1E6"/>
+<rect class="tk" style="animation-delay:-2.678s" x="437.2" y="104" width="3" height="32" fill="#5CE1E6"/>
+<rect class="tk" style="animation-delay:-2.446s" x="488.9" y="104" width="3" height="32" fill="#5CE1E6"/>
+<rect class="tk" style="animation-delay:-2.253s" x="458.5" y="104" width="3" height="32" fill="#5CE1E6"/>
+<rect class="tk" style="animation-delay:-1.920s" x="398.2" y="104" width="3" height="32" fill="#5CE1E6"/>
+<rect class="tk" style="animation-delay:-1.671s" x="554.7" y="104" width="3" height="32" fill="#5CE1E6"/>
+<rect class="tk" style="animation-delay:-1.491s" x="425.4" y="104" width="3" height="32" fill="#5CE1E6"/>
+<rect class="tk" style="animation-delay:-1.273s" x="504.7" y="104" width="3" height="32" fill="#5CE1E6"/>
+<rect class="tk" style="animation-delay:-0.917s" x="420.1" y="104" width="3" height="32" fill="#5CE1E6"/>
+<rect class="tk" style="animation-delay:-0.665s" x="521.6" y="104" width="3" height="32" fill="#5CE1E6"/>
+<rect class="tk" style="animation-delay:-0.345s" x="486.9" y="104" width="3" height="32" fill="#5CE1E6"/>
+<rect class="tk" style="animation-delay:-0.116s" x="494.7" y="104" width="3" height="32" fill="#5CE1E6"/>
+<g class="av"><path d="M472 86 h16 l-8 11 z" fill="#fff"/></g>
+<text x="480" y="170" font-size="14" fill="#E8EEF7" font-weight="700" text-anchor="middle">▼ 直近 20 打の平均: -3 ms（早め）</text>
+<text x="480" y="194" font-size="12" fill="#9AA8BC" font-weight="400" text-anchor="middle">帯は判定の幅（PERFECT・GREAT・GOOD・POOR）。レーンには重ねず、左のスコアの下に出ます。</text>
+</svg>

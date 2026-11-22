@@ -1,0 +1,208 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="420" viewBox="0 0 960 420" role="img" aria-labelledby="title desc">
+<title id="title">DTXmaniaNXT</title>
+<desc id="desc">DTX の譜面で遊べるドラムのゲーム兼練習アプリ。NX と同じレーンに音符が落ちてきて、叩くと判定が出る。</desc>
+<style>
+text{font-family:'Hiragino Sans','Hiragino Kaku Gothic ProN','Yu Gothic UI','Yu Gothic','Meiryo','Noto Sans JP','Noto Sans CJK JP',system-ui,sans-serif}
+.mono{font-family:'JetBrains Mono','SF Mono','Cascadia Mono',Consolas,Menlo,monospace}
+.fb{transform-box:fill-box;transform-origin:50% 50%}
+@keyframes fall{0%{transform:translateY(0);opacity:1}29.167%{transform:translateY(290px);opacity:1}29.767%{transform:translateY(290px);opacity:0}100%{transform:translateY(290px);opacity:0}}
+.fa{animation:fall 4.8s linear infinite}
+@keyframes blip{0%{opacity:.9}8%{opacity:0}100%{opacity:0}}.bl{opacity:0;animation:blip 4.8s ease-out infinite}
+@keyframes pop{0%{opacity:1;transform:scale(1.25)}2%{transform:scale(1)}4%{opacity:1}5.5%{opacity:0}100%{opacity:0}}.pp{opacity:0;animation:pop 4.8s ease-out infinite;transform-box:fill-box;transform-origin:50% 50%}
+@keyframes w5{0%{opacity:0}0.000%{opacity:1}6.229%{opacity:0}100%{opacity:0}}
+.w5{opacity:0;animation:w5 4.8s step-end infinite}
+@keyframes w6{0%{opacity:0}6.250%{opacity:1}12.479%{opacity:0}100%{opacity:0}}
+.w6{opacity:0;animation:w6 4.8s step-end infinite}
+@keyframes w7{0%{opacity:0}12.500%{opacity:1}18.729%{opacity:0}100%{opacity:0}}
+.w7{opacity:0;animation:w7 4.8s step-end infinite}
+@keyframes w8{0%{opacity:0}18.750%{opacity:1}24.979%{opacity:0}100%{opacity:0}}
+.w8{opacity:0;animation:w8 4.8s step-end infinite}
+@keyframes w9{0%{opacity:0}25.000%{opacity:1}31.229%{opacity:0}100%{opacity:0}}
+.w9{opacity:0;animation:w9 4.8s step-end infinite}
+@keyframes w10{0%{opacity:0}31.250%{opacity:1}37.479%{opacity:0}100%{opacity:0}}
+.w10{opacity:0;animation:w10 4.8s step-end infinite}
+@keyframes w11{0%{opacity:0}37.500%{opacity:1}37.479%{opacity:0}100%{opacity:0}}
+.w11{opacity:0;animation:w11 4.8s step-end infinite}
+@keyframes w12{0%{opacity:0}37.500%{opacity:1}43.729%{opacity:0}100%{opacity:0}}
+.w12{opacity:0;animation:w12 4.8s step-end infinite}
+@keyframes w13{0%{opacity:0}43.750%{opacity:1}49.979%{opacity:0}100%{opacity:0}}
+.w13{opacity:0;animation:w13 4.8s step-end infinite}
+@keyframes w14{0%{opacity:0}50.000%{opacity:1}56.229%{opacity:0}100%{opacity:0}}
+.w14{opacity:0;animation:w14 4.8s step-end infinite}
+@keyframes w15{0%{opacity:0}56.250%{opacity:1}62.479%{opacity:0}100%{opacity:0}}
+.w15{opacity:0;animation:w15 4.8s step-end infinite}
+@keyframes w16{0%{opacity:0}62.500%{opacity:1}68.729%{opacity:0}100%{opacity:0}}
+.w16{opacity:0;animation:w16 4.8s step-end infinite}
+@keyframes w17{0%{opacity:0}68.750%{opacity:1}74.979%{opacity:0}100%{opacity:0}}
+.w17{opacity:0;animation:w17 4.8s step-end infinite}
+@keyframes w18{0%{opacity:0}75.000%{opacity:1}81.229%{opacity:0}100%{opacity:0}}
+.w18{opacity:0;animation:w18 4.8s step-end infinite}
+@keyframes w19{0%{opacity:0}81.250%{opacity:1}84.354%{opacity:0}100%{opacity:0}}
+.w19{opacity:0;animation:w19 4.8s step-end infinite}
+@keyframes w20{0%{opacity:0}84.375%{opacity:1}87.479%{opacity:0}100%{opacity:0}}
+.w20{opacity:0;animation:w20 4.8s step-end infinite}
+@keyframes w21{0%{opacity:0}87.500%{opacity:1}90.604%{opacity:0}100%{opacity:0}}
+.w21{opacity:0;animation:w21 4.8s step-end infinite}
+@keyframes w22{0%{opacity:0}90.625%{opacity:1}93.729%{opacity:0}100%{opacity:0}}
+.w22{opacity:0;animation:w22 4.8s step-end infinite}
+@keyframes w23{0%{opacity:0}93.750%{opacity:1}99.979%{opacity:0}100%{opacity:0}}
+.w23{opacity:0;animation:w23 4.8s step-end infinite}
+@media (prefers-reduced-motion:reduce){*{animation:none!important}}
+</style>
+<defs><linearGradient id="bg1" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#0B1018"/><stop offset="1" stop-color="#151B2E"/></linearGradient><radialGradient id="rg2" cx="0.82" cy="0.35" r="0.6"><stop offset="0" stop-color="#C77DFF" stop-opacity="0.22"/><stop offset="1" stop-color="#C77DFF" stop-opacity="0"/></radialGradient><linearGradient id="tg3" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#5CE1E6"/><stop offset="1" stop-color="#C77DFF"/></linearGradient><linearGradient id="pg4" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#FFF6B0"/><stop offset="1" stop-color="#FFB300"/></linearGradient></defs>
+<rect x="1" y="1" width="958" height="418" rx="18" fill="url(#bg1)" stroke="#263247"/>
+<rect x="1" y="1" width="958" height="418" rx="18" fill="url(#rg2)"/>
+<text x="52" y="122" font-size="58" font-weight="800" fill="#E8EEF7" letter-spacing="-1">DTXmania<tspan fill="url(#tg3)">NXT</tspan></text>
+<text x="54" y="160" font-size="25" fill="#E8EEF7" font-weight="700" text-anchor="start">DTX の譜面で遊んで、</text>
+<text x="54" y="192" font-size="25" fill="#E8EEF7" font-weight="700" text-anchor="start">苦手な所を練習する。</text>
+<text x="54" y="226" font-size="15" fill="#9AA8BC" font-weight="400" text-anchor="start">Rust で一から書いたアプリ。見た目は DTXManiaNX v2.0 のまま。</text>
+<text x="54" y="248" font-size="15" fill="#9AA8BC" font-weight="400" text-anchor="start">電子ドラムのためのアプリ。Windows を主に、macOS・Linux でも。</text>
+<rect x="52" y="274" width="177" height="28" rx="14" fill="#5CE1E6" fill-opacity="0.12" stroke="#5CE1E6" stroke-opacity="0.55"/>
+<circle cx="66" cy="288" r="4" fill="#5CE1E6"/>
+<text x="77" y="293" font-size="13" fill="#E8EEF7" font-weight="500" text-anchor="start">電子ドラム（MIDI）</text>
+<rect x="239.0" y="274" width="99" height="28" rx="14" fill="#7CF29A" fill-opacity="0.12" stroke="#7CF29A" stroke-opacity="0.55"/>
+<circle cx="253.0" cy="288" r="4" fill="#7CF29A"/>
+<text x="264.0" y="293" font-size="13" fill="#E8EEF7" font-weight="500" text-anchor="start">練習モード</text>
+<rect x="348.0" y="274" width="125" height="28" rx="14" fill="#FFD54F" fill-opacity="0.12" stroke="#FFD54F" stroke-opacity="0.55"/>
+<circle cx="362.0" cy="288" r="4" fill="#FFD54F"/>
+<text x="373.0" y="293" font-size="13" fill="#E8EEF7" font-weight="500" text-anchor="start">ずれを合わせる</text>
+<rect x="483.0" y="274" width="60" height="28" rx="14" fill="#C77DFF" fill-opacity="0.12" stroke="#C77DFF" stroke-opacity="0.55"/>
+<circle cx="497.0" cy="288" r="4" fill="#C77DFF"/>
+<text x="508.0" y="293" font-size="13" fill="#E8EEF7" font-weight="500" text-anchor="start">無料</text>
+<rect x="54" y="338" width="20" height="6" rx="3" fill="#FF5C8A"/>
+<rect x="80" y="338" width="20" height="6" rx="3" fill="#4FC3F7"/>
+<rect x="106" y="338" width="20" height="6" rx="3" fill="#F48FB1"/>
+<rect x="132" y="338" width="20" height="6" rx="3" fill="#FFD54F"/>
+<rect x="158" y="338" width="20" height="6" rx="3" fill="#66BB6A"/>
+<rect x="184" y="338" width="20" height="6" rx="3" fill="#9C84E0"/>
+<rect x="210" y="338" width="20" height="6" rx="3" fill="#EF5350"/>
+<rect x="236" y="338" width="20" height="6" rx="3" fill="#FF9800"/>
+<rect x="262" y="338" width="20" height="6" rx="3" fill="#42A5F5"/>
+<rect x="288" y="338" width="20" height="6" rx="3" fill="#80DEEA"/>
+<text x="324" y="345" font-size="13" fill="#9AA8BC" font-weight="400" text-anchor="start">10 レーン・ドラム専用</text>
+<rect x="594" y="26" width="322" height="360" rx="10" fill="#05070C" stroke="#20293A"/>
+<rect x="600" y="34" width="30" height="296" fill="#FF5C8A" fill-opacity="0.05"/>
+<rect x="631" y="34" width="30" height="296" fill="#4FC3F7" fill-opacity="0.05"/>
+<rect x="662" y="34" width="30" height="296" fill="#F48FB1" fill-opacity="0.05"/>
+<rect x="693" y="34" width="30" height="296" fill="#FFD54F" fill-opacity="0.05"/>
+<rect x="724" y="34" width="30" height="296" fill="#66BB6A" fill-opacity="0.05"/>
+<rect x="755" y="34" width="30" height="296" fill="#9C84E0" fill-opacity="0.05"/>
+<rect x="786" y="34" width="30" height="296" fill="#EF5350" fill-opacity="0.05"/>
+<rect x="817" y="34" width="30" height="296" fill="#FF9800" fill-opacity="0.05"/>
+<rect x="848" y="34" width="30" height="296" fill="#42A5F5" fill-opacity="0.05"/>
+<rect x="879" y="34" width="30" height="296" fill="#80DEEA" fill-opacity="0.05"/>
+<line x1="600" y1="330" x2="910" y2="330" stroke="#2A3448" stroke-width="1"/>
+<line x1="600" y1="256" x2="910" y2="256" stroke="#2A3448" stroke-width="1"/>
+<line x1="600" y1="182" x2="910" y2="182" stroke="#2A3448" stroke-width="1"/>
+<line x1="600" y1="108" x2="910" y2="108" stroke="#2A3448" stroke-width="1"/>
+<line x1="600" y1="34" x2="910" y2="34" stroke="#2A3448" stroke-width="1"/>
+<rect class="fa" style="animation-delay:-1.400s" x="758" y="34" width="24" height="7" rx="2" fill="#9C84E0"/>
+<rect class="fa" style="animation-delay:-1.400s" x="851" y="34" width="24" height="7" rx="2" fill="#42A5F5"/>
+<rect class="fa" style="animation-delay:-1.400s" x="634" y="34" width="24" height="7" rx="2" fill="#4FC3F7"/>
+<rect class="fa" style="animation-delay:-1.100s" x="634" y="34" width="24" height="7" rx="2" fill="#4FC3F7"/>
+<rect class="fa" style="animation-delay:-0.800s" x="634" y="34" width="24" height="7" rx="2" fill="#4FC3F7"/>
+<rect class="fa" style="animation-delay:-0.800s" x="696" y="34" width="24" height="7" rx="2" fill="#FFD54F"/>
+<rect class="fa" style="animation-delay:-0.500s" x="634" y="34" width="24" height="7" rx="2" fill="#4FC3F7"/>
+<rect class="fa" style="animation-delay:-0.200s" x="634" y="34" width="24" height="7" rx="2" fill="#4FC3F7"/>
+<rect class="fa" style="animation-delay:-4.700s" x="758" y="34" width="24" height="7" rx="2" fill="#9C84E0"/>
+<rect class="fa" style="animation-delay:-4.700s" x="634" y="34" width="24" height="7" rx="2" fill="#4FC3F7"/>
+<rect class="fa" style="animation-delay:-4.400s" x="634" y="34" width="24" height="7" rx="2" fill="#4FC3F7"/>
+<rect class="fa" style="animation-delay:-4.400s" x="696" y="34" width="24" height="7" rx="2" fill="#FFD54F"/>
+<rect class="fa" style="animation-delay:-4.100s" x="634" y="34" width="24" height="7" rx="2" fill="#4FC3F7"/>
+<rect class="fa" style="animation-delay:-3.800s" x="758" y="34" width="24" height="7" rx="2" fill="#9C84E0"/>
+<rect class="fa" style="animation-delay:-3.800s" x="634" y="34" width="24" height="7" rx="2" fill="#4FC3F7"/>
+<rect class="fa" style="animation-delay:-3.800s" x="603" y="34" width="24" height="7" rx="2" fill="#FF5C8A"/>
+<rect class="fa" style="animation-delay:-3.500s" x="634" y="34" width="24" height="7" rx="2" fill="#4FC3F7"/>
+<rect class="fa" style="animation-delay:-3.200s" x="634" y="34" width="24" height="7" rx="2" fill="#4FC3F7"/>
+<rect class="fa" style="animation-delay:-3.200s" x="696" y="34" width="24" height="7" rx="2" fill="#FFD54F"/>
+<rect class="fa" style="animation-delay:-2.900s" x="634" y="34" width="24" height="7" rx="2" fill="#4FC3F7"/>
+<rect class="fa" style="animation-delay:-2.600s" x="634" y="34" width="24" height="7" rx="2" fill="#4FC3F7"/>
+<rect class="fa" style="animation-delay:-2.300s" x="758" y="34" width="24" height="7" rx="2" fill="#9C84E0"/>
+<rect class="fa" style="animation-delay:-2.300s" x="634" y="34" width="24" height="7" rx="2" fill="#4FC3F7"/>
+<rect class="fa" style="animation-delay:-2.300s" x="727" y="34" width="24" height="7" rx="2" fill="#66BB6A"/>
+<rect class="fa" style="animation-delay:-2.150s" x="789" y="34" width="24" height="7" rx="2" fill="#EF5350"/>
+<rect class="fa" style="animation-delay:-2.000s" x="820" y="34" width="24" height="7" rx="2" fill="#FF9800"/>
+<rect class="fa" style="animation-delay:-2.000s" x="634" y="34" width="24" height="7" rx="2" fill="#4FC3F7"/>
+<rect class="fa" style="animation-delay:-2.000s" x="696" y="34" width="24" height="7" rx="2" fill="#FFD54F"/>
+<rect class="fa" style="animation-delay:-1.850s" x="820" y="34" width="24" height="7" rx="2" fill="#FF9800"/>
+<rect class="fa" style="animation-delay:-1.700s" x="634" y="34" width="24" height="7" rx="2" fill="#4FC3F7"/>
+<rect class="bl" style="animation-delay:-4.800s" x="631" y="210" width="30" height="120" fill="#4FC3F7" fill-opacity="0.35"/>
+<rect class="bl" style="animation-delay:-4.800s" x="755" y="210" width="30" height="120" fill="#9C84E0" fill-opacity="0.35"/>
+<rect class="bl" style="animation-delay:-4.800s" x="848" y="210" width="30" height="120" fill="#42A5F5" fill-opacity="0.35"/>
+<rect class="bl" style="animation-delay:-4.500s" x="631" y="210" width="30" height="120" fill="#4FC3F7" fill-opacity="0.35"/>
+<rect class="bl" style="animation-delay:-4.200s" x="631" y="210" width="30" height="120" fill="#4FC3F7" fill-opacity="0.35"/>
+<rect class="bl" style="animation-delay:-4.200s" x="693" y="210" width="30" height="120" fill="#FFD54F" fill-opacity="0.35"/>
+<rect class="bl" style="animation-delay:-3.900s" x="631" y="210" width="30" height="120" fill="#4FC3F7" fill-opacity="0.35"/>
+<rect class="bl" style="animation-delay:-3.600s" x="631" y="210" width="30" height="120" fill="#4FC3F7" fill-opacity="0.35"/>
+<rect class="bl" style="animation-delay:-3.300s" x="631" y="210" width="30" height="120" fill="#4FC3F7" fill-opacity="0.35"/>
+<rect class="bl" style="animation-delay:-3.300s" x="755" y="210" width="30" height="120" fill="#9C84E0" fill-opacity="0.35"/>
+<rect class="bl" style="animation-delay:-3.000s" x="631" y="210" width="30" height="120" fill="#4FC3F7" fill-opacity="0.35"/>
+<rect class="bl" style="animation-delay:-3.000s" x="693" y="210" width="30" height="120" fill="#FFD54F" fill-opacity="0.35"/>
+<rect class="bl" style="animation-delay:-2.700s" x="631" y="210" width="30" height="120" fill="#4FC3F7" fill-opacity="0.35"/>
+<rect class="bl" style="animation-delay:-2.400s" x="631" y="210" width="30" height="120" fill="#4FC3F7" fill-opacity="0.35"/>
+<rect class="bl" style="animation-delay:-2.400s" x="755" y="210" width="30" height="120" fill="#9C84E0" fill-opacity="0.35"/>
+<rect class="bl" style="animation-delay:-2.400s" x="600" y="210" width="30" height="120" fill="#FF5C8A" fill-opacity="0.35"/>
+<rect class="bl" style="animation-delay:-2.100s" x="631" y="210" width="30" height="120" fill="#4FC3F7" fill-opacity="0.35"/>
+<rect class="bl" style="animation-delay:-1.800s" x="631" y="210" width="30" height="120" fill="#4FC3F7" fill-opacity="0.35"/>
+<rect class="bl" style="animation-delay:-1.800s" x="693" y="210" width="30" height="120" fill="#FFD54F" fill-opacity="0.35"/>
+<rect class="bl" style="animation-delay:-1.500s" x="631" y="210" width="30" height="120" fill="#4FC3F7" fill-opacity="0.35"/>
+<rect class="bl" style="animation-delay:-1.200s" x="631" y="210" width="30" height="120" fill="#4FC3F7" fill-opacity="0.35"/>
+<rect class="bl" style="animation-delay:-0.900s" x="631" y="210" width="30" height="120" fill="#4FC3F7" fill-opacity="0.35"/>
+<rect class="bl" style="animation-delay:-0.900s" x="755" y="210" width="30" height="120" fill="#9C84E0" fill-opacity="0.35"/>
+<rect class="bl" style="animation-delay:-0.900s" x="724" y="210" width="30" height="120" fill="#66BB6A" fill-opacity="0.35"/>
+<rect class="bl" style="animation-delay:-0.750s" x="786" y="210" width="30" height="120" fill="#EF5350" fill-opacity="0.35"/>
+<rect class="bl" style="animation-delay:-0.600s" x="631" y="210" width="30" height="120" fill="#4FC3F7" fill-opacity="0.35"/>
+<rect class="bl" style="animation-delay:-0.600s" x="693" y="210" width="30" height="120" fill="#FFD54F" fill-opacity="0.35"/>
+<rect class="bl" style="animation-delay:-0.600s" x="817" y="210" width="30" height="120" fill="#FF9800" fill-opacity="0.35"/>
+<rect class="bl" style="animation-delay:-0.450s" x="817" y="210" width="30" height="120" fill="#FF9800" fill-opacity="0.35"/>
+<rect class="bl" style="animation-delay:-0.300s" x="631" y="210" width="30" height="120" fill="#4FC3F7" fill-opacity="0.35"/>
+<rect x="596" y="328" width="318" height="4" rx="2" fill="#FFFFFF" fill-opacity="0.85"/>
+<ellipse cx="615.5" cy="356" rx="12" ry="9" fill="#141B28" stroke="#FF5C8A" stroke-width="2.5"/>
+<ellipse cx="646.5" cy="356" rx="12" ry="9" fill="#141B28" stroke="#4FC3F7" stroke-width="2.5"/>
+<ellipse cx="677.5" cy="356" rx="12" ry="9" fill="#141B28" stroke="#F48FB1" stroke-width="2.5"/>
+<ellipse cx="708.5" cy="356" rx="12" ry="9" fill="#141B28" stroke="#FFD54F" stroke-width="2.5"/>
+<ellipse cx="739.5" cy="356" rx="12" ry="9" fill="#141B28" stroke="#66BB6A" stroke-width="2.5"/>
+<ellipse cx="770.5" cy="356" rx="12" ry="9" fill="#141B28" stroke="#9C84E0" stroke-width="2.5"/>
+<ellipse cx="801.5" cy="356" rx="12" ry="9" fill="#141B28" stroke="#EF5350" stroke-width="2.5"/>
+<ellipse cx="832.5" cy="356" rx="12" ry="9" fill="#141B28" stroke="#FF9800" stroke-width="2.5"/>
+<ellipse cx="863.5" cy="356" rx="12" ry="9" fill="#141B28" stroke="#42A5F5" stroke-width="2.5"/>
+<ellipse cx="894.5" cy="356" rx="12" ry="9" fill="#141B28" stroke="#80DEEA" stroke-width="2.5"/>
+<text class="pp" style="animation-delay:-4.800s" x="755" y="180" font-size="30" font-weight="800" font-style="italic" fill="url(#pg4)" text-anchor="middle" stroke="#3A2400" stroke-width="1">PERFECT</text>
+<text class="pp" style="animation-delay:-4.500s" x="755" y="180" font-size="30" font-weight="800" font-style="italic" fill="url(#pg4)" text-anchor="middle" stroke="#3A2400" stroke-width="1">PERFECT</text>
+<text class="pp" style="animation-delay:-4.200s" x="755" y="180" font-size="30" font-weight="800" font-style="italic" fill="url(#pg4)" text-anchor="middle" stroke="#3A2400" stroke-width="1">PERFECT</text>
+<text class="pp" style="animation-delay:-3.900s" x="755" y="180" font-size="30" font-weight="800" font-style="italic" fill="url(#pg4)" text-anchor="middle" stroke="#3A2400" stroke-width="1">PERFECT</text>
+<text class="pp" style="animation-delay:-3.600s" x="755" y="180" font-size="30" font-weight="800" font-style="italic" fill="url(#pg4)" text-anchor="middle" stroke="#3A2400" stroke-width="1">PERFECT</text>
+<text class="pp" style="animation-delay:-3.300s" x="755" y="180" font-size="30" font-weight="800" font-style="italic" fill="url(#pg4)" text-anchor="middle" stroke="#3A2400" stroke-width="1">PERFECT</text>
+<text class="pp" style="animation-delay:-3.000s" x="755" y="180" font-size="30" font-weight="800" font-style="italic" fill="url(#pg4)" text-anchor="middle" stroke="#3A2400" stroke-width="1">PERFECT</text>
+<text class="pp" style="animation-delay:-3.000s" x="755" y="180" font-size="30" font-weight="800" font-style="italic" fill="url(#pg4)" text-anchor="middle" stroke="#3A2400" stroke-width="1">PERFECT</text>
+<text class="pp" style="animation-delay:-2.700s" x="755" y="180" font-size="30" font-weight="800" font-style="italic" fill="url(#pg4)" text-anchor="middle" stroke="#3A2400" stroke-width="1">PERFECT</text>
+<text class="pp" style="animation-delay:-2.400s" x="755" y="180" font-size="30" font-weight="800" font-style="italic" fill="url(#pg4)" text-anchor="middle" stroke="#3A2400" stroke-width="1">PERFECT</text>
+<text class="pp" style="animation-delay:-2.100s" x="755" y="180" font-size="30" font-weight="800" font-style="italic" fill="url(#pg4)" text-anchor="middle" stroke="#3A2400" stroke-width="1">PERFECT</text>
+<text class="pp" style="animation-delay:-1.800s" x="755" y="180" font-size="30" font-weight="800" font-style="italic" fill="url(#pg4)" text-anchor="middle" stroke="#3A2400" stroke-width="1">PERFECT</text>
+<text class="pp" style="animation-delay:-1.500s" x="755" y="180" font-size="30" font-weight="800" font-style="italic" fill="url(#pg4)" text-anchor="middle" stroke="#3A2400" stroke-width="1">PERFECT</text>
+<text class="pp" style="animation-delay:-1.200s" x="755" y="180" font-size="30" font-weight="800" font-style="italic" fill="url(#pg4)" text-anchor="middle" stroke="#3A2400" stroke-width="1">PERFECT</text>
+<text class="pp" style="animation-delay:-0.900s" x="755" y="180" font-size="30" font-weight="800" font-style="italic" fill="url(#pg4)" text-anchor="middle" stroke="#3A2400" stroke-width="1">PERFECT</text>
+<text class="pp" style="animation-delay:-0.750s" x="755" y="180" font-size="30" font-weight="800" font-style="italic" fill="url(#pg4)" text-anchor="middle" stroke="#3A2400" stroke-width="1">PERFECT</text>
+<text class="pp" style="animation-delay:-0.600s" x="755" y="180" font-size="30" font-weight="800" font-style="italic" fill="url(#pg4)" text-anchor="middle" stroke="#3A2400" stroke-width="1">PERFECT</text>
+<text class="pp" style="animation-delay:-0.450s" x="755" y="180" font-size="30" font-weight="800" font-style="italic" fill="url(#pg4)" text-anchor="middle" stroke="#3A2400" stroke-width="1">PERFECT</text>
+<text class="pp" style="animation-delay:-0.300s" x="755" y="180" font-size="30" font-weight="800" font-style="italic" fill="url(#pg4)" text-anchor="middle" stroke="#3A2400" stroke-width="1">PERFECT</text>
+<text class="w5" x="755" y="130" font-size="22" font-weight="800" fill="#5CE1E6" text-anchor="middle" fill-opacity="0.9">100 COMBO</text>
+<text class="w6" x="755" y="130" font-size="22" font-weight="800" fill="#5CE1E6" text-anchor="middle" fill-opacity="0.9">101 COMBO</text>
+<text class="w7" x="755" y="130" font-size="22" font-weight="800" fill="#5CE1E6" text-anchor="middle" fill-opacity="0.9">102 COMBO</text>
+<text class="w8" x="755" y="130" font-size="22" font-weight="800" fill="#5CE1E6" text-anchor="middle" fill-opacity="0.9">103 COMBO</text>
+<text class="w9" x="755" y="130" font-size="22" font-weight="800" fill="#5CE1E6" text-anchor="middle" fill-opacity="0.9">104 COMBO</text>
+<text class="w10" x="755" y="130" font-size="22" font-weight="800" fill="#5CE1E6" text-anchor="middle" fill-opacity="0.9">105 COMBO</text>
+<text class="w11" x="755" y="130" font-size="22" font-weight="800" fill="#5CE1E6" text-anchor="middle" fill-opacity="0.9">106 COMBO</text>
+<text class="w12" x="755" y="130" font-size="22" font-weight="800" fill="#5CE1E6" text-anchor="middle" fill-opacity="0.9">107 COMBO</text>
+<text class="w13" x="755" y="130" font-size="22" font-weight="800" fill="#5CE1E6" text-anchor="middle" fill-opacity="0.9">108 COMBO</text>
+<text class="w14" x="755" y="130" font-size="22" font-weight="800" fill="#5CE1E6" text-anchor="middle" fill-opacity="0.9">109 COMBO</text>
+<text class="w15" x="755" y="130" font-size="22" font-weight="800" fill="#5CE1E6" text-anchor="middle" fill-opacity="0.9">110 COMBO</text>
+<text class="w16" x="755" y="130" font-size="22" font-weight="800" fill="#5CE1E6" text-anchor="middle" fill-opacity="0.9">111 COMBO</text>
+<text class="w17" x="755" y="130" font-size="22" font-weight="800" fill="#5CE1E6" text-anchor="middle" fill-opacity="0.9">112 COMBO</text>
+<text class="w18" x="755" y="130" font-size="22" font-weight="800" fill="#5CE1E6" text-anchor="middle" fill-opacity="0.9">113 COMBO</text>
+<text class="w19" x="755" y="130" font-size="22" font-weight="800" fill="#5CE1E6" text-anchor="middle" fill-opacity="0.9">114 COMBO</text>
+<text class="w20" x="755" y="130" font-size="22" font-weight="800" fill="#5CE1E6" text-anchor="middle" fill-opacity="0.9">115 COMBO</text>
+<text class="w21" x="755" y="130" font-size="22" font-weight="800" fill="#5CE1E6" text-anchor="middle" fill-opacity="0.9">116 COMBO</text>
+<text class="w22" x="755" y="130" font-size="22" font-weight="800" fill="#5CE1E6" text-anchor="middle" fill-opacity="0.9">117 COMBO</text>
+<text class="w23" x="755" y="130" font-size="22" font-weight="800" fill="#5CE1E6" text-anchor="middle" fill-opacity="0.9">118 COMBO</text>
+</svg>
