@@ -658,7 +658,8 @@ impl App {
         let label = self.songs.chart_label(&play.path);
         play.begin();
         let lag = play_view::LagDigits::from_config(&self.config);
-        let view = PlayView::new(&play, &label, lag);
+        let looks = play_view::Looks::from_settings(&self.config.settings);
+        let view = PlayView::new(&play, &label, lag, looks);
         self.message = None;
         // 譜面の音を切ったままだと、叩いても音が出ないわけが分からない。始めにしばらく知らせる
         if !play.drum_sounds {

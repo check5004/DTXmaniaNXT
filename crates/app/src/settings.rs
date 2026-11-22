@@ -135,6 +135,129 @@ pub const PEDAL_HIT_KEYS: [&str; 4] = [
     "pedal_hit_poor",
 ];
 
+/// 譜面の見た目（上流のドラムの設定）
+pub const JUDGE_LINE_POS: &str = "judge_line_pos";
+pub const HID_SUD: &str = "hid_sud";
+pub const SHUTTER_IN: &str = "shutter_in";
+pub const SHUTTER_OUT: &str = "shutter_out";
+pub const DARK: &str = "dark";
+pub const LANE_DISP: &str = "lane_disp";
+pub const JUDGE_LINE_DISP: &str = "judge_line_disp";
+pub const LANE_FLUSH: &str = "lane_flush";
+pub const ATTACK_EFFECT: &str = "attack_effect";
+pub const JUDGE_POSITION: &str = "judge_position";
+pub const COMBO_DISP: &str = "combo_disp";
+pub const MIN_COMBO: &str = "min_combo";
+
+/// 選択肢の表を `[key, label]` の並びから作る
+macro_rules! choices {
+    ($($key:literal => $label:literal),+ $(,)?) => {
+        &[$(Choice { key: $key, label: $label }),+]
+    };
+}
+
+/// 上流 `nHidSud`（並びは上流と同じ）
+pub const HID_SUD_CHOICES: &[Choice] = choices![
+    "off" => "OFF",
+    "hidden" => "HIDDEN（途中から消える）",
+    "sudden" => "SUDDEN（途中から出る）",
+    "hid_sud" => "HID-SUD（途中だけ見える）",
+    "stealth" => "STEALTH（見えない）",
+];
+
+/// 上流 `EDarkMode`
+const DARK_CHOICES: &[Choice] = choices![
+    "off" => "OFF",
+    "half" => "HALF",
+    "full" => "FULL",
+];
+
+/// 上流 `nLaneDisp`
+pub const LANE_DISP_CHOICES: &[Choice] = choices![
+    "all_on" => "全部出す",
+    "lane_off" => "レーンを暗く",
+    "line_off" => "小節線を消す",
+    "all_off" => "両方",
+];
+
+/// 上流 `eAttackEffect`
+pub const ATTACK_EFFECT_CHOICES: &[Choice] = choices![
+    "all_on" => "全部出す",
+    "chip_off" => "飛ぶチップを消す",
+    "effect_only" => "火花だけ",
+    "all_off" => "全部消す",
+];
+
+/// 上流 `JudgementStringPosition`
+pub const JUDGE_POSITION_CHOICES: &[Choice] = choices![
+    "lane" => "レーンの上（P-A）",
+    "below" => "判定ラインの下（P-B）",
+    "off" => "出さない",
+];
+
+const VIEW_LANES: &str = "画面の部品";
+const VIEW_HIDE: &str = "見えにくくする";
+
+/// 0〜100 の数（判定ラインの高さ、シャッター）
+const fn percent(
+    key: &'static str,
+    section: &'static str,
+    name: &'static str,
+    desc: &'static str,
+) -> Def {
+    Def {
+        key,
+        group: Group::View,
+        section,
+        name,
+        kind: Kind::Number {
+            min: 0,
+            max: 100,
+            step: 1,
+            default: 0,
+            unit: "",
+            zero: None,
+        },
+        desc,
+        in_play: false,
+    }
+}
+
+/// 譜面の見た目の ON / OFF（既定は ON）
+const fn view_toggle(key: &'static str, name: &'static str, desc: &'static str) -> Def {
+    Def {
+        key,
+        group: Group::View,
+        section: VIEW_LANES,
+        name,
+        kind: Kind::Toggle { default: true },
+        desc,
+        in_play: false,
+    }
+}
+
+/// 譜面の見た目の選択肢
+const fn view_choice(
+    key: &'static str,
+    section: &'static str,
+    name: &'static str,
+    choices: &'static [Choice],
+    desc: &'static str,
+) -> Def {
+    Def {
+        key,
+        group: Group::View,
+        section,
+        name,
+        kind: Kind::Choice {
+            choices,
+            default: 0,
+        },
+        desc,
+        in_play: false,
+    }
+}
+
 const RULE_SECTION: &str = "演奏の決まり";
 
 /// ゲージの減り方の選択肢（上流 `EDamageLevel`。並びは MISS の減りにかける数 [`DAMAGE_FACTORS`] と同じ）
@@ -302,6 +425,86 @@ pub const ALL: &[Def] = &[
         desc: "演奏中に → で先へ、← で前へ、この幅だけ飛びます（練習では区間をずらします）。\n飛んだプレイは記録に残しません。Space か Pause で一時停止します。",
         in_play: true,
     },
+    percent(
+        JUDGE_LINE_POS,
+        "流れ方",
+        "判定ラインの高さ（JudgeLinePos）",
+        "判定ラインを下から何ドット上げるか（0〜100）。チップと小節線、火花も一緒に動きます。",
+    ),
+    view_choice(
+        HID_SUD,
+        VIEW_HIDE,
+        "見えにくくする（HID-SUD）",
+        HID_SUD_CHOICES,
+        "HIDDEN は判定ラインの近くでチップが消え、SUDDEN は判定ラインの近くまで来てから出ます。\nHID-SUD は両方、STEALTH はずっと見えません（譜面を覚える練習に）。",
+    ),
+    percent(
+        SHUTTER_IN,
+        VIEW_HIDE,
+        "上のシャッター（ShutterInPos）",
+        "チップが出てくる側（上）をシャッターでどこまで隠すか（0〜100。100 で画面の高さ全部）。",
+    ),
+    percent(
+        SHUTTER_OUT,
+        VIEW_HIDE,
+        "下のシャッター（ShutterOutPos）",
+        "判定ラインの側（下）をシャッターでどこまで隠すか（0〜100。100 で画面の高さ全部）。",
+    ),
+    view_choice(
+        DARK,
+        VIEW_LANES,
+        "暗くする（Dark）",
+        DARK_CHOICES,
+        "下の 3 つをまとめて切り替えます。HALF はレーンを暗くし、FULL はさらに小節線・判定ライン・レーンの光・進み具合のバーを消します。\n選んだあとで下の 3 つを 1 つずつ変えることもできます。",
+    ),
+    view_choice(
+        LANE_DISP,
+        VIEW_LANES,
+        "レーンと小節線（LaneDisp）",
+        LANE_DISP_CHOICES,
+        "レーンの背景を暗くするか、小節線と拍線を消すかを選びます。",
+    ),
+    view_toggle(
+        JUDGE_LINE_DISP,
+        "判定ライン（JudgeLineDisp）",
+        "判定ラインを出すかどうか。",
+    ),
+    view_toggle(
+        LANE_FLUSH,
+        "レーンの光（LaneFlush）",
+        "叩いたときにレーンを光らせるかどうか。",
+    ),
+    view_choice(
+        ATTACK_EFFECT,
+        VIEW_LANES,
+        "叩いたときの効果（AttackEffect）",
+        ATTACK_EFFECT_CHOICES,
+        "音符を取ったときの火花・星・飛び散るチップをどこまで出すか。",
+    ),
+    view_choice(
+        JUDGE_POSITION,
+        VIEW_LANES,
+        "判定の文字の位置（JudgePosition）",
+        JUDGE_POSITION_CHOICES,
+        "PERFECT などの文字を、レーンの上か、判定ラインの下に出します。出さないこともできます。",
+    ),
+    view_toggle(COMBO_DISP, "コンボ（Combo）", "コンボの数を出すかどうか。"),
+    Def {
+        key: MIN_COMBO,
+        group: Group::View,
+        section: VIEW_LANES,
+        name: "コンボを出す数（D-MinCombo）",
+        kind: Kind::Number {
+            min: 1,
+            max: 99999,
+            step: 1,
+            default: 10,
+            unit: "",
+            zero: None,
+        },
+        desc: "コンボがこの数になったら、コンボの数を出します。",
+        in_play: false,
+    },
     hit_window(
         HIT_KEYS[0],
         "判定の幅",
@@ -444,6 +647,9 @@ impl Values {
                 let n = choices.len() as i64;
                 let i = (self.choice(key) as i64 + i64::from(delta)).rem_euclid(n) as usize;
                 self.set(key, toml::Value::String(choices[i].key.to_owned()));
+                if key == DARK {
+                    self.apply_dark(i);
+                }
             }
             Kind::Number { min, max, step, .. } => {
                 let v = snap(self.number(key) + i64::from(delta) * step, min, max, step);
@@ -456,6 +662,26 @@ impl Values {
                 }
             }
         }
+    }
+
+    /// Dark を選んだら、レーンと小節線・判定ライン・レーンの光をそろえる（上流の設定画面と同じ）
+    fn apply_dark(&mut self, dark: usize) {
+        let (lanes, lines) = match dark {
+            2 => (3, false),
+            1 => (1, true),
+            _ => (0, true),
+        };
+        self.set(
+            LANE_DISP,
+            toml::Value::String(LANE_DISP_CHOICES[lanes].key.to_owned()),
+        );
+        self.set(JUDGE_LINE_DISP, toml::Value::Boolean(lines));
+        self.set(LANE_FLUSH, toml::Value::Boolean(lines));
+    }
+
+    /// Dark が FULL（進み具合のバーも消す）
+    pub fn dark_full(&self) -> bool {
+        self.choice(DARK) == 2
     }
 
     fn set(&mut self, key: &str, v: toml::Value) {
@@ -598,6 +824,25 @@ mod tests {
         let w = v.hit_windows(true);
         assert_eq!((w.perfect, w.great), (44.0, 44.0));
         assert_eq!(v.hit_windows(false), HitWindows::default());
+    }
+
+    #[test]
+    fn dark_sets_the_lane_parts() {
+        let mut v = Values::default();
+        assert!(v.flag(JUDGE_LINE_DISP) && v.flag(LANE_FLUSH));
+        assert_eq!(v.number(MIN_COMBO), 10);
+        v.change(DARK, 2);
+        assert!(v.dark_full());
+        assert_eq!(v.choice(LANE_DISP), 3);
+        assert!(!v.flag(JUDGE_LINE_DISP) && !v.flag(LANE_FLUSH));
+        // あとから 1 つずつ変えられる
+        v.change(LANE_FLUSH, 1);
+        assert!(v.flag(LANE_FLUSH));
+        v.change(DARK, -1);
+        assert_eq!(v.choice(LANE_DISP), 1);
+        assert!(v.flag(JUDGE_LINE_DISP));
+        v.change(DARK, -1);
+        assert_eq!(v.choice(LANE_DISP), 0);
     }
 
     #[test]
