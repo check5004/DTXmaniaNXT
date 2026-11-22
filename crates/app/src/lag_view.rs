@@ -1,5 +1,6 @@
 //! ずれの表示（このアプリで足したもの。絵は足さずにコードで描く）。
-//! - 演奏中の「ずれのバー」: ゲージの下に、叩いた音符のずれを横の目盛りに印で出す（osu! の hit error bar と同じ形）。
+//! - 演奏中の「ずれのバー」: 左のスコアの下に、叩いた音符のずれを横の目盛りに印で出す（osu! の hit error bar と同じ形）。
+//!   レーンにはかぶせない。練習ではスコアの場所に練習の欄が出るので、左下（成績の板の下）に出す。
 //!   真ん中が ±0、左が早い、右が遅い。帯は判定の幅、印の色は判定の色で、少しずつ消える。▼ と数字は直近の平均
 //! - 結果の画面の「ずれ」の板: 今回のずれの散らばりと、この曲・全体のずれ、補正のおすすめ（BD で受ける）
 
@@ -24,12 +25,15 @@ const MAX_MARKS: usize = 256;
 /// ▼ と数字に使う、直近の打数
 pub const MEAN_OF: usize = 20;
 
-/// バーの真ん中の x（レーンの真ん中）と、POOR の幅の端までの長さ
-const BAR_X: f32 = 574.0;
-const BAR_HALF: f32 = 180.0;
-/// バーの真ん中の y（ゲージの下の空き。Reverse ではゲージの上の空き）
-const BAR_Y: f32 = 697.0;
-const REVERSE_BAR_Y: f32 = 14.0;
+/// バーの板の左端と幅（左の列。スコアと成績の板と同じ幅に収める）
+const BOX_X: f32 = 10.0;
+const BOX_W: f32 = 276.0;
+/// バーの真ん中の x と、POOR の幅の端までの長さ（右に平均の数を出す）
+const BAR_X: f32 = BOX_X + 106.0;
+const BAR_HALF: f32 = 84.0;
+/// バーの真ん中の y（スコアの下の空き。練習では成績の板の下）
+const BAR_Y: f32 = 126.0;
+const PRACTICE_BAR_Y: f32 = 699.0;
 
 /// 判定の色（結果の分析と同じ）
 pub fn judgement_color(j: Judgement) -> Color32 {
@@ -167,7 +171,7 @@ impl HitErrorBar {
             .then(|| self.recent.iter().sum::<f64>() / self.recent.len() as f64)
     }
 
-    pub fn draw(&mut self, c: &Canvas, g: &mut Gfx, now: Instant, reverse: bool) {
+    pub fn draw(&mut self, c: &Canvas, g: &mut Gfx, now: Instant, practice: bool) {
         while self
             .marks
             .front()
@@ -175,14 +179,14 @@ impl HitErrorBar {
         {
             self.marks.pop_front();
         }
-        let cy = if reverse { REVERSE_BAR_Y } else { BAR_Y };
+        let cy = if practice { PRACTICE_BAR_Y } else { BAR_Y };
         let w = self.windows;
         let s = BAR_HALF / w.poor as f32;
         c.fill(
-            BAR_X - BAR_HALF - 20.0,
-            cy - 14.0,
-            (BAR_HALF + 20.0) * 2.0,
-            28.0,
+            BOX_X,
+            cy - 18.0,
+            BOX_W,
+            36.0,
             Color32::from_black_alpha(165),
         );
         bands(c, &w, BAR_X, cy, BAR_HALF, 4.0, 0.6);
@@ -201,17 +205,17 @@ impl HitErrorBar {
         }
         c.fill(BAR_X - 1.0, cy - 12.0, 2.0, 24.0, Color32::WHITE);
         let small = Color32::from_gray(190);
-        draw_text(c, g, "早", BAR_X - BAR_HALF - 16.0, cy - 8.0, 12.0, small);
-        draw_text_right(c, g, "遅", BAR_X + BAR_HALF + 16.0, cy - 8.0, 12.0, small);
+        draw_text(c, g, "早", BAR_X - BAR_HALF - 15.0, cy - 8.0, 12.0, small);
+        draw_text_right(c, g, "遅", BAR_X + BAR_HALF + 15.0, cy - 8.0, 12.0, small);
         if let Some(m) = self.mean() {
             let x = BAR_X + (m.clamp(-w.poor, w.poor) as f32) * s;
             caret(c, x, cy - 11.0, Color32::WHITE);
-            draw_text(
+            draw_text_right(
                 c,
                 g,
                 &signed_ms(m),
-                BAR_X + BAR_HALF + 28.0,
-                cy - 10.0,
+                BOX_X + BOX_W - 8.0,
+                cy - 9.0,
                 15.0,
                 Color32::WHITE,
             );

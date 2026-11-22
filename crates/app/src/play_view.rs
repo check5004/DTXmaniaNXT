@@ -317,7 +317,7 @@ pub struct PlayView {
     late: u32,
     lag_digits: LagDigits,
     looks: Looks,
-    /// ゲージの下のずれのバー（出さない設定でも印は集めておく。一時停止で ON にしたらすぐ出す）
+    /// スコアの下のずれのバー（出さない設定でも印は集めておく。一時停止で ON にしたらすぐ出す）
     hit_error: HitErrorBar,
 }
 
@@ -439,7 +439,7 @@ pub struct Looks {
     pub min_combo: u32,
     /// 進み具合のバーを出す（Dark が FULL なら出さない）
     pub progress: bool,
-    /// ゲージの下にずれのバーを出す
+    /// スコアの下にずれのバーを出す
     pub hit_error: bool,
     /// レーンの並び
     pub layout: Layout,
@@ -837,7 +837,7 @@ impl PlayView {
         self.draw_status(c, g, play, practice);
         self.draw_gauge(c, g, px_per_ms);
         if self.looks.hit_error {
-            self.hit_error.draw(c, g, now, self.looks.reverse);
+            self.hit_error.draw(c, g, now, practice);
         }
         self.draw_combo(c, g, play, now);
         self.draw_judges(c, g, now);
