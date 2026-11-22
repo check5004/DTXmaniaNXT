@@ -22,7 +22,7 @@ use dtx::DrumLane;
 use egui::Color32;
 use engine::input::Preset;
 use engine::practice::{
-    LoopStyle, PassRule, SET_LAPS_CHOICES, SET_SPEED_STEP, SPEED_MAX, SPEED_MIN, SPEED_STEP,
+    LoopStyle, PassRule, SPEED_MAX, SPEED_MIN, SPEED_STEP, STEP_LAPS_CHOICES, STEP_SPEED,
     SpeedPlan, snap_speed,
 };
 use library::Progress;
@@ -164,8 +164,8 @@ pub enum Setting {
 pub enum Drill {
     Style,
     Rule,
-    /// 1 セットの周の数
-    SetLaps,
+    /// 1 段の周の数
+    StepLaps,
     /// 速度の決め方（段階アップか固定か）
     Ladder,
     Speed,
@@ -596,7 +596,7 @@ pub fn get_drill(d: Drill, c: &Config) -> i64 {
     match d {
         Drill::Style => at(LoopStyle::ALL.iter().position(|&s| s == c.loop_style())),
         Drill::Rule => at(PassRule::ALL.iter().position(|&r| r == c.pass_rule())),
-        Drill::SetLaps => at(SET_LAPS_CHOICES.iter().position(|&n| n == c.set_laps())),
+        Drill::StepLaps => at(STEP_LAPS_CHOICES.iter().position(|&n| n == c.step_laps())),
         Drill::Ladder => i64::from(!c.practice_ladder),
         Drill::Speed => i64::from(snap_speed(i64::from(c.practice_speed))),
         Drill::Target => at(SpeedPlan::TARGETS
@@ -613,7 +613,7 @@ pub fn set_drill(d: Drill, c: &mut Config, v: i64) {
     match d {
         Drill::Style => c.practice_style = LoopStyle::ALL[pick(2)].name().to_owned(),
         Drill::Rule => c.practice_rule = PassRule::ALL[pick(3)].name().to_owned(),
-        Drill::SetLaps => c.practice_set_laps = SET_LAPS_CHOICES[pick(SET_LAPS_CHOICES.len())],
+        Drill::StepLaps => c.practice_step_laps = STEP_LAPS_CHOICES[pick(STEP_LAPS_CHOICES.len())],
         Drill::Ladder => c.practice_ladder = v == 0,
         Drill::Speed => c.practice_speed = snap_speed(v),
         Drill::Target => {
@@ -639,20 +639,20 @@ fn drill_row(d: Drill, c: &Config) -> Row {
             "切れ目なく: 区間の終わりから切れ目なく頭へ戻ります（ビート向き）。\n毎回区切る: 次の小節の頭の 1 打まで叩き、助走からやり直します（フィル向き）。",
         ),
         Drill::Rule => pick(
-            "苦手の見方",
+            "段の越え方",
             &["ゆるい", "ふつう", "きびしい"],
-            "1 セットのうちに同じ拍を何回落としたら苦手とみなすかです（落としたのは POOR と MISS）。苦手が出たら、その所だけの練習をすすめます。1 回きりのミスはうっかりとして数えません。\nゆるい: 3 回。\nふつう: 2 回。\nきびしい: 1 回でも。",
+            "1 段のうちに、同じ拍を何回落としたら「もう一度」にするかです（落としたのは POOR と MISS）。違う拍のミスは数えません。\nゆるい: 3 回。\nふつう: 2 回。\nきびしい: 1 回でも。",
         ),
-        Drill::SetLaps => pick(
-            "1 セットの周",
-            &["4 周", "6 周", "8 周", "10 周", "12 周"],
-            "この周の数だけ叩いたら止まって、落とした所と次の一手（苦手の所だけ、速度を上げる・下げる、やめる）を出します。",
+        Drill::StepLaps => pick(
+            "1 段の周",
+            &["3 周", "4 周", "6 周", "8 周"],
+            "1 つの段で叩く周の数です。叩き終えて同じ拍のミスが重ならなければ、次の段へ進みます。",
         ),
         Drill::Ladder => pick(
             "速度の決め方",
             &["段階アップ", "固定"],
             &format!(
-                "段階アップ: 苦手の無いセットのあとは {SET_SPEED_STEP}% 上げるのを、たくさん落としたら {SET_SPEED_STEP}% 下げるのをすすめます。目標の速度で苦手の無いセットになったらクリア。\n固定: 速度を変えるのはすすめません。セットの合間に自分で上げ下げできます（練習中も , と . キーで 5% ずつ）。"
+                "段階アップ: 始めの速度から目標の速度まで {STEP_SPEED}% ずつの段をのぼります。目標の段を越えたらクリア。「もう一度」が 2 回続いたら 1 段下げます。\n固定: その速度の 1 段だけです。越えたらクリア（練習中も , と . キーで 5% ずつ変えられます）。"
             ),
         ),
         Drill::Speed => number(
@@ -685,7 +685,7 @@ fn drill_row(d: Drill, c: &Config) -> Row {
         Drill::Metronome => pick(
             "メトロノーム",
             &["オン", "オフ"],
-            "オン: 区間のあいだ拍ごとに小さくクリックを鳴らします（小節の頭は強く）。\nセットの頭と速度が変わる周の前の 4 拍のカウントは、オフでも鳴ります。",
+            "オン: 区間のあいだ拍ごとに小さくクリックを鳴らします（小節の頭は強く）。\n段の頭の 4 拍のカウントは、オフでも鳴ります。",
         ),
     }
 }
@@ -1165,7 +1165,7 @@ pub fn rows(page: Page, info: &ConfigInfo<'_>) -> Vec<Row> {
             for d in [
                 Drill::Style,
                 Drill::Rule,
-                Drill::SetLaps,
+                Drill::StepLaps,
                 Drill::Ladder,
                 Drill::Speed,
                 Drill::Target,

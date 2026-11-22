@@ -1201,14 +1201,11 @@ impl App {
                 // 判定の線より上に見えている時間
                 play.view_ahead_ms = play_view::view_ahead_ms(self.config.scroll_px_per_ms);
                 play.update();
-                for e in play.take_break_events() {
+                for e in play.take_practice_events() {
                     match e {
-                        game::BreakEvent::Moved => self.sfx.play(Se::Move),
-                        game::BreakEvent::Decided => self.sfx.play(Se::Decide),
-                        game::BreakEvent::Quit => {
-                            self.sfx.play(Se::Decide);
-                            quit_at = Some(play.now_ms());
-                        }
+                        game::PracticeEvent::StepUp => self.sfx.play(Se::Decide),
+                        game::PracticeEvent::Cleared => self.sfx.play(Se::StageClear),
+                        game::PracticeEvent::Finished { at_ms } => quit_at = Some(at_ms),
                     }
                 }
                 view.feed(play);
@@ -1854,15 +1851,6 @@ impl App {
             return;
         };
         let failing = view.frozen_ms().is_some();
-        // セットの合間は ↑↓ で選び、Enter で決める（ドラムのハイタム・ロータムとシンバルと同じ）
-        if play.in_break() {
-            match code {
-                KeyCode::ArrowUp => return play.break_move(-1),
-                KeyCode::ArrowDown => return play.break_move(1),
-                KeyCode::Enter | KeyCode::NumpadEnter => return play.break_choose(),
-                _ => {}
-            }
-        }
         let toast = match code {
             // 一時停止して、一時停止の板を開く（上流 Pause。やめるのは板の「演奏をやめる」から）。
             // STAGE FAILED を出しているあいだは止めない（出し終えると選曲に戻る）
@@ -1905,11 +1893,10 @@ impl App {
                     to.max(0.0) / 1000.0
                 )
             }
-            // セットの合間は選ぶ速度が決めるので変えない
-            KeyCode::Comma | KeyCode::Period if play.practice.is_some() && !play.in_break() => {
+            KeyCode::Comma | KeyCode::Period if play.practice.is_some() => {
                 play.nudge_speed(if code == KeyCode::Comma { -1 } else { 1 });
                 let speed = play.practice.as_ref().map_or(100, |p| p.speed());
-                format!("速度 {speed}%（次の周から、助走のあと。セットはこの速度から数え直し）")
+                format!("速度 {speed}%（次の周から、助走のあと。この段は 1 周目から数え直し）")
             }
             HIT_SOUND_KEY => {
                 play.drum_sounds = !play.drum_sounds;
@@ -2329,7 +2316,7 @@ impl App {
                             speed: p.speed,
                             pitch: p.pitch,
                             metronome: p.metronome,
-                            set_laps: p.set_laps,
+                            step_laps: p.step_laps,
                         })
                     }
                     None => options,
@@ -2583,10 +2570,13 @@ impl App {
                 view.draw_background(&c, &mut self.gfx);
                 match view.page {
                     Page::Summary => view.draw_summary(&c, &mut self.gfx, o),
-                    Page::Analysis => {
-                        view.draw_analysis_hint(&c, &mut self.gfx);
-                        *result_actions = ui::draw_result(ui, &mut self.gfx, o);
-                    }
+                    Page::Analysis => match &o.practice {
+                        Some(p) => view.draw_practice_laps(&c, &mut self.gfx, p),
+                        None => {
+                            view.draw_analysis_hint(&c, &mut self.gfx);
+                            *result_actions = ui::draw_result(ui, &mut self.gfx, o);
+                        }
+                    },
                 }
                 // フェードは egui の窓より上に
                 let top = ctx.layer_painter(egui::LayerId::new(

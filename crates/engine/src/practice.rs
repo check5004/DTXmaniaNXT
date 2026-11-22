@@ -6,10 +6,10 @@
 //!
 //! 判定の幅とずれは実時間のミリ秒のまま使うので、遅くしても判定は甘くならない。
 //!
-//! 練習は 8 周ほどのセットで区切る。セットの合間で止まり、落とした拍の数え（`SpotTally`）から
-//! 次のセット（苦手の所だけ、速度を上げる・下げる、やめる）を選ぶ（`choices`）。速度と叩く所が変わるのは
-//! セットの合間と手で変えたときだけで、変わった周は、つなぐときも助走（新しい速度の 1 小節と 4 拍の
-//! カウント）から入る。速度が黙って変わると叩けないので、変わる前に必ず間を置く。
+//! 練習は、始めの速度から目標の速度まで 10% ずつの段をのぼる。1 段は 4 周ほどで、落とした拍の数え
+//! （`SpotTally`）で同じ拍のミスが重ならなければ次の段へ、重なればもう一度、もう一度が続けば 1 段下げる
+//! （`next_step`）。目標の段を越えたらクリア。速度が変わるのは段の変わり目と手で変えたときだけで、
+//! 変わった周は、つなぐときも助走（新しい速度の 1 小節と 4 拍のカウント）から入る。
 
 use std::collections::BTreeMap;
 
@@ -346,7 +346,7 @@ impl Looper {
         self.times = times;
     }
 
-    /// 次の周の音を実時間 `audio_ms` より前には始めない。つなぐときも効く（セットの合間で止めたあと）
+    /// 次の周の音を実時間 `audio_ms` より前には始めない。つなぐときも効く（段の変わり目で止めたあと）
     pub fn resume_at(&mut self, audio_ms: f64) {
         if self.next_index > 0 {
             self.cursor_ms = self.cursor_ms.max(audio_ms);
@@ -400,11 +400,11 @@ pub fn place(chip_ms: f64, sound_ms: f64, span: Span, speed: f64) -> Option<Plac
     })
 }
 
-/// 苦手の見方（同じ拍を何周落としたら苦手とみなすか）。落としたのは POOR と MISS。
+/// 段の越え方（同じ拍を何周落としたら「もう一度」か）。落としたのは POOR と MISS。
 /// 1 周のミスの数では合否を決めない（2026-11-22 ユーザー「ミス数じゃなくて、内容を見るべき」）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PassRule {
-    /// ゆるい: セットで同じ拍を 3 周
+    /// ゆるい: 段の中で同じ拍を 3 周
     Easy,
     /// ふつう: 2 周
     #[default]
@@ -428,7 +428,7 @@ impl PassRule {
         Self::ALL.into_iter().find(|r| r.name() == name)
     }
 
-    /// 同じ拍を何周落としたら苦手とみなすか
+    /// 同じ拍を何周落としたら「もう一度」か
     pub fn weak_times(self) -> u32 {
         match self {
             Self::Easy => 3,
@@ -460,8 +460,7 @@ pub fn speed_percent(speed: f64) -> u32 {
 pub enum SpeedPlan {
     /// 決めた速度のまま回る
     Fixed(u32),
-    /// セットの合間で 10% ずつ上げ下げする（苦手が無ければ上げるのをすすめる）。目標の速度で区間全体を
-    /// 苦手なしで叩けたらクリア
+    /// 始めの速度から 10% ずつの段をのぼる。目標の段を越えたらクリア
     Ladder { start: u32, target: u32 },
 }
 
@@ -489,33 +488,21 @@ impl SpeedPlan {
     }
 }
 
-/// 1 セットの周の数（既定）。8 周で止まって、次に何をするかを選ぶ（2026-11-22 ユーザーが「セットで区切る」を選択。
-/// 「しつこい、疲れる、集中力が持たない、無限ループ過ぎ」）
-pub const SET_LAPS: u32 = 8;
-/// 選べる 1 セットの周の数
-pub const SET_LAPS_CHOICES: [u32; 5] = [4, 6, 8, 10, 12];
-/// セットの合間に速度を上げ下げする幅（%）。5% では助けにならない（2026-11-22 ユーザーの指定）
-pub const SET_SPEED_STEP: u32 = 10;
-/// 落とした音符の割合がこれを超えたら、下げるのをすすめる
-pub const DOWN_MISS_RATE: f64 = 0.2;
-/// 苦手がこれだけあったら、一つに絞るより下げるのをすすめる
-pub const DOWN_WEAK_SPOTS: usize = 3;
+/// 1 段の周の数（既定）。4 周叩いて、同じ拍のミスが重ならなければ次の段へ（2026-11-22 ユーザー「開始してクリアする
+/// までのフローがよくわからん」。段をのぼってクリアする形に組み直した）
+pub const STEP_LAPS: u32 = 4;
+/// 選べる 1 段の周の数
+pub const STEP_LAPS_CHOICES: [u32; 4] = [3, 4, 6, 8];
+/// 段の速度の幅（%）。5% では助けにならない（2026-11-22 ユーザーの指定）
+pub const STEP_SPEED: u32 = 10;
+/// 同じ段で「もう一度」がこれだけ続いたら、1 段下げる
+pub const DOWN_AFTER: u32 = 2;
 
-/// セットで叩く所
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SetKind {
-    /// 区間全体
-    Whole,
-    /// 苦手の所だけ（区間の中の小節）
-    Focus(Section),
-}
-
-/// 終わったセット 1 つ
+/// 段の挑戦 1 回（その段の周をまとめたもの）
 #[derive(Debug, Clone, PartialEq)]
-pub struct SetReport {
+pub struct Attempt {
     /// 0 から数える
     pub index: usize,
-    pub kind: SetKind,
     /// 速度（%）
     pub speed: u32,
     /// 最後まで叩いた周の数
@@ -527,17 +514,19 @@ pub struct SetReport {
     pub missed: u32,
     /// 拍ごとの落とした周の数
     pub spots: SpotTally,
-    /// 何周で苦手とみなすか
+    /// 同じ拍を何周落としたら「もう一度」か
     pub weak_times: u32,
+    /// 段を越えたか。途中でやめた挑戦は None
+    pub passed: Option<bool>,
 }
 
-impl SetReport {
-    /// 苦手の拍（落とした周の多い順）
+impl Attempt {
+    /// ミスが重なった拍（落とした周の多い順）
     pub fn weak(&self) -> Vec<(BeatSlot, &Spot)> {
         self.spots.weak(self.weak_times)
     }
 
-    /// うっかり（苦手に届かない回数だけ落とした拍）の数
+    /// うっかり（重ならなかったミス）の拍の数
     pub fn slips(&self) -> usize {
         self.spots
             .spots()
@@ -554,165 +543,82 @@ impl SetReport {
         }
     }
 
-    /// 区間全体を苦手なしで叩き終えた
-    pub fn clean_whole(&self) -> bool {
-        self.kind == SetKind::Whole && self.laps > 0 && self.weak().is_empty()
-    }
-
-    /// 等速以上で、区間全体を苦手なしで叩き終えた（記録のクリア）
+    /// 等速以上で段を越えた（記録のクリア）
     pub fn cleared(&self) -> bool {
-        self.clean_whole() && self.speed >= 100
-    }
-
-    /// たくさん落としたので、一つの拍に絞るより下げるほうがよい
-    fn heavy(&self) -> bool {
-        self.miss_rate() > DOWN_MISS_RATE + 1e-9 || self.weak().len() >= DOWN_WEAK_SPOTS
+        self.passed == Some(true) && self.speed >= 100
     }
 }
 
-/// セットの合間に選べること
+/// 段の挑戦のあと、次にすること
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Choice {
-    /// 次のセットを `kind` を速度 `speed`（%）で叩く
-    Set { kind: SetKind, speed: u32 },
-    /// 練習をやめて結果へ
-    Quit,
+pub enum Next {
+    /// 段を越えたので、この速度（%）の段へ
+    Up(u32),
+    /// 同じ段をもう一度
+    Again,
+    /// もう一度が続いたので、この速度（%）の段へ下げる
+    Down(u32),
+    /// 目標の段を越えた（固定の速度なら、その段を越えた）
+    Clear,
 }
 
-/// セットの合間の選択肢と、おすすめ（`list` の添字）
-#[derive(Debug, Clone, PartialEq)]
-pub struct Choices {
-    pub list: Vec<Choice>,
-    pub recommended: usize,
+/// 速度 `speed` の段の挑戦のあと、次にすることを決める。`again_in_row` はこの挑戦を入れて、この段で続けて
+/// 「もう一度」になった回数（越えたら 0）。下げるのは段階アップのときだけで、下限より下には下げない
+pub fn next_step(plan: SpeedPlan, speed: u32, passed: bool, again_in_row: u32) -> Next {
+    match plan {
+        SpeedPlan::Fixed(_) if passed => Next::Clear,
+        SpeedPlan::Fixed(_) => Next::Again,
+        SpeedPlan::Ladder { target, .. } if passed => {
+            if speed >= target {
+                Next::Clear
+            } else {
+                Next::Up((speed + STEP_SPEED).min(target))
+            }
+        }
+        SpeedPlan::Ladder { .. } => {
+            if again_in_row >= DOWN_AFTER && speed >= SPEED_MIN + STEP_SPEED {
+                Next::Down(speed - STEP_SPEED)
+            } else {
+                Next::Again
+            }
+        }
+    }
 }
 
 impl SpeedPlan {
-    /// 区間全体を苦手なしで叩けたらここまで上げる（段階アップの目標。固定なら上げない）
-    pub fn goal(self) -> Option<u32> {
+    /// 越えたらクリアになる段の速度（段階アップは目標、固定はその速度）
+    pub fn goal(self) -> u32 {
         match self {
-            Self::Fixed(_) => None,
-            Self::Ladder { target, .. } => Some(target),
+            Self::Fixed(s) => s,
+            Self::Ladder { target, .. } => target,
         }
     }
 
-    /// 段階アップの段（下から）。始めの速度から 10% ずつ、目標で止める。固定なら空
+    /// 段（下から）。始めの速度から 10% ずつ、目標で止める。固定はその速度の 1 段
     pub fn steps(self) -> Vec<u32> {
-        let Self::Ladder { start, target } = self else {
-            return Vec::new();
+        let (start, target) = match self {
+            Self::Fixed(s) => (s, s),
+            Self::Ladder { start, target } => (start, target),
         };
         let mut out = vec![start];
         let mut s = start;
         while s < target {
-            s = (s + SET_SPEED_STEP).min(target);
+            s = (s + STEP_SPEED).min(target);
             out.push(s);
         }
         out
     }
-}
 
-/// セットの合間の選択肢を決める。`section` は練習する区間全体。
-/// 並びはいつも同じ（苦手の所、上げる、もう 1 セット、下げる、やめる）で、無いものは抜く。
-/// おすすめ: 苦手が無ければ上げる（目標で苦手が無ければやめる）、苦手があればその所だけ、
-/// たくさん落としたら下げる。苦手の所だけのセットで苦手が無くなったら区間に戻る。
-/// 段階アップの始めの速度より下はすすめない。固定なら速度は変えるのをすすめない
-pub fn choices(report: &SetReport, plan: SpeedPlan, section: Section) -> Choices {
-    let s = report.speed;
-    let weak = report.weak();
-    let cap = plan.goal().unwrap_or(SPEED_MAX).max(s);
-    let up = (weak.is_empty() && s < cap).then(|| (s + SET_SPEED_STEP).min(cap));
-    let down = (s >= SPEED_MIN + SET_SPEED_STEP).then(|| s - SET_SPEED_STEP);
-    let down_ok = match plan {
-        SpeedPlan::Ladder { start, .. } => down.filter(|&d| d >= start),
-        SpeedPlan::Fixed(_) => None,
-    };
-    let mut list = Vec::new();
-    let rec = match report.kind {
-        SetKind::Whole => {
-            let focus = weak
-                .first()
-                .map(|w| focus_section(w.0, section))
-                .filter(|&f| f != section);
-            if let Some(f) = focus {
-                list.push(Choice::Set {
-                    kind: SetKind::Focus(f),
-                    speed: s,
-                });
-            }
-            if let Some(u) = up {
-                list.push(Choice::Set {
-                    kind: SetKind::Whole,
-                    speed: u,
-                });
-            }
-            let same = Choice::Set {
-                kind: SetKind::Whole,
-                speed: s,
-            };
-            list.push(same);
-            if let Some(d) = down {
-                list.push(Choice::Set {
-                    kind: SetKind::Whole,
-                    speed: d,
-                });
-            }
-            list.push(Choice::Quit);
-            let goal_reached = plan.goal().is_some_and(|g| s >= g) && weak.is_empty();
-            if goal_reached {
-                Choice::Quit
-            } else if weak.is_empty() {
-                match (plan, up) {
-                    (SpeedPlan::Ladder { .. }, Some(u)) => Choice::Set {
-                        kind: SetKind::Whole,
-                        speed: u,
-                    },
-                    _ => same,
-                }
-            } else if let (true, Some(d)) = (report.heavy(), down_ok) {
-                Choice::Set {
-                    kind: SetKind::Whole,
-                    speed: d,
-                }
-            } else if let Some(f) = focus {
-                Choice::Set {
-                    kind: SetKind::Focus(f),
-                    speed: s,
-                }
-            } else {
-                same
-            }
+    /// 段に、下げて叩いた速度 `lowest`（%）までの段を下に足したもの
+    pub fn stairs(self, lowest: u32) -> Vec<u32> {
+        let mut out = self.steps();
+        let mut s = out[0];
+        while s >= lowest + STEP_SPEED && s >= SPEED_MIN + STEP_SPEED {
+            s -= STEP_SPEED;
+            out.insert(0, s);
         }
-        SetKind::Focus(f) => {
-            let back = Choice::Set {
-                kind: SetKind::Whole,
-                speed: s,
-            };
-            let again = Choice::Set {
-                kind: SetKind::Focus(f),
-                speed: s,
-            };
-            list.push(back);
-            list.push(again);
-            if let Some(d) = down {
-                list.push(Choice::Set {
-                    kind: SetKind::Focus(f),
-                    speed: d,
-                });
-            }
-            list.push(Choice::Quit);
-            if weak.is_empty() {
-                back
-            } else if let (true, Some(d)) = (report.heavy(), down_ok) {
-                Choice::Set {
-                    kind: SetKind::Focus(f),
-                    speed: d,
-                }
-            } else {
-                again
-            }
-        }
-    };
-    let recommended = list.iter().position(|&c| c == rec).unwrap_or(0);
-    Choices { list, recommended }
+        out
+    }
 }
 
 /// 区間の中の拍。小節と、小節の中の拍（0 から）
@@ -814,18 +720,6 @@ impl SpotTally {
         v.sort_by(|a, b| b.1.laps.cmp(&a.1.laps).then(a.0.cmp(&b.0)));
         v
     }
-}
-
-/// 苦手の拍 `slot` だけを練習する区間。その拍の小節で、拍が小節の頭なら入り方も練習できるように前の小節から。
-/// 区間 `section` の外には出ない
-pub fn focus_section(slot: BeatSlot, section: Section) -> Section {
-    let m = slot.measure.clamp(section.first, section.last);
-    let first = if slot.beat == 0 && m > section.first {
-        m - 1
-    } else {
-        m
-    };
-    Section::new(first, m)
 }
 
 #[cfg(test)]
@@ -1252,20 +1146,6 @@ mod tests {
     }
 
     #[test]
-    fn focus_takes_the_measure_and_the_lead_in_for_a_downbeat() {
-        let s = Section::new(61, 64);
-        let at = |m, b| BeatSlot {
-            measure: m,
-            beat: b,
-        };
-        assert_eq!(focus_section(at(63, 2), s), Section::new(63, 63));
-        // 小節の頭なら前の小節から
-        assert_eq!(focus_section(at(62, 0), s), Section::new(61, 62));
-        // 区間の外には出ない
-        assert_eq!(focus_section(at(61, 0), s), Section::new(61, 61));
-    }
-
-    #[test]
     fn a_narrower_section_and_a_break_start_with_a_run_up() {
         let tempo = tempo();
         let mut l = Looper::new(
@@ -1290,11 +1170,11 @@ mod tests {
         BeatSlot { measure, beat }
     }
 
-    /// 8 周のセット。`misses` は周ごとの落とした拍
-    fn report(kind: SetKind, speed: u32, misses: &[&[BeatSlot]]) -> SetReport {
+    /// 4 周の挑戦。`misses` は周ごとの落とした拍
+    fn attempt(speed: u32, misses: &[&[BeatSlot]]) -> Attempt {
         let mut spots = SpotTally::default();
         let mut missed = 0;
-        for i in 0..8 {
+        for i in 0..4 {
             let m: Vec<(BeatSlot, DrumLane)> = misses
                 .get(i)
                 .map(|m| m.iter().map(|&b| (b, DrumLane::SD)).collect())
@@ -1302,17 +1182,19 @@ mod tests {
             missed += m.len() as u32;
             spots.add_lap(&m);
         }
-        SetReport {
+        let mut a = Attempt {
             index: 0,
-            kind,
             speed,
-            laps: 8,
-            clean_laps: 8 - misses.iter().filter(|m| !m.is_empty()).count() as u32,
-            notes: 8 * 40,
+            laps: 4,
+            clean_laps: 4 - misses.iter().filter(|m| !m.is_empty()).count() as u32,
+            notes: 4 * 40,
             missed,
             spots,
             weak_times: PassRule::Normal.weak_times(),
-        }
+            passed: None,
+        };
+        a.passed = Some(a.weak().is_empty());
+        a
     }
 
     const LADDER: SpeedPlan = SpeedPlan::Ladder {
@@ -1320,124 +1202,40 @@ mod tests {
         target: 100,
     };
 
-    fn set(kind: SetKind, speed: u32) -> Choice {
-        Choice::Set { kind, speed }
+    #[test]
+    fn single_slips_do_not_hold_back_the_step() {
+        let a = attempt(80, &[&[at(61, 1)], &[], &[at(63, 3)]]);
+        assert!(a.weak().is_empty());
+        assert_eq!(a.slips(), 2);
+        assert_eq!(a.passed, Some(true));
+        assert_eq!(next_step(LADDER, 80, true, 0), Next::Up(90));
+        // 目標の段を越えたらクリア
+        assert_eq!(next_step(LADDER, 100, true, 0), Next::Clear);
+        assert!(attempt(100, &[&[at(61, 1)]]).cleared());
+        assert!(!attempt(90, &[]).cleared());
     }
 
     #[test]
-    fn a_weak_downbeat_leads_to_practicing_just_that_spot() {
-        let section = Section::new(61, 64);
-        // 62 小節の頭を 3 周、ほかは 1 回ずつ（うっかり）
-        let r = report(
-            SetKind::Whole,
-            80,
-            &[
-                &[at(62, 0)],
-                &[at(63, 2)],
-                &[at(62, 0)],
-                &[],
-                &[at(62, 0), at(64, 1)],
-            ],
-        );
-        assert_eq!(r.weak().len(), 1);
-        assert_eq!(r.slips(), 2);
-        assert!(!r.clean_whole());
-        let c = choices(&r, LADDER, section);
-        let focus = SetKind::Focus(Section::new(61, 62));
-        assert_eq!(
-            c.list,
-            vec![
-                set(focus, 80),
-                set(SetKind::Whole, 80),
-                set(SetKind::Whole, 70),
-                Choice::Quit
-            ]
-        );
-        assert_eq!(c.list[c.recommended], set(focus, 80));
+    fn a_beat_missed_twice_means_again_and_twice_again_steps_down() {
+        let a = attempt(80, &[&[at(62, 0)], &[], &[at(62, 0)]]);
+        assert_eq!(a.weak().len(), 1);
+        assert_eq!(a.passed, Some(false));
+        assert_eq!(next_step(LADDER, 80, false, 1), Next::Again);
+        assert_eq!(next_step(LADDER, 80, false, 2), Next::Down(70));
+        // 始めの速度より下にも下げる（段を下に足す）
+        assert_eq!(next_step(LADDER, 70, false, 2), Next::Down(60));
+        // 下限より下には下げない
+        assert_eq!(next_step(LADDER, SPEED_MIN, false, 5), Next::Again);
     }
 
     #[test]
-    fn single_slips_do_not_hold_back_the_speed() {
-        let section = Section::new(61, 64);
-        let r = report(SetKind::Whole, 80, &[&[at(61, 1)], &[], &[at(63, 3)]]);
-        assert!(r.weak().is_empty() && r.clean_whole() && !r.cleared());
-        let c = choices(&r, LADDER, section);
-        assert_eq!(
-            c.list,
-            vec![
-                set(SetKind::Whole, 90),
-                set(SetKind::Whole, 80),
-                set(SetKind::Whole, 70),
-                Choice::Quit
-            ]
-        );
-        assert_eq!(c.list[c.recommended], set(SetKind::Whole, 90));
-        // 目標の速度で苦手が無ければクリア。おすすめはやめる
-        let r = report(SetKind::Whole, 100, &[&[at(61, 1)]]);
-        assert!(r.cleared());
-        let c = choices(&r, LADDER, section);
-        assert_eq!(c.list[c.recommended], Choice::Quit);
-        assert!(!c.list.contains(&set(SetKind::Whole, 110)));
-        // 固定なら速度を変えるのはすすめない（上げる・下げるは選べる）
-        let c = choices(&r, SpeedPlan::Fixed(100), section);
-        assert_eq!(c.list[c.recommended], set(SetKind::Whole, 100));
-        assert!(c.list.contains(&set(SetKind::Whole, 110)));
-    }
-
-    #[test]
-    fn many_misses_suggest_slowing_down_but_not_below_the_start() {
-        let section = Section::new(61, 64);
-        let bad: &[BeatSlot] = &[at(61, 0), at(62, 1), at(63, 2)];
-        let r = report(SetKind::Whole, 80, &[bad, bad, bad]);
-        assert_eq!(r.weak().len(), 3);
-        let c = choices(&r, LADDER, section);
-        assert_eq!(c.list[c.recommended], set(SetKind::Whole, 70));
-        // 始めの速度なら下げずに、一番の苦手に絞る（61 小節の頭は区間の頭なので 61 だけ）
-        let r = report(SetKind::Whole, 70, &[bad, bad, bad]);
-        let c = choices(&r, LADDER, section);
-        assert_eq!(
-            c.list[c.recommended],
-            set(SetKind::Focus(Section::new(61, 61)), 70)
-        );
-    }
-
-    #[test]
-    fn after_the_spot_is_fixed_go_back_to_the_whole_section() {
-        let section = Section::new(61, 64);
-        let focus = SetKind::Focus(Section::new(61, 62));
-        let r = report(focus, 80, &[&[at(62, 0)]]);
-        let c = choices(&r, LADDER, section);
-        assert_eq!(
-            c.list,
-            vec![
-                set(SetKind::Whole, 80),
-                set(focus, 80),
-                set(focus, 70),
-                Choice::Quit
-            ]
-        );
-        assert_eq!(c.recommended, 0);
-        // まだ苦手なら、もう 1 セット
-        let r = report(focus, 80, &[&[at(62, 0)], &[at(62, 0)]]);
-        let c = choices(&r, LADDER, section);
-        assert_eq!(c.list[c.recommended], set(focus, 80));
-        // 苦手の所だけのセットはクリアにしない
-        assert!(!report(focus, 100, &[]).cleared());
-    }
-
-    #[test]
-    fn a_one_measure_section_has_no_narrower_spot() {
-        let section = Section::new(10, 10);
-        let r = report(SetKind::Whole, 80, &[&[at(10, 2)], &[at(10, 2)]]);
-        let c = choices(&r, LADDER, section);
-        assert!(!c.list.iter().any(|c| matches!(
-            c,
-            Choice::Set {
-                kind: SetKind::Focus(_),
-                ..
-            }
-        )));
-        assert_eq!(c.list[c.recommended], set(SetKind::Whole, 80));
+    fn a_fixed_speed_is_one_step() {
+        let plan = SpeedPlan::Fixed(80);
+        assert_eq!(plan.steps(), vec![80]);
+        assert_eq!(plan.goal(), 80);
+        assert_eq!(next_step(plan, 80, true, 0), Next::Clear);
+        // 固定は下げない
+        assert_eq!(next_step(plan, 80, false, 4), Next::Again);
     }
 
     #[test]
@@ -1448,7 +1246,10 @@ mod tests {
             target: 100,
         };
         assert_eq!(l.steps(), vec![75, 85, 95, 100]);
-        assert!(SpeedPlan::Fixed(80).steps().is_empty());
+        // 下げた段は下に足す
+        assert_eq!(LADDER.stairs(70), vec![70, 80, 90, 100]);
+        assert_eq!(LADDER.stairs(60), vec![60, 70, 80, 90, 100]);
+        assert_eq!(l.stairs(55), vec![55, 65, 75, 85, 95, 100]);
     }
 
     #[test]
