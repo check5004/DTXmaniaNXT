@@ -11,38 +11,46 @@ use dtx::DrumLane;
 use engine::judge::{BdGroup, CyGroup, FtGroup, HhGroup, HitWindows, LaneGroups};
 use serde::{Deserialize, Serialize};
 
-/// 分類（設定の画面を作り直すときの 8 つの分類。名前は [`Group::label`]）
+/// 分類（設定の画面の左の列。名前は [`Group::label`]）。
+/// 左の列は NX v2.0 と同じく「システム」と「ドラム」の 2 段に分ける（2026-11-22 ユーザーが見本から案 A を選んだ）。
+/// システムは NX の System ＞ Graphics・Audio・Gameplay と同じ小分け、ドラムは NX の Drums にあったもの
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Group {
-    /// 演奏（演奏の決まり、自動で叩く、叩き分け、判定）
-    Play,
-    /// 譜面の見た目（流れ方、見えにくくする、ずれの表示、画面の部品）
-    View,
-    /// タイミング（補正）
-    Timing,
-    /// 音（音量、鳴らすもの）
+    /// システム ＞ 画面（窓の出し方、垂直同期、譜面の動画。NX の System ＞ Graphics）
+    Display,
+    /// システム ＞ 音（音量、鳴らすもの。NX の System ＞ Audio）
     Sound,
-    /// 入力機器
-    Input,
-    /// 曲
+    /// システム ＞ ゲームプレイ（演奏の決まり、判定の幅、ずれの表示、記録。NX の System ＞ Gameplay と HAZARD・Tight）
+    Play,
+    /// システム ＞ 曲
     Songs,
+    /// システム ＞ アプリ
+    App,
+    /// ドラム ＞ 譜面（流れ方、見えにくくする、レーンとチップ、画面の部品）
+    View,
+    /// ドラム ＞ 自動・叩き分け（自動で叩く、叩き分け、共通にしたときの音、Muting LP）
+    Pads,
+    /// ドラム ＞ タイミング（補正）
+    Timing,
+    /// ドラム ＞ 入力（パッドとキーの割り当て、MIDI 機器）
+    Input,
     /// 練習
     Practice,
-    /// アプリ
-    App,
 }
 
 impl Group {
     pub fn label(self) -> &'static str {
         match self {
-            Self::Play => "演奏",
-            Self::View => "譜面の見た目",
-            Self::Timing => "タイミング",
+            Self::Display => "画面",
             Self::Sound => "音",
-            Self::Input => "入力機器",
+            Self::Play => "ゲームプレイ",
             Self::Songs => "曲",
-            Self::Practice => "練習",
             Self::App => "アプリ",
+            Self::View => "譜面",
+            Self::Pads => "自動・叩き分け",
+            Self::Timing => "タイミング",
+            Self::Input => "入力",
+            Self::Practice => "練習",
         }
     }
 }
@@ -102,7 +110,7 @@ pub struct Def {
 const fn auto_lane(key: &'static str, name: &'static str) -> Def {
     Def {
         key,
-        group: Group::Play,
+        group: Group::Pads,
         section: AUTO_SECTION,
         name,
         kind: Kind::Toggle { default: false },
@@ -358,7 +366,8 @@ pub const CY_PRIORITY: &str = "cy_priority";
 pub const MUTING_LP: &str = "muting_lp";
 
 const GROUP_SECTION: &str = "叩き分け";
-const HIT_SOUND_SECTION: &str = "叩いた音";
+/// 叩き分けを共通にしたとき鳴らす音（NX では Group の隣）
+const PRIORITY_SECTION: &str = "共通にしたときの音";
 
 /// 上流 `EHHGroup` の並び
 const HH_GROUP_CHOICES: &[Choice] = choices![
@@ -397,7 +406,7 @@ const fn group_choice(
 ) -> Def {
     Def {
         key,
-        group: Group::Play,
+        group: Group::Pads,
         section: GROUP_SECTION,
         name,
         kind: Kind::Choice {
@@ -413,8 +422,8 @@ const fn group_choice(
 const fn priority(key: &'static str, name: &'static str, desc: &'static str) -> Def {
     Def {
         key,
-        group: Group::Sound,
-        section: HIT_SOUND_SECTION,
+        group: Group::Pads,
+        section: PRIORITY_SECTION,
         name,
         kind: Kind::Choice {
             choices: PRIORITY_CHOICES,
@@ -537,7 +546,7 @@ const AUTO_LANE_DESC: &str = "ON にすると、このレーンの音符を自�
 pub const ALL: &[Def] = &[
     Def {
         key: AUTO_ALL,
-        group: Group::Play,
+        group: Group::Pads,
         section: AUTO_SECTION,
         name: "自動演奏（AutoPlay）",
         kind: Kind::All {
@@ -629,7 +638,7 @@ pub const ALL: &[Def] = &[
     ),
     Def {
         key: CYMBAL_FREE,
-        group: Group::Play,
+        group: Group::Pads,
         section: GROUP_SECTION,
         name: "シンバルフリー（CymbalFree）",
         kind: Kind::Toggle { default: false },
@@ -638,7 +647,7 @@ pub const ALL: &[Def] = &[
     },
     Def {
         key: SKIP_MS,
-        group: Group::App,
+        group: Group::Play,
         section: "演奏中のキー",
         name: "早送り・巻き戻しの幅（SkipTimeMs）",
         kind: Kind::Number {
@@ -654,8 +663,8 @@ pub const ALL: &[Def] = &[
     },
     Def {
         key: DISPLAY_MODE,
-        group: Group::App,
-        section: "画面",
+        group: Group::Display,
+        section: "",
         name: "画面の出し方（FullScreen）",
         kind: Kind::Choice {
             choices: DISPLAY_MODE_CHOICES,
@@ -666,8 +675,8 @@ pub const ALL: &[Def] = &[
     },
     Def {
         key: VSYNC,
-        group: Group::App,
-        section: "画面",
+        group: Group::Display,
+        section: "",
         name: "垂直同期（VSyncWait）",
         kind: Kind::Toggle { default: true },
         desc: "画面の書き換えをモニターに合わせます。OFF にすると絵が少し早く出ますが、横に裂けて見えることがあります。\n判定は MIDI の時刻と音で行うので、どちらでも変わりません。",
@@ -675,8 +684,8 @@ pub const ALL: &[Def] = &[
     },
     Def {
         key: AUTO_SAVE_RESULT,
-        group: Group::App,
-        section: "画面の保存",
+        group: Group::Play,
+        section: "記録",
         name: "記録を更新した結果を画像で残す（AutoSaveResult）",
         kind: Kind::Toggle { default: true },
         desc: "記録を更新したとき、結果の画面を譜面と同じフォルダに PNG で残します（譜面の名前.日時_DRUMS_ランク.png）。\nF12 ではいつでも画面を「ピクチャ」の DTXmaniaNXT に残せます。",
@@ -792,7 +801,7 @@ pub const ALL: &[Def] = &[
     view_toggle(COMBO_DISP, "コンボ（Combo）", "コンボの数を出すかどうか。"),
     Def {
         key: HIT_ERROR_BAR,
-        group: Group::View,
+        group: Group::Play,
         section: "ずれの表示",
         name: "ずれのバー",
         kind: Kind::Toggle { default: true },
@@ -832,8 +841,8 @@ pub const ALL: &[Def] = &[
     ),
     Def {
         key: MUTING_LP,
-        group: Group::Sound,
-        section: HIT_SOUND_SECTION,
+        group: Group::Pads,
+        section: "ペダル",
         name: "左ペダルでハイハットを止める（Muting LP）",
         kind: Kind::Toggle { default: true },
         desc: "左ペダルを踏むと、鳴っているハイハットの音（叩いた音）を止めます。",
@@ -872,7 +881,7 @@ pub const ALL: &[Def] = &[
     Def {
         key: BGM_ADJUST,
         group: Group::Timing,
-        section: "補正",
+        section: "",
         name: "BGM のずらし（BGMAdjust）",
         kind: Kind::Number {
             min: -99,

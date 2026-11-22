@@ -33,6 +33,7 @@ mod loading;
 mod logging;
 mod midi;
 mod nx_import;
+mod nx_place;
 mod play_view;
 mod practice;
 mod practice_hud;
