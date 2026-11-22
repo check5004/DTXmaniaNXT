@@ -14,7 +14,7 @@ use engine::practice::{Attempt, SpeedPlan, place};
 use engine::stroke::{Stroke, StrokeTally};
 use records::{Lap, NoteHit, SectionClear, Session, SessionKind, StrayHit};
 
-use crate::audio::{AudioOut, Bus, Sound, click, load_sound};
+use crate::audio::{AudioOut, Bus, HitTiming, Sound, click, load_sound};
 use crate::chart_sound::{AutoMix, ChartSounds, METRONOME_BAR, METRONOME_BEAT, auto_bus};
 use crate::history::OvercomeCheck;
 use crate::midi::RawMidi;
@@ -301,6 +301,8 @@ pub struct Play {
     /// MIDI のポートごとの入力の読み手と、ポートの名前（[`crate::midi::MidiIn::ports`] と同じ並び）
     inputs: Vec<(String, Normalizer)>,
     mappers: HashMap<usize, MidiTimestampMapper>,
+    /// 叩いた音を鳴らさなかった打撃の時刻（FPS と遅延の表示へ。鳴らしたものは出力から返ってくる）
+    silent_timings: Vec<HitTiming>,
     /// 音が出ないときの時計の起点（ホスト時刻）。この時刻が時間軸の `start_ms`
     fallback_origin_us: i64,
     start_ms: f64,
@@ -498,6 +500,7 @@ impl Play {
             auto_next: 0,
             inputs: Vec::new(),
             mappers: HashMap::new(),
+            silent_timings: Vec::new(),
             fallback_origin_us: host_us(),
             start_ms,
             paused_ms: None,
@@ -855,7 +858,8 @@ impl Play {
             }
         }
         for (lane, velocity, host_us, articulation, hh_pedal) in hits {
-            self.hit(lane, velocity, host_us, Some(articulation), hh_pedal);
+            let at = (host_us, raw.arrival_us);
+            self.hit(lane, velocity, at, Some(articulation), hh_pedal);
         }
     }
 
@@ -875,14 +879,15 @@ impl Play {
             velocity: 100,
             hh_pedal: None,
         });
-        self.hit(lane, 100, at_us, None, None);
+        self.hit(lane, 100, (at_us, at_us), None, None);
     }
 
+    /// `at_us` は叩いた時刻と、アプリに届いた時刻（ホスト時刻）
     fn hit(
         &mut self,
         lane: DrumLane,
         velocity: u8,
-        at_us: i64,
+        (at_us, arrival_us): (i64, i64),
         articulation: Option<Articulation>,
         hh_pedal: Option<u8>,
     ) {
@@ -922,6 +927,12 @@ impl Play {
             }
         }
         self.record(&events, articulation, hh_pedal);
+        let mut timing = Some(HitTiming {
+            hit_us: at_us,
+            arrival_us,
+            handled_us: host_us(),
+            sound_us: None,
+        });
         if self.drum_sounds {
             // 取った音符の音を鳴らす。空打ちなら空打ちの音、無ければそのレーンの一番近い音符の音
             let wav = events
@@ -944,9 +955,16 @@ impl Play {
                 {
                     let (gain, pan) = self.chart_sounds.gain_pan(w);
                     let gain = gain * f32::from(velocity) / 127.0;
-                    a.play_now_panned(s, (gain, pan), tag, Bus::Hits);
+                    if let Some(t) = timing.take() {
+                        a.play_hit(s, (gain, pan), tag, t);
+                    }
                 }
             }
+        }
+        if let Some(t) = timing
+            && self.silent_timings.len() < 256
+        {
+            self.silent_timings.push(t);
         }
         self.show(&events);
         // スネアの音符を違う所で叩いたら知らせる（判定はそのまま）
@@ -958,6 +976,15 @@ impl Play {
                 self.push_fx(Fx::WrongStroke { want });
             }
         }
+    }
+
+    /// 叩いた時刻と音が鳴り始めた時刻（FPS と遅延の表示へ）。取り出したものは消える
+    pub fn take_hit_timings(&mut self) -> Vec<HitTiming> {
+        let mut out = std::mem::take(&mut self.silent_timings);
+        if let Some(a) = self.audio.as_mut() {
+            out.extend(a.take_timings());
+        }
+        out
     }
 
     /// スネアのリムの音符か（音がリムの音らしい）

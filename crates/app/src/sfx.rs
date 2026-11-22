@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use library::SortKind;
 
-use crate::audio::{AudioOut, Bus, Sound, load_sound, load_sound_bytes};
+use crate::audio::{AudioOut, Bus, OutputLatency, Sound, load_sound, load_sound_bytes};
 
 /// 効果音の種類（上流 `CSkin` のシステムサウンド）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -194,6 +194,11 @@ impl Sfx {
                 Err(e) => log::warn!("skin: {}: {e:#}", se.file()),
             }
         }
+    }
+
+    /// 画面の音の出力の遅れ（FPS と遅延の表示へ）
+    pub fn latency(&self) -> Option<OutputLatency> {
+        self.out.as_ref().and_then(AudioOut::latency)
     }
 
     /// スキンにその音がある

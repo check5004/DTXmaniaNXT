@@ -118,6 +118,8 @@ pub const SKIP_MS: &str = "skip_ms";
 /// 窓と画面の保存（上流の FullScreen、VSyncWait、AutoSaveResult）
 pub const DISPLAY_MODE: &str = "display_mode";
 pub const VSYNC: &str = "vsync";
+/// FPS と遅延の表示（このアプリで足したもの。並びは [`crate::perf::Mode`] と同じ）
+pub const MONITOR: &str = "monitor";
 pub const AUTO_SAVE_RESULT: &str = "auto_save_result";
 
 /// ゲージの減り方（MISS の減りにかける数を選ぶ）
@@ -205,6 +207,13 @@ impl DisplayMode {
         Self::ALL.into_iter().find(|m| m.name() == name)
     }
 }
+
+/// FPS と遅延の表示（並びは [`crate::perf::Mode`] と同じ）
+const MONITOR_CHOICES: &[Choice] = choices![
+    "off" => "出さない",
+    "compact" => "小さく",
+    "detail" => "詳しく",
+];
 
 /// 上流 `nHidSud`（並びは上流と同じ）
 pub const HID_SUD_CHOICES: &[Choice] = choices![
@@ -681,6 +690,18 @@ pub const ALL: &[Def] = &[
         name: "垂直同期（VSyncWait）",
         kind: Kind::Toggle { default: true },
         desc: "画面の書き換えをモニターに合わせます。OFF にすると絵が少し早く出ますが、横に裂けて見えることがあります。\n判定は MIDI の時刻と音で行うので、どちらでも変わりません。",
+        in_play: true,
+    },
+    Def {
+        key: MONITOR,
+        group: Group::App,
+        section: "画面",
+        name: "FPS と遅延の表示",
+        kind: Kind::Choice {
+            choices: MONITOR_CHOICES,
+            default: 0,
+        },
+        desc: "右上の隅に FPS と、叩いてから音が鳴るまでの時間を出します。F9 でも切り替えます。\n判定は叩いた時刻で行うので、ここに出る遅れは判定には入りません。",
         in_play: true,
     },
     Def {
