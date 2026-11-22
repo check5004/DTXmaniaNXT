@@ -551,13 +551,13 @@ impl AudioOut {
         self.play_tagged(sound, gain, 0);
     }
 
-    /// すぐ鳴らす（叩いた音）。左右 `pan` を付ける
-    pub fn play_now_panned(&mut self, sound: &Sound, gain: f32, pan: f32) {
+    /// すぐ鳴らす（叩いた音）。左右 `pan` と、止めるときの目印 `tag`（0 は止めない）を付ける
+    pub fn play_now_panned(&mut self, sound: &Sound, gain: f32, pan: f32, tag: u8) {
         let _ = self.tx.push(Command::Now {
             sound: sound.clone(),
             gain,
             pan,
-            tag: 0,
+            tag,
         });
     }
 

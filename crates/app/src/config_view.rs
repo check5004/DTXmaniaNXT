@@ -2892,8 +2892,11 @@ mod tests {
             ItemId::Value(Setting::ScrollSpeed),
         );
         assert_eq!(v.input(ConfigInput::Up, &list), Response::default());
-        v.input(ConfigInput::Down, &list);
         // 小見出し「ずれの表示」を飛ばす
+        let heading = list.iter().position(|r| r.name == "ずれの表示").unwrap();
+        assert_eq!(list[heading].ctl, Ctl::Heading);
+        *v.cursor_mut() = heading - 1;
+        v.input(ConfigInput::Down, &list);
         assert_eq!(
             list[v.level().cursor].id,
             Some(ItemId::Value(Setting::ShowLagTime))

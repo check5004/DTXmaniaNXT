@@ -64,7 +64,7 @@ use winit::window::{Window, WindowId};
 
 use crate::config::Config;
 use crate::config_view::{ConfigAction, ConfigInfo, ConfigInput, ConfigView, ItemId, Setting};
-use crate::game::{GaugeRule, Outcome, Play, Rules};
+use crate::game::{GaugeRule, HitSoundRule, Outcome, Play, Rules};
 use crate::gfx::{Canvas, Gfx};
 use crate::history::History;
 use crate::loading::{Job, Loading};
@@ -630,6 +630,11 @@ impl App {
                 risky: v.number(settings::RISKY) as u32,
                 hazard: v.flag(settings::HAZARD),
             },
+            groups: v.lane_groups(),
+            hit_sounds: HitSoundRule {
+                pad_first: v.pad_sound_first(),
+                muting_lp: v.flag(settings::MUTING_LP),
+            },
         }
     }
 
@@ -659,7 +664,8 @@ impl App {
         let label = self.songs.chart_label(&play.path);
         play.begin();
         let lag = play_view::LagDigits::from_config(&self.config);
-        let view = PlayView::new(&play, &label, lag);
+        let looks = play_view::Looks::from_settings(&self.config.settings);
+        let view = PlayView::new(&play, &label, lag, looks);
         self.message = None;
         // 譜面の音を切ったままだと、叩いても音が出ないわけが分からない。始めにしばらく知らせる
         if !play.drum_sounds {

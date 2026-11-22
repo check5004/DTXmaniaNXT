@@ -359,6 +359,7 @@ pub struct PlayView {
     early: u32,
     late: u32,
     lag_digits: LagDigits,
+    looks: Looks,
 }
 
 /// 判定のずれの数字の出し方（NX の `ShowLagTime` と `ShowLagTimeColor`）
@@ -400,6 +401,137 @@ impl LagDigits {
     }
 }
 
+/// チップの見えにくくし方（上流 `nHidSud`）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HidSud {
+    Off,
+    /// 判定ラインの近くで消える
+    Hidden,
+    /// 判定ラインの近くまで来てから出る
+    Sudden,
+    /// 両方
+    Both,
+    /// ずっと見えない
+    Stealth,
+}
+
+/// 叩いたときの効果（上流 `eAttackEffect`）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AttackEffect {
+    AllOn,
+    /// 飛び散るチップを出さない
+    ChipOff,
+    /// 火花だけ
+    EffectOnly,
+    AllOff,
+}
+
+/// 判定の文字の位置（上流 `JudgementStringPosition`）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JudgePosition {
+    /// レーンの上（P-A）
+    Lane,
+    /// 判定ラインの下（P-B）
+    Below,
+    Off,
+}
+
+/// 譜面の見た目の設定（設定の表の「譜面の見た目」から）
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Looks {
+    /// 判定ラインを下から上げるドット（上流 `nJudgeLine`）
+    pub judge_line_up: f32,
+    pub hid_sud: HidSud,
+    /// シャッター（0〜100。100 で画面の高さ全部）
+    pub shutter_in: f32,
+    pub shutter_out: f32,
+    /// レーンの背景を暗くする（上流 `nLaneDisp` の 1 と 3）
+    pub dark_lanes: bool,
+    /// 小節線と拍線を出す（上流 `nLaneDisp` の 0 と 1）
+    pub bar_lines: bool,
+    pub judge_line: bool,
+    pub lane_flush: bool,
+    pub attack: AttackEffect,
+    pub judge_position: JudgePosition,
+    pub combo: bool,
+    /// コンボをこの数から出す
+    pub min_combo: u32,
+    /// 進み具合のバーを出す（Dark が FULL なら出さない）
+    pub progress: bool,
+}
+
+impl Default for Looks {
+    fn default() -> Self {
+        Self::from_settings(&crate::settings::Values::default())
+    }
+}
+
+impl Looks {
+    pub fn from_settings(v: &crate::settings::Values) -> Self {
+        use crate::settings as s;
+        let lane_disp = v.choice(s::LANE_DISP);
+        Self {
+            judge_line_up: v.number(s::JUDGE_LINE_POS) as f32,
+            hid_sud: match v.choice(s::HID_SUD) {
+                1 => HidSud::Hidden,
+                2 => HidSud::Sudden,
+                3 => HidSud::Both,
+                4 => HidSud::Stealth,
+                _ => HidSud::Off,
+            },
+            shutter_in: v.number(s::SHUTTER_IN) as f32,
+            shutter_out: v.number(s::SHUTTER_OUT) as f32,
+            dark_lanes: matches!(lane_disp, 1 | 3),
+            bar_lines: matches!(lane_disp, 0 | 1),
+            judge_line: v.flag(s::JUDGE_LINE_DISP),
+            lane_flush: v.flag(s::LANE_FLUSH),
+            attack: match v.choice(s::ATTACK_EFFECT) {
+                1 => AttackEffect::ChipOff,
+                2 => AttackEffect::EffectOnly,
+                3 => AttackEffect::AllOff,
+                _ => AttackEffect::AllOn,
+            },
+            judge_position: match v.choice(s::JUDGE_POSITION) {
+                1 => JudgePosition::Below,
+                2 => JudgePosition::Off,
+                _ => JudgePosition::Lane,
+            },
+            combo: v.flag(s::COMBO_DISP),
+            min_combo: v.number(s::MIN_COMBO) as u32,
+            progress: !v.dark_full(),
+        }
+    }
+
+    /// 判定ラインの y
+    fn judge_y(&self) -> f32 {
+        JUDGE_LINE_Y - self.judge_line_up
+    }
+
+    /// 判定ラインから `distance` ドット上にあるチップの濃さ（上流の Sudden・Hidden・ステルスの処理）。
+    /// 見えなければ None
+    fn chip_alpha(&self, distance: f32) -> Option<f32> {
+        let mut alpha = 1.0;
+        if matches!(self.hid_sud, HidSud::Sudden | HidSud::Both) {
+            if distance >= 250.0 {
+                return None;
+            } else if distance >= 200.0 {
+                alpha = 1.0 - (distance - 200.0) / 50.0;
+            }
+        }
+        if matches!(self.hid_sud, HidSud::Hidden | HidSud::Both) {
+            if distance < 100.0 {
+                return None;
+            } else if distance < 150.0 {
+                alpha = (distance - 100.0) / 50.0;
+            }
+        }
+        if self.hid_sud == HidSud::Stealth {
+            return None;
+        }
+        Some(alpha)
+    }
+}
+
 /// 演奏を終えたときの数字（結果の画面と記録に渡す）
 #[derive(Debug, Clone, PartialEq)]
 pub struct Finish {
@@ -416,7 +548,7 @@ pub struct Finish {
 
 impl PlayView {
     /// `label` は選んだ難易度の名前（set.def の `#L1LABEL` など。無ければ空）
-    pub fn new(play: &Play, label: &str, lag_digits: LagDigits) -> Self {
+    pub fn new(play: &Play, label: &str, lag_digits: LagDigits, looks: Looks) -> Self {
         let now = Instant::now();
         let mut sections = [Section::default(); SECTIONS];
         if play.practice.is_none() {
@@ -453,6 +585,7 @@ impl PlayView {
             early: 0,
             late: 0,
             lag_digits,
+            looks,
         }
     }
 
@@ -560,10 +693,16 @@ impl PlayView {
     }
 
     /// 火花と星と飛び散るチップを出す（上流 `CActPerfDrumsChipFireD.Start`）
+    /// 叩いたときの効果の設定（上流 `eAttackEffect`）で、出すものを選ぶ。判定ラインを上げたら一緒に上げる
     fn start_fire(&mut self, l: Lane, now: Instant) {
+        let attack = self.looks.attack;
+        if attack == AttackEffect::AllOff {
+            return;
+        }
+        let up = self.looks.judge_line_up;
         self.fires[l.i()] = Some(now);
         let cx = FIRE[l.i()].0 + 320.0;
-        if self.stars.len() < 240 {
+        if matches!(attack, AttackEffect::AllOn | AttackEffect::ChipOff) && self.stars.len() < 240 {
             for _ in 0..16 {
                 let deg = self.rng.below(360) as f32;
                 let (sin, cos) = deg.to_radians().sin_cos();
@@ -572,14 +711,14 @@ impl PlayView {
                     start: now,
                     steps: 0,
                     x: cx,
-                    y: 555.0,
+                    y: 555.0 - up,
                     ax: 0.9 * cos,
                     ay: 0.9 * sin - 0.1,
                     radius: 0.3 + self.rng.below(30) as f32 / 100.0,
                 });
             }
         }
-        if self.pieces.len() < 8 {
+        if attack == AttackEffect::AllOn && self.pieces.len() < 8 {
             let w = PIECES[l.i()].1;
             let x = FIRE[l.i()].0 + w + 312.0;
             let shift = match l {
@@ -594,7 +733,7 @@ impl PlayView {
                 steps: 0,
                 xl: x + shift,
                 xr: x,
-                y: 564.0,
+                y: 564.0 - up,
                 ax: 0.91 * deg.cos() + 0.3,
                 ay: 0.91 * (deg.sin() - 0.8),
             });
@@ -638,13 +777,18 @@ impl PlayView {
         self.draw_lanes(c, g, now);
         self.draw_lines(c, g, play, now_ms, px_per_ms);
         self.draw_chips(c, g, play, now_ms, px_per_ms, now);
-        self.draw_progress(c, g, play, now_ms);
+        self.draw_shutters(c, g);
+        if self.looks.progress {
+            self.draw_progress(c, g, play, now_ms);
+        }
         // 判定の線（8×8 の画像を横に並べる。上流は D3D の繰り返しで 559 ドットに広げている）
-        if let Some(t) = g.skin.tex("Graphics/ScreenPlayDrums hit-bar.png") {
+        if self.looks.judge_line
+            && let Some(t) = g.skin.tex("Graphics/ScreenPlayDrums hit-bar.png")
+        {
             c.draw_opt(
                 &t,
                 295.0,
-                JUDGE_LINE_Y,
+                self.looks.judge_y(),
                 Opt {
                     src: Some(src(0.0, 0.0, t.w, 6.0)),
                     sx: 559.0 / t.w,
@@ -719,15 +863,26 @@ impl PlayView {
 
     /// レーンの枠と光（上流 `CActPerfDrumsLaneFlushD`）
     fn draw_lanes(&mut self, c: &Canvas, g: &Gfx, now: Instant) {
-        if let Some(t) = g.skin.tex("Graphics/7_Paret.png") {
+        // レーンを暗くするなら暗いほうの絵（上流 `nLaneDisp`）
+        let paret = if self.looks.dark_lanes {
+            "Graphics/7_Paret_Dark.png"
+        } else {
+            "Graphics/7_Paret.png"
+        };
+        if let Some(t) = g.skin.tex(paret) {
             for (x, sx, w) in PANEL {
                 c.part(&t, x, 0.0, src(sx, 0.0, w, 720.0));
             }
         }
+        let flush = self.looks.lane_flush;
         for (i, slot) in self.flush.iter_mut().enumerate() {
             let Some((at, velocity)) = *slot else {
                 continue;
             };
+            if !flush {
+                *slot = None;
+                continue;
+            }
             // 強く叩くほど下から始まる（上流：(1 - 強さ) × 55 から 90 まで 3 ミリ秒ごと）
             let from = ((1.0 - f64::from(velocity) / 127.0) * 55.0).floor();
             let v = from + count(at, now, 3.0);
@@ -768,10 +923,12 @@ impl PlayView {
         let Some(t) = g.skin.tex("Graphics/7_chips_drums.png") else {
             return;
         };
-        let y_of = |ms: f64| JUDGE_LINE_Y - ((ms - now_ms) as f32) * px_per_ms;
+        let judge_y = self.looks.judge_y();
+        let y_of = |ms: f64| judge_y - ((ms - now_ms) as f32) * px_per_ms;
+        let bar_lines = self.looks.bar_lines;
         let draw = |ms: f64, bar: bool| {
             let y = y_of(ms);
-            if (-4.0..724.0).contains(&y) {
+            if bar_lines && (-4.0..724.0).contains(&y) {
                 let sy = if bar { 769.0 } else { 772.0 };
                 c.part(&t, 295.0, y - 1.0, src(0.0, sy, 559.0, 2.0));
             }
@@ -794,7 +951,7 @@ impl PlayView {
                     }
                     // 周の頭に何周目かを出す
                     let y = y_of(lap.plan.start_ms);
-                    if (0.0..JUDGE_LINE_Y).contains(&y)
+                    if (0.0..judge_y).contains(&y)
                         && let Some(text) = g.texts.get(
                             &format!("{} 周目", lap.plan.index + 1),
                             &Style {
@@ -827,9 +984,10 @@ impl PlayView {
         let Some(t) = g.skin.tex("Graphics/7_chips_drums.png") else {
             return;
         };
-        let y_of = |ms: f64| JUDGE_LINE_Y - ((ms - now_ms) as f32) * px_per_ms;
-        let visible =
-            |y: f32| y > -64.0 && y < 720.0 + 64.0 && y > JUDGE_LINE_Y - DRAW_AHEAD_PX - 64.0;
+        let looks = self.looks;
+        let judge_y = looks.judge_y();
+        let y_of = |ms: f64| judge_y - ((ms - now_ms) as f32) * px_per_ms;
+        let visible = |y: f32| y > -64.0 && y < 720.0 + 64.0 && y > judge_y - DRAW_AHEAD_PX - 64.0;
         // 模様は 70 ミリ秒ごとに 8 コマ
         let frame = count(self.entered, now, 70.0) as u32 % 8;
         let notes = play.judge.notes();
@@ -843,14 +1001,18 @@ impl PlayView {
             if play.judge.is_done(i) || !visible(y) {
                 continue;
             }
-            shown.push((n.lane, y, 1.0));
+            if let Some(alpha) = looks.chip_alpha(judge_y - y) {
+                shown.push((n.lane, y, alpha));
+            }
         }
         // 練習の助走など、判定しない音符は薄く
         if let Some(p) = &play.practice {
             for &(ms, lane) in &p.faint {
                 let y = y_of(ms);
-                if visible(y) {
-                    shown.push((lane, y, 0.35));
+                if visible(y)
+                    && let Some(alpha) = looks.chip_alpha(judge_y - y)
+                {
+                    shown.push((lane, y, 0.35 * alpha));
                 }
             }
         }
@@ -879,6 +1041,23 @@ impl PlayView {
                     ..Default::default()
                 },
             );
+        }
+    }
+
+    /// シャッター（上流の ShutterInPos・ShutterOutPos。7_shutter.png を上と下から 7.2 ドット × 値だけ出す）
+    fn draw_shutters(&self, c: &Canvas, g: &Gfx) {
+        let (top, bottom) = (self.looks.shutter_in, self.looks.shutter_out);
+        if top <= 0.0 && bottom <= 0.0 {
+            return;
+        }
+        let Some(t) = g.skin.tex("Graphics/7_shutter.png") else {
+            return;
+        };
+        if top > 0.0 {
+            c.draw(&t, 295.0, (-720.0 + top * 7.2).floor());
+        }
+        if bottom > 0.0 {
+            c.draw(&t, 295.0, (720.0 - bottom * 7.2).floor());
         }
     }
 
@@ -1068,6 +1247,10 @@ impl PlayView {
 
     /// コンボ（上流 `CActPerfCommonCombo.tDrawCombo_Drums` を右上 (1245, 60) に。10 コンボから出す）
     fn draw_combo(&mut self, c: &Canvas, g: &Gfx, play: &Play, now: Instant) {
+        // 上流 `bドラムコンボ文字の表示`。切ったら 100 コンボごとの爆発も出さない
+        if !self.looks.combo {
+            return;
+        }
         let combo = self.tally.combo;
         // 100 コンボごとの爆発（上流 `CActPerfDrumsComboDGB`）
         let hundred = combo / 100;
@@ -1094,7 +1277,7 @@ impl PlayView {
                 );
             }
         }
-        if combo < 10 {
+        if combo < self.looks.min_combo.max(1) {
             return;
         }
         let Some(t) = g.skin.tex("Graphics/ScreenPlayDrums combo.png") else {
@@ -1149,6 +1332,15 @@ impl PlayView {
 
     /// 判定の文字とずれ（上流 `CActPerfDrumsJudgementString` のコマ送り：24 コマを 14 ミリ秒ごと）
     fn draw_judges(&mut self, c: &Canvas, g: &Gfx, now: Instant) {
+        // 上流 `JudgementStringPosition`：レーンの上は 348、判定ラインの下は 583 を基準に、レーンごとの段をずらす
+        let base = match self.looks.judge_position {
+            JudgePosition::Lane => 348,
+            JudgePosition::Below => 583,
+            JudgePosition::Off => {
+                self.judges = [None; 10];
+                return;
+            }
+        };
         let strings = g.skin.tex("Graphics/7_judge strings.png");
         let lag = g.skin.tex("Graphics/7_lag numbers.png");
         let digits = self.lag_digits;
@@ -1162,7 +1354,7 @@ impl PlayView {
             let (lx, lw, row) = JUDGE_POS[i];
             let xc = lx + lw / 2;
             let x = (xc - 122) as f32;
-            let y = (348 + row * 32 - 87) as f32;
+            let y = (base + row * 32 - 87) as f32;
             if let Some(t) = &strings {
                 c.part(
                     t,
@@ -1292,8 +1484,9 @@ impl PlayView {
                 ..Default::default()
             };
             let x = FIRE[i].0 + 320.0;
-            c.draw_rot(&t, x, 565.0, 0.0, o);
-            c.draw_rot(&t, x, 565.0, 0.0, o);
+            let y = self.looks.judge_y() + 4.0;
+            c.draw_rot(&t, x, y, 0.0, o);
+            c.draw_rot(&t, x, y, 0.0, o);
         }
     }
 }
@@ -1699,6 +1892,48 @@ mod tests {
             truth = (truth + score_delta(Judgement::Perfect, &t, notes, truth)).min(MAX_SCORE);
         }
         truth
+    }
+
+    #[test]
+    fn hidden_and_sudden_fade_chips_like_upstream() {
+        let looks = |hid_sud| Looks {
+            hid_sud,
+            ..Looks::default()
+        };
+        let off = looks(HidSud::Off);
+        assert_eq!(off.chip_alpha(500.0), Some(1.0));
+        assert_eq!(off.chip_alpha(-30.0), Some(1.0));
+        let sudden = looks(HidSud::Sudden);
+        assert_eq!(sudden.chip_alpha(260.0), None);
+        assert_eq!(sudden.chip_alpha(225.0), Some(0.5));
+        assert_eq!(sudden.chip_alpha(50.0), Some(1.0));
+        let hidden = looks(HidSud::Hidden);
+        assert_eq!(hidden.chip_alpha(500.0), Some(1.0));
+        assert_eq!(hidden.chip_alpha(125.0), Some(0.5));
+        assert_eq!(hidden.chip_alpha(90.0), None);
+        let both = looks(HidSud::Both);
+        assert_eq!(both.chip_alpha(300.0), None);
+        assert_eq!(both.chip_alpha(175.0), Some(1.0));
+        assert_eq!(both.chip_alpha(50.0), None);
+        assert_eq!(looks(HidSud::Stealth).chip_alpha(175.0), None);
+    }
+
+    #[test]
+    fn looks_follow_the_settings() {
+        use crate::settings as s;
+        let mut v = s::Values::default();
+        let d = Looks::from_settings(&v);
+        assert!(d.bar_lines && !d.dark_lanes && d.judge_line && d.lane_flush && d.progress);
+        assert_eq!(d.judge_y(), JUDGE_LINE_Y);
+        assert_eq!(d.min_combo, 10);
+        v.set_raw(s::DARK, 2);
+        v.set_raw(s::JUDGE_LINE_POS, 40);
+        let full = Looks::from_settings(&v);
+        assert!(!full.bar_lines && full.dark_lanes && !full.judge_line && !full.progress);
+        assert_eq!(full.judge_y(), JUDGE_LINE_Y - 40.0);
+        v.set_raw(s::LANE_DISP, 2);
+        let line_off = Looks::from_settings(&v);
+        assert!(!line_off.bar_lines && !line_off.dark_lanes);
     }
 
     #[test]
