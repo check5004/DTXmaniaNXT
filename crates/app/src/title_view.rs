@@ -518,6 +518,7 @@ mod tests {
 
     #[test]
     fn the_help_bar_names_what_the_selected_row_does() {
+        let _ja = i18n::scoped(i18n::Lang::Ja);
         let names =
             |v: &TitleView| -> Vec<&'static str> { v.hints().iter().map(|h| h.1).collect() };
         let mut v = TitleView::new();
