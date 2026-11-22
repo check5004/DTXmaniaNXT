@@ -261,8 +261,12 @@ enum Command {
         /// 同じ音の重なりを [`MAX_OVERLAP`] までにする（譜面の音）
         limit: bool,
     },
-    /// `tag` と同じビットを持つ、もう鳴り始めた音を短いフェードで止める（選曲のプレビューの音、ハイハット）
+    /// `tag` と同じビットを持つ音を短いフェードで止める（選曲のプレビューの音、メトロノーム）。
+    /// 鳴らす予定でまだ鳴り始めていない音は取りやめる
     Stop(u8),
+    /// `tag` と同じビットを持つ、もう鳴り始めた音だけを短いフェードで止める（ハイハット、チョーク。
+    /// 先に鳴らす予定の自動の音は残す）
+    StopRinging(u8),
     /// 決めたフレームで、`tag` と同じビットを持ち、そのときまでに鳴り始めた音を止める（自動で叩く左ペダルなど）
     StopAt { frame: u64, tag: u8 },
     /// このフレームより後から鳴らす予定の音と止める予定を取りやめる（練習で並べ直す周の音）
@@ -407,7 +411,13 @@ impl Mixer {
                 self.voices.push(v);
             }
             Command::Stop(tag) => {
-                // まだ鳴り始めていない音（自動で鳴らす先の音）は止めない
+                // まだ鳴り始めていない音は捨て、鳴っている音はフェードで止める
+                self.voices.retain(|v| v.tag & tag == 0 || v.start < now);
+                for v in self.voices.iter_mut().filter(|v| v.tag & tag != 0) {
+                    v.cut(now, self.fade);
+                }
+            }
+            Command::StopRinging(tag) => {
                 for v in self
                     .voices
                     .iter_mut()
@@ -662,10 +672,16 @@ impl AudioOut {
 
     /// 曲の時刻 `song_ms` に鳴らす
     pub fn play_at(&mut self, sound: &Sound, song_ms: f64, gain: f32, bus: Bus) {
+        self.play_at_tagged(sound, song_ms, gain, 0, bus);
+    }
+
+    /// 曲の時刻 `song_ms` に鳴らし、止めるときの目印 `tag`（ビットの組。0 は止めない）を付ける。
+    /// `stop` で、まだ鳴り始めていなければ取りやめ、鳴っていれば止める（メトロノーム）
+    pub fn play_at_tagged(&mut self, sound: &Sound, song_ms: f64, gain: f32, tag: u8, bus: Bus) {
         let frame = self.frame_at(song_ms).max(0.0) as u64;
-        let _ = self
-            .tx
-            .push(Command::At(Voice::whole(sound.clone(), frame, gain, bus)));
+        let mut v = Voice::whole(sound.clone(), frame, gain, bus);
+        v.tag = tag;
+        let _ = self.tx.push(Command::At(v));
     }
 
     /// 音の一部を、置いたとおりに鳴らす（練習の周の BGM）。途中から始めるときと途中で切るときは短いフェードをかける
@@ -775,9 +791,14 @@ impl AudioOut {
         });
     }
 
-    /// `tag` と同じビットを持つ、もう鳴り始めた音を止める（鳴らす予定の先の音は止めない）
+    /// `tag` と同じビットを持つ音を止める（鳴らす予定でまだ鳴り始めていない音は取りやめる）
     pub fn stop(&mut self, tag: u8) {
         let _ = self.tx.push(Command::Stop(tag));
+    }
+
+    /// `tag` と同じビットを持つ、もう鳴り始めた音だけを止める（鳴らす予定の先の音は残す）
+    pub fn stop_ringing(&mut self, tag: u8) {
+        let _ = self.tx.push(Command::StopRinging(tag));
     }
 
     /// 曲の時刻 `song_ms` に、`tag` と同じビットを持ち、そのときまでに鳴り始めた音を止める
@@ -884,7 +905,7 @@ mod tests {
     }
 
     #[test]
-    fn stop_cuts_only_started_voices_that_share_a_bit() {
+    fn stopping_ringing_voices_keeps_the_ones_to_come() {
         let s = silence(1000);
         let mut m = Mixer::new(10);
         m.command(Command::At(voice(&s, 0, 1)), 0);
@@ -892,9 +913,21 @@ mod tests {
         m.command(Command::At(voice(&s, 500, 1)), 0);
         m.command(Command::At(voice(&s, 0, 2)), 0);
         m.command(Command::At(voice(&s, 0, 1 | 4)), 0);
-        m.command(Command::Stop(1), 100);
+        m.command(Command::StopRinging(1), 100);
         assert_eq!(lens(&m), vec![110, 1000, 1000, 110]);
         assert!(m.voices[0].fade_out && !m.voices[1].fade_out);
+    }
+
+    #[test]
+    fn stop_also_drops_the_voices_to_come() {
+        let s = silence(1000);
+        let mut m = Mixer::new(10);
+        m.command(Command::At(voice(&s, 0, 2)), 0);
+        m.command(Command::At(voice(&s, 500, 2)), 0);
+        m.command(Command::At(voice(&s, 500, 1)), 0);
+        m.command(Command::Stop(2), 100);
+        assert_eq!(lens(&m), vec![110, 1000]);
+        assert_eq!(m.voices[1].tag, 1);
     }
 
     #[test]
