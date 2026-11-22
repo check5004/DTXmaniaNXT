@@ -1,23 +1,28 @@
 //! 結果の画面に足すトレーニングの表示（NX の部品で）。
 //!
-//! - 練習の結果：ランクとジャケットの場所に、合格の数・クリア・気づいたこと（空打ちの偏り、ずれ）と、
+//! - 練習の結果：ランクとジャケットの場所に、セットごとの苦手・クリア・気づいたこと（空打ちの偏り、ずれ）と、
 //!   周ごとの成績の表を出す
 //! - ふだんのプレイ：右の空いた場所に、苦手な小節を進み具合のバーの形（黒地に縞）で出す
 
 use egui::Color32;
-use engine::practice::{PASSES_TO_UP, Section, SpeedPlan, speed_percent};
+use engine::practice::{Section, SetKind, SetReport, SpeedPlan, speed_percent};
 
 use crate::band::{Band, BandData, CLEARED_COLOR};
 use crate::game::{Outcome, PracticeOutcome};
 use crate::gfx::{Canvas, Gfx};
 use crate::inputs::lane_label;
 use crate::practice::{
-    LapSummary, StrayHint, WEAK_VELOCITY, rule_pass_label, section_label, style_label,
+    LapSummary, StrayHint, WEAK_VELOCITY, beat_short, rule_label, section_label, style_label,
 };
 use crate::text::Style;
 
 const PASS_COLOR: Color32 = Color32::from_rgb(0x70, 0xE0, 0x90);
-const FAIL_COLOR: Color32 = Color32::from_rgb(0xF0, 0x80, 0x60);
+/// 落とした周（うっかりでも）
+const SLIP_COLOR: Color32 = Color32::from_rgb(0xF0, 0xD0, 0x50);
+/// 苦手の拍
+const WEAK_COLOR: Color32 = Color32::from_rgb(0xFF, 0x80, 0x60);
+/// 結果の画面に出すセットの数（新しいほうから）
+const SETS_SHOWN: usize = 3;
 /// 気づいたこと（空打ちの偏り、ずれ）
 const NOTE_COLOR: Color32 = Color32::from_rgb(0xFF, 0xD0, 0x80);
 /// ずれの平均をこれ以上なら知らせる（ミリ秒）と、そのために要る打った数
@@ -108,7 +113,44 @@ fn offset_note((mean, hits): (f64, usize)) -> Option<String> {
     })
 }
 
-/// 練習の結果。合格の数、クリア、気づいたこと、周ごとの成績の表
+/// セットの 1 行（「セット 2　苦手の所 小節 62　70%　8 周」）と、苦手の行（「苦手 61-4・62-1　うっかり 3 か所」）
+fn set_lines(r: &SetReport, set_laps: u32) -> (String, String, Color32) {
+    let kind = match r.kind {
+        SetKind::Whole => "区間全体".to_owned(),
+        SetKind::Focus(s) => format!("苦手の所 {}", section_label(s)),
+    };
+    let partial = if r.laps < set_laps {
+        "（途中まで）"
+    } else {
+        ""
+    };
+    let head = format!(
+        "セット {}　{kind}　{}%　{} 周{partial}",
+        r.index + 1,
+        r.speed,
+        r.laps
+    );
+    let weak = r.weak();
+    let slips = r.slips();
+    let slip = if slips > 0 {
+        format!("　うっかり {slips} か所")
+    } else {
+        String::new()
+    };
+    if weak.is_empty() {
+        (head, format!("苦手なし{slip}"), PASS_COLOR)
+    } else {
+        let beats: Vec<String> = weak.iter().take(4).map(|(b, _)| beat_short(*b)).collect();
+        let more = if weak.len() > 4 { " ほか" } else { "" };
+        (
+            head,
+            format!("苦手 {}{more}{slip}", beats.join("・")),
+            WEAK_COLOR,
+        )
+    }
+}
+
+/// 練習の結果。セットごとの苦手、クリア、気づいたこと、周ごとの成績の表
 pub fn draw_practice(c: &Canvas, g: &mut Gfx, p: &PracticeOutcome) {
     let (x, y, w, h) = PRACTICE;
     panel(c, PRACTICE);
@@ -116,10 +158,10 @@ pub fn draw_practice(c: &Canvas, g: &mut Gfx, p: &PracticeOutcome) {
     let heading_w = g.heading(c, left, y + 10.0, "練習の結果");
     let o = p.options;
     let head = format!(
-        "{}　{} / {} / {}",
+        "{}　{} / 苦手の見方 {} / {}",
         section_text(o.section),
         style_label(o.style),
-        rule_pass_label(o.rule),
+        rule_label(o.rule),
         plan_text(o.speed)
     );
     text(
@@ -146,26 +188,27 @@ pub fn draw_practice(c: &Canvas, g: &mut Gfx, p: &PracticeOutcome) {
         );
         ty += 30.0;
     } else {
-        let passed = done.iter().filter(|l| l.passed == Some(true)).count();
+        let clean = done.iter().filter(|l| l.passed == Some(true)).count();
         let line = format!(
-            "{} 周のうち合格 {passed} 周（{}）",
-            done.len(),
-            rule_pass_label(o.rule)
+            "{} セット・{} 周（ノーミスの周 {clean}）",
+            p.sets.len(),
+            done.len()
         );
         text(c, g, &line, left, ty, 20.0, Color32::WHITE);
         ty += 28.0;
         let reached = done.iter().map(|l| speed_percent(l.speed)).max();
-        let top = done
+        let top = p
+            .sets
             .iter()
-            .filter(|l| l.passed == Some(true))
-            .map(|l| speed_percent(l.speed))
+            .filter(|r| r.clean_whole())
+            .map(|r| r.speed)
             .max();
         let mut parts = Vec::new();
         if let (SpeedPlan::Ladder { start, target }, Some(r)) = (o.speed, reached) {
             parts.push(format!("{start}% から始めて {r}% まで（目標 {target}%）"));
         }
         if let Some(top) = top {
-            parts.push(format!("合格した一番速い速度 {top}%"));
+            parts.push(format!("区間全体を苦手なしで叩けた一番速い速度 {top}%"));
         }
         if !parts.is_empty() {
             text(
@@ -177,15 +220,37 @@ pub fn draw_practice(c: &Canvas, g: &mut Gfx, p: &PracticeOutcome) {
                 16.0,
                 Color32::from_gray(220),
             );
+            ty += 24.0;
+        }
+        // セットごとの苦手（新しいほうから SETS_SHOWN 個）
+        let from = p.sets.len().saturating_sub(SETS_SHOWN);
+        if from > 0 {
+            text(
+                c,
+                g,
+                &format!("（前の {from} セットは省きました）"),
+                left,
+                ty,
+                14.0,
+                Color32::from_gray(160),
+            );
+            ty += 20.0;
+        }
+        for r in &p.sets[from..] {
+            let (head, weak, color) = set_lines(r, o.set_laps);
+            let hw = text(c, g, &head, left, ty, 16.0, Color32::WHITE);
+            text(c, g, &weak, left + hw.max(330.0) + 16.0, ty, 16.0, color);
             ty += 22.0;
         }
     }
-    if p.cleared
-        && let SpeedPlan::Ladder { target, .. } = o.speed
-    {
-        let line = format!("クリア！ 目標の {target}% で {PASSES_TO_UP} 回合格しました");
-        text(c, g, &line, left, ty, 20.0, PASS_COLOR);
-        ty += 28.0;
+    if p.cleared {
+        let goal = match o.speed {
+            SpeedPlan::Ladder { target, .. } => target,
+            SpeedPlan::Fixed(s) => s,
+        };
+        let line = format!("クリア！ {goal}% で区間全体を苦手なしで叩けました");
+        text(c, g, &line, left, ty + 2.0, 20.0, PASS_COLOR);
+        ty += 30.0;
     }
     // 気づいたこと
     if let Some(hint) = &p.strays {
@@ -231,15 +296,15 @@ pub fn draw_practice(c: &Canvas, g: &mut Gfx, p: &PracticeOutcome) {
 /// 表の列（見出し、左の端からの位置）
 const COLUMNS: [(&str, f32); 10] = [
     ("周", 0.0),
-    ("速度", 56.0),
-    ("PERFECT", 138.0),
-    ("GREAT", 268.0),
-    ("GOOD", 344.0),
-    ("POOR", 414.0),
-    ("MISS", 482.0),
-    ("空打ち", 546.0),
-    ("ずれ", 616.0),
-    ("", 718.0),
+    ("速度", 44.0),
+    ("PERFECT", 116.0),
+    ("GREAT", 240.0),
+    ("GOOD", 312.0),
+    ("POOR", 378.0),
+    ("MISS", 440.0),
+    ("空打ち", 500.0),
+    ("ずれ", 566.0),
+    ("", 672.0),
 ];
 
 /// 周ごとの成績の表。入りきらないときは新しい周を出す
@@ -285,6 +350,10 @@ fn shown_laps(n: usize, rows: usize) -> (usize, Option<usize>) {
 
 fn rows_of(c: &Canvas, g: &mut Gfx, laps: &[&LapSummary], x: f32, mut y: f32) {
     for (i, l) in laps.iter().enumerate() {
+        // セットの変わり目に線を引く
+        if i > 0 && laps[i - 1].set != l.set {
+            c.fill(x - 6.0, y - 3.0, 740.0, 1.0, Color32::from_white_alpha(70));
+        }
         if i % 2 == 0 {
             c.fill(
                 x - 6.0,
@@ -315,8 +384,8 @@ fn rows_of(c: &Canvas, g: &mut Gfx, laps: &[&LapSummary], x: f32, mut y: f32) {
             text(c, g, s, x + dx, y, 17.0, Color32::WHITE);
         }
         let (verdict, color) = match l.passed {
-            Some(true) => ("合格", PASS_COLOR),
-            Some(false) => ("不合格", FAIL_COLOR),
+            Some(true) => ("ノーミス", PASS_COLOR),
+            Some(false) => ("ミス", SLIP_COLOR),
             None => ("途中", Color32::from_gray(150)),
         };
         text(c, g, verdict, x + COLUMNS[9].1, y, 17.0, color);

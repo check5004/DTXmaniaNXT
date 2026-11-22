@@ -1025,7 +1025,7 @@ impl PlayView {
                     };
                     if ahead
                         && let Some(text) = g.texts.get(
-                            &format!("{} 周目", lap.plan.index + 1),
+                            &format!("{} 周目", lap.in_set),
                             &Style {
                                 px: 14.0,
                                 color: Color32::WHITE,

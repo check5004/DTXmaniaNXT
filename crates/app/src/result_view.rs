@@ -242,7 +242,7 @@ impl ResultView {
         let elapsed = self.entered.elapsed();
         self.draw_panels(c, g, elapsed);
         if let Some(p) = &o.practice {
-            // 練習：スコアの場所に合格した周の数、ランクとジャケットの場所に周ごとの成績
+            // 練習：スコアの場所に苦手の無いセットの数、ランクとジャケットの場所にセットと周ごとの成績
             self.draw_parameters(c, g, Some(p));
             crate::result_training::draw_practice(c, g, p);
             self.draw_title(c, g);
@@ -339,7 +339,7 @@ impl ResultView {
     }
 
     /// 左のパネル、進み具合のバー、スコア、New Record、早い遅いの数（上流 `CActResultParameterPanel`）
-    /// 練習なら `practice` を渡す（スコアの代わりに合格した周の数を出す）
+    /// 練習なら `practice` を渡す（スコアの代わりに苦手の無いセットの数を出す）
     fn draw_parameters(
         &self,
         c: &Canvas,
@@ -429,15 +429,11 @@ impl ResultView {
     }
 }
 
-/// 練習の結果のスコアの場所：合格した周の数と、最後まで叩いた周の数
+/// 練習の結果のスコアの場所：苦手の無いセットの数と、叩いたセットの数
 fn draw_passed(c: &Canvas, g: &mut Gfx, p: &crate::game::PracticeOutcome) {
-    let done = p.laps.iter().filter(|l| l.completed).count();
-    let passed = p
-        .laps
-        .iter()
-        .filter(|l| l.completed && l.passed == Some(true))
-        .count();
-    g.heading(c, 30.0, 28.0, "合格した周");
+    let done = p.sets.len();
+    let passed = p.sets.iter().filter(|r| r.weak().is_empty()).count();
+    g.heading(c, 30.0, 28.0, "苦手の無いセット");
     let text = passed.min(9999).to_string();
     let mut x = 30.0;
     match g.skin.tex("Graphics/7_score numbersGD.png") {

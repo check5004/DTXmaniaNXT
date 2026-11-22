@@ -2,7 +2,7 @@
 //!
 //! 上流の選曲画面のポップアップメニュー（`CActSelectPopupMenu`：ソートやクイック設定）と同じ
 //! 背景（`ScreenSelect sort menu background.png`）とカーソル（`ScreenConfig menu cursor.png`）で、
-//! 区間、つなぎ方、合格の基準、速度、音程、メトロノームを選ぶ。文字は日本語なので、DFP フォントの代わりに
+//! 区間、つなぎ方、苦手の見方、1 セットの周、速度、音程、メトロノームを選ぶ。文字は日本語なので、DFP フォントの代わりに
 //! 同じ大きさの白い太字（選んでいる行は橙）で出す。小節の帯と苦手なフレーズは、難易度パネルの場所に重ねて出す。
 //! NX v2.0 の選曲画面は後ろの絵が細かく、半透明の板の文字が読みにくいので、開いているあいだは後ろを暗くする。
 //! v2 の背景の絵は下の端に案内の吹き出しがあるので、選んでいる行の説明はその下に板を敷いて出す。
@@ -11,11 +11,13 @@
 //! 数の項目は Enter で値を変える状態になり、↑↓ で変えて Enter で戻る。
 
 use egui::{Color32, Pos2};
-use engine::practice::{LoopStyle, PassRule, Section, SpeedPlan};
+use engine::practice::{LoopStyle, PassRule, SET_LAPS_CHOICES, SET_SPEED_STEP, Section, SpeedPlan};
 
 use crate::band::{Band, BandData};
 use crate::gfx::{Canvas, Gfx, src};
-use crate::practice::{PracticeOptions, PracticeSetup, rule_label, section_label, style_label};
+use crate::practice::{
+    PracticeOptions, PracticeSetup, rule_detail, rule_label, section_label, style_label,
+};
 use crate::sfx::Se;
 use crate::stretch::Pitch;
 use crate::text::Style;
@@ -24,7 +26,7 @@ use crate::text::Style;
 /// そこだと小節の帯に重なるので、曲のリストの上に出す
 const X: f32 = 790.0;
 const Y: f32 = 150.0;
-const ROW_H: f32 = 29.0;
+const ROW_H: f32 = 27.0;
 const W: f32 = 360.0;
 const H: f32 = 450.0;
 /// 開いているあいだ、後ろの選曲画面を暗くする濃さ
@@ -54,6 +56,7 @@ pub enum Row {
     Weak,
     Loop,
     Pass,
+    SetLaps,
     Speed,
     SpeedValue,
     Target,
@@ -63,12 +66,13 @@ pub enum Row {
     Back,
 }
 
-const ROWS: [Row; 12] = [
+const ROWS: [Row; 13] = [
     Row::Section,
     Row::Length,
     Row::Weak,
     Row::Loop,
     Row::Pass,
+    Row::SetLaps,
     Row::Speed,
     Row::SpeedValue,
     Row::Target,
@@ -254,6 +258,11 @@ impl PracticePopup {
                 let i = all.iter().position(|&r| r == s.rule).unwrap_or(0);
                 s.rule = all[(i + 1) % all.len()];
             }
+            Row::SetLaps => {
+                let all = SET_LAPS_CHOICES;
+                let i = all.iter().position(|&n| n == s.set_laps).unwrap_or(0);
+                s.set_laps = all[(i + 1) % all.len()];
+            }
             Row::Speed => s.toggle_ladder(),
             Row::Pitch => {
                 let all = Pitch::ALL;
@@ -326,6 +335,7 @@ impl PracticePopup {
             },
             Row::Loop => style_label(s.style).to_owned(),
             Row::Pass => rule_label(s.rule).to_owned(),
+            Row::SetLaps => format!("{} 周", s.set_laps),
             Row::Speed => match s.speed {
                 SpeedPlan::Ladder { .. } => "段階アップ",
                 SpeedPlan::Fixed(_) => "固定",
@@ -352,7 +362,8 @@ impl PracticePopup {
             Row::Length => "長さ",
             Row::Weak => "苦手なフレーズ",
             Row::Loop => "つなぎ方",
-            Row::Pass => "合格の基準",
+            Row::Pass => "苦手の見方",
+            Row::SetLaps => "1 セットの周",
             Row::Speed => "速度の決め方",
             Row::SpeedValue => match self.setup.speed {
                 SpeedPlan::Ladder { .. } => "始めの速度",
@@ -391,22 +402,22 @@ impl PracticePopup {
                 }
             }
             .to_owned(),
-            Row::Pass => match s.rule {
-                PassRule::Easy => "Easy: MISS が 0 なら合格（POOR は数えません）。",
-                PassRule::Normal => "Normal: フルコンボ（MISS と POOR が 0）で合格。",
-                PassRule::Strict => "Strict: フルコンボで、PERFECT が 8 割以上なら合格。",
-            }
-            .to_owned(),
+            Row::Pass => format!(
+                "{}: 1 セットで{}とみなし、その所だけの練習をすすめます。1 回きりのミスはうっかりとして数えません。",
+                rule_label(s.rule),
+                rule_detail(s.rule)
+            ),
+            Row::SetLaps => format!(
+                "{} 周ごとに止まって、落とした所と次の一手（苦手の所だけ、速度を上げる・下げる）を出します。Enter で選びます。",
+                s.set_laps
+            ),
             Row::Speed => match s.speed {
                 SpeedPlan::Ladder { .. } => format!(
-                    "段階アップ: その速度で {up} 回合格するたびに {}% 上げ、不合格が {} 回続くと {}% 下げます。目標の速度で {up} 回合格したらクリア。",
-                    engine::practice::LADDER_UP,
-                    engine::practice::FAILS_TO_DOWN,
-                    engine::practice::LADDER_DOWN,
-                    up = engine::practice::PASSES_TO_UP,
+                    "段階アップ: 苦手の無いセットのあとは {step}% 上げるのを、たくさん落としたら {step}% 下げるのをすすめます。目標の速度で苦手の無いセットになったらクリア。",
+                    step = SET_SPEED_STEP,
                 ),
                 SpeedPlan::Fixed(_) => {
-                    "固定: 同じ速度のまま回ります（練習中も , と . で 5% ずつ変えられます）。"
+                    "固定: 速度を変えるのはすすめません。セットの合間に自分で上げ下げできます（練習中も , と . で 5% ずつ）。"
                         .to_owned()
                 }
             },
@@ -418,7 +429,7 @@ impl PracticePopup {
             }
             .to_owned(),
             Row::Metronome => {
-                "オンなら区間のあいだ拍ごとに小さく鳴らします（小節の頭は強く）。速度が変わる周の前の 4 拍のカウントは、オフでも鳴ります。"
+                "オンなら区間のあいだ拍ごとに小さく鳴らします（小節の頭は強く）。セットの頭と速度が変わる周の前の 4 拍のカウントは、オフでも鳴ります。"
                     .to_owned()
             }
             Row::Start => match s.section {
@@ -694,6 +705,7 @@ mod tests {
             speed: SpeedPlan::default(),
             pitch: Pitch::Keep,
             metronome: true,
+            set_laps: engine::practice::SET_LAPS,
         })
     }
 
