@@ -184,9 +184,6 @@ impl TitleView {
         if scanning {
             draw_scanning(c, g, self.entered);
         }
-        if !g.skin.is_loaded() {
-            draw_no_skin(c, g);
-        }
         // 白いフェード
         let a = match self.chosen {
             Some((_, at)) => (at.elapsed().as_secs_f32() / FADE.as_secs_f32()).min(1.0),
@@ -237,17 +234,6 @@ fn draw_plain_menu(c: &Canvas, g: &mut Gfx, cursor: usize) {
                 1.0,
             );
         }
-    }
-}
-
-fn draw_no_skin(c: &Canvas, g: &mut Gfx) {
-    c.fill(240.0, 640.0, 800.0, 60.0, Color32::from_black_alpha(200));
-    let s = Style::plain(22.0, Color32::WHITE);
-    if let Some(t) = g.texts.get(
-        "CONFIGURATION で DTXManiaNX のフォルダを選ぶと、NX と同じ画面になります",
-        &s,
-    ) {
-        t.draw(c, 640.0 - t.w / 2.0, 655.0, 1.0, 1.0);
     }
 }
 

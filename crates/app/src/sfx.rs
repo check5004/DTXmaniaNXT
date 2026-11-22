@@ -6,8 +6,7 @@ use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::Duration;
 
-use crate::audio::{AudioOut, Sound, load_sound};
-use crate::gfx::Skin;
+use crate::audio::{AudioOut, Sound, load_sound, load_sound_bytes};
 
 /// 効果音の種類（上流 `CSkin` のシステムサウンド）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -41,7 +40,7 @@ pub enum Se {
 }
 
 impl Se {
-    const ALL: [Se; 13] = [
+    pub const ALL: [Se; 13] = [
         Se::Move,
         Se::Decide,
         Se::Cancel,
@@ -57,7 +56,7 @@ impl Se {
         Se::GameEnd,
     ];
 
-    fn file(self) -> &'static str {
+    pub fn file(self) -> &'static str {
         match self {
             Se::Move => "Sounds/Move.ogg",
             Se::Decide => "Sounds/Decide.ogg",
@@ -123,16 +122,20 @@ impl Sfx {
     }
 
     /// スキンの効果音を読む
-    pub fn load(&mut self, skin: &Skin) {
+    pub fn load(&mut self) {
         self.sounds.clear();
         let Some(rate) = self.out.as_ref().map(AudioOut::rate) else {
             return;
         };
         for se in Se::ALL {
-            if let Some(p) = skin.path(se.file())
-                && let Ok(s) = load_sound(&p, rate)
-            {
-                self.sounds.insert(se, s);
+            let Some(bytes) = crate::skin::read(se.file()) else {
+                continue;
+            };
+            match load_sound_bytes(bytes, Some("ogg"), rate) {
+                Ok(s) => {
+                    self.sounds.insert(se, s);
+                }
+                Err(e) => log::warn!("skin: {}: {e:#}", se.file()),
             }
         }
     }

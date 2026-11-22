@@ -13,7 +13,7 @@ use symphonia::core::codecs::audio::AudioDecoderOptions;
 use symphonia::core::errors::Error as SymphoniaError;
 use symphonia::core::formats::probe::Hint;
 use symphonia::core::formats::{FormatOptions, TrackType};
-use symphonia::core::io::MediaSourceStream;
+use symphonia::core::io::{MediaSource, MediaSourceStream};
 use symphonia::core::meta::MetadataOptions;
 
 use crate::time::{duration_us, host_us};
@@ -55,9 +55,23 @@ pub fn click(rate: u32, accent: bool) -> Sound {
 /// 音のファイルを読み、ステレオ・`rate` Hz にそろえる
 pub fn load_sound(path: &Path, rate: u32) -> Result<Sound> {
     let file = std::fs::File::open(path).with_context(|| format!("open {}", path.display()))?;
-    let mss = MediaSourceStream::new(Box::new(file), Default::default());
+    let ext = path.extension().and_then(|e| e.to_str());
+    decode_sound(Box::new(file), ext, rate).with_context(|| path.display().to_string())
+}
+
+/// メモリにある音のファイル（アプリに入れたスキンの音）を読み、ステレオ・`rate` Hz にそろえる
+pub fn load_sound_bytes(
+    bytes: impl AsRef<[u8]> + Send + Sync + 'static,
+    ext: Option<&str>,
+    rate: u32,
+) -> Result<Sound> {
+    decode_sound(Box::new(std::io::Cursor::new(bytes)), ext, rate)
+}
+
+fn decode_sound(source: Box<dyn MediaSource>, ext: Option<&str>, rate: u32) -> Result<Sound> {
+    let mss = MediaSourceStream::new(source, Default::default());
     let mut hint = Hint::new();
-    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+    if let Some(ext) = ext {
         hint.with_extension(ext);
     }
     let mut format = symphonia::default::get_probe()
@@ -67,7 +81,7 @@ pub fn load_sound(path: &Path, rate: u32) -> Result<Sound> {
             FormatOptions::default(),
             MetadataOptions::default(),
         )
-        .with_context(|| format!("probe {}", path.display()))?;
+        .context("probe")?;
     let track = format
         .default_track(TrackType::Audio)
         .ok_or_else(|| anyhow!("no audio track"))?;

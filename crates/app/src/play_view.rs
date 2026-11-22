@@ -8,7 +8,6 @@
 //! 判定は `Play` が MIDI の時刻と音の再生位置で行う。この画面は `Play` から出来事（叩いた・判定した）を
 //! 受け取り、光やコンボなどの動きを実時間で進めて描くだけ。
 
-use std::path::Path;
 use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 
@@ -379,19 +378,16 @@ pub enum LagShow {
 }
 
 impl LagDigits {
-    /// NX の Config.ini から。NX の設定が無ければ出す
-    pub fn from_nx(c: Option<&nx::NxConfig>) -> Self {
-        let show = match c.map(|c| c.show_lag_time) {
-            None => LagShow::On,
-            Some(Some(0)) => LagShow::Off,
-            Some(Some(2)) => LagShow::NotPerfect,
-            // 上流の既定は出さない（0）
-            Some(None) => LagShow::Off,
-            Some(Some(_)) => LagShow::On,
+    /// 設定の `show_lag_time` と `show_lag_time_color` から
+    pub fn from_config(c: &crate::config::Config) -> Self {
+        let show = match c.show_lag_time {
+            0 => LagShow::Off,
+            2 => LagShow::NotPerfect,
+            _ => LagShow::On,
         };
         Self {
             show,
-            swapped: c.is_some_and(|c| c.lag_color_swapped),
+            swapped: c.show_lag_time_color == 1,
         }
     }
 
@@ -420,7 +416,7 @@ pub struct Finish {
 
 impl PlayView {
     /// `label` は選んだ難易度の名前（set.def の `#L1LABEL` など。無ければ空）
-    pub fn new(play: &Play, skin_dir: Option<&Path>, label: &str, lag_digits: LagDigits) -> Self {
+    pub fn new(play: &Play, label: &str, lag_digits: LagDigits) -> Self {
         let now = Instant::now();
         let mut sections = [Section::default(); SECTIONS];
         if play.practice.is_none() {
@@ -432,9 +428,7 @@ impl PlayView {
         }
         Self {
             entered: now,
-            diff_panel: skin_dir
-                .and_then(|d| difficulty_cell(d, "7", label))
-                .unwrap_or((0.0, 0.0)),
+            diff_panel: difficulty_cell("7", label).unwrap_or((0.0, 0.0)),
             flush: [None; 10],
             pads: [PadState::new(now); 10],
             fires: [None; 10],
@@ -1485,9 +1479,8 @@ pub fn rotate_about_center(x: f32, y: f32, angle: f32) -> (f32, f32) {
 
 /// スキンの Script/difficult.dtxs から、場面 `scene` の難易度の名前 `label` の画像の切り出しの左上を引く
 /// （上流 `tSetDifficultyLabelFromScript`。行は「場面,名前,x,y[,大文字小文字を区別するなら 1]」）
-pub fn difficulty_cell(skin_dir: &Path, scene: &str, label: &str) -> Option<(f32, f32)> {
-    let path = nx::find_file(skin_dir, "Script/difficult.dtxs")?;
-    let bytes = std::fs::read(path).ok()?;
+pub fn difficulty_cell(scene: &str, label: &str) -> Option<(f32, f32)> {
+    let bytes = crate::skin::read("Script/difficult.dtxs")?;
     let (text, _) = dtx::decode(&bytes);
     parse_difficulty(&text, scene, label)
 }
@@ -1605,15 +1598,16 @@ mod tests {
     }
 
     #[test]
-    fn lag_digits_follow_the_nx_config() {
-        let on = LagDigits::from_nx(None);
+    fn lag_digits_follow_the_config() {
+        let mut c = crate::config::Config::default();
+        let on = LagDigits::from_config(&c);
         assert_eq!(on.show, LagShow::On);
         assert!(!on.swapped);
-        // NX の既定（書いていない、または 0）は出さない
-        let c = nx::NxConfig::parse("[System]\n");
-        assert_eq!(LagDigits::from_nx(Some(&c)).show, LagShow::Off);
-        let c = nx::NxConfig::parse("[System]\nShowLagTime=2\nShowLagTimeColor=1\n");
-        let d = LagDigits::from_nx(Some(&c));
+        c.show_lag_time = 0;
+        assert_eq!(LagDigits::from_config(&c).show, LagShow::Off);
+        c.show_lag_time = 2;
+        c.show_lag_time_color = 1;
+        let d = LagDigits::from_config(&c);
         assert_eq!(d.show, LagShow::NotPerfect);
         assert!(d.swapped);
         assert!(!d.shows(Judgement::Perfect));
