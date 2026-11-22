@@ -14,7 +14,7 @@ use engine::practice::{SpeedPlan, place};
 use records::{Lap, NoteHit, SectionClear, Session, SessionKind, StrayHit};
 
 use crate::audio::{AudioOut, Sound, click, load_sound};
-use crate::chart_sound::ChartSounds;
+use crate::chart_sound::{AutoMix, ChartSounds, METRONOME_BAR, METRONOME_BEAT};
 use crate::history::OvercomeCheck;
 use crate::midi::RawMidi;
 use crate::practice::{LapSummary, Practice, PracticeOptions, count_per_measure};
@@ -73,16 +73,22 @@ pub struct Rules {
     /// 叩き分け（譜面に無いレーンは共通に寄せてから使う）
     pub groups: LaneGroups,
     pub hit_sounds: HitSoundRule,
+    /// 自動で鳴らす音の音量・BGM の有無・ずらし
+    pub auto_mix: AutoMix,
+    /// メトロノームを鳴らす
+    pub metronome: bool,
 }
 
 /// 叩いた音の鳴らし方（上流の HH / FT / CY Priority と Muting LP）
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct HitSoundRule {
     /// 共通にしたレーンで別のレーンの音符を取ったとき、叩いたパッドのレーンの音を鳴らす
     /// （ハイハットと左シンバル、ロータムとフロアタム、シンバルとライドの順）
     pub pad_first: [bool; 3],
     /// 左ペダルを踏んだら、叩いて鳴っているハイハットの音を止める
     pub muting_lp: bool,
+    /// 叩いた音の音量にかける数（上流の ChipVolume）
+    pub volume: f32,
 }
 
 impl Default for HitSoundRule {
@@ -90,6 +96,7 @@ impl Default for HitSoundRule {
         Self {
             pad_first: [false; 3],
             muting_lp: true,
+            volume: 1.0,
         }
     }
 }
@@ -311,7 +318,7 @@ impl Play {
             .map(|c| tempo.chip_ms(c))
             .fold(0.0, f64::max);
         let end_ms = last_chip_ms + 2000.0;
-        let mut chart_sounds = ChartSounds::new(&chart, &tempo);
+        let mut chart_sounds = ChartSounds::mixed(&chart, &tempo, rules.auto_mix);
         // 自動で叩くレーンの音は、BGM と同じく時刻を決めて鳴らす（叩いた音の設定に関わらず）
         chart_sounds.add_auto_notes(
             notes
@@ -319,6 +326,10 @@ impl Play {
                 .filter(|n| auto.contains(&n.lane))
                 .map(|n| (n.ms, n.wav)),
         );
+        let lines = beat_lines(&tempo);
+        if rules.metronome {
+            chart_sounds.add_metronome(lines.iter().map(|l| (l.ms, l.bar)));
+        }
         // 叩き分けの寄せ方は曲全体の音符で決める（練習の区間によって判定が変わらないように）
         let groups = rules.groups.effective_for(&notes);
         let (mut judge, practice) = match practice {
@@ -342,7 +353,7 @@ impl Play {
                 None
             }
         };
-        let sounds = match &audio {
+        let mut sounds = match &audio {
             Some(a) => load_sounds(
                 &chart,
                 &chart_sounds,
@@ -351,6 +362,11 @@ impl Play {
             ),
             None => HashMap::new(),
         };
+        // メトロノームの音は NX のスキンに無いので、数え始めと同じ作った音を使う
+        if let (true, Some(a)) = (rules.metronome, &audio) {
+            sounds.insert(METRONOME_BAR, click(a.rate(), true));
+            sounds.insert(METRONOME_BEAT, click(a.rate(), false));
+        }
         let mut section_audio = None;
         // 練習でなければ、自動で鳴らす音（BGM・効果音など）は時刻が近づいたものから出力に渡す（`lay_auto`）。
         // 練習は区間の自動で鳴らす音を 1 本にまとめ、周の速度に伸ばして鳴らす
@@ -398,7 +414,7 @@ impl Play {
             input_offset_ms,
             drum_sounds,
             fx: Vec::new(),
-            lines: beat_lines(&tempo),
+            lines,
             bpm: 60_000.0 / (tempo.beat_to_ms(1.0) - tempo.beat_to_ms(0.0)).max(1.0),
             last_chip_ms,
             preimage: preimage_path(&chart, path),
@@ -771,7 +787,8 @@ impl Play {
                     && let Some(s) = self.sounds.get(&w)
                 {
                     let (gain, pan) = self.chart_sounds.gain_pan(w);
-                    a.play_now_panned(s, gain * f32::from(velocity) / 127.0, pan, tag);
+                    let gain = gain * self.hit_sounds.volume * f32::from(velocity) / 127.0;
+                    a.play_now_panned(s, gain, pan, tag);
                 }
             }
         }
@@ -1175,7 +1192,7 @@ mod tests {
                 groups: common,
                 hit_sounds: HitSoundRule {
                     pad_first: [true, false, false],
-                    muting_lp: true,
+                    ..Default::default()
                 },
                 ..Default::default()
             },
@@ -1186,6 +1203,35 @@ mod tests {
         assert_eq!(pad_first.hit_wav(DrumLane::HHO, &hh, 4000.0), 1);
         // 同じレーンなら譜面の音のまま
         assert_eq!(pad_first.hit_wav(DrumLane::HH, &hh, 4000.0), 1);
+    }
+
+    #[test]
+    fn metronome_and_bgm_follow_the_rules() {
+        // BPM 120（1 小節 2000ms）。BGM（wav 01）は小節 1 の頭、HH（wav 02）は小節 2 の頭
+        let text = "#BPM 120\n#00101: 01\n#00211: 02\n";
+        let wavs = |p: &Play| -> Vec<(f64, u16)> {
+            p.chart_sounds.auto.iter().map(|v| (v.ms, v.wav)).collect()
+        };
+        let plain = load_text("metronome-off", text, &Rules::default());
+        assert_eq!(wavs(&plain), vec![(2000.0, 1)]);
+        let on = load_text(
+            "metronome-on",
+            text,
+            &Rules {
+                metronome: true,
+                auto_mix: AutoMix {
+                    bgm: false,
+                    shift_ms: 30.0,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        );
+        let all = wavs(&on);
+        // BGM は鳴らさず、メトロノームは BGMAdjust でずらさない
+        assert!(all.iter().all(|&(_, w)| w != 1));
+        assert_eq!(all[..2], [(0.0, METRONOME_BAR), (500.0, METRONOME_BEAT)]);
+        assert!(all.contains(&(4000.0, METRONOME_BAR)));
     }
 
     #[test]

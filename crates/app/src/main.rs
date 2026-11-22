@@ -61,6 +61,7 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowId};
 
+use crate::chart_sound::AutoMix;
 use crate::config::Config;
 use crate::config_view::{ConfigAction, ConfigInfo, ConfigInput, ConfigView, Setting};
 use crate::game::{GaugeRule, HitSoundRule, Outcome, Play, Rules};
@@ -633,7 +634,14 @@ impl App {
             hit_sounds: HitSoundRule {
                 pad_first: v.pad_sound_first(),
                 muting_lp: v.flag(settings::MUTING_LP),
+                volume: v.number(settings::CHIP_VOLUME) as f32 / 100.0,
             },
+            auto_mix: AutoMix {
+                gain: v.number(settings::AUTO_VOLUME) as f32 / 100.0,
+                bgm: v.flag(settings::BGM_SOUND),
+                shift_ms: v.number(settings::BGM_ADJUST) as f64,
+            },
+            metronome: v.flag(settings::METRONOME),
         }
     }
 

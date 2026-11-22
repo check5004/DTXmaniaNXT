@@ -339,6 +339,33 @@ const fn priority(key: &'static str, name: &'static str, desc: &'static str) -> 
     }
 }
 
+/// 音量と鳴らすもの（上流の ChipVolume、AutoVolume、BGM Sound、BGMAdjust、Metronome）
+pub const CHIP_VOLUME: &str = "chip_volume";
+pub const AUTO_VOLUME: &str = "auto_volume";
+pub const BGM_SOUND: &str = "bgm_sound";
+pub const BGM_ADJUST: &str = "bgm_adjust";
+pub const METRONOME: &str = "metronome";
+
+/// 音量（0〜100 %、5 刻み）
+const fn volume(key: &'static str, name: &'static str, default: i64, desc: &'static str) -> Def {
+    Def {
+        key,
+        group: Group::Sound,
+        section: "音量",
+        name,
+        kind: Kind::Number {
+            min: 0,
+            max: 100,
+            step: 5,
+            default,
+            unit: " %",
+            zero: None,
+        },
+        desc,
+        in_play: false,
+    }
+}
+
 const RULE_SECTION: &str = "演奏の決まり";
 
 /// ゲージの減り方の選択肢（上流 `EDamageLevel`。並びは MISS の減りにかける数 [`DAMAGE_FACTORS`] と同じ）
@@ -641,6 +668,52 @@ pub const ALL: &[Def] = &[
         name: "左ペダルでハイハットを止める（Muting LP）",
         kind: Kind::Toggle { default: true },
         desc: "左ペダルを踏むと、鳴っているハイハットの音（叩いた音）を止めます。",
+        in_play: false,
+    },
+    volume(
+        CHIP_VOLUME,
+        "叩いた音の音量（ChipVolume）",
+        100,
+        "叩いたときに鳴らす譜面の音の音量です（全体の音量にさらにかけます）。",
+    ),
+    volume(
+        AUTO_VOLUME,
+        "自動で鳴らす音の音量（AutoVolume）",
+        80,
+        "BGM・効果音・自動で叩くレーンなど、自動で鳴らす譜面の音の音量です（全体の音量にさらにかけます）。NX と同じく既定は 80 %。",
+    ),
+    Def {
+        key: BGM_SOUND,
+        group: Group::Sound,
+        section: "鳴らすもの",
+        name: "BGM（BGM Sound）",
+        kind: Kind::Toggle { default: true },
+        desc: "OFF にすると、譜面の BGM（チャンネル 01）を鳴らしません。効果音やギター・ベースの音は鳴らします。",
+        in_play: false,
+    },
+    Def {
+        key: METRONOME,
+        group: Group::Sound,
+        section: "鳴らすもの",
+        name: "メトロノーム（Metronome）",
+        kind: Kind::Toggle { default: false },
+        desc: "小節の頭と拍でクリックを鳴らします（拍は小さめ）。区間の練習では、遅くした速さに合わせて鳴ります。",
+        in_play: false,
+    },
+    Def {
+        key: BGM_ADJUST,
+        group: Group::Timing,
+        section: "補正",
+        name: "BGM のずらし（BGMAdjust）",
+        kind: Kind::Number {
+            min: -99,
+            max: 99,
+            step: 1,
+            default: 0,
+            unit: " ms",
+            zero: None,
+        },
+        desc: "BGM と効果音を鳴らす時刻をずらします（プラスで遅く）。譜面と BGM が合っていない曲に。\n-99 〜 99 ms。",
         in_play: false,
     },
     hit_window(
@@ -1033,6 +1106,16 @@ mod tests {
         assert_eq!(v.pad_sound_first(), [false, false, true]);
         v.change(BD_GROUP, 1);
         assert_eq!(v.lane_groups().bd, BdGroup::LeftPedalsCommon);
+    }
+
+    #[test]
+    fn sound_settings_default_to_upstream() {
+        let mut v = Values::default();
+        assert_eq!(v.number(CHIP_VOLUME), 100);
+        assert_eq!(v.label(AUTO_VOLUME), "80 %");
+        assert!(v.flag(BGM_SOUND) && !v.flag(METRONOME));
+        v.change(BGM_ADJUST, -150);
+        assert_eq!(v.number(BGM_ADJUST), -99);
     }
 
     #[test]
