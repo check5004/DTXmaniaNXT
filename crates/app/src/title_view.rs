@@ -291,15 +291,19 @@ impl TitleView {
     /// 画面の下の操作の案内（設定の画面と同じ帯）。決定ですることは、選んでいる行で変える。
     /// LC（戻る）はこの画面では使わない（叩き間違えで終わらないように。キーボードの Esc だけ）
     fn hints(&self) -> Vec<ui::Hint<'static>> {
-        let mut v: Vec<ui::Hint<'static>> = vec![(&[Pad::HT], "上"), (&[Pad::LT], "下")];
+        let mut v: Vec<ui::Hint<'static>> =
+            vec![(&[Pad::HT], t("Up", "上")), (&[Pad::LT], t("Down", "下"))];
         let decide = match self.selected() {
-            TitleItem::GameStart => Some("はじめる（Enter）"),
-            TitleItem::Config => Some("設定を開く（Enter）"),
-            TitleItem::Exit => Some("終わる（Enter）"),
+            TitleItem::GameStart => Some(t("Start (Enter)", "はじめる（Enter）")),
+            TitleItem::Config => Some(t("Open Settings (Enter)", "設定を開く（Enter）")),
+            TitleItem::Exit => Some(t("Quit (Enter)", "終わる（Enter）")),
             TitleItem::Update => match &self.update {
-                Status::Available(_) => Some("更新する（Enter）"),
-                Status::Failed(_) => Some("もう一度落とす（Enter）"),
-                Status::Ready(_) => Some("再起動して入れ替える（Enter）"),
+                Status::Available(_) => Some(t("Update (Enter)", "更新する（Enter）")),
+                Status::Failed(_) => Some(t("Retry Download (Enter)", "もう一度落とす（Enter）")),
+                Status::Ready(_) => Some(t(
+                    "Restart to Update (Enter)",
+                    "再起動して入れ替える（Enter）",
+                )),
                 // 落としている間は、決めても何もしない
                 Status::Downloading { .. } | Status::Idle => None,
             },
@@ -307,7 +311,7 @@ impl TitleView {
         if let Some(d) = decide {
             v.push((&[Pad::CY, Pad::RD], d));
         }
-        v.push((&[], "終わる（Esc）"));
+        v.push((&[], t("Quit (Esc)", "終わる（Esc）")));
         v
     }
 

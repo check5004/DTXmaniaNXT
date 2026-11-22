@@ -1817,12 +1817,19 @@ impl App {
             ItemId::OpenEditor => match editor::open() {
                 Ok(editor::Opened::Opened) => {
                     log::info!("opened the chart editor: {}", editor::URL);
-                    self.config_toast("ブラウザで譜面エディタを開きました".to_owned());
+                    self.config_toast(
+                        t(
+                            "Opened the chart editor in your browser",
+                            "ブラウザで譜面エディタを開きました",
+                        )
+                        .to_owned(),
+                    );
                 }
                 Ok(editor::Opened::Recently) => {}
                 Err(e) => {
                     log::warn!("could not open the chart editor: {e}");
-                    self.config_toast(format!(
+                    self.config_toast(tf!(
+                        "Couldn't open a browser. Please open {} yourself.",
                         "ブラウザを開けませんでした。{} を開いてください",
                         editor::URL
                     ));
