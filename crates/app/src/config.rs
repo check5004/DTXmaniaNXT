@@ -12,7 +12,7 @@ use crate::practice::PracticePrefs;
 use crate::settings::{DisplayMode, Values};
 use crate::stretch::Pitch;
 use crate::update::UpdateMode;
-use crate::window_mode::MonitorPick;
+use crate::window_mode::{MonitorPick, Placement};
 
 /// 設定の画面で全体の音量を 1 回で変える幅（%）
 pub const MASTER_VOLUME_STEP: u8 = 5;
@@ -88,6 +88,9 @@ pub struct Config {
     /// 全画面とボーダーレスを出すモニター（`None` なら窓のあるモニター）。ウィンドウのときは、起動したときにこの真ん中に開く
     #[serde(skip_serializing_if = "Option::is_none")]
     pub monitor: Option<MonitorPick>,
+    /// 前回終えたときのウィンドウの位置と大きさ（全画面やボーダーレスなら、その前のウィンドウの）。次に起動したときに使う
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub window: Option<Placement>,
     /// 設定の表（[`crate::settings`]）の項目の値（config.toml の `[settings]`）。書いていないものは既定
     #[serde(skip_serializing_if = "Values::is_empty")]
     pub settings: Values,
@@ -177,6 +180,7 @@ impl Default for Config {
             last_version: String::new(),
             last_full_mode: String::new(),
             monitor: None,
+            window: None,
             settings: Values::default(),
         }
     }

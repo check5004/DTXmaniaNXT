@@ -145,9 +145,15 @@ fn display_number(name: &str) -> Option<u32> {
 
 /// つながっているモニター（左から、同じなら上から）
 pub fn monitors(window: &Window) -> Vec<MonitorInfo> {
-    let primary = window.primary_monitor();
-    let mut all: Vec<MonitorInfo> = window
-        .available_monitors()
+    monitors_in(window.available_monitors(), window.primary_monitor())
+}
+
+/// [`monitors`] の、窓を開く前（`ActiveEventLoop` の一覧から）
+pub fn monitors_in(
+    available: impl Iterator<Item = MonitorHandle>,
+    primary: Option<MonitorHandle>,
+) -> Vec<MonitorInfo> {
+    let mut all: Vec<MonitorInfo> = available
         .map(|m| MonitorInfo::of(&m, primary.as_ref()))
         .collect();
     all.sort_by_key(|m| (m.rect.x, m.rect.y));
@@ -235,25 +241,123 @@ pub fn borderless_rect(monitor: Rect, all: &[Rect]) -> Rect {
         .unwrap_or(sides[0])
 }
 
-/// ウィンドウのときの位置と大きさ（ウィンドウから離れるときに残し、戻るときに使う）
-#[derive(Debug, Clone, Copy)]
+/// ウィンドウのときの位置と大きさ（物理ドット）。ウィンドウから離れるときに残して戻るときに使い、
+/// 終わるときに config.toml の `[window]` に残して次に起動したときに使う
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Placement {
-    pos: PhysicalPosition<i32>,
-    size: PhysicalSize<u32>,
-    maximized: bool,
+    /// 窓の外側の左上
+    pub x: i32,
+    pub y: i32,
+    /// 窓の中の大きさ
+    pub w: u32,
+    pub h: u32,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub maximized: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 impl Placement {
-    fn of(window: &Window) -> Option<Self> {
+    /// 今の窓の位置と大きさ（しまってあるときは分からない）
+    pub fn of(window: &Window) -> Option<Self> {
         if window.is_minimized() == Some(true) {
             return None;
         }
+        let pos = window.outer_position().ok()?;
+        let size = window.inner_size();
         Some(Self {
-            pos: window.outer_position().ok()?,
-            size: window.inner_size(),
+            x: pos.x,
+            y: pos.y,
+            w: size.width,
+            h: size.height,
             maximized: window.is_maximized(),
         })
     }
+
+    pub fn pos(&self) -> PhysicalPosition<i32> {
+        PhysicalPosition::new(self.x, self.y)
+    }
+
+    pub fn size(&self) -> PhysicalSize<u32> {
+        PhysicalSize::new(self.w, self.h)
+    }
+}
+
+/// 起動したときのウィンドウの位置と大きさ。`saved` は前回終えたときの、`size` は設定の大きさ（前回のままなら `None`）、
+/// `target` は選んだモニター（`all` の何番目か）。
+///
+/// - 大きさは設定の大きさ、無ければ前回の大きさ。どちらも無ければ `None`（OS に任せる）
+/// - 位置は前回の位置。ただし選んだモニターがあってそこに無いとき、どのモニターにも入っていないときは、
+///   選んだモニター（無ければメイン）の真ん中
+/// - モニターに入らない大きさは、16:9 のまま入る大きさに縮める
+/// - 最大化は前回のままのときだけ戻す
+pub fn opening(
+    saved: Option<&Placement>,
+    size: Option<(u32, u32)>,
+    all: &[MonitorInfo],
+    target: Option<usize>,
+) -> Option<Placement> {
+    let (w, h) = size.or(saved.map(|s| (s.w, s.h)))?;
+    // 前回の窓の左上の少し内側（題名の帯）が入っているモニター
+    let home = |s: &Placement| {
+        all.iter().position(|m| {
+            let (x, y) = (s.x + 40, s.y + 16);
+            x >= m.rect.x && x < m.rect.x + m.rect.w && y >= m.rect.y && y < m.rect.y + m.rect.h
+        })
+    };
+    let keep = saved.filter(|s| match (home(s), target) {
+        (Some(at), Some(t)) => at == t,
+        (at, None) => at.is_some(),
+        (None, Some(_)) => false,
+    });
+    let monitor = target
+        .or_else(|| keep.and_then(home))
+        .or_else(|| all.iter().position(|m| m.primary))
+        .or((!all.is_empty()).then_some(0))
+        .map(|i| all[i].rect);
+    let (w, h) = monitor.map_or((w, h), |m| fit((w, h), m));
+    let (x, y) = match (keep, monitor) {
+        (Some(s), _) => (s.x, s.y),
+        (None, Some(m)) => (
+            m.x + (m.w - w as i32).max(0) / 2,
+            m.y + (m.h - h as i32).max(0) / 2,
+        ),
+        (None, None) => (saved.map_or(0, |s| s.x), saved.map_or(0, |s| s.y)),
+    };
+    Some(Placement {
+        x,
+        y,
+        w,
+        h,
+        maximized: size.is_none() && saved.is_some_and(|s| s.maximized),
+    })
+}
+
+/// 窓の中の大きさを、モニター `m` に入るように縮める（枠と題名とタスクバーのぶん、少し余らせる）
+fn fit((w, h): (u32, u32), m: Rect) -> (u32, u32) {
+    let (mw, mh) = ((m.w as f64 * 0.96).max(1.0), (m.h as f64 * 0.88).max(1.0));
+    let k = (mw / w as f64).min(mh / h as f64);
+    if k >= 1.0 {
+        return (w, h);
+    }
+    ((w as f64 * k) as u32, (h as f64 * k) as u32)
+}
+
+/// ウィンドウの大きさを変えて、今のモニターの真ん中に置く（設定の「ウィンドウの大きさ」を選んだとき）
+pub fn resize(window: &Window, size: (u32, u32)) {
+    if window.is_maximized() {
+        window.set_maximized(false);
+    }
+    let Some(m) = window.current_monitor() else {
+        let _ = window.request_inner_size(PhysicalSize::new(size.0, size.1));
+        return;
+    };
+    let (w, h) = fit(size, Rect::of(&m));
+    let size = PhysicalSize::new(w, h);
+    let _ = window.request_inner_size(size);
+    window.set_outer_position(center_of(&m, size));
 }
 
 /// 窓の出し方を `from` から `to` に変える（`from` が `None` なら開いたばかり）。
@@ -280,8 +384,8 @@ pub fn apply(
             window.set_resizable(true);
             match saved {
                 Some(p) => {
-                    window.set_outer_position(p.pos);
-                    let _ = window.request_inner_size(p.size);
+                    window.set_outer_position(p.pos());
+                    let _ = window.request_inner_size(p.size());
                     if p.maximized {
                         window.set_maximized(true);
                     }
@@ -522,6 +626,65 @@ mod tests {
         assert_eq!(find(&pick, &renamed), Some(0));
         // 外れていれば無し（窓のあるモニターに出す）
         assert_eq!(find(&pick, &all[..1]), None);
+    }
+
+    fn place(x: i32, y: i32, w: u32, h: u32) -> Placement {
+        Placement {
+            x,
+            y,
+            w,
+            h,
+            maximized: false,
+        }
+    }
+
+    #[test]
+    fn window_opens_where_it_was_last_time() {
+        let all = [
+            info(r"\\.\DISPLAY1", 0, 0, 2560, 1440, true),
+            info(r"\\.\DISPLAY2", 2560, 0, 1920, 1080, false),
+        ];
+        // 前回が無く、大きさも決めていなければ OS に任せる
+        assert_eq!(opening(None, None, &all, None), None);
+        // 前回のまま
+        let last = Placement {
+            maximized: true,
+            ..place(2700, 100, 1600, 900)
+        };
+        assert_eq!(opening(Some(&last), None, &all, None), Some(last));
+        assert_eq!(opening(Some(&last), None, &all, Some(1)), Some(last));
+        // 決めた大きさなら位置だけ前回のまま（最大化は戻さない）
+        assert_eq!(
+            opening(Some(&last), Some((1280, 720)), &all, None),
+            Some(place(2700, 100, 1280, 720))
+        );
+        // 選んだモニターに無ければ、そのモニターの真ん中
+        assert_eq!(
+            opening(Some(&last), Some((1280, 720)), &all, Some(0)),
+            Some(place(640, 360, 1280, 720))
+        );
+        // 前回のモニターが外れていたら、メインの真ん中
+        let gone = place(-1900, 0, 1600, 900);
+        assert_eq!(
+            opening(Some(&gone), None, &all, None),
+            Some(place(480, 270, 1600, 900))
+        );
+        // 前回が無く大きさを決めたら、選んだモニター（無ければメイン）の真ん中
+        assert_eq!(
+            opening(None, Some((1920, 1080)), &all, None),
+            Some(place(320, 180, 1920, 1080))
+        );
+    }
+
+    #[test]
+    fn window_size_is_shrunk_to_fit_the_monitor() {
+        let small = [info(r"\\.\DISPLAY1", 0, 0, 1920, 1080, true)];
+        let o = opening(None, Some((2560, 1440)), &small, None).unwrap();
+        assert!(o.w <= 1920 && o.h < 1080, "{o:?}");
+        // 16:9 のまま
+        assert!((o.w as f64 / o.h as f64 - 16.0 / 9.0).abs() < 0.01, "{o:?}");
+        assert!(o.x >= 0 && o.y >= 0);
+        assert_eq!(fit((1280, 720), small[0].rect), (1280, 720));
     }
 
     #[test]
