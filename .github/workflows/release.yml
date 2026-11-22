@@ -27,7 +27,7 @@ jobs:
       sha: ${{ steps.plan.outputs.sha }}
       run: ${{ steps.plan.outputs.run }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - id: plan
         run: bash .github/release/plan.sh
 
@@ -44,14 +44,14 @@ jobs:
     continue-on-error: ${{ matrix.os != 'windows-latest' }}
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           ref: ${{ needs.plan.outputs.sha }}
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: bash .github/release/build.sh
         shell: bash
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: bin-${{ runner.os }}
           path: out/
@@ -62,11 +62,11 @@ jobs:
     if: ${{ !cancelled() && needs.plan.outputs.run == 'true' }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           ref: ${{ needs.plan.outputs.sha }}
       - uses: dtolnay/rust-toolchain@stable
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: bin
       - run: bash .github/release/package.sh "${{ needs.plan.outputs.tag }}"
