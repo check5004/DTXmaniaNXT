@@ -1,0 +1,75 @@
+name: Release
+
+# Cargo.toml の version を上げて main に入れると、タグ v<version> と GitHub のリリースを作り、
+# Windows（必須）と macOS・Linux の実行ファイルを載せる。そのタグがもうあれば何もしない。
+# Run workflow で動かすと、タグのコミットから作り直してファイルを差し替える。
+# 中身は .github/release/ のスクリプト（ワークフローを触らずに直せるように）。
+on:
+  push:
+    branches: [main]
+    paths: [Cargo.toml, .github/workflows/release.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.plan.outputs.tag }}
+      sha: ${{ steps.plan.outputs.sha }}
+      run: ${{ steps.plan.outputs.run }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: plan
+        run: bash .github/release/plan.sh
+
+  build:
+    needs: plan
+    if: needs.plan.outputs.run == 'true'
+    name: build (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    # Windows は必須。ほかの OS が落ちても、そのぶんを抜いてリリースする
+    continue-on-error: ${{ matrix.os != 'windows-latest' }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: bash .github/release/build.sh
+        shell: bash
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bin-${{ runner.os }}
+          path: out/
+          if-no-files-found: error
+
+  release:
+    needs: [plan, build]
+    if: ${{ !cancelled() && needs.plan.outputs.run == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/download-artifact@v4
+        with:
+          path: bin
+      - run: bash .github/release/package.sh "${{ needs.plan.outputs.tag }}"
+      - run: bash .github/release/publish.sh "${{ needs.plan.outputs.tag }}" "${{ needs.plan.outputs.sha }}"
+        env:
+          GH_TOKEN: ${{ github.token }}
