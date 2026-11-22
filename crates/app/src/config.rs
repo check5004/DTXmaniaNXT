@@ -4,6 +4,7 @@
 use std::path::PathBuf;
 
 use dtx::DrumLane;
+use engine::input::MidiProfile;
 use engine::practice::{LoopStyle, PassRule, SpeedPlan, snap_speed};
 use serde::{Deserialize, Serialize};
 
@@ -13,8 +14,9 @@ use crate::stretch::Pitch;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
-    /// DTXManiaNX のフォルダ。選んだときに、使っているスキン（画面の画像と音）と Config.ini を
-    /// 設定のフォルダの `nx` へ写し（[`Config::nx_copy_dir`]）、曲のフォルダをここから足す
+    /// 0.1 の設定で選んでいた DTXManiaNX のフォルダ。読むだけで書かない
+    /// （起動したときにその NX の設定を一度だけ引き継ぐ。[`Config::take_over_nx`]）
+    #[serde(skip_serializing)]
     pub nx_dir: Option<PathBuf>,
     /// 曲のフォルダ
     pub song_dirs: Vec<PathBuf>,
@@ -40,9 +42,15 @@ pub struct Config {
     pub practice_target: u32,
     /// 遅くするときの音程（"keep" は保つ、"tape" は音程ごと遅く）
     pub practice_pitch: String,
-    /// ゲージが尽きたら途中で終わる（STAGE FAILED）。書いていなければ NX の Config.ini の `StageFailed` に従う
+    /// ゲージが尽きたら途中で終わる（STAGE FAILED）。書いていなければ ON（上流の既定）
     pub stage_failed: Option<bool>,
-    /// 設定の画面で変えたパッドの割り当て（Roland の既定と NX の割り当てより優先する）
+    /// 判定の下のずれの数字（0 は出さない、1 は出す、2 は PERFECT 以外だけ。上流 `ShowLagTime`）
+    pub show_lag_time: u8,
+    /// ずれの数字の色（0 は TYPE-A：早いを青・遅いを赤、1 は TYPE-B：早いを赤・遅いを青。上流 `ShowLagTimeColor`）
+    pub show_lag_time_color: u8,
+    /// 結果の画面に早かった数と遅かった数を出す（上流 `ShowLagHitCount`）
+    pub show_lag_hit_count: bool,
+    /// 設定の画面で変えたパッドの割り当て（Roland の既定より優先する）
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub pad_notes: Vec<PadNote>,
 }
@@ -72,6 +80,9 @@ impl Default for Config {
             practice_target: SpeedPlan::DEFAULT_TARGET,
             practice_pitch: Pitch::default().name().to_owned(),
             stage_failed: None,
+            show_lag_time: 1,
+            show_lag_time_color: 0,
+            show_lag_hit_count: false,
             pad_notes: Vec::new(),
         }
     }
@@ -87,16 +98,66 @@ impl Config {
         Some(Self::dir()?.join("config.toml"))
     }
 
-    /// NX から写したスキンと Config.ini を置くフォルダ（NX のフォルダと同じ形）
-    pub fn nx_copy_dir() -> Option<PathBuf> {
-        Some(Self::dir()?.join("nx"))
+    /// 0.1 で DTXManiaNX のフォルダを選んでいたら、その NX のパッドの割り当てと表示の設定を一度だけ引き継ぐ
+    /// （曲のフォルダは 0.1 が `song_dirs` に足してある）。0.1 が設定のフォルダの `nx` へ写した NX のスキンと
+    /// Config.ini は、もう使わないので消す。引き継いだら true（保存は呼ぶ側で）
+    pub fn take_over_nx(&mut self) -> bool {
+        let Some(nx_dir) = self.nx_dir.take() else {
+            return false;
+        };
+        let copy = Self::dir()
+            .map(|d| d.join("nx"))
+            .filter(|d| nx::is_install(d));
+        let install = copy
+            .as_deref()
+            .and_then(nx::Install::open)
+            .or_else(|| nx::Install::open(&nx_dir));
+        if let Some(i) = &install {
+            self.adopt_nx(&i.config);
+            log::info!(
+                "took over the settings of DTXManiaNX ({})",
+                i.root.display()
+            );
+        }
+        if let Some(c) = copy
+            && let Err(e) = std::fs::remove_dir_all(&c)
+        {
+            log::warn!("cannot remove {}: {e}", c.display());
+        }
+        true
     }
 
-    /// 曲のフォルダのどれかが NX のフォルダの中にある（NX を消すと曲も消える）
-    pub fn songs_in_nx(&self) -> bool {
-        self.nx_dir
-            .as_deref()
-            .is_some_and(|nx| self.song_dirs.iter().any(|d| d.starts_with(nx)))
+    /// NX の Config.ini のパッドの割り当てと表示の設定を引き継ぐ。
+    /// パッドは Roland の既定と違うものだけ足し、この設定の画面で変えた割り当てをそのまま優先する
+    fn adopt_nx(&mut self, nx: &nx::NxConfig) {
+        let roland = MidiProfile::roland_vdrums().lane_notes();
+        let mut pads: Vec<PadNote> = nx
+            .midi_notes()
+            .into_iter()
+            .filter(|&(note, lane)| {
+                lane != DrumLane::LBD
+                    && !self.pad_notes.iter().any(|p| p.note == note)
+                    && !roland.get(&lane).is_some_and(|n| n.contains(&note))
+            })
+            .map(|(note, lane)| PadNote {
+                note,
+                lane: lane.name().to_owned(),
+            })
+            .collect();
+        pads.append(&mut self.pad_notes);
+        self.pad_notes = pads;
+        if self.stage_failed.is_none() {
+            self.stage_failed = nx.stage_failed;
+        }
+        // NX で書いていなければ上流の既定（出さない）
+        self.show_lag_time = nx.show_lag_time.unwrap_or(0);
+        self.show_lag_time_color = u8::from(nx.lag_color_swapped);
+        self.show_lag_hit_count = nx.show_lag_hit_count;
+    }
+
+    /// STAGE FAILED にする（書いていなければ ON）
+    pub fn stage_failed(&self) -> bool {
+        self.stage_failed.unwrap_or(true)
     }
 
     pub fn load() -> Self {
@@ -285,11 +346,44 @@ mod tests {
     }
 
     #[test]
+    fn takes_over_nx_settings_once() {
+        // 0.1 の設定：NX のフォルダは読むが、書き戻さない
+        let mut c: Config =
+            toml::from_str("nx_dir = \"/nx\"\n[[pad_notes]]\nnote = 50\nlane = \"FT\"\n").unwrap();
+        assert_eq!(c.nx_dir.as_deref(), Some(std::path::Path::new("/nx")));
+        assert!(!toml::to_string_pretty(&c).unwrap().contains("nx_dir"));
+        let nx = nx::NxConfig::parse(
+            "[System]\nStageFailed=0\nShowLagTime=2\nShowLagTimeColor=1\nShowLagHitCount=1\n\
+             [DrumsKeyAssign]\nSD=M038,M040,M099\nHT=M050\nLBD=M033\n",
+        );
+        c.adopt_nx(&nx);
+        // 38 と 40 は Roland の既定と同じなので足さない。50 はここで変えたほうを残す。LBD は扱わない
+        assert_eq!(
+            c.pad_overrides(),
+            vec![(99, DrumLane::SD), (50, DrumLane::FT)]
+        );
+        assert!(!c.stage_failed());
+        assert_eq!(c.show_lag_time, 2);
+        assert_eq!(c.show_lag_time_color, 1);
+        assert!(c.show_lag_hit_count);
+        // ここで決めた STAGE FAILED は NX より優先する
+        let mut c = Config {
+            stage_failed: Some(true),
+            ..Config::default()
+        };
+        c.adopt_nx(&nx);
+        assert!(c.stage_failed());
+    }
+
+    #[test]
     fn round_trip() {
         let mut c = Config::default();
         c.song_dirs.push(PathBuf::from("曲"));
         c.level = 4;
         c.stage_failed = Some(false);
+        c.show_lag_time = 2;
+        c.show_lag_time_color = 1;
+        c.show_lag_hit_count = true;
         c.assign_pad(60, DrumLane::HT);
         let back: Config = toml::from_str(&toml::to_string_pretty(&c).unwrap()).unwrap();
         assert_eq!(back, c);

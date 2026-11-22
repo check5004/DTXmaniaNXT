@@ -5,7 +5,7 @@
 //! - 判定は MIDI の時刻と音の再生位置で行い、画面のフレームには左右されない
 //! - 電子ドラムが無いときはキーボードで叩ける
 //! - 設定（曲のフォルダ・補正値など）は config.toml に残す
-//! - 画面は DTXManiaNX と同じ画像と配置で描く。画像と音はユーザーの PC にある NX のフォルダから読む
+//! - 画面は DTXManiaNX と同じ画像と配置で描く。画像と音はアプリに入れた NX のスキン（`assets/skin`）
 //! - 起動するとタイトル。そこから選曲と設定へ進む
 
 mod audio;
@@ -26,6 +26,7 @@ mod result_training;
 mod result_view;
 mod select;
 mod sfx;
+mod skin;
 mod songs;
 mod stretch;
 mod text;
@@ -49,7 +50,7 @@ use winit::window::{Window, WindowId};
 use crate::config::Config;
 use crate::config_view::{ConfigAction, ConfigInfo, ConfigInput, ConfigView, Setting};
 use crate::game::{Outcome, Play};
-use crate::gfx::{Canvas, Gfx, Skin};
+use crate::gfx::{Canvas, Gfx};
 use crate::history::History;
 use crate::loading::Loading;
 use crate::midi::MidiIn;
@@ -237,8 +238,6 @@ struct App {
     menu_input: Normalizer,
     /// 選曲の画面で最後に HH を叩いた時刻（2 回で難易度を変える）
     last_hh_us: Option<i64>,
-    /// DTXManiaNX のフォルダ（画面の画像と音、曲のフォルダ、パッドの割り当て）
-    nx: Option<nx::Install>,
     gfx: Gfx,
     /// 選曲画面の動き
     view: SelectView,
@@ -285,12 +284,9 @@ enum Decided {
     Title,
 }
 
-/// 電子ドラムのノート番号の割り当て。Roland の既定に、NX で使っていた割り当て、設定の画面で変えた割り当ての順に重ねる
-fn midi_profile(nx: Option<&nx::Install>, config: &Config) -> MidiProfile {
+/// 電子ドラムのノート番号の割り当て。Roland の既定に、設定の画面で変えた割り当てを重ねる
+fn midi_profile(config: &Config) -> MidiProfile {
     let mut p = MidiProfile::roland_vdrums();
-    if let Some(nx) = nx {
-        p.apply_lanes(&nx.config.midi_notes());
-    }
     p.apply_lanes(&config.pad_overrides());
     p
 }
@@ -322,52 +318,6 @@ fn keyboard_key(lane: DrumLane) -> Option<String> {
         .map(|(k, _)| format!("{k:?}").trim_start_matches("Key").to_owned())
 }
 
-/// 使う NX（画面の画像と音、Config.ini）。NX から写したものがあればそれを使う。
-/// まだ写していなければ、設定の NX のフォルダか、NXT の exe が置いてある NX のフォルダから写す
-fn find_nx(config: &mut Config) -> Option<nx::Install> {
-    if let Some(i) = Config::nx_copy_dir().and_then(|d| nx::Install::open(&d)) {
-        return Some(i);
-    }
-    let original = match config.nx_dir.as_deref().and_then(nx::Install::open) {
-        Some(i) => i,
-        None => {
-            let exe_dir = std::env::current_exe().ok()?.parent()?.to_owned();
-            let i = nx::Install::open(&exe_dir).filter(|i| nx::is_skin(&i.skin))?;
-            config.nx_dir = Some(exe_dir);
-            i
-        }
-    };
-    let (i, _) = adopt_nx(config, &original);
-    config.save();
-    Some(i)
-}
-
-/// NX を使い始める：スキンと Config.ini を設定のフォルダへ写し、曲のフォルダを足す。
-/// 写したもの（写せなければ NX そのもの）と、曲のフォルダを足したかを返す。保存は呼ぶ側で
-fn adopt_nx(config: &mut Config, original: &nx::Install) -> (nx::Install, bool) {
-    let mut added = false;
-    for d in original.song_dirs().into_iter().filter(|d| d.is_dir()) {
-        added |= config.add_song_dir(d);
-    }
-    let copied = Config::nx_copy_dir().map(|d| nx::copy_install(original, &d));
-    let i = match copied {
-        Some(Ok(i)) => {
-            log::info!(
-                "copied the NX skin {} to {}",
-                original.skin.display(),
-                i.root.display()
-            );
-            i
-        }
-        Some(Err(e)) => {
-            log::warn!("cannot copy the NX skin: {e}");
-            original.clone()
-        }
-        None => original.clone(),
-    };
-    (i, added)
-}
-
 /// 2 回叩きと見なす間（上流と同じ 0.5 秒）
 const DOUBLE_HIT_US: i64 = 500_000;
 
@@ -381,13 +331,8 @@ impl App {
             }
         };
         let mut config = Config::load();
-        let nx = find_nx(&mut config);
-        if let Some(n) = &nx {
-            log::info!(
-                "DTXManiaNX: {} (skin {})",
-                n.root.display(),
-                n.skin.display()
-            );
+        if config.take_over_nx() {
+            config.save();
         }
         let mut pending = None;
         // 引数がフォルダなら曲のフォルダに足し、譜面ならすぐ遊ぶ
@@ -405,10 +350,10 @@ impl App {
             songs.rescan(config.song_dirs.clone());
         }
         let egui_ctx = egui::Context::default();
-        let gfx = Gfx::new(&egui_ctx, nx.as_ref().map(|n| n.skin.clone()));
+        let gfx = Gfx::new(&egui_ctx);
         let mut sfx = Sfx::new();
-        sfx.load(&gfx.skin);
-        let menu_input = Normalizer::new(midi_profile(nx.as_ref(), &config));
+        sfx.load();
+        let menu_input = Normalizer::new(midi_profile(&config));
         Self {
             window: None,
             gpu: None,
@@ -423,7 +368,6 @@ impl App {
             message: None,
             menu_input,
             last_hh_us: None,
-            nx,
             gfx,
             view: SelectView::new(),
             sfx,
@@ -467,36 +411,7 @@ impl App {
 
     /// パッドの割り当てが変わったので、メニューの操作に使う割り当ても作り直す
     fn refresh_pads(&mut self) {
-        self.menu_input = Normalizer::new(midi_profile(self.nx.as_ref(), &self.config));
-    }
-
-    /// DTXManiaNX のフォルダを使う
-    fn set_nx(&mut self, dir: PathBuf) {
-        let Some(i) = nx::Install::open(&dir) else {
-            self.message = Some(format!(
-                "DTXManiaNX のフォルダではありません（System フォルダがありません）: {}",
-                dir.display()
-            ));
-            return;
-        };
-        log::info!(
-            "DTXManiaNX: {} (skin {})",
-            i.root.display(),
-            i.skin.display()
-        );
-        self.config.nx_dir = Some(dir);
-        // 選ぶたびに写し直す（NX でスキンや割り当てを変えたときも、選び直せば揃う）
-        let (i, added) = adopt_nx(&mut self.config, &i);
-        self.config.save();
-        self.gfx.skin = Skin::new(&self.egui_ctx, Some(i.skin.clone()));
-        self.sfx.load(&self.gfx.skin);
-        self.menu_input = Normalizer::new(midi_profile(Some(&i), &self.config));
-        self.nx = Some(i);
-        self.message = None;
-        if added {
-            self.songs.rescan(self.config.song_dirs.clone());
-        }
-        self.view.enter();
+        self.menu_input = Normalizer::new(midi_profile(&self.config));
     }
 
     /// カーソルを動かす
@@ -521,13 +436,7 @@ impl App {
         let label = self.songs.chart_label(&path);
         // 音が無いときも、読み込みの画面が一瞬で消えないように少しは出す
         let wait = self.sfx.play_loading().max(MIN_LOADING);
-        self.screen = Screen::Loading(Box::new(Loading::new(
-            path,
-            practice,
-            &label,
-            self.gfx.skin.dir(),
-            wait,
-        )));
+        self.screen = Screen::Loading(Box::new(Loading::new(path, practice, &label, wait)));
     }
 
     /// 曲を読み込む（読み込みの画面を 1 回出してから呼ぶ。時間がかかる）
@@ -541,7 +450,7 @@ impl App {
             )?,
             None => Play::load(path, self.config.input_offset_ms, self.config.drum_sounds)?,
         };
-        p.set_midi_profile(midi_profile(self.nx.as_ref(), &self.config));
+        p.set_midi_profile(midi_profile(&self.config));
         if p.practice.is_some() {
             let band = self
                 .history
@@ -558,8 +467,8 @@ impl App {
     fn enter_play(&mut self, mut play: Play) {
         let label = self.songs.chart_label(&play.path);
         play.begin();
-        let lag = play_view::LagDigits::from_nx(self.nx.as_ref().map(|n| &n.config));
-        let view = PlayView::new(&play, self.gfx.skin.dir(), &label, lag);
+        let lag = play_view::LagDigits::from_config(&self.config);
+        let view = PlayView::new(&play, &label, lag);
         self.message = None;
         self.screen = Screen::Play(Box::new(play), Box::new(view));
     }
@@ -609,12 +518,9 @@ impl App {
         }
     }
 
-    /// ゲージが尽きたら途中で終わるか（設定に無ければ NX の Config.ini、それも無ければ上流と同じく終わる）
+    /// ゲージが尽きたら途中で終わるか（設定に無ければ上流と同じく終わる）
     fn stage_failed_enabled(&self) -> bool {
-        self.config
-            .stage_failed
-            .or_else(|| self.nx.as_ref().and_then(|n| n.config.stage_failed))
-            .unwrap_or(true)
+        self.config.stage_failed()
     }
 
     /// 演奏中に設定を変えたことを知らせる
@@ -710,10 +616,9 @@ impl App {
             outcome.tendencies = self.history.tendencies();
         }
         let lag_counts = self
-            .nx
-            .as_ref()
-            .filter(|n| n.config.show_lag_hit_count)
-            .map(|n| n.config.lag_color_swapped);
+            .config
+            .show_lag_hit_count
+            .then_some(self.config.show_lag_time_color == 1);
         let view = ResultView::new(ResultInfo {
             title: outcome.title.clone(),
             artist: outcome.artist.clone(),
@@ -920,7 +825,7 @@ impl App {
         let Screen::Config(view, _) = &mut self.screen else {
             return;
         };
-        let info = config_info(&self.config, self.nx.as_ref(), &self.midi, &self.songs);
+        let info = config_info(&self.config, &self.midi, &self.songs);
         let items = config_view::items(view.list(), &info);
         let r = view.input(input, &items);
         self.config_response(r);
@@ -937,11 +842,6 @@ impl App {
 
     fn config_action(&mut self, action: ConfigAction) {
         match action {
-            ConfigAction::ChooseNx => {
-                if let Some(dir) = ui::pick_folder("DTXManiaNX のフォルダを選ぶ") {
-                    self.set_nx(dir);
-                }
-            }
             ConfigAction::AddSongDir => {
                 if let Some(dir) = ui::pick_folder("曲のフォルダを選ぶ") {
                     self.add_song_dir(dir);
@@ -982,22 +882,21 @@ impl App {
                         let steps = (f64::from(c.scroll_px_per_ms) * 20.0).round() + d;
                         c.scroll_px_per_ms = (steps / 20.0).clamp(0.1, 3.0) as f32;
                     }
-                    Setting::StageFailed | Setting::HitSound => return,
+                    _ => return,
                 }
                 c.save();
             }
             ConfigAction::Toggle(s) => {
                 let c = &mut self.config;
                 match s {
-                    // ON → OFF → NX に従う → ON
-                    Setting::StageFailed => {
-                        c.stage_failed = match c.stage_failed {
-                            Some(true) => Some(false),
-                            Some(false) => None,
-                            None => Some(true),
-                        };
-                    }
+                    Setting::StageFailed => c.stage_failed = Some(!c.stage_failed()),
                     Setting::HitSound => c.drum_sounds = !c.drum_sounds,
+                    // OFF → ON → GREAT- → OFF（上流と同じ並び）
+                    Setting::ShowLagTime => c.show_lag_time = (c.show_lag_time + 1) % 3,
+                    Setting::ShowLagTimeColor => {
+                        c.show_lag_time_color = 1 - c.show_lag_time_color.min(1)
+                    }
+                    Setting::ShowLagHitCount => c.show_lag_hit_count = !c.show_lag_hit_count,
                     _ => return,
                 }
                 c.save();
@@ -1421,16 +1320,12 @@ impl App {
 
     fn on_drop(&mut self, path: PathBuf) {
         if path.is_dir() {
-            if nx::is_install(&path) {
-                self.set_nx(path);
-            } else {
-                self.add_song_dir(path);
-            }
+            self.add_song_dir(path);
         } else if ui::is_chart_file(&path) {
             self.start(path);
         } else {
             self.message = Some(format!(
-                "DTX ファイルか曲のフォルダ、DTXManiaNX のフォルダをドロップしてください: {}",
+                "DTX ファイルか曲のフォルダをドロップしてください: {}",
                 path.display()
             ));
         }
@@ -1467,7 +1362,7 @@ impl App {
                 let painter = ctx.layer_painter(egui::LayerId::background());
                 let c = Canvas::new(&painter, ctx.content_rect());
                 self.gfx.begin(&c, ctx.pixels_per_point());
-                let info = config_info(&self.config, self.nx.as_ref(), &self.midi, &self.songs);
+                let info = config_info(&self.config, &self.midi, &self.songs);
                 let items = config_view::items(view.list(), &info);
                 view.draw(&c, &mut self.gfx, &items, scanning);
                 if let Some(m) = &self.message {
@@ -1560,17 +1455,12 @@ impl App {
 /// 設定の画面の項目を作るのに要るもの
 fn config_info<'a>(
     config: &'a Config,
-    nx: Option<&'a nx::Install>,
     midi: &'a Option<MidiIn>,
     songs: &SongList,
 ) -> ConfigInfo<'a> {
     ConfigInfo {
         config,
-        nx_root: config.nx_dir.as_deref(),
-        nx_found: config.nx_dir.as_deref().is_some_and(nx::is_install),
-        nx_copied: nx.is_some_and(|n| Config::nx_copy_dir().is_some_and(|d| n.root == d)),
-        nx_stage_failed: nx.and_then(|n| n.config.stage_failed),
-        lanes: midi_profile(nx, config).lane_notes(),
+        lanes: midi_profile(config).lane_notes(),
         midi_ports: midi.as_ref().map_or(&[], |m| m.ports.as_slice()),
         scanning: songs.scanning(),
         song_count: songs.library.songs,

@@ -2,7 +2,7 @@
 //!
 //! - 窓の大きさに合わせて拡大し、縦横の比は保つ（余りは黒）
 //! - 画像の一部を切り出し、拡大・透明度・加算合成（光る表現）を付けて描ける（NX の `CTexture.tDraw2D` と同じ使い方）
-//! - スキンの画像はユーザーの PC にある NX のフォルダから読む（NXT には入れない）
+//! - スキンの画像はアプリに入れた NX のスキン（[`crate::skin`]）から読む
 //!
 //! 描画そのものは egui の Mesh で行う。egui は乗算済みアルファで合成するので、
 //! 頂点の色のアルファを 0 にすると加算合成になる。
@@ -286,15 +286,33 @@ impl Canvas {
     }
 }
 
-/// 画像のファイルを読む。`black_key` なら真っ黒のピクセルを透明にする（NX の `b黒を透過する`）
-fn load_image(path: &Path, black_key: bool, max_side: Option<u32>) -> Option<egui::ColorImage> {
-    let img = match image::open(path) {
-        Ok(i) => i,
+/// 画像のファイルを読む（曲の画像）
+fn load_image(path: &Path, max_side: Option<u32>) -> Option<egui::ColorImage> {
+    match image::open(path) {
+        Ok(img) => Some(to_color_image(img, false, max_side)),
         Err(e) => {
             log::warn!("{}: {e}", path.display());
-            return None;
+            None
         }
-    };
+    }
+}
+
+/// スキンの画像を読む。`black_key` なら真っ黒のピクセルを透明にする（NX の `b黒を透過する`）
+fn decode_skin_image(rel: &str, bytes: &[u8], black_key: bool) -> Option<egui::ColorImage> {
+    match image::load_from_memory(bytes) {
+        Ok(img) => Some(to_color_image(img, black_key, None)),
+        Err(e) => {
+            log::warn!("skin: {rel}: {e}");
+            None
+        }
+    }
+}
+
+fn to_color_image(
+    img: image::DynamicImage,
+    black_key: bool,
+    max_side: Option<u32>,
+) -> egui::ColorImage {
     let img = match max_side {
         Some(m) if img.width().max(img.height()) > m => {
             img.resize(m, m, image::imageops::FilterType::Triangle)
@@ -311,49 +329,33 @@ fn load_image(path: &Path, black_key: bool, max_side: Option<u32>) -> Option<egu
         }
     }
     let size = [rgba.width() as usize, rgba.height() as usize];
-    Some(egui::ColorImage::from_rgba_unmultiplied(
-        size,
-        rgba.as_raw(),
-    ))
+    egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw())
 }
 
-/// NX のスキン（画像と音）。無ければ何も描かない
+/// NX のスキンの画像（アプリに入れたもの。一度読んだら覚えておく）
 pub struct Skin {
     ctx: egui::Context,
-    dir: Option<PathBuf>,
     cache: RefCell<HashMap<(String, bool), Option<Tex>>>,
 }
 
 impl Skin {
-    pub fn new(ctx: &egui::Context, dir: Option<PathBuf>) -> Self {
+    pub fn new(ctx: &egui::Context) -> Self {
         Self {
             ctx: ctx.clone(),
-            dir,
             cache: RefCell::default(),
         }
     }
 
-    pub fn dir(&self) -> Option<&Path> {
-        self.dir.as_deref()
-    }
-
-    pub fn is_loaded(&self) -> bool {
-        self.dir.is_some()
-    }
-
-    /// スキンの中のファイル（`Graphics\5_bar box.png` など NX の書き方でよい）
-    pub fn path(&self, rel: &str) -> Option<PathBuf> {
-        nx::find_file(self.dir.as_deref()?, rel)
-    }
-
-    /// 画像（一度読んだら覚えておく）
+    /// 画像（`Graphics\5_bar box.png` など NX の書き方でよい）
     pub fn tex(&self, rel: &str) -> Option<Tex> {
         self.tex_with(rel, false)
     }
 
     /// 無くてもよい画像（スキンに無ければ黙って None）
     pub fn tex_optional(&self, rel: &str) -> Option<Tex> {
-        self.path(rel)?;
+        if !crate::skin::has(rel) {
+            return None;
+        }
         self.tex(rel)
     }
 
@@ -367,13 +369,14 @@ impl Skin {
         if let Some(t) = self.cache.borrow().get(&key) {
             return t.clone();
         }
-        let tex = self
-            .path(rel)
-            .and_then(|p| load_image(&p, black_key, None))
-            .map(|img| Tex::new(&self.ctx, rel, img));
-        if tex.is_none() && self.dir.is_some() {
-            log::warn!("skin: no {rel}");
+        let tex = match crate::skin::read(rel) {
+            Some(bytes) => decode_skin_image(rel, &bytes, black_key),
+            None => {
+                log::warn!("skin: no {rel}");
+                None
+            }
         }
+        .map(|img| Tex::new(&self.ctx, rel, img));
         self.cache.borrow_mut().insert(key, tex.clone());
         tex
     }
@@ -405,7 +408,7 @@ impl Images {
         let (done_tx, rx) = channel();
         std::thread::spawn(move || {
             for path in job_rx {
-                let img = load_image(&path, false, Some(MAX_SIDE));
+                let img = load_image(&path, Some(MAX_SIDE));
                 if done_tx.send((path, img)).is_err() {
                     break;
                 }
@@ -470,9 +473,9 @@ pub struct Gfx {
 }
 
 impl Gfx {
-    pub fn new(ctx: &egui::Context, skin_dir: Option<PathBuf>) -> Self {
+    pub fn new(ctx: &egui::Context) -> Self {
         Self {
-            skin: Skin::new(ctx, skin_dir),
+            skin: Skin::new(ctx),
             texts: crate::text::Texts::new(ctx),
             images: Images::new(ctx),
         }

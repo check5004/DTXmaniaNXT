@@ -2,7 +2,7 @@
 //! スキンの 6_ の画像で、ジャケット、曲名、アーティスト、パートと難易度のパネル、レベルを出す。
 //! 上流と同じく、読み込みが終わっても「Now loading」の音が鳴り終わるまでは出しておく。
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 
@@ -39,7 +39,6 @@ impl Loading {
         path: PathBuf,
         practice: Option<PracticeOptions>,
         label: &str,
-        skin_dir: Option<&Path>,
         wait: Duration,
     ) -> Self {
         let head = library::scan::read_head(&path).unwrap_or_default();
@@ -48,9 +47,7 @@ impl Loading {
             .zip(Some(head.preimage.trim()))
             .filter(|(_, name)| !name.is_empty())
             .and_then(|(dir, name)| library::scan::resolve(dir, name));
-        let diff_panel = skin_dir
-            .and_then(|d| difficulty_cell(d, "6", label))
-            .unwrap_or((0.0, 0.0));
+        let diff_panel = difficulty_cell("6", label).unwrap_or((0.0, 0.0));
         Self {
             path,
             practice,
