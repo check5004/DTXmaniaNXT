@@ -7,7 +7,8 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::mpsc;
 
-use crate::audio::Sound;
+use crate::audio::{FADE_SECONDS, Sound, envelope, pan_gains};
+use crate::chart_sound::AutoVoice;
 
 /// 遅くするときの音程
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -35,10 +36,10 @@ impl Pitch {
     }
 }
 
-/// 曲の BGM（曲の時刻、音の番号）を、曲の時刻 `[from_ms, to_ms)` の 1 本の音（ステレオ、`rate` Hz）にまとめる。
-/// 範囲より前から鳴っている音は途中から入れ、範囲の終わりで切る
+/// 自動で鳴らす音（BGM・効果音など）を、曲の時刻 `[from_ms, to_ms)` の 1 本の音（ステレオ、`rate` Hz）にまとめる。
+/// 音ごとの音量・左右・止める時刻も入れる。範囲より前から鳴っている音は途中から入れ、範囲の終わりで切る
 pub fn mix_bgm(
-    bgm: &[(f64, u16)],
+    voices: &[AutoVoice],
     sounds: &HashMap<u16, Sound>,
     rate: u32,
     from_ms: f64,
@@ -46,23 +47,35 @@ pub fn mix_bgm(
 ) -> Vec<f32> {
     let per_ms = f64::from(rate) / 1000.0;
     let frames = ((to_ms - from_ms) * per_ms).round().max(0.0) as usize;
+    let fade = (f64::from(rate) * FADE_SECONDS) as u64;
     let mut out = vec![0.0f32; frames * 2];
-    for &(ms, wav) in bgm {
-        let Some(s) = sounds.get(&wav) else {
+    for v in voices {
+        let Some(s) = sounds.get(&v.wav) else {
             continue;
         };
-        let start = ((ms - from_ms) * per_ms).round() as i64;
+        let start = ((v.ms - from_ms) * per_ms).round() as i64;
+        let mut len = s.frames() as u64;
+        let mut cut = false;
+        if let Some(ms) = v.len_ms {
+            let l = (ms * per_ms).round().max(0.0) as u64;
+            if l < len {
+                len = l;
+                cut = true;
+            }
+        }
         let from = start.max(0);
-        let to = (start + s.frames() as i64).min(frames as i64);
+        let to = (start + len as i64).min(frames as i64);
         if from >= to {
             continue;
         }
-        let src = &s.samples()[((from - start) * 2) as usize..((to - start) * 2) as usize];
-        for (o, v) in out[(from * 2) as usize..(to * 2) as usize]
-            .iter_mut()
-            .zip(src)
-        {
-            *o += v;
+        let (left, right) = pan_gains(v.pan);
+        let src = s.samples();
+        for f in from..to {
+            let i = (f - start) as u64;
+            let g = v.gain * envelope(i, len, fade, false, cut);
+            let (si, di) = (i as usize * 2, f as usize * 2);
+            out[di] += src[si] * g * left;
+            out[di + 1] += src[si + 1] * g * right;
         }
     }
     out
@@ -232,13 +245,50 @@ mod tests {
         let mut sounds = HashMap::new();
         sounds.insert(1, sound(&[1.0, 1.0, 1.0]));
         sounds.insert(2, sound(&[0.5; 10]));
+        let v = |ms: f64, wav: u16| AutoVoice {
+            ms,
+            wav,
+            gain: 1.0,
+            pan: 0.0,
+            len_ms: None,
+        };
         // 音 1 は 2ms から、音 2 は区間より前の -5ms から鳴っている
-        let out = mix_bgm(&[(2.0, 1), (-5.0, 2), (9.0, 1)], &sounds, 1000, 0.0, 10.0);
+        let out = mix_bgm(
+            &[v(2.0, 1), v(-5.0, 2), v(9.0, 1)],
+            &sounds,
+            1000,
+            0.0,
+            10.0,
+        );
         let left: Vec<f32> = out.iter().step_by(2).copied().collect();
         assert_eq!(left, vec![0.5, 0.5, 1.5, 1.5, 1.5, 0.0, 0.0, 0.0, 0.0, 1.0]);
         // 区間の外の音と無い音は入らない
-        let out = mix_bgm(&[(20.0, 1), (0.0, 9)], &sounds, 1000, 0.0, 4.0);
+        let out = mix_bgm(&[v(20.0, 1), v(0.0, 9)], &sounds, 1000, 0.0, 4.0);
         assert!(out.iter().all(|&v| v == 0.0));
+    }
+
+    #[test]
+    fn auto_voices_keep_volume_pan_and_cut() {
+        // 1000 Hz で 1 フレーム 1ms。フェードは 5 フレーム
+        let mut sounds = HashMap::new();
+        sounds.insert(1, sound(&[1.0; 20]));
+        let voice = AutoVoice {
+            ms: 0.0,
+            wav: 1,
+            gain: 0.5,
+            pan: 0.5,
+            len_ms: Some(10.0),
+        };
+        let out = mix_bgm(&[voice], &sounds, 1000, 0.0, 20.0);
+        let left: Vec<f32> = out.iter().step_by(2).copied().collect();
+        let right: Vec<f32> = out.iter().skip(1).step_by(2).copied().collect();
+        // 右へ振ったので左は半分。10ms で止め、終わりの 5 フレームを下げる
+        assert_eq!(left[0], 0.25);
+        assert_eq!(right[0], 0.5);
+        assert_eq!(right[4], 0.5);
+        assert!(right[7] < 0.5 && right[7] > 0.0);
+        assert_eq!(right[9], 0.0);
+        assert!(right[10..].iter().all(|&v| v == 0.0));
     }
 
     /// 440Hz のサイン波（ステレオ、48kHz）

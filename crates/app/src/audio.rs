@@ -166,7 +166,7 @@ fn resample_linear(stereo: &[f32], from: u32, to: u32) -> Vec<f32> {
 }
 
 /// 切れ目にかけるフェードの長さ（秒）。プツッという音を消す
-const FADE_SECONDS: f64 = 0.005;
+pub const FADE_SECONDS: f64 = 0.005;
 
 /// 全体の音量の既定（%）。設定が無いときもこの大きさで鳴らす（上流の既定の 100 は大きすぎる）
 pub const DEFAULT_MASTER_VOLUME: u8 = 50;
@@ -205,7 +205,12 @@ enum Command {
     /// 決めたフレームから鳴らす（曲の BGM など）
     At(Voice),
     /// できるだけ早く鳴らす（叩いた音）。`tag` で後から止められる
-    Now { sound: Sound, gain: f32, tag: u8 },
+    Now {
+        sound: Sound,
+        gain: f32,
+        pan: f32,
+        tag: u8,
+    },
     /// `tag` の音を短いフェードで止める（選曲のプレビューの音）
     Stop(u8),
     /// このフレームより後から鳴らす予定の音を取りやめる（練習で並べ直す周の音）
@@ -219,6 +224,8 @@ struct Voice {
     skip: u64,
     len: u64,
     gain: f32,
+    /// 左右（-1 が左、1 が右）。ステレオの音の反対側を下げる（上流の BASS の `BASS_ATTRIB_PAN` と同じ）
+    pan: f32,
     /// 途中から始めたので頭にフェードをかける
     fade_in: bool,
     /// 途中で切るので終わりにフェードをかける
@@ -236,6 +243,7 @@ impl Voice {
             skip: 0,
             len,
             gain,
+            pan: 0.0,
             fade_in: false,
             fade_out: false,
             tag: 0,
@@ -253,21 +261,28 @@ impl Voice {
         }
         let from = frames_done.max(self.start);
         let to = (frames_done + n).min(self.end());
+        let (left, right) = pan_gains(self.pan);
         for f in from..to {
             let i = f - self.start;
             let g = self.gain * envelope(i, self.len, fade, self.fade_in, self.fade_out);
             let src = ((self.skip + i) * 2) as usize;
             let dst = ((f - frames_done) as usize) * channels;
-            data[dst] += self.sound.0[src] * g;
+            data[dst] += self.sound.0[src] * g * left;
             if channels > 1 {
-                data[dst + 1] += self.sound.0[src + 1] * g;
+                data[dst + 1] += self.sound.0[src + 1] * g * right;
             }
         }
     }
 }
 
+/// 左右 `pan`（-1〜1）のときの左と右の音量。真ん中は両方 1 で、右へ振るほど左を下げる
+pub fn pan_gains(pan: f32) -> (f32, f32) {
+    let pan = pan.clamp(-1.0, 1.0);
+    (1.0 - pan.max(0.0), 1.0 + pan.min(0.0))
+}
+
 /// 長さ `len` の音の `i` フレーム目の音量（0〜1）。切れ目に `fade` フレームの直線のフェード
-fn envelope(i: u64, len: u64, fade: u64, fade_in: bool, fade_out: bool) -> f32 {
+pub fn envelope(i: u64, len: u64, fade: u64, fade_in: bool, fade_out: bool) -> f32 {
     if fade == 0 {
         return 1.0;
     }
@@ -331,8 +346,14 @@ impl AudioOut {
                 while let Ok(cmd) = rx.pop() {
                     match cmd {
                         Command::At(v) => voices.push(v),
-                        Command::Now { sound, gain, tag } => {
+                        Command::Now {
+                            sound,
+                            gain,
+                            pan,
+                            tag,
+                        } => {
                             let mut v = Voice::whole(sound, frames_done, gain);
+                            v.pan = pan;
                             v.tag = tag;
                             voices.push(v);
                         }
@@ -427,6 +448,7 @@ impl AudioOut {
             skip,
             len,
             gain,
+            pan: 0.0,
             fade_in,
             fade_out: p.cut_end,
             tag: 0,
@@ -439,8 +461,52 @@ impl AudioOut {
         let _ = self.tx.push(Command::CancelFrom(frame));
     }
 
+    /// 譜面の音を曲の時刻 `song_ms` に、音量 `gain` と左右 `pan` で鳴らす。`len_ms` があれば、そこで短いフェードで切る
+    /// （次の音で前の音を止めるチャンネル）
+    pub fn play_chip(
+        &mut self,
+        sound: &Sound,
+        song_ms: f64,
+        len_ms: Option<f64>,
+        gain: f32,
+        pan: f32,
+    ) {
+        let frame = self.frame_at(song_ms);
+        let rate = f64::from(self.rate);
+        let mut v = Voice::whole(sound.clone(), frame.max(0.0) as u64, gain);
+        v.pan = pan;
+        // 出力を始める前の部分は飛ばす
+        if frame < 0.0 {
+            v.skip = (-frame).round() as u64;
+            v.fade_in = true;
+        }
+        let mut len = (sound.frames() as u64).saturating_sub(v.skip);
+        if let Some(ms) = len_ms {
+            let cut = (ms / 1000.0 * rate + frame.min(0.0)).round().max(0.0) as u64;
+            if cut < len {
+                len = cut;
+                v.fade_out = true;
+            }
+        }
+        if len == 0 {
+            return;
+        }
+        v.len = len;
+        let _ = self.tx.push(Command::At(v));
+    }
+
     pub fn play_now(&mut self, sound: &Sound, gain: f32) {
         self.play_tagged(sound, gain, 0);
+    }
+
+    /// すぐ鳴らす（叩いた音）。左右 `pan` を付ける
+    pub fn play_now_panned(&mut self, sound: &Sound, gain: f32, pan: f32) {
+        let _ = self.tx.push(Command::Now {
+            sound: sound.clone(),
+            gain,
+            pan,
+            tag: 0,
+        });
     }
 
     /// すぐ鳴らし、`tag`（1 以上）を付けておく。`stop` で止められる
@@ -448,6 +514,7 @@ impl AudioOut {
         let _ = self.tx.push(Command::Now {
             sound: sound.clone(),
             gain,
+            pan: 0.0,
             tag,
         });
     }
@@ -522,6 +589,7 @@ mod tests {
             skip: 2,
             len: 3,
             gain: 1.0,
+            pan: 0.0,
             fade_in: false,
             fade_out: false,
             tag: 0,
@@ -533,6 +601,21 @@ mod tests {
         let mut out = vec![0.0; 2 * 2];
         v.mix(&mut out, 2, 3, 2, 0);
         assert_eq!(out, vec![4., 4., 0., 0.]);
+    }
+
+    #[test]
+    fn pan_lowers_the_other_side() {
+        assert_eq!(pan_gains(0.0), (1.0, 1.0));
+        assert_eq!(pan_gains(-0.5), (1.0, 0.5));
+        assert_eq!(pan_gains(1.0), (0.0, 1.0));
+        assert_eq!(pan_gains(-3.0), (1.0, 0.0));
+        let v = Voice {
+            pan: 0.5,
+            ..Voice::whole(Sound(Arc::from(vec![1.0f32; 4])), 0, 1.0)
+        };
+        let mut out = vec![0.0; 4];
+        v.mix(&mut out, 2, 0, 2, 0);
+        assert_eq!(out, vec![0.5, 1.0, 0.5, 1.0]);
     }
 
     #[test]

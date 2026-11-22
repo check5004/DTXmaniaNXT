@@ -1,0 +1,23 @@
+{
+  "title": "自動で鳴る音",
+  "notes": [
+    { "ms": 2000, "lane": "SD", "measure": 1, "pos": "0" },
+    { "ms": 3000, "lane": "SD", "measure": 1, "pos": "1/2" }
+  ],
+  "auto": [
+    { "ms": 2000, "wav": "01", "kind": "BGM" },
+    { "ms": 2000, "wav": "02", "kind": "SE65", "cut_ms": 2500 },
+    { "ms": 2000, "wav": "03", "kind": "GUITAR", "cut_ms": 3000 },
+    { "ms": 2000, "wav": "04", "kind": "BASS", "cut_ms": 3500 },
+    { "ms": 2000, "wav": "06", "kind": "SE66" },
+    { "ms": 2500, "wav": "02", "kind": "SE65", "cut_ms": 3000 },
+    { "ms": 3000, "wav": "02", "kind": "SE65", "cut_ms": 3500 },
+    { "ms": 3000, "wav": "03", "kind": "GUITAR" },
+    { "ms": 3500, "wav": "02", "kind": "SE65" },
+    { "ms": 3500, "wav": "04", "kind": "BASS" }
+  ],
+  "volume": { "01": 100, "02": 60, "03": 80 },
+  "pan": { "01": 0, "03": -50, "04": 40 },
+  "empty_hits": [{ "ms": 2000, "lane": "SD", "wav": "07" }],
+  "hidden": [{ "ms": 3500, "lane": "SD", "wav": "05" }]
+}
