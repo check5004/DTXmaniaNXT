@@ -3,6 +3,8 @@
 //! 上流の選曲画面のポップアップメニュー（`CActSelectPopupMenu`：ソートやクイック設定）と同じ
 //! 背景（`ScreenSelect sort menu background.png`）、カーソル（`ScreenConfig menu cursor.png`）、文字（DFP フォント）で、
 //! 区間、つなぎ方、合格の基準、速度、音程を選ぶ。小節の帯と苦手なフレーズは、難易度パネルの場所に重ねて出す。
+//! NX v2.0 の選曲画面は後ろの絵が細かく、半透明の板の文字が読みにくいので、開いているあいだは後ろを暗くする。
+//! v2 の背景の絵は下の端に案内の吹き出しがあるので、選んでいる行の説明はその下に板を敷いて出す。
 //!
 //! 操作は上流のポップアップと同じ。↑↓（HT / LT）で選び、Enter（CY / RD）で決め、Esc（LC）で閉じる。
 //! 数の項目は Enter で値を変える状態になり、↑↓ で変えて Enter で戻る。
@@ -24,6 +26,11 @@ const Y: f32 = 150.0;
 const ROW_H: f32 = 32.0;
 const W: f32 = 360.0;
 const H: f32 = 450.0;
+/// 開いているあいだ、後ろの選曲画面を暗くする濃さ
+const DIM: u8 = 150;
+/// 説明の行の高さと、出す行の数の上限
+const HELP_LINE_H: f32 = 17.0;
+const HELP_LINES: usize = 3;
 
 /// 難易度パネル（`5_status panel.png`）の場所と大きさ。小節の帯をここに重ねる
 const PANEL: (f32, f32, f32, f32) = (130.0, 350.0, 561.0, 342.0);
@@ -419,15 +426,30 @@ impl PracticePopup {
     }
 
     pub fn draw(&self, c: &Canvas, g: &mut Gfx) {
+        c.cover(Color32::from_black_alpha(DIM));
         self.draw_measures(c, g);
-        // 背景
-        match g
+        // 背景（絵の下の端を覚えておき、説明はその下に出す）。v2 の絵は半透明で後ろの曲の帯が透けるので、
+        // 行のある所の下にもう 1 枚暗い板を敷く
+        c.fill(
+            X,
+            Y,
+            W,
+            40.0 + ROW_H * ROWS.len() as f32 + 6.0,
+            Color32::from_black_alpha(DIM),
+        );
+        let bottom = match g
             .skin
             .tex_optional("Graphics/ScreenSelect sort menu background.png")
         {
-            Some(t) => c.draw(&t, X, Y),
-            None => c.fill(X, Y, W, H, Color32::from_rgb(30, 110, 170)),
-        }
+            Some(t) => {
+                c.draw(&t, X, Y);
+                Y + t.h
+            }
+            None => {
+                c.fill(X, Y, W, H, Color32::from_rgb(30, 110, 170));
+                Y + H
+            }
+        };
         // 題（上流は (+96, +4)）
         g.dfp(c, X + 96.0, Y + 4.0, "PRACTICE", false);
         // カーソル（上流：左の端 16、中を 16 ずつ 19 個、右の端 16）
@@ -462,17 +484,24 @@ impl PracticePopup {
                 g.dfp(c, X + 200.0, y, &v, selected);
             }
         }
-        // 選んでいる行の説明
+        // 選んでいる行の説明（背景の絵の下に、結果の画面の板と同じ暗い板を敷いて）
         let style = Style::edged(14.0, Color32::WHITE, Color32::BLACK, 1.5);
-        let mut y = Y + 40.0 + ROW_H * ROWS.len() as f32 + 6.0;
-        for line in g.texts.wrap(&self.help(self.row()), style.px, W - 36.0) {
-            if y + 16.0 > Y + H - 4.0 {
-                break;
+        let lines: Vec<String> = g
+            .texts
+            .wrap(&self.help(self.row()), style.px, W - 24.0)
+            .into_iter()
+            .take(HELP_LINES)
+            .collect();
+        if !lines.is_empty() {
+            let top = bottom + 4.0;
+            let h = 10.0 + HELP_LINE_H * lines.len() as f32;
+            c.fill(X, top, W, h, Color32::from_rgba_unmultiplied(8, 8, 16, 225));
+            c.frame(X, top, W, h, Color32::from_gray(150));
+            for (i, line) in lines.iter().enumerate() {
+                if let Some(t) = g.texts.get(line, &style) {
+                    t.draw(c, X + 12.0, top + 5.0 + HELP_LINE_H * i as f32, 1.0, 1.0);
+                }
             }
-            if let Some(t) = g.texts.get(&line, &style) {
-                t.draw(c, X + 18.0, y, 1.0, 1.0);
-            }
-            y += 17.0;
         }
     }
 
@@ -480,14 +509,8 @@ impl PracticePopup {
     fn draw_measures(&self, c: &Canvas, g: &mut Gfx) {
         let s = &self.setup;
         let (px, py, pw, ph) = PANEL;
-        // 下の難易度パネルの文字が透けないように、ほぼ不透明に
-        c.fill(
-            px,
-            py,
-            pw,
-            ph,
-            Color32::from_rgba_unmultiplied(10, 10, 18, 248),
-        );
+        // 下の難易度パネルの文字が透けないように、不透明に
+        c.fill(px, py, pw, ph, Color32::from_rgb(10, 10, 18));
         c.frame(px, py, pw, ph, Color32::from_gray(150));
         g.dfp(c, px + 14.0, py + 8.0, "MEASURES", false);
         // 練習する曲（結果の画面から開いたときは、選曲のカーソルの曲と違うことがある）

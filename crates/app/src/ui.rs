@@ -11,7 +11,7 @@ use engine::practice::Section;
 
 use crate::config::Config;
 use crate::game::{Outcome, Play, WeakMap};
-use crate::gfx::Canvas;
+use crate::gfx::{Canvas, Gfx};
 use crate::history::{OvercomeCheck, TENDENCY_MIN_HITS, TENDENCY_SESSIONS};
 
 fn judgement_label(j: Judgement) -> (&'static str, Color32) {
@@ -49,9 +49,14 @@ pub enum ResultAction {
 /// 補正に反映してよいだけの数（これより少ないと平均がぶれる）
 const MIN_HITS_FOR_OFFSET: u32 = 20;
 
-pub fn draw_result(ui: &mut egui::Ui, o: &Outcome, config: &Config) -> Vec<ResultAction> {
+pub fn draw_result(
+    ui: &mut egui::Ui,
+    g: &mut Gfx,
+    o: &Outcome,
+    config: &Config,
+) -> Vec<ResultAction> {
     let mut actions = Vec::new();
-    result_page(ui, |ui| {
+    result_page(ui, g, |ui| {
         egui::ScrollArea::vertical().show(ui, |ui| {
             ui.vertical_centered(|ui| {
                 ui.add_space(8.0);
@@ -150,8 +155,15 @@ pub fn draw_result(ui: &mut egui::Ui, o: &Outcome, config: &Config) -> Vec<Resul
     actions
 }
 
-/// 結果の 2 ページ目の枠。NX の結果の背景の上に、半透明の黒い板を真ん中に置く
-fn result_page(ui: &mut egui::Ui, body: impl FnOnce(&mut egui::Ui)) {
+/// 結果の 2 ページ目の板の色と縁（1 ページ目の WEAK MEASURES など、NX の部品で描いた板と同じ）
+const PAGE_FILL: Color32 = Color32::from_rgba_unmultiplied_const(8, 8, 16, 225);
+const PAGE_EDGE: Color32 = Color32::from_gray(150);
+/// 見出しの高さ（NX の座標）
+const PAGE_HEADING_H: f32 = 30.0;
+
+/// 結果の 2 ページ目の枠。NX の結果の背景の上に、ほかの NX の板と同じ暗い板を真ん中に置き、
+/// 左上に DFP の文字で見出しを出す
+fn result_page(ui: &mut egui::Ui, g: &mut Gfx, body: impl FnOnce(&mut egui::Ui)) {
     egui::CentralPanel::default()
         .frame(egui::Frame::NONE.inner_margin(egui::Margin {
             left: 16,
@@ -164,12 +176,20 @@ fn result_page(ui: &mut egui::Ui, body: impl FnOnce(&mut egui::Ui)) {
             let height = ui.available_height();
             ui.vertical_centered(|ui| {
                 egui::Frame::new()
-                    .fill(Color32::from_black_alpha(215))
-                    .corner_radius(6.0)
+                    .fill(PAGE_FILL)
+                    .stroke(Stroke::new(1.0, PAGE_EDGE))
                     .inner_margin(egui::Margin::same(16))
                     .show(ui, |ui| {
                         ui.set_width(width - 32.0);
                         ui.set_max_height(height - 32.0);
+                        // 見出し（スクロールしない）
+                        let c = Canvas::overlay(ui.painter(), ui.ctx().content_rect());
+                        let (rect, _) = ui.allocate_exact_size(
+                            Vec2::new(ui.available_width(), PAGE_HEADING_H * c.scale()),
+                            Sense::hover(),
+                        );
+                        let at = c.to_nx(rect.min);
+                        g.dfp(&c, at.x - 2.0, at.y - 8.0, "ANALYSIS", false);
                         // 背景が透けるので、文字を明るくする（弱い文字はこれを薄めた色になる）
                         ui.visuals_mut().override_text_color = Some(Color32::from_gray(225));
                         body(ui);

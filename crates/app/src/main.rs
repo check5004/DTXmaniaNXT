@@ -1657,7 +1657,7 @@ impl App {
                     Page::Summary => view.draw_summary(&c, &mut self.gfx, o),
                     Page::Analysis => {
                         view.draw_analysis_hint(&c, &mut self.gfx);
-                        *result_actions = ui::draw_result(ui, o, &self.config);
+                        *result_actions = ui::draw_result(ui, &mut self.gfx, o, &self.config);
                     }
                 }
                 // フェードは egui の窓より上に
