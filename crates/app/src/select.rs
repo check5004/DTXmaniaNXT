@@ -69,7 +69,7 @@ enum Bar {
     Song,
     /// 閉じた BOX
     Box,
-    /// 開いた BOX（`<< BACK`）
+    /// 開いた BOX（`<< 戻る`）
     Back,
 }
 
@@ -295,7 +295,7 @@ impl SelectView {
     fn row(&mut self, songs: &SongList, e: Entry<'_>) -> Row {
         match e {
             Entry::Back => Row {
-                title: "<< BACK".into(),
+                title: "<< 戻る".into(),
                 sub: "BOX を出ます。".into(),
                 bar: Bar::Back,
                 preimage: Preimage::Skin("Graphics/5_preimage backbox.png"),
@@ -303,7 +303,7 @@ impl SelectView {
                 skill: None,
             },
             Entry::Random => Row {
-                title: "< RANDOM SELECT >".into(),
+                title: "< ランダムに選ぶ >".into(),
                 sub: "この中から 1 曲を選びます。".into(),
                 bar: Bar::Song,
                 preimage: Preimage::Skin("Graphics/5_preimage random.png"),
@@ -317,10 +317,9 @@ impl SelectView {
                     .flatten();
                 Row {
                     title: b.title.clone(),
-                    sub: match b.nodes.len() {
-                        0 => "Empty collection".to_owned(),
-                        1 => "1 song".to_owned(),
-                        n => format!("{n} songs"),
+                    sub: match song_count(&b.nodes) {
+                        0 => "曲がありません".to_owned(),
+                        n => format!("{n} 曲"),
                     },
                     bar: Bar::Box,
                     preimage: file.map_or(
@@ -795,6 +794,17 @@ fn selection_key(songs: &SongList) -> SelectionKey {
         songs.cursor,
         songs.level,
     )
+}
+
+/// BOX の中の曲の数（中の BOX の曲も数える）
+fn song_count(nodes: &[Node]) -> usize {
+    nodes
+        .iter()
+        .map(|n| match n {
+            Node::Box(b) => song_count(&b.nodes),
+            Node::Song(_) => 1,
+        })
+        .sum()
 }
 
 fn chart_for<'a>(songs: &SongList, s: &'a Song) -> Option<&'a SongChart> {

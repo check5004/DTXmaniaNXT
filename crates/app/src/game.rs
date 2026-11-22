@@ -205,7 +205,8 @@ impl Play {
         drum_sounds: bool,
         practice: Option<PracticeOptions>,
     ) -> Result<Self> {
-        let bytes = std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
+        let bytes =
+            std::fs::read(path).with_context(|| format!("{} を読めません", path.display()))?;
         let chart = dtx::load(&bytes);
         for w in &chart.warnings {
             log::warn!("{}:{}: {}", path.display(), w.line, w.message);
@@ -516,7 +517,7 @@ impl Play {
 
     pub fn on_key(&mut self, lane: DrumLane, at_us: i64) {
         self.last_input = Some(LastInput {
-            source: "keyboard".into(),
+            source: crate::inputs::KEYBOARD.into(),
             pad: None,
             articulation: None,
             lane: Some(lane),

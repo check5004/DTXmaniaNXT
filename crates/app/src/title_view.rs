@@ -229,7 +229,7 @@ pub fn draw_scanning(c: &Canvas, g: &mut Gfx, since: Instant) {
 
 /// スキンが無いときのメニュー
 fn draw_plain_menu(c: &Canvas, g: &mut Gfx, cursor: usize) {
-    for (i, name) in ["GAME START", "CONFIGURATION", "EXIT"].iter().enumerate() {
+    for (i, name) in ["はじめる", "設定", "終わる"].iter().enumerate() {
         let color = if i == cursor {
             Color32::from_rgb(255, 200, 0)
         } else {

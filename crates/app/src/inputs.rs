@@ -16,6 +16,27 @@ use winit::keyboard::KeyCode;
 use crate::config::{Config, KeyBind, MidiDevice, PadNote, UNASSIGNED, note_overrides};
 use crate::midi::{PortInfo, base_name};
 
+/// キーボードの入力の名前（設定の画面に出す）
+pub const KEYBOARD: &str = "キーボード";
+
+/// レーンの画面に出す名前（設定の画面の割り当てや、結果の分析に出す）
+pub fn lane_label(lane: DrumLane) -> &'static str {
+    match lane {
+        DrumLane::LC => "左シンバル",
+        DrumLane::HH => "ハイハット（閉）",
+        DrumLane::HHO => "ハイハット（開）",
+        DrumLane::SD => "スネア",
+        DrumLane::BD => "バスドラム",
+        DrumLane::HT => "ハイタム",
+        DrumLane::LT => "ロータム",
+        DrumLane::FT => "フロアタム",
+        DrumLane::CY => "右シンバル",
+        DrumLane::RD => "ライド",
+        DrumLane::LP => "左ペダル",
+        DrumLane::LBD => "左バスドラム",
+    }
+}
+
 /// ポートの名前と ID の組
 pub type PortKey<'a> = (&'a str, &'a str);
 
@@ -348,7 +369,7 @@ pub fn set_key(config: &mut Config, code: KeyCode, lane: Option<DrumLane>) {
 /// レーンを叩く入力 1 つぶん（設定の画面に出す）
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LaneSource {
-    /// 機器の名前（キーボードなら "Keyboard"）
+    /// 機器の名前（キーボードなら [`KEYBOARD`]）
     pub source: String,
     /// ノート番号かキーの名前
     pub inputs: Vec<String>,
@@ -374,7 +395,7 @@ pub fn lane_sources(config: &Config, ports: &[PortInfo]) -> BTreeMap<DrumLane, V
     }
     for (lane, inputs) in keys {
         out.entry(lane).or_default().push(LaneSource {
-            source: "Keyboard".to_owned(),
+            source: KEYBOARD.to_owned(),
             inputs,
         });
     }
@@ -423,13 +444,28 @@ impl MidiMonitor {
                 let lane = profile.and_then(|p| p.note_lane(note));
                 let soft = profile.is_some_and(|p| velocity < p.min_velocity);
                 let result = match (accepted, lane) {
-                    (false, _) => "ignored (other channel)".to_owned(),
-                    (true, Some(_)) if soft => "ignored (too soft)".to_owned(),
-                    (true, Some(l)) => l.name().to_owned(),
-                    (true, None) => "not assigned".to_owned(),
+                    (false, _) => "ignored (other channel)",
+                    (true, Some(_)) if soft => "ignored (too soft)",
+                    (true, Some(l)) => l.name(),
+                    (true, None) => "not assigned",
                 };
-                self.last
-                    .insert(port, (format!("{desc} → {result}"), Instant::now()));
+                // 設定の画面に出す文は日本語で（ログは英語のまま）
+                let shown = match (accepted, lane) {
+                    (false, _) => "ほかのチャンネルなので捨てた",
+                    (true, Some(_)) if soft => "弱いので捨てた",
+                    (true, Some(l)) => lane_label(l),
+                    (true, None) => "割り当てなし",
+                };
+                self.last.insert(
+                    port,
+                    (
+                        format!(
+                            "ch{} ノート {note} ベロシティ {velocity} → {shown}",
+                            channel + 1
+                        ),
+                        Instant::now(),
+                    ),
+                );
                 let worked = accepted && lane.is_some() && !soft;
                 if !worked && self.logged.insert((port, 0x90, channel, note)) {
                     log::info!("MIDI {port_name}: {desc}: {result}");
@@ -614,7 +650,7 @@ mod tests {
         assert_eq!(lp[0].source, "Finger Drum Pad");
         assert!(lp[0].inputs.contains(&"3".to_owned()));
         assert_eq!(lp[1].source, "V51");
-        assert_eq!(lp.last().unwrap().source, "Keyboard");
+        assert_eq!(lp.last().unwrap().source, KEYBOARD);
         assert_eq!(lp.last().unwrap().inputs, vec!["Z".to_owned()]);
         // 開いていない機器は出さない
         ports[0].open = false;
@@ -636,20 +672,26 @@ mod tests {
             velocity: 100,
         };
         m.observe(0, "Pad", &on(38), Some(&p));
-        assert_eq!(m.last(0), Some("ch10 note 38 vel 100 → SD"));
+        assert_eq!(m.last(0), Some("ch10 ノート 38 ベロシティ 100 → スネア"));
         m.observe(0, "Pad", &on(3), Some(&p));
-        assert_eq!(m.last(0), Some("ch10 note 3 vel 100 → not assigned"));
+        assert_eq!(
+            m.last(0),
+            Some("ch10 ノート 3 ベロシティ 100 → 割り当てなし")
+        );
         let mut only1 = p.clone();
         only1.channel = Some(0);
         m.observe(1, "Pad2", &on(38), Some(&only1));
         assert_eq!(
             m.last(1),
-            Some("ch10 note 38 vel 100 → ignored (other channel)")
+            Some("ch10 ノート 38 ベロシティ 100 → ほかのチャンネルなので捨てた")
         );
         let mut strong = p.clone();
         strong.min_velocity = 110;
         m.observe(1, "Pad2", &on(38), Some(&strong));
-        assert_eq!(m.last(1), Some("ch10 note 38 vel 100 → ignored (too soft)"));
+        assert_eq!(
+            m.last(1),
+            Some("ch10 ノート 38 ベロシティ 100 → 弱いので捨てた")
+        );
         assert_eq!(m.last(2), None);
     }
 }

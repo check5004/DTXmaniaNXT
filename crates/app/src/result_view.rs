@@ -417,7 +417,7 @@ fn draw_passed(c: &Canvas, g: &mut Gfx, p: &crate::game::PracticeOutcome) {
         .iter()
         .filter(|l| l.completed && l.passed == Some(true))
         .count();
-    g.dfp(c, 30.0, 28.0, "PASSED LAPS", false);
+    g.heading(c, 30.0, 28.0, "合格した周");
     let text = passed.min(9999).to_string();
     let mut x = 30.0;
     match g.skin.tex("Graphics/7_score numbersGD.png") {
