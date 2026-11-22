@@ -14,6 +14,7 @@ use engine::practice::{SpeedPlan, place};
 use records::{Lap, NoteHit, SectionClear, Session, SessionKind, StrayHit};
 
 use crate::audio::{AudioOut, Sound, click, load_sound};
+use crate::chart_sound::ChartSounds;
 use crate::history::OvercomeCheck;
 use crate::midi::RawMidi;
 use crate::practice::{LapSummary, Practice, PracticeOptions, count_per_measure};
@@ -34,6 +35,9 @@ const SECTION_MARGIN_MS: f64 = 1000.0;
 
 /// 落ちてくる音符が見え始めるより、これだけ前に周を並べる（ミリ秒）
 const LAY_MARGIN_MS: f64 = 500.0;
+
+/// 自動で鳴らす音（BGM・効果音など）を、今よりこれだけ先の分まで出力に渡しておく（ミリ秒）
+const AUTO_AHEAD_MS: f64 = 1500.0;
 
 /// 画面の効果に使う出来事。演奏画面が毎フレーム取り出す
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -167,6 +171,10 @@ pub struct Play {
     note_hits: Vec<Option<NoteHit>>,
     strays: Vec<StrayHit>,
     sounds: HashMap<u16, Sound>,
+    /// 譜面の音の鳴らし方（自動で鳴らす音、音ごとの音量と左右、空打ちの音）
+    chart_sounds: ChartSounds,
+    /// 自動で鳴らす音のうち、次に出力へ渡すもの（練習では使わない）
+    auto_next: usize,
     /// MIDI のポートごとの入力の読み手と、ポートの名前（[`crate::midi::MidiIn::ports`] と同じ並び）
     inputs: Vec<(String, Normalizer)>,
     mappers: HashMap<usize, MidiTimestampMapper>,
@@ -220,12 +228,7 @@ impl Play {
             .map(|c| tempo.chip_ms(c))
             .fold(0.0, f64::max);
         let end_ms = last_chip_ms + 2000.0;
-        let bgm: Vec<(f64, u16)> = chart
-            .chips
-            .iter()
-            .filter(|c| c.channel == dtx::ch::BGM)
-            .map(|c| (tempo.chip_ms(c), c.value))
-            .collect();
+        let chart_sounds = ChartSounds::new(&chart, &tempo);
         // 叩き分けの寄せ方は曲全体の音符で決める（練習の区間によって判定が変わらないように）
         let groups = LaneGroups::default().effective_for(&notes);
         let (judge, practice) = match practice {
@@ -242,7 +245,7 @@ impl Play {
             .as_ref()
             .map_or(-LEAD_IN_MS, |p| p.first_audio_ms() - PRACTICE_LEAD_IN_MS);
 
-        let mut audio = match AudioOut::open(start_ms) {
+        let audio = match AudioOut::open(start_ms) {
             Ok(a) => Some(a),
             Err(e) => {
                 log::warn!("audio is off: {e:#}");
@@ -250,40 +253,34 @@ impl Play {
             }
         };
         let sounds = match &audio {
-            Some(a) => load_sounds(&chart, path.parent().unwrap_or(Path::new(".")), a.rate()),
+            Some(a) => load_sounds(
+                &chart,
+                &chart_sounds,
+                path.parent().unwrap_or(Path::new(".")),
+                a.rate(),
+            ),
             None => HashMap::new(),
         };
         let mut section_audio = None;
-        if let Some(a) = audio.as_mut() {
-            match &practice {
-                // BGM（ch01）は決まった時刻に鳴らす
-                None => {
-                    for (ms, wav) in &bgm {
-                        if let Some(s) = sounds.get(wav) {
-                            a.play_at(s, *ms, 1.0);
-                        }
-                    }
-                }
-                // 練習は区間の BGM を 1 本にまとめ、周の速度に伸ばして鳴らす
-                Some(p) => {
-                    let t = p.times();
-                    let from = t.run_up_ms - SECTION_MARGIN_MS;
-                    let to = t.tail_ms.max(t.end_ms) + SECTION_MARGIN_MS;
-                    let started = std::time::Instant::now();
-                    let first = p.ladder().speed();
-                    section_audio = Some(SectionAudio::new(
-                        mix_bgm(&bgm, &sounds, a.rate(), from, to),
-                        from,
-                        a.rate(),
-                        p.options.pitch,
-                        first,
-                    ));
-                    log::info!(
-                        "section audio at {first}%: {:.0}ms",
-                        started.elapsed().as_secs_f64() * 1000.0
-                    );
-                }
-            }
+        // 練習でなければ、自動で鳴らす音（BGM・効果音など）は時刻が近づいたものから出力に渡す（`lay_auto`）。
+        // 練習は区間の自動で鳴らす音を 1 本にまとめ、周の速度に伸ばして鳴らす
+        if let (Some(a), Some(p)) = (audio.as_ref(), &practice) {
+            let t = p.times();
+            let from = t.run_up_ms - SECTION_MARGIN_MS;
+            let to = t.tail_ms.max(t.end_ms) + SECTION_MARGIN_MS;
+            let started = std::time::Instant::now();
+            let first = p.ladder().speed();
+            section_audio = Some(SectionAudio::new(
+                mix_bgm(&chart_sounds.auto, &sounds, a.rate(), from, to),
+                from,
+                a.rate(),
+                p.options.pitch,
+                first,
+            ));
+            log::info!(
+                "section audio at {first}%: {:.0}ms",
+                started.elapsed().as_secs_f64() * 1000.0
+            );
         }
         let clicks = audio
             .as_ref()
@@ -331,12 +328,15 @@ impl Play {
             note_hits: vec![None; note_count],
             strays: Vec::new(),
             sounds,
+            chart_sounds,
+            auto_next: 0,
             inputs: Vec::new(),
             mappers: HashMap::new(),
             fallback_origin_us: host_us(),
             start_ms,
         };
         play.lay_laps(start_ms);
+        play.lay_auto(start_ms);
         Ok(play)
     }
 
@@ -413,6 +413,27 @@ impl Play {
         p.forget_before(now_ms - 2000.0);
     }
 
+    /// 練習でなければ、自動で鳴らす音（BGM・効果音・ギターとベースなど）のうち `now_ms` から少し先までのものを出力に渡す。
+    /// 何千もある曲でも、出力へ渡す口があふれないように少しずつ渡す
+    fn lay_auto(&mut self, now_ms: f64) {
+        if self.practice.is_some() {
+            return;
+        }
+        let Some(a) = self.audio.as_mut() else {
+            return;
+        };
+        let until = now_ms + AUTO_AHEAD_MS;
+        while let Some(v) = self.chart_sounds.auto.get(self.auto_next) {
+            if v.ms >= until {
+                break;
+            }
+            self.auto_next += 1;
+            if let Some(s) = self.sounds.get(&v.wav) {
+                a.play_chip(s, v.ms, v.len_ms, v.gain, v.pan);
+            }
+        }
+    }
+
     /// 練習の速度を手で `steps` 刻み動かす（次に並べる周から）
     pub fn nudge_speed(&mut self, steps: i64) {
         if let Some(p) = self.practice.as_mut() {
@@ -446,6 +467,7 @@ impl Play {
     pub fn update(&mut self) {
         let now = self.now_ms();
         self.lay_laps(now);
+        self.lay_auto(now);
         let misses = self.judge.advance(now);
         self.record(&misses, None, None);
         self.show(&misses);
@@ -553,26 +575,46 @@ impl Play {
         }
         self.record(&events, articulation, hh_pedal);
         if self.drum_sounds {
-            // 取った音符の音を鳴らす。空打ちなら、そのレーンの一番近い音符の音
+            // 取った音符の音を鳴らす。空打ちなら空打ちの音、無ければそのレーンの一番近い音符の音
             let wav = events
                 .first()
                 .map(|e| self.judge.notes()[e.note].wav)
-                .or_else(|| self.nearest_wav(lane, ms));
-            if let (Some(a), Some(s)) = (self.audio.as_mut(), wav.and_then(|w| self.sounds.get(&w)))
+                .or_else(|| self.stray_wav(lane, ms));
+            if let (Some(a), Some(w)) = (self.audio.as_mut(), wav)
+                && let Some(s) = self.sounds.get(&w)
             {
-                a.play_now(s, f32::from(velocity) / 127.0);
+                let (gain, pan) = self.chart_sounds.gain_pan(w);
+                a.play_now_panned(s, gain * f32::from(velocity) / 127.0, pan);
             }
         }
         self.show(&events);
     }
 
-    fn nearest_wav(&self, lane: DrumLane, ms: f64) -> Option<u16> {
-        self.judge
+    /// 音符の無い所でレーン `lane` を叩いたときの音。上流と同じく、空打ちの音（0xB1〜）を決めてあればそれ、
+    /// 無ければそのレーンの一番近い音符（見えない音符 0x31〜 も含む）の音。
+    /// 練習は周ごとに時刻を並べ直すので、並べた音符のうち一番近いものの音にする
+    fn stray_wav(&self, lane: DrumLane, ms: f64) -> Option<u16> {
+        let nearest = self
+            .judge
             .notes()
             .iter()
             .filter(|n| n.lane == lane)
             .min_by(|a, b| (a.ms - ms).abs().total_cmp(&(b.ms - ms).abs()))
-            .map(|n| n.wav)
+            .map(|n| (n.ms, n.wav));
+        if self.practice.is_some() {
+            return nearest.map(|(_, w)| w);
+        }
+        if let Some(w) = self.chart_sounds.empty_hit(lane, ms) {
+            return Some(w);
+        }
+        match (nearest, self.chart_sounds.nearest_hidden(lane, ms)) {
+            (Some(n), Some(h)) => Some(if (h.0 - ms).abs() < (n.0 - ms).abs() {
+                h.1
+            } else {
+                n.1
+            }),
+            (n, h) => n.or(h).map(|(_, w)| w),
+        }
     }
 
     /// 今までの成績
@@ -794,13 +836,19 @@ fn unix_now() -> i64 {
         .map_or(0, |d| d.as_secs() as i64)
 }
 
-/// 譜面が使う音をすべて読む。読めない音は飛ばす
-fn load_sounds(chart: &Chart, dir: &Path, rate: u32) -> HashMap<u16, Sound> {
+/// 譜面が使う音（叩く音符、自動で鳴らす音、空打ちの音、見えない音符）をすべて読む。読めない音は飛ばす
+fn load_sounds(
+    chart: &Chart,
+    chart_sounds: &ChartSounds,
+    dir: &Path,
+    rate: u32,
+) -> HashMap<u16, Sound> {
     let used: BTreeSet<u16> = chart
         .chips
         .iter()
-        .filter(|c| c.channel == dtx::ch::BGM || DrumLane::from_channel(c.channel).is_some())
+        .filter(|c| DrumLane::from_channel(c.channel).is_some())
         .map(|c| c.value)
+        .chain(chart_sounds.wavs())
         .collect();
     let mut out = HashMap::new();
     for id in used {
