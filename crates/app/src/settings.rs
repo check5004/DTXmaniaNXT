@@ -126,6 +126,12 @@ pub const SKIP_MS: &str = "skip_ms";
 /// 窓と画面の保存（上流の FullScreen、VSyncWait、AutoSaveResult）
 pub const DISPLAY_MODE: &str = "display_mode";
 pub const VSYNC: &str = "vsync";
+/// ウィンドウの大きさ（前回のままか、決まった大きさ）
+pub const WINDOW_SIZE: &str = "window_size";
+/// 1 秒に描く回数の上限
+pub const FPS_LIMIT: &str = "fps_limit";
+/// ほかの窓を使っているあいだ、描く回数を下げる（演奏中は除く）
+pub const BACKGROUND_FPS: &str = "background_fps";
 pub const AUTO_SAVE_RESULT: &str = "auto_save_result";
 
 /// ゲージの減り方（MISS の減りにかける数を選ぶ）
@@ -188,6 +194,62 @@ const DISPLAY_MODE_CHOICES: &[Choice] = choices![
 
 /// 0.4.2 までの全画面の ON / OFF のキー（読むだけ。[`Values::upgrade`] で画面の出し方に写す）
 const OLD_FULLSCREEN: &str = "fullscreen";
+
+/// 垂直同期の選び方（並びは [`Vsync`] と同じ）。0.8 までは ON / OFF だけ（[`Values::upgrade`] で写す）
+const VSYNC_CHOICES: &[Choice] = choices![
+    "on" => "ON",
+    "low_latency" => "低遅延（裂けない）",
+    "off" => "OFF",
+];
+
+/// 垂直同期
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Vsync {
+    /// 絵をモニターに合わせて出す（FIFO）
+    On,
+    /// モニターに合わせたまま、待たずに一番新しい絵を出す（Mailbox）。使えなければ ON と同じ
+    LowLatency,
+    /// 待たずに出す（裂けることがある）
+    Off,
+}
+
+impl Vsync {
+    const ALL: [Self; 3] = [Self::On, Self::LowLatency, Self::Off];
+}
+
+/// ウィンドウの大きさの選び方。先頭は前回の大きさ、あとは窓の中の大きさ（ドット）
+const WINDOW_SIZE_CHOICES: &[Choice] = choices![
+    "last" => "前回のまま",
+    "1280x720" => "1280×720",
+    "1600x900" => "1600×900",
+    "1920x1080" => "1920×1080",
+    "2560x1440" => "2560×1440",
+];
+
+/// [`WINDOW_SIZE_CHOICES`] の 2 つめからの大きさ
+const WINDOW_SIZES: [(u32, u32); 4] = [(1280, 720), (1600, 900), (1920, 1080), (2560, 1440)];
+
+/// フレームレートの上限の選び方（並びは [`FPS_LIMITS`] と同じ。先頭は無制限）
+const FPS_LIMIT_CHOICES: &[Choice] = choices![
+    "off" => "無制限",
+    "60" => "60",
+    "120" => "120",
+    "144" => "144",
+    "240" => "240",
+    "360" => "360",
+];
+
+/// [`FPS_LIMIT_CHOICES`] の 2 つめからの回数
+const FPS_LIMITS: [u32; 5] = [60, 120, 144, 240, 360];
+
+/// ほかの窓を見ているときの選び方
+const BACKGROUND_FPS_CHOICES: &[Choice] = choices![
+    "keep" => "そのまま",
+    "low" => "描く回数を下げる",
+];
+
+/// 画面の「なめらかさと遅れ」の小見出し
+const DISPLAY_SMOOTH: &str = "なめらかさと遅れ";
 
 /// 画面の出し方
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -685,13 +747,52 @@ pub const ALL: &[Def] = &[
         in_play: true,
     },
     Def {
-        key: VSYNC,
+        key: WINDOW_SIZE,
         group: Group::Display,
         section: "",
+        name: "ウィンドウの大きさ",
+        kind: Kind::Choice {
+            choices: WINDOW_SIZE_CHOICES,
+            default: 0,
+        },
+        desc: "ウィンドウのときの大きさです。選ぶとその場で変わります。\n前回のまま: 手で変えた大きさで次も開きます。\n位置はどれでも前回のところに開きます。",
+        in_play: false,
+    },
+    Def {
+        key: VSYNC,
+        group: Group::Display,
+        section: DISPLAY_SMOOTH,
         name: "垂直同期",
-        kind: Kind::Toggle { default: true },
-        desc: "画面の書き換えをモニターに合わせます。OFF にすると絵が少し早く出ますが、横に裂けて見えることがあります。\n判定は MIDI の時刻と音で行うので、どちらでも変わりません。",
+        kind: Kind::Choice {
+            choices: VSYNC_CHOICES,
+            default: 0,
+        },
+        desc: "ON: モニターの書き換えに合わせて出します。\n低遅延: 合わせたまま待たずに一番新しい絵を出すので、ON より早く、裂けません（使えない GPU では ON と同じ）。\nOFF: いちばん早いですが、横に裂けることがあります。",
         in_play: true,
+    },
+    Def {
+        key: FPS_LIMIT,
+        group: Group::Display,
+        section: DISPLAY_SMOOTH,
+        name: "フレームレートの上限",
+        kind: Kind::Choice {
+            choices: FPS_LIMIT_CHOICES,
+            default: 0,
+        },
+        desc: "1 秒に描く回数の上限です。垂直同期が低遅延か OFF のとき、下げると GPU の熱とファンの音が減ります。\n叩いた音と判定は遅れません。",
+        in_play: true,
+    },
+    Def {
+        key: BACKGROUND_FPS,
+        group: Group::Display,
+        section: DISPLAY_SMOOTH,
+        name: "ほかの窓を見ているとき",
+        kind: Kind::Choice {
+            choices: BACKGROUND_FPS_CHOICES,
+            default: 0,
+        },
+        desc: "ほかの窓を使っているあいだ、1 秒に 30 回だけ描いて GPU を休ませます。\n演奏と練習の最中は下げません。",
+        in_play: false,
     },
     Def {
         key: AUTO_SAVE_RESULT,
@@ -1151,14 +1252,46 @@ impl Values {
     /// 前の版のキーを今のキーに写す（読んだときに 1 回）。写したら true
     ///
     /// - 0.4.2 までの `fullscreen = true` は、画面の出し方の「全画面」
+    /// - 0.8 までの `vsync = true / false` は、垂直同期の「ON」「OFF」
     pub fn upgrade(&mut self) -> bool {
-        let Some(old) = self.0.remove(OLD_FULLSCREEN) else {
-            return false;
-        };
-        if !self.0.contains_key(DISPLAY_MODE) && old.as_bool() == Some(true) {
-            self.set_display_mode(DisplayMode::Fullscreen);
+        let mut changed = false;
+        if let Some(old) = self.0.remove(OLD_FULLSCREEN) {
+            if !self.0.contains_key(DISPLAY_MODE) && old.as_bool() == Some(true) {
+                self.set_display_mode(DisplayMode::Fullscreen);
+            }
+            changed = true;
         }
-        true
+        if let Some(on) = self.0.get(VSYNC).and_then(toml::Value::as_bool) {
+            self.set_vsync(if on { Vsync::On } else { Vsync::Off });
+            changed = true;
+        }
+        changed
+    }
+
+    /// 垂直同期
+    pub fn vsync(&self) -> Vsync {
+        Vsync::ALL[self.choice(VSYNC)]
+    }
+
+    pub fn set_vsync(&mut self, v: Vsync) {
+        self.set_raw(VSYNC, v as i64);
+    }
+
+    /// ウィンドウの大きさ（窓の中、ドット）。前回のままなら `None`
+    pub fn window_size(&self) -> Option<(u32, u32)> {
+        self.choice(WINDOW_SIZE)
+            .checked_sub(1)
+            .map(|i| WINDOW_SIZES[i])
+    }
+
+    /// 1 秒に描く回数の上限（無制限なら `None`）
+    pub fn fps_limit(&self) -> Option<u32> {
+        self.choice(FPS_LIMIT).checked_sub(1).map(|i| FPS_LIMITS[i])
+    }
+
+    /// ほかの窓を使っているあいだ、描く回数を下げる
+    pub fn background_low(&self) -> bool {
+        self.choice(BACKGROUND_FPS) == 1
     }
 
     fn set(&mut self, key: &str, v: toml::Value) {
@@ -1421,7 +1554,7 @@ mod tests {
         assert!(v.upgrade());
         assert_eq!(v.display_mode(), DisplayMode::Fullscreen);
         assert_eq!(v.label(DISPLAY_MODE), "全画面");
-        assert!(!v.flag(VSYNC));
+        assert_eq!(v.vsync(), Vsync::Off);
         let text = toml::to_string(&v).unwrap();
         assert!(!text.contains("fullscreen ="), "{text}");
         assert!(text.contains("display_mode = \"fullscreen\""), "{text}");
@@ -1438,6 +1571,46 @@ mod tests {
             toml::from_str("fullscreen = true\ndisplay_mode = \"borderless\"\n").unwrap();
         assert!(both.upgrade());
         assert_eq!(both.display_mode(), DisplayMode::Borderless);
+    }
+
+    #[test]
+    fn old_vsync_flag_becomes_the_vsync_choice() {
+        let mut on: Values = toml::from_str("vsync = true\n").unwrap();
+        assert!(on.upgrade());
+        assert_eq!(on.vsync(), Vsync::On);
+        assert!(toml::to_string(&on).unwrap().contains("vsync = \"on\""));
+        assert!(!on.upgrade());
+        let mut off: Values = toml::from_str("vsync = false\n").unwrap();
+        assert!(off.upgrade());
+        assert_eq!(off.vsync(), Vsync::Off);
+        // 書いていなければ ON（前と同じ既定）
+        assert_eq!(Values::default().vsync(), Vsync::On);
+        let mut v = Values::default();
+        v.set_vsync(Vsync::LowLatency);
+        assert_eq!(v.vsync(), Vsync::LowLatency);
+        assert_eq!(v.label(VSYNC), "低遅延（裂けない）");
+    }
+
+    #[test]
+    fn graphics_choices_read_as_numbers() {
+        let mut v = Values::default();
+        assert_eq!(v.window_size(), None);
+        assert_eq!(v.fps_limit(), None);
+        assert!(!v.background_low());
+        v.set_raw(WINDOW_SIZE, 3);
+        v.set_raw(FPS_LIMIT, 3);
+        v.set_raw(BACKGROUND_FPS, 1);
+        assert_eq!(v.window_size(), Some((1920, 1080)));
+        assert_eq!(v.fps_limit(), Some(144));
+        assert!(v.background_low());
+        assert_eq!(WINDOW_SIZE_CHOICES.len(), WINDOW_SIZES.len() + 1);
+        assert_eq!(FPS_LIMIT_CHOICES.len(), FPS_LIMITS.len() + 1);
+        for (c, n) in FPS_LIMIT_CHOICES[1..].iter().zip(FPS_LIMITS) {
+            assert_eq!(c.key, n.to_string());
+        }
+        for (c, (w, h)) in WINDOW_SIZE_CHOICES[1..].iter().zip(WINDOW_SIZES) {
+            assert_eq!(c.key, format!("{w}x{h}"));
+        }
     }
 
     #[test]
