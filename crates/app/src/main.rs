@@ -7,6 +7,7 @@
 //! - 設定（曲のフォルダ・補正値など）は config.toml に残す
 //! - 画面は DTXManiaNX と同じ画像と配置で描く。画像と音はアプリに入れた NX のスキン（`assets/skin`）
 //! - 起動するとタイトル。そこから選曲と設定へ進む
+//! - Setup.exe で入れたときは、起動したときに GitHub のリリースから新しい版を落とし、終えるときに入れ替える
 //! - Windows のリリース版はコンソールの窓を出さない。ログは設定のフォルダの dtxmanianxt.log にも書く（`logging`）
 
 // 開発中（debug）は、ログが見えるようにコンソールを残す
@@ -40,6 +41,7 @@ mod text;
 mod time;
 mod title_view;
 mod ui;
+mod update;
 mod xa;
 
 use std::path::PathBuf;
@@ -324,6 +326,8 @@ struct App {
     toast: Option<(String, Instant)>,
     /// 音符を自動で叩く（開発用。`DTXMANIANXT_AUTOPLAY=1`）
     autoplay: bool,
+    /// 新しい版を探して落とし、終えるときに入れ替える
+    updater: update::Updater,
 }
 
 /// 演奏の画面が数えたスコアを、記録に残す形にする
@@ -418,6 +422,7 @@ impl App {
         let keys = inputs::keyboard_map(&config);
         let history = History::open();
         songs.set_stats(history.chart_stats());
+        let updater = update::Updater::start(config.auto_update);
         Self {
             window: None,
             gpu: None,
@@ -448,6 +453,7 @@ impl App {
             show_play_info: false,
             toast: None,
             autoplay: std::env::var_os("DTXMANIANXT_AUTOPLAY").is_some_and(|v| v == "1"),
+            updater,
         }
     }
 
@@ -1090,6 +1096,7 @@ impl App {
                         c.show_lag_time_color = 1 - c.show_lag_time_color.min(1)
                     }
                     Setting::ShowLagHitCount => c.show_lag_hit_count = !c.show_lag_hit_count,
+                    Setting::AutoUpdate => c.auto_update = !c.auto_update,
                     _ => return,
                 }
                 c.save();
@@ -1644,6 +1651,7 @@ impl App {
             .filter(|(_, until)| Instant::now() < *until)
             .map(|(t, _)| t.clone());
         let scanning = self.songs.scanning().is_some();
+        self.title.set_update(self.updater.ready());
         self.shutter.update(Instant::now());
         let egui_ctx = self.egui_ctx.clone();
         let output = egui_ctx.run_ui(input, |ui| {
@@ -1974,6 +1982,9 @@ impl SelectMouse {
 }
 
 fn main() -> ExitCode {
+    // インストールなどで Velopack から呼ばれたときは、ここで仕事をして終わる
+    // （ログのファイルより先に。前回の遊んだときのログを押し出さないように）
+    update::run_hooks();
     let log = logging::init();
     // 主のスレッドの panic は、ログに書いたうえで（`logging`）ここで受け、終わることを知らせる
     let error = match std::panic::catch_unwind(run) {
@@ -1995,6 +2006,7 @@ fn run() -> Result<()> {
     event_loop.set_control_flow(ControlFlow::Poll);
     let mut app = App::new(arg);
     event_loop.run_app(&mut app)?;
+    app.updater.apply_on_exit(app.config.auto_update);
     match app.startup_error.take() {
         Some(e) => Err(e),
         None => Ok(()),

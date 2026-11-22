@@ -66,6 +66,8 @@ pub struct Config {
     /// PC のキーボードの割り当てのうち、既定から変えたもの（順に重ねる）
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub keys: Vec<KeyBind>,
+    /// 起動したときに GitHub のリリースから新しい版を落とし、終えるときに入れ替える（Setup.exe で入れたときだけ）
+    pub auto_update: bool,
 }
 
 /// パッドの割り当て 1 つ（ノート番号 → レーン）
@@ -145,6 +147,7 @@ impl Default for Config {
             pad_notes: Vec::new(),
             midi_devices: Vec::new(),
             keys: Vec::new(),
+            auto_update: true,
         }
     }
 }

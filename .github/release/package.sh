@@ -18,6 +18,8 @@ cargo about generate --locked --fail -m crates/app/Cargo.toml -c "$here/about.to
 cp LICENSE stage/LICENSE.txt
 
 win=bin/bin-Windows/dtxmanianxt.exe
+velopack=bin/bin-Windows/velopack
+version=${tag#v}
 mac=bin/bin-macOS/dtxmanianxt
 linux=bin/bin-Linux/dtxmanianxt
 
@@ -30,9 +32,21 @@ if objdump -p "$win" | grep -i 'DLL Name' | tee /dev/stderr | grep -qi 'vcruntim
   echo "::warning::exe が VC++ のランタイムの DLL を読む（crt-static が効いていない）"
 fi
 
-# Windows: exe 1 つだけ（どれを落とせばいいか迷わないように、zip などは作らない）。
-# 名前は版によらず同じにして、releases/latest/download/DTXmaniaNXT.exe でいつも最新が落とせるようにする
-cp "$win" dist/DTXmaniaNXT.exe
+# Windows: 落とすのはインストーラー 1 つだけ（どれを落とせばいいか迷わないように、exe 単体や zip は載せない）。
+# 名前は版によらず同じにして、releases/latest/download/DTXmaniaNXT-Setup.exe でいつも最新が落とせるようにする。
+# ほかに自動更新の材料（この版の .nupkg と releases.win.json。アプリが GitHub から読む）を載せる。
+# vpk download で落とした前の版の .nupkg は前のリリースにあるので載せ直さない
+# （vpk の名前は DTXmaniaNXT-win-Setup.exe、DTXmaniaNXT-<版>-full.nupkg のような形。版によって少し違うので広めに探す）
+setup=$(find "$velopack" -maxdepth 1 -name '*-Setup.exe' | head -n1)
+full=$(find "$velopack" -maxdepth 1 -name "DTXmaniaNXT-$version-*full.nupkg" | head -n1)
+if [ -z "$setup" ] || [ -z "$full" ] || [ ! -f "$velopack/releases.win.json" ]; then
+  echo "::error::Windows のインストーラーか自動更新の材料ができていない。build (windows-latest) の velopack.sh のログを見る"
+  ls -l "$velopack" || true
+  exit 1
+fi
+cp "$setup" dist/DTXmaniaNXT-Setup.exe
+cp "$velopack/releases.win.json" "$full" dist/
+find "$velopack" -maxdepth 1 -name "DTXmaniaNXT-$version-*delta.nupkg" -exec cp {} dist/ \;
 # ライセンスの表記は exe と別のファイルで載せる（macOS と Linux はまとめの中にも入れる）
 cp stage/THIRD-PARTY-LICENSES.html dist/
 
@@ -58,7 +72,7 @@ ls -l dist/
 {
   echo "## ダウンロード"
   echo
-  echo "- **Windows（64 ビット）**: [DTXmaniaNXT.exe]($download/DTXmaniaNXT.exe)。Windows はこれ 1 つだけです。好きなフォルダに置いてダブルクリックで起動します。"
+  echo "- **Windows（64 ビット）**: [DTXmaniaNXT-Setup.exe]($download/DTXmaniaNXT-Setup.exe)。Windows はこれ 1 つだけです。ダブルクリックするとインストールして起動します（管理者の権限は要りません）。次からはスタートメニューかデスクトップの DTXmaniaNXT から起動します。新しい版は起動したときに自動で落とし、終了したときに入れ替わります。"
   if [ -f "dist/DTXmaniaNXT-$tag-macos-arm64.tar.gz" ]; then
     echo "- macOS（Apple シリコン）: [DTXmaniaNXT-$tag-macos-arm64.tar.gz]($download/DTXmaniaNXT-$tag-macos-arm64.tar.gz)"
   fi
@@ -66,7 +80,7 @@ ls -l dist/
     echo "- Linux（x86_64）: [DTXmaniaNXT-$tag-linux-x64.tar.gz]($download/DTXmaniaNXT-$tag-linux-x64.tar.gz)（ALSA の \`libasound2\` が要ります）"
   fi
   echo
-  echo "下の一覧のほかのファイルは、遊ぶのには要りません（\`THIRD-PARTY-LICENSES.html\` は使っているライブラリのライセンスの表記、\`SHA256SUMS.txt\` はダウンロードしたファイルの確かめ用、Source code は GitHub が自動で付けるソースです）。"
+  echo "下の一覧のほかのファイルは、ダウンロードしなくてかまいません（\`.nupkg\` と \`releases.win.json\` はアプリが自動更新に使う材料、\`THIRD-PARTY-LICENSES.html\` は使っているライブラリのライセンスの表記、\`SHA256SUMS.txt\` はダウンロードしたファイルの確かめ用、Source code は GitHub が自動で付けるソースです）。"
   echo
   cat "$here/notes.md"
 } > notes.md

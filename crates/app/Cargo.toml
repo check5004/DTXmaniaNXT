@@ -39,6 +39,8 @@ ab_glyph = "0.2"
 ttf-parser = "0.25"
 # アプリに入れた NX のスキン（assets/skin）を exe に埋め込む（開発中のビルドはフォルダから読む）
 rust-embed = "8"
+# インストールと、GitHub のリリースからの自動更新（Setup.exe と差分の更新を作る vpk と組で使う）
+velopack = "1.2"
 
 [lints]
 workspace = true

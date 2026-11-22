@@ -88,6 +88,7 @@ pub enum Setting {
     ShowLagTime,
     ShowLagTimeColor,
     ShowLagHitCount,
+    AutoUpdate,
 }
 
 /// 一覧の項目
@@ -373,6 +374,13 @@ pub fn items(list: List, info: &ConfigInfo<'_>) -> Vec<Item> {
                 "ShowLagHitCount",
                 on_off(c.show_lag_hit_count),
                 "ON にすると、結果の画面に早かった数と遅かった数を出します。".to_owned(),
+            ));
+            v.push(item(
+                ItemId::Value(Setting::AutoUpdate),
+                "AutoUpdate",
+                on_off(c.auto_update),
+                "ON にすると、起動したときに新しい版を GitHub から落とし、終了したときに入れ替えます。\nSetup.exe で入れたときだけ働きます。切り替えは次の起動から効きます。"
+                    .to_owned(),
             ));
         }
         List::Drums => {
