@@ -12,7 +12,7 @@
 
 <p align="center">
   DTX 譜面で遊べる、無料のドラムゲーム兼練習ソフトです。<br>
-  Windows（64bit）版のほか、macOS（Apple シリコン）版と Linux（x86_64）版も<a href="https://github.com/check5004/DTXmaniaNXT/releases/latest">リリースページ</a>で配布しています。<br>
+  対応 OS は Windows（64bit）。macOS 版・Linux 版も<a href="https://github.com/check5004/DTXmaniaNXT/releases/latest">リリースページ</a>にあります。<br>
   <sub>非公式のファンメイド作品です。詳しくは<a href="#クレジットと権利">クレジットと権利</a>をご覧ください。</sub>
 </p>
 
@@ -224,7 +224,7 @@ DTXmaniaNXT は**非公式のファンメイド作品**です。2000 年から�
 
 <p align="center"><img src="docs/readme/lineage.ja.svg" width="960" alt="DTXmaniaNXT の系譜。DTXMania（FROM・DTXMania Group、2000 年〜）、DTXManiaXG verK（kairera0467）、DTXManiaNX（limyz・fisyher）、DTXManiaNX v2.0（BocuD）、DTXmaniaNXT の順。NXT は v2.0 の画像と効果音を無改変で同梱し、プログラムは新規に書いたもの"></p>
 
-### DTXMania の系譜
+### DTXMania と派生版
 
 | プロジェクト | 作者 | 説明 |
 | --- | --- | --- |
