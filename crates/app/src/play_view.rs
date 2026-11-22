@@ -1006,6 +1006,7 @@ impl PlayView {
                 }
             }
             Some(p) => {
+                self.draw_focus_beats(c, g, p, now_ms, px_per_ms);
                 for lap in &p.laps {
                     let span = lap.plan.audio;
                     for l in play
@@ -1025,7 +1026,7 @@ impl PlayView {
                     };
                     if ahead
                         && let Some(text) = g.texts.get(
-                            &format!("{} 周目", lap.in_set),
+                            &format!("{} 周目", lap.in_attempt),
                             &Style {
                                 px: 14.0,
                                 color: Color32::WHITE,
@@ -1038,6 +1039,69 @@ impl PlayView {
                     {
                         text.draw(c, 300.0, y - text.h - 2.0, 1.0, 1.0);
                     }
+                }
+            }
+        }
+    }
+
+    /// 練習で、前の段で同じ拍のミスが重なった拍を、今の段の周の譜面の下に赤い帯で光らせる
+    /// （帯は拍の頭から次の拍まで。拍の名前「62-3」を判定の線の側の端に）
+    fn draw_focus_beats(
+        &self,
+        c: &Canvas,
+        g: &mut Gfx,
+        p: &crate::practice::Practice,
+        now_ms: f64,
+        px_per_ms: f32,
+    ) {
+        let beats = p.focus_beats();
+        if beats.is_empty() {
+            return;
+        }
+        let looks = self.looks;
+        let red = Color32::from_rgb(0xFF, 0x60, 0x50);
+        let tag = Style {
+            px: 13.0,
+            color: Color32::WHITE,
+            bold: true,
+            shadow: None,
+            edge: Some((Color32::BLACK, 1.0)),
+            gradient: None,
+        };
+        for lap in p.laps.iter().filter(|l| l.attempt == p.attempt_index()) {
+            for (b, _) in &beats {
+                let (a, z) = p.beat_ms(*b);
+                if a < lap.plan.audio.from_ms || a >= lap.plan.audio.to_ms {
+                    continue;
+                }
+                // 拍の頭の音符が判定の線を過ぎたら消す（チップの高さのぶん少し下まで）
+                let near = ((lap.plan.real_ms(a) - now_ms) as f32) * px_per_ms - 8.0;
+                let far = ((lap.plan.real_ms(z) - now_ms) as f32) * px_per_ms - 8.0;
+                if far <= 0.0 || near > DRAW_AHEAD_PX {
+                    continue;
+                }
+                let y0 = looks.ahead_y(near.max(0.0));
+                let y1 = looks.ahead_y(far.min(DRAW_AHEAD_PX));
+                let (top, h) = (y0.min(y1), (y0 - y1).abs());
+                c.fill(295.0, top, 559.0, h, red.gamma_multiply(0.18));
+                c.fill(295.0, top, 559.0, 1.0, red.gamma_multiply(0.6));
+                c.fill(295.0, top + h - 1.0, 559.0, 1.0, red.gamma_multiply(0.6));
+                if near >= 0.0
+                    && let Some(t) = g.texts.get(&format!("{}-{}", b.measure, b.beat + 1), &tag)
+                {
+                    let ty = if looks.reverse {
+                        top + 2.0
+                    } else {
+                        top + h - t.h - 2.0
+                    };
+                    c.fill(
+                        298.0,
+                        ty - 1.0,
+                        t.w + 8.0,
+                        t.h + 2.0,
+                        red.gamma_multiply(0.9),
+                    );
+                    t.draw(c, 302.0, ty, 1.0, 1.0);
                 }
             }
         }
