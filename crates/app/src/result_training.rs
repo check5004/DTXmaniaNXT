@@ -6,6 +6,7 @@
 
 use egui::{Color32, Stroke, StrokeKind};
 use engine::practice::{BeatSlot, Section, SpeedPlan, SpotTally, speed_percent};
+use engine::stroke::StrokeTally;
 
 use crate::band::{Band, BandData, CLEARED_COLOR};
 use crate::game::{Outcome, PracticeOutcome};
@@ -666,6 +667,9 @@ pub fn draw_weak(c: &Canvas, g: &mut Gfx, o: &Outcome) {
         text(c, g, &line, x + 14.0, ty, 15.0, color);
         ty += 20.0;
     }
+    if let Some(t) = &o.strokes {
+        draw_strokes(c, g, t, x, ty, pw, limit);
+    }
     let hint = if w.phrases.is_empty() {
         "P：区間を練習"
     } else {
@@ -677,9 +681,82 @@ pub fn draw_weak(c: &Canvas, g: &mut Gfx, o: &Outcome) {
     }
 }
 
+/// スネアの打ち分けの欄の高さ（線・見出し・棒 2 本・叩けなかった小節）
+const STROKES_H: f32 = 98.0;
+/// リムの棒の色（スネアのチップの黄色）
+const RIM_COLOR: Color32 = Color32::from_rgb(0xFF, 0xC8, 0x28);
+
+/// 苦手な小節の欄の下に、スネアの打ち分け（リムの音符をリムで、普通の音符をヘッドかリムショットで叩けた数）。
+/// 欄の下の端（`limit`）に寄せる。苦手なフレーズなどで場所が無ければ 1 行にまとめる
+fn draw_strokes(c: &Canvas, g: &mut Gfx, t: &StrokeTally, x: f32, ty: f32, pw: f32, limit: f32) {
+    let top = limit - STROKES_H;
+    if ty > top {
+        if ty + 18.0 <= limit {
+            let line = format!(
+                "スネアの打ち分け　リム {} / {}　ヘッド {} / {}",
+                t.rim_ok, t.rim_hit, t.head_ok, t.head_hit
+            );
+            text(c, g, &line, x + 14.0, ty, 15.0, Color32::from_gray(230));
+        }
+        return;
+    }
+    c.fill(x + 12.0, top, pw - 24.0, 1.0, Color32::from_white_alpha(60));
+    text(
+        c,
+        g,
+        "スネアの打ち分け",
+        x + 14.0,
+        top + 8.0,
+        17.0,
+        Color32::WHITE,
+    );
+    let rows = [
+        ("リム", t.rim_ok, t.rim_hit, RIM_COLOR),
+        ("ヘッド", t.head_ok, t.head_hit, Color32::from_gray(235)),
+    ];
+    let (bx, bw) = (x + 84.0, pw - 190.0);
+    for (i, (label, ok, n, color)) in rows.into_iter().enumerate() {
+        let y = top + 36.0 + i as f32 * 22.0;
+        text(c, g, label, x + 14.0, y, 15.0, Color32::from_gray(230));
+        c.fill(bx, y + 4.0, bw, 10.0, Color32::from_white_alpha(30));
+        if n > 0 {
+            c.fill(bx, y + 4.0, bw * ok as f32 / n as f32, 10.0, color);
+        }
+        let count = if n > 0 {
+            format!("{ok} / {n}")
+        } else {
+            "-".to_owned()
+        };
+        text(c, g, &count, bx + bw + 12.0, y, 15.0, Color32::WHITE);
+    }
+    if !t.rim_missed_measures.is_empty() {
+        let line = format!(
+            "リムで叩けなかった所: {} 小節",
+            measures_text(&t.rim_missed_measures, 6)
+        );
+        text(c, g, &line, x + 14.0, top + 80.0, 14.0, WEAK_COLOR);
+    }
+}
+
+/// 小節の番号を「12・28・29」のように。`max` を超えたら「ほか n」を足す
+fn measures_text(measures: &[u32], max: usize) -> String {
+    let shown: Vec<String> = measures.iter().take(max).map(u32::to_string).collect();
+    let mut s = shown.join("・");
+    if measures.len() > max {
+        s += &format!(" ほか {}", measures.len() - max);
+    }
+    s
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn measures_are_listed_with_the_rest_counted() {
+        assert_eq!(measures_text(&[12, 28, 29], 6), "12・28・29");
+        assert_eq!(measures_text(&[1, 2, 3, 4], 2), "1・2 ほか 2");
+    }
 
     #[test]
     fn old_laps_are_omitted_when_the_table_is_full() {

@@ -39,6 +39,7 @@ mod practice_hud;
 mod practice_popup;
 mod result_training;
 mod result_view;
+mod rim_look;
 mod select;
 mod settings;
 mod settings_ui;

@@ -156,6 +156,8 @@ pub const LANE_TYPE: &str = "lane_type";
 pub const RD_POSITION: &str = "rd_position";
 pub const HHO_GRAPHICS: &str = "hho_graphics";
 pub const LBD_GRAPHICS: &str = "lbd_graphics";
+/// スネアのリムの音符の出し方
+pub const RIM_GRAPHICS: &str = "rim_graphics";
 /// ずれのバー（叩いた音符のずれを、判定の線の時刻を真ん中にした横の目盛りに印で出す）
 pub const HIT_ERROR_BAR: &str = "hit_error_bar";
 
@@ -268,6 +270,14 @@ const LBD_GRAPHICS_CHOICES: &[Choice] = choices![
     "own_lane" => "LP の右にレーンを足す（水色）",
     "a" => "LP のレーンに同じ絵（NX の A）",
     "b" => "LP のレーンに紫の絵（NX の B）",
+];
+
+/// スネアのリムの音符の出し方（並びは [`crate::rim_look::RimLook`] と同じ）
+const RIM_GRAPHICS_CHOICES: &[Choice] = choices![
+    "ears" => "両はしに印",
+    "hollow" => "縁だけ",
+    "white" => "白",
+    "off" => "出さない",
 ];
 
 const VIEW_LANES: &str = "画面の部品";
@@ -714,6 +724,13 @@ pub const ALL: &[Def] = &[
         "左バスドラムの出し方（LBDGraphics）",
         LBD_GRAPHICS_CHOICES,
         "左バスドラム（LBD）の音符を BD のレーンに水色で出すか、LP の右に足したレーン（実物のツインペダルと同じ並び）に出すか、NX と同じく LP のレーンに出すか。\n光・判定の文字・火花も、音符を出したレーンに出します。",
+    ),
+    view_choice(
+        RIM_GRAPHICS,
+        VIEW_ORDER,
+        "スネアのリムの音符",
+        RIM_GRAPHICS_CHOICES,
+        "音の名前が Rim や SideStick のスネアの音符を、リムの音符として見分けて出します。\n出さないにすると、普通の音符と同じ絵です。",
     ),
     view_choice(
         HID_SUD,
