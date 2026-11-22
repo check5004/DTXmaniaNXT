@@ -319,8 +319,8 @@ pub const ATTACK_EFFECT_CHOICES: &[Choice] = choices![
 
 /// 上流 `JudgementStringPosition`
 pub const JUDGE_POSITION_CHOICES: &[Choice] = choices![
-    "lane" => "レーンの上（P-A）",
-    "below" => "判定ラインの下（P-B）",
+    "lane" => "レーンの上",
+    "below" => "判定ラインの下",
     "off" => "出さない",
 ];
 
@@ -590,8 +590,8 @@ const fn hit_window(
     }
 }
 
-const HIT_DESC: &str = "音符の時刻から前後この幅までに叩くと、この判定になります（上流の既定は PERFECT 34、GREAT 67、GOOD 84、POOR 117）。\nPOOR の幅の外は空打ちです。狭い判定の幅が広い判定を越えたら、広い判定もそこまで広げて使います。";
-const PEDAL_HIT_DESC: &str = "バスドラム・左ペダル・左バスドラムの判定の幅です（上流の DrumPedal〜）。\nほかのレーンと同じく、狭い判定の幅が広い判定を越えたら、広い判定もそこまで広げて使います。";
+const HIT_DESC: &str = "音符の時刻から前後この幅までに叩くと、この判定になります（既定は PERFECT 34、GREAT 67、GOOD 84、POOR 117）。\nPOOR の幅の外は空打ちです。狭い判定の幅が広い判定を越えたら、広い判定もそこまで広げて使います。";
+const PEDAL_HIT_DESC: &str = "バスドラム・左ペダル・左バスドラムだけの判定の幅です（既定はほかのレーンと同じ PERFECT 34、GREAT 67、GOOD 84、POOR 117）。\nほかのレーンと同じく、狭い判定の幅が広い判定を越えたら、広い判定もそこまで広げて使います。";
 
 /// オートのまとめての切り替え
 pub const AUTO_ALL: &str = "auto_all";
@@ -630,7 +630,7 @@ pub const ALL: &[Def] = &[
         key: AUTO_ALL,
         group: Group::Pads,
         section: AUTO_SECTION,
-        name: "自動演奏（AutoPlay）",
+        name: "自動演奏",
         kind: Kind::All {
             members: &AUTO_KEYS,
         },
@@ -652,7 +652,7 @@ pub const ALL: &[Def] = &[
         key: DAMAGE_LEVEL,
         group: Group::Play,
         section: RULE_SECTION,
-        name: "ゲージの減り方（DamageLevel）",
+        name: "ゲージの減り方",
         kind: Kind::Choice {
             choices: DAMAGE_CHOICES,
             default: 1,
@@ -696,25 +696,25 @@ pub const ALL: &[Def] = &[
     },
     group_choice(
         HH_GROUP,
-        "ハイハットの叩き分け（HH Group）",
+        "ハイハットの叩き分け",
         HH_GROUP_CHOICES,
         "左シンバル・ハイハット（閉）・ハイハット（開）を叩き分けるかを選びます。共通にしたものは、どれを叩いても取れます。\n譜面に無いレーンは、叩き分けようがないので共通にします。",
     ),
     group_choice(
         FT_GROUP,
-        "フロアタムの叩き分け（FT Group）",
+        "フロアタムの叩き分け",
         FT_GROUP_CHOICES,
         "ロータムとフロアタムを叩き分けるかを選びます。",
     ),
     group_choice(
         CY_GROUP,
-        "シンバルの叩き分け（CY Group）",
+        "シンバルの叩き分け",
         CY_GROUP_CHOICES,
         "右シンバルとライドを叩き分けるかを選びます。譜面にライドが無ければ共通にします。",
     ),
     group_choice(
         BD_GROUP,
-        "ペダルの叩き分け（BD Group）",
+        "ペダルの叩き分け",
         BD_GROUP_CHOICES,
         "左ペダル・左バスドラム・バスドラムを叩き分けるかを選びます。\n左バスドラムにパッドもキーも割り当てていなければ、BD-0 でもバスドラムで左バスドラムを取れます。",
     ),
@@ -722,7 +722,7 @@ pub const ALL: &[Def] = &[
         key: CYMBAL_FREE,
         group: Group::Pads,
         section: GROUP_SECTION,
-        name: "シンバルフリー（CymbalFree）",
+        name: "シンバルフリー",
         kind: Kind::Toggle { default: false },
         desc: "左シンバルと右シンバルを叩き分けません（どちらで叩いても取れます）。\nライドも共通にするかは、シンバルの叩き分けに従います。",
         in_play: false,
@@ -731,7 +731,7 @@ pub const ALL: &[Def] = &[
         key: SKIP_MS,
         group: Group::Play,
         section: "演奏中のキー",
-        name: "早送り・巻き戻しの幅（SkipTimeMs）",
+        name: "早送り・巻き戻しの幅",
         kind: Kind::Number {
             min: 1000,
             max: 20000,
@@ -747,7 +747,7 @@ pub const ALL: &[Def] = &[
         key: DISPLAY_MODE,
         group: Group::Display,
         section: "",
-        name: "画面の出し方（FullScreen）",
+        name: "画面の出し方",
         kind: Kind::Choice {
             choices: DISPLAY_MODE_CHOICES,
             default: 0,
@@ -819,7 +819,7 @@ pub const ALL: &[Def] = &[
         key: AUTO_SAVE_RESULT,
         group: Group::Play,
         section: "記録",
-        name: "記録を更新した結果を画像で残す（AutoSaveResult）",
+        name: "記録を更新した結果を画像で残す",
         kind: Kind::Toggle { default: true },
         desc: "記録を更新したとき、結果の画面を譜面と同じフォルダに PNG で残します（譜面の名前.日時_DRUMS_ランク.png）。\nF12 ではいつでも画面を「ピクチャ」の DTXmaniaNXT に残せます。",
         in_play: false,
@@ -827,7 +827,7 @@ pub const ALL: &[Def] = &[
     percent(
         JUDGE_LINE_POS,
         "流れ方",
-        "判定ラインの高さ（JudgeLinePos）",
+        "判定ラインの高さ",
         "判定ラインを下から何ドット上げるか（0〜100）。チップと小節線、火花も一緒に動きます。",
     ),
     Def {
@@ -842,28 +842,28 @@ pub const ALL: &[Def] = &[
     view_choice(
         LANE_TYPE,
         VIEW_ORDER,
-        "レーンの並び（LaneType）",
+        "レーンの並び",
         LANE_TYPE_CHOICES,
         "HH と LT のあいだの並び。B はペダルとタム、C はタムをまとめ、D は左右対称。\nCY と RD は「RD の位置」で決まり、パッドや判定の文字も一緒に動きます。",
     ),
     view_choice(
         RD_POSITION,
         VIEW_ORDER,
-        "RD の位置（RDPosition）",
+        "RD の位置",
         RD_POSITION_CHOICES,
         "ライドシンバルのレーンを右端に置くか、シンバル（CY）の左に置くか。",
     ),
     view_choice(
         HHO_GRAPHICS,
         VIEW_ORDER,
-        "オープンハイハットの絵（HHOGraphics）",
+        "オープンハイハットの絵",
         HHO_GRAPHICS_CHOICES,
         "A はまわりに丸のある絵、B は丸を消した絵、C はクローズのハイハットと同じ絵です。",
     ),
     view_choice(
         LBD_GRAPHICS,
         VIEW_ORDER,
-        "左バスドラムの出し方（LBDGraphics）",
+        "左バスドラムの出し方",
         LBD_GRAPHICS_CHOICES,
         "左バスドラム（LBD）の音符を BD のレーンに水色で出すか、LP の右に足したレーン（実物のツインペダルと同じ並び）に出すか、LP のレーンに出すか。\n光・判定の文字・火花も、音符を出したレーンに出します。",
     ),
@@ -877,20 +877,20 @@ pub const ALL: &[Def] = &[
     view_choice(
         HID_SUD,
         VIEW_HIDE,
-        "見えにくくする（HID-SUD）",
+        "見えにくくする",
         HID_SUD_CHOICES,
         "HIDDEN は判定ラインの近くでチップが消え、SUDDEN は判定ラインの近くまで来てから出ます。\nHID-SUD は両方、STEALTH はずっと見えません（譜面を覚える練習に）。",
     ),
     percent(
         SHUTTER_IN,
         VIEW_HIDE,
-        "上のシャッター（ShutterInPos）",
+        "上のシャッター",
         "チップが出てくる側（上）をシャッターでどこまで隠すか（0〜100。100 で画面の高さ全部）。",
     ),
     percent(
         SHUTTER_OUT,
         VIEW_HIDE,
-        "下のシャッター（ShutterOutPos）",
+        "下のシャッター",
         "判定ラインの側（下）をシャッターでどこまで隠すか（0〜100。100 で画面の高さ全部）。",
     ),
     view_choice(
@@ -903,35 +903,31 @@ pub const ALL: &[Def] = &[
     view_choice(
         LANE_DISP,
         VIEW_LANES,
-        "レーンと小節線（LaneDisp）",
+        "レーンと小節線",
         LANE_DISP_CHOICES,
         "レーンの背景を暗くするか、小節線と拍線を消すかを選びます。",
     ),
-    view_toggle(
-        JUDGE_LINE_DISP,
-        "判定ライン（JudgeLineDisp）",
-        "判定ラインを出すかどうか。",
-    ),
+    view_toggle(JUDGE_LINE_DISP, "判定ライン", "判定ラインを出すかどうか。"),
     view_toggle(
         LANE_FLUSH,
-        "レーンの光（LaneFlush）",
+        "レーンの光",
         "叩いたときにレーンを光らせるかどうか。",
     ),
     view_choice(
         ATTACK_EFFECT,
         VIEW_LANES,
-        "叩いたときの効果（AttackEffect）",
+        "叩いたときの効果",
         ATTACK_EFFECT_CHOICES,
         "音符を取ったときの火花・星・飛び散るチップをどこまで出すか。",
     ),
     view_choice(
         JUDGE_POSITION,
         VIEW_LANES,
-        "判定の文字の位置（JudgePosition）",
+        "判定の文字の位置",
         JUDGE_POSITION_CHOICES,
         "PERFECT などの文字を、レーンの上か、判定ラインの下に出します。出さないこともできます。",
     ),
-    view_toggle(COMBO_DISP, "コンボ（Combo）", "コンボの数を出すかどうか。"),
+    view_toggle(COMBO_DISP, "コンボ", "コンボの数を出すかどうか。"),
     Def {
         key: HIT_ERROR_BAR,
         group: Group::Play,
@@ -945,7 +941,7 @@ pub const ALL: &[Def] = &[
         key: MIN_COMBO,
         group: Group::View,
         section: VIEW_LANES,
-        name: "コンボを出す数（D-MinCombo）",
+        name: "コンボを出す数",
         kind: Kind::Number {
             min: 1,
             max: 99999,
@@ -961,7 +957,7 @@ pub const ALL: &[Def] = &[
         key: AVI,
         group: Group::Display,
         section: DISPLAY_MOVIE,
-        name: "動画（AVI）",
+        name: "譜面の動画",
         kind: Kind::Toggle { default: true },
         desc: "譜面の動画（#AVI）をレーンの後ろに流します。\n今は Windows だけで、MP4 や AVI を Windows の機能で読みます。",
         in_play: false,
@@ -970,7 +966,7 @@ pub const ALL: &[Def] = &[
         key: MOVIE_ALPHA,
         group: Group::Display,
         section: DISPLAY_MOVIE,
-        name: "レーンの透け具合（MovieAlpha）",
+        name: "レーンの透け具合",
         kind: Kind::Number {
             min: 0,
             max: 100,
@@ -984,37 +980,37 @@ pub const ALL: &[Def] = &[
     },
     priority(
         HH_PRIORITY,
-        "ハイハットの音（HH Priority）",
+        "ハイハットの音",
         "ハイハットや左シンバルを共通にしたとき、別のレーンの音符を取ったら、譜面の音符の音を鳴らすか、叩いたパッドの音を鳴らすかを選びます。",
     ),
     priority(
         FT_PRIORITY,
-        "フロアタムの音（FT Priority）",
+        "フロアタムの音",
         "ロータムとフロアタムを共通にしたとき、譜面の音符の音を鳴らすか、叩いたパッドの音を鳴らすかを選びます。",
     ),
     priority(
         CY_PRIORITY,
-        "シンバルの音（CY Priority）",
+        "シンバルの音",
         "シンバルとライドを共通にしたとき、譜面の音符の音を鳴らすか、叩いたパッドの音を鳴らすかを選びます。",
     ),
     Def {
         key: MUTING_LP,
         group: Group::Pads,
         section: "ペダル",
-        name: "閉じたハイハットと左ペダルで止める（Muting LP）",
+        name: "閉じたハイハットと左ペダルで止める",
         kind: Kind::Toggle { default: true },
         desc: "閉じたハイハット（HH）か左ペダル（LP）の音が鳴ると、鳴っているハイハットの音（開いたハイハットも）を止めます。叩いた音も、自動で叩くレーンや譜面の自動のハイハットの音も同じです。",
         in_play: false,
     },
     volume(
         AUTO_VOLUME,
-        "BGM の音量（AutoVolume）",
+        "BGM の音量",
         80,
         "曲の音の音量です。BGM のほか、譜面の効果音、自動で叩くレーンの音、選曲のプレビューも入ります（全体の音量にさらにかけます）。",
     ),
     volume(
         CHIP_VOLUME,
-        "叩いた音の音量（ChipVolume）",
+        "叩いた音の音量",
         100,
         "叩いたときに鳴らす譜面の音の音量です（全体の音量にさらにかけます）。強く叩くほど大きく鳴ります。\n電子ドラムの音源の音で叩くなら、「叩いた音」を OFF にします。",
     ),
@@ -1026,7 +1022,7 @@ pub const ALL: &[Def] = &[
     ),
     volume(
         SE_VOLUME,
-        "効果音の音量（SE）",
+        "効果音の音量",
         100,
         "カーソルを動かす音・決定の音・結果の画面の声など、画面の効果音の音量です（全体の音量にさらにかけます）。\n譜面の効果音は BGM の音量に入ります。",
     ),
@@ -1034,7 +1030,7 @@ pub const ALL: &[Def] = &[
         key: BGM_SOUND,
         group: Group::Sound,
         section: "鳴らすもの",
-        name: "BGM（BGM Sound）",
+        name: "譜面の BGM",
         kind: Kind::Toggle { default: true },
         desc: "OFF にすると、譜面の BGM（チャンネル 01）を鳴らしません。効果音やギター・ベースの音は鳴らします。",
         in_play: false,
@@ -1043,7 +1039,7 @@ pub const ALL: &[Def] = &[
         key: METRONOME,
         group: Group::Sound,
         section: "鳴らすもの",
-        name: "メトロノーム（Metronome）",
+        name: "メトロノーム",
         kind: Kind::Toggle { default: false },
         desc: "小節の頭と拍でクリックを鳴らします。演奏中も一時停止から切り替えられます。\n区間練習は、練習の決めごとのメトロノームで鳴らします。",
         in_play: true,
@@ -1052,7 +1048,7 @@ pub const ALL: &[Def] = &[
         key: BGM_ADJUST,
         group: Group::Timing,
         section: "",
-        name: "BGM のずらし（BGMAdjust）",
+        name: "BGM のずらし",
         kind: Kind::Number {
             min: -99,
             max: 99,
@@ -1064,41 +1060,35 @@ pub const ALL: &[Def] = &[
         desc: "BGM と効果音を鳴らす時刻をずらします（プラスで遅く）。譜面と BGM が合っていない曲に。\n-99 〜 99 ms。",
         in_play: false,
     },
-    hit_window(
-        HIT_KEYS[0],
-        "判定の幅",
-        "PERFECT（DrumPerfect）",
-        34,
-        HIT_DESC,
-    ),
-    hit_window(HIT_KEYS[1], "判定の幅", "GREAT（DrumGreat）", 67, HIT_DESC),
-    hit_window(HIT_KEYS[2], "判定の幅", "GOOD（DrumGood）", 84, HIT_DESC),
-    hit_window(HIT_KEYS[3], "判定の幅", "POOR（DrumPoor）", 117, HIT_DESC),
+    hit_window(HIT_KEYS[0], "判定の幅", "PERFECT の幅", 34, HIT_DESC),
+    hit_window(HIT_KEYS[1], "判定の幅", "GREAT の幅", 67, HIT_DESC),
+    hit_window(HIT_KEYS[2], "判定の幅", "GOOD の幅", 84, HIT_DESC),
+    hit_window(HIT_KEYS[3], "判定の幅", "POOR の幅", 117, HIT_DESC),
     hit_window(
         PEDAL_HIT_KEYS[0],
         "判定の幅（ペダル）",
-        "PERFECT（DrumPedalPerfect）",
+        "PERFECT の幅",
         34,
         PEDAL_HIT_DESC,
     ),
     hit_window(
         PEDAL_HIT_KEYS[1],
         "判定の幅（ペダル）",
-        "GREAT（DrumPedalGreat）",
+        "GREAT の幅",
         67,
         PEDAL_HIT_DESC,
     ),
     hit_window(
         PEDAL_HIT_KEYS[2],
         "判定の幅（ペダル）",
-        "GOOD（DrumPedalGood）",
+        "GOOD の幅",
         84,
         PEDAL_HIT_DESC,
     ),
     hit_window(
         PEDAL_HIT_KEYS[3],
         "判定の幅（ペダル）",
-        "POOR（DrumPedalPoor）",
+        "POOR の幅",
         117,
         PEDAL_HIT_DESC,
     ),
