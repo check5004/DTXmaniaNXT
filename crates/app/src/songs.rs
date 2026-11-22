@@ -158,6 +158,11 @@ impl SongList {
         self.cursor = self.cursor.min(self.len().saturating_sub(1));
     }
 
+    /// 言語を変えたとき、並べ替えで作る BOX の名前を作り直す
+    pub fn relabel(&mut self) {
+        self.rebuild();
+    }
+
     /// 今の並べ替え
     pub fn sort(&self) -> SortKind {
         self.sort
