@@ -142,6 +142,8 @@ pub enum Page {
     Quick,
     /// 演奏中の一時停止（演奏に戻る・やり直す・演奏中に変えてよい項目・やめる）
     Pause,
+    /// 音量ミキサー（全体と系統ごとの音量。よく使う・簡易設定・一時停止から開く）
+    Mixer,
 }
 
 /// 値を変えられる設定（`Config` の欄）
@@ -188,6 +190,8 @@ pub enum ItemId {
     Rescan,
     /// パッドとキーの割り当ての一覧へ
     Lanes,
+    /// 音量ミキサーへ
+    Mixer,
     /// 順に叩いて割り当てる
     AssignAll,
     Lane(DrumLane),
@@ -223,7 +227,6 @@ pub enum ItemId {
 /// 数の見せ方
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Fmt {
-    Plain,
     /// 20 で割って小数 2 桁（譜面の速さ）
     Speed,
     /// 符号つきのミリ秒
@@ -236,12 +239,13 @@ pub enum Fmt {
     Clock,
     /// 単位をつける。0 のときに名前があればその名前（Risky の「OFF」など）
     Unit(&'static str, Option<&'static str>),
+    /// 音量（0〜100 %）。一覧では値の下に横のバーも出す
+    Volume,
 }
 
 impl Fmt {
     pub fn show(self, v: i64) -> String {
         match self {
-            Fmt::Plain => v.to_string(),
             Fmt::Speed => format!("{:.2}", v as f64 / 20.0),
             Fmt::Ms => format!("{v:+} ms"),
             Fmt::Channel if v == 0 => "すべて".to_owned(),
@@ -250,6 +254,7 @@ impl Fmt {
             Fmt::Clock => clock(v),
             Fmt::Unit(_, Some(zero)) if v == 0 => zero.to_owned(),
             Fmt::Unit(u, _) => format!("{v}{u}"),
+            Fmt::Volume => format!("{v} %"),
         }
     }
 }
@@ -543,9 +548,9 @@ fn value_row(s: Setting, c: &Config) -> Row {
             at,
             (0, 100, i64::from(MASTER_VOLUME_STEP)),
             Some(def),
-            Fmt::Plain,
+            Fmt::Volume,
             format!(
-                "全体の音量です。0 が無音で、100 が最大です。{MASTER_VOLUME_STEP} ずつ変わります。"
+                "すべての音にかける音量です。{MASTER_VOLUME_STEP} % ずつ変わり、0 で無音になります。\nBGM・叩いた音・メトロノーム・効果音の音量は、これにさらにかけます。"
             ),
         ),
         Setting::HitSound => flag(
@@ -718,10 +723,37 @@ fn table_row(d: &'static settings::Def, v: &settings::Values) -> Row {
             max,
             step,
             default: def,
-            fmt: Fmt::Unit(unit, zero),
+            fmt: if settings::VOLUMES.contains(&d.key) {
+                Fmt::Volume
+            } else {
+                Fmt::Unit(unit, zero)
+            },
         },
     };
     row(id, d.name, v.label(d.key), d.desc.to_owned(), ctl)
+}
+
+/// 音量ミキサーの行（全体の音量と、系統ごとの音量）
+fn volume_rows(c: &Config) -> Vec<Row> {
+    let mut r = vec![value_row(Setting::MasterVolume, c)];
+    r.extend(
+        settings::VOLUMES
+            .iter()
+            .map(|k| table_row(settings::def(k), &c.settings)),
+    );
+    r
+}
+
+/// 音量ミキサーを開く行（よく使う・簡易設定・一時停止）
+fn mixer_row(c: &Config) -> Row {
+    page_row(
+        ItemId::Mixer,
+        "音量",
+        Page::Mixer,
+        format!("全体 {} %", c.master_volume()),
+        "全体・BGM・叩いた音・メトロノーム・効果音の音量を、1 つずつ変えます。\n演奏中も一時停止から変えられ、すぐに効きます。"
+            .to_owned(),
+    )
 }
 
 /// 小見出しごとに行を集める（同じ小見出しの行は、後から足しても同じ所に入る）
@@ -1030,11 +1062,11 @@ pub fn rows(page: Page, info: &ConfigInfo<'_>) -> Vec<Row> {
                 Setting::InputAdjust,
                 Setting::VisualAdjust,
                 Setting::HitSound,
-                Setting::MasterVolume,
-                Setting::ShowLagTime,
             ] {
                 r.push(value_row(x, c));
             }
+            r.push(mixer_row(c));
+            r.push(value_row(Setting::ShowLagTime, c));
             for d in settings::ALL
                 .iter()
                 .filter(|d| d.in_play && d.key != settings::SKIP_MS)
@@ -1081,11 +1113,12 @@ pub fn rows(page: Page, info: &ConfigInfo<'_>) -> Vec<Row> {
             s.table(Group::Timing, v);
         }
         Page::Cat(Cat::Sound) => {
-            let r = s.at("");
-            r.push(value_row(Setting::MasterVolume, c));
-            r.push(value_row(Setting::HitSound, c));
+            // 音量ミキサーの行（全体のあとに、表の系統ごとの音量が続く）を先頭に
+            s.at("音量").push(value_row(Setting::MasterVolume, c));
+            s.at("鳴らすもの").push(value_row(Setting::HitSound, c));
             s.table(Group::Sound, v);
         }
+        Page::Mixer => s.at("").extend(volume_rows(c)),
         Page::Cat(Cat::Input) => {
             let assigned = PADS.iter().filter(|l| info.lanes.contains_key(l)).count();
             s.at("").push(page_row(
@@ -1320,13 +1353,12 @@ fn favorites(c: &Config) -> Vec<Row> {
         Setting::ScrollSpeed,
         Setting::InputAdjust,
         Setting::HitSound,
-        Setting::MasterVolume,
-        Setting::ShowLagTime,
-        Setting::StageFailed,
     ]
     .into_iter()
     .map(|x| value_row(x, c))
     .collect();
+    r.push(mixer_row(c));
+    r.extend([Setting::ShowLagTime, Setting::StageFailed].map(|x| value_row(x, c)));
     r.push(table_row(settings::def(settings::AUTO_ALL), &c.settings));
     r.push(table_row(settings::def(settings::HID_SUD), &c.settings));
     r
@@ -1366,6 +1398,7 @@ fn page_title(page: Page, info: &ConfigInfo<'_>) -> String {
         Page::Cat(c) => c.name().to_owned(),
         Page::Quick => "簡易設定".to_owned(),
         Page::Pause => "一時停止".to_owned(),
+        Page::Mixer => "音量".to_owned(),
         Page::Lanes => "パッドとキーの割り当て".to_owned(),
         Page::Device(i) => info
             .devices
@@ -2454,7 +2487,16 @@ fn draw_row(c: &Canvas, g: &mut Gfx, r: &Row, x: f32, y: f32, w: f32, sel: bool)
                 Color32::from_white_alpha(70)
             };
             let options = r.options();
-            let dy = if options.as_ref().is_some_and(|(o, _)| o.len() > 1) {
+            let volume = match r.ctl {
+                Ctl::Number {
+                    at,
+                    max,
+                    fmt: Fmt::Volume,
+                    ..
+                } => Some((at as f32 / max.max(1) as f32).clamp(0.0, 1.0)),
+                _ => None,
+            };
+            let dy = if options.as_ref().is_some_and(|(o, _)| o.len() > 1) || volume.is_some() {
                 -4.0
             } else {
                 0.0
@@ -2477,6 +2519,20 @@ fn draw_row(c: &Canvas, g: &mut Gfx, r: &Row, x: f32, y: f32, w: f32, sel: bool)
                     };
                     let dx = right - 16.0 - (n - i) as f32 * 11.0 + 3.0;
                     ui::dot(c, dx + 3.0, y + ROW_H - 8.0, 3.0, color);
+                }
+            }
+            // 音量は値の下に横のバー（ミキサーのつまみの位置）
+            if let Some(v) = volume {
+                let (bw, bh) = (64.0, 4.0);
+                let (bx, by) = (right - 16.0 - bw, y + ROW_H - 10.0);
+                let track = if sel {
+                    Color32::from_white_alpha(60)
+                } else {
+                    Color32::from_white_alpha(34)
+                };
+                ui::round_fill(c, bx, by, bw, bh, 2.0, track);
+                if v > 0.0 {
+                    ui::round_fill(c, bx, by, bw * v, bh, 2.0, ui::ORANGE);
                 }
             }
         }
@@ -2544,23 +2600,13 @@ fn draw_preview(
             preview_offset(c, g, get(s, cfg), s == Setting::InputAdjust, (x, y, w, h));
         }
         Some(ItemId::Value(Setting::MasterVolume)) => {
-            let v = cfg.master_volume() as f32 / 100.0;
-            let (bx, by, bw) = (x + 24.0, y + 90.0, w - 48.0);
-            ui::round_fill(c, bx, by, bw, 18.0, 9.0, Color32::from_white_alpha(30));
-            if v > 0.0 {
-                ui::round_fill(c, bx, by, bw * v, 18.0, 9.0, ui::ORANGE);
-            }
-            ui::text_center(
-                c,
-                g,
-                &format!("{} %", cfg.master_volume()),
-                x + w / 2.0,
-                y + 44.0,
-                &ui::bold(24.0, Color32::WHITE),
-                w,
-            );
-            ui::text(c, g, "全体の音量", x + 12.0, y + h - 22.0, &cap, w - 24.0);
+            preview_mixer(c, g, cfg, Some(0), (x, y, w, h))
         }
+        Some(ItemId::Table(key)) if settings::VOLUMES.contains(&key) => {
+            let at = settings::VOLUMES.iter().position(|k| *k == key);
+            preview_mixer(c, g, cfg, at.map(|i| i + 1), (x, y, w, h));
+        }
+        Some(ItemId::Mixer) => preview_mixer(c, g, cfg, None, (x, y, w, h)),
         Some(
             ItemId::Device(i)
             | ItemId::DeviceState(i)
@@ -2598,6 +2644,89 @@ fn draw_preview(
             preview_auto(c, g, cfg, (x, y, w, h));
         }
         _ => ui::pad_roles(c, g, x, y, w, h),
+    }
+}
+
+/// 音量ミキサーの見本。全体と系統ごとの音量を縦のつまみで並べ、`selected`（全体が 0、系統は 1〜）を明るくする
+fn preview_mixer(
+    c: &Canvas,
+    g: &mut Gfx,
+    cfg: &Config,
+    selected: Option<usize>,
+    (x, y, w, h): (f32, f32, f32, f32),
+) {
+    const NAMES: [&str; 5] = ["全体", "BGM", "叩いた音", "メトロノーム", "効果音"];
+    let mut levels = vec![i64::from(cfg.master_volume())];
+    levels.extend(settings::VOLUMES.iter().map(|k| cfg.settings.number(k)));
+    let col = (w - 24.0) / NAMES.len() as f32;
+    let (top, bottom) = (y + 40.0, y + h - 34.0);
+    let track = bottom - top;
+    for (i, (name, level)) in NAMES.iter().zip(&levels).enumerate() {
+        let cx = x + 12.0 + col * (i as f32 + 0.5);
+        let sel = selected == Some(i);
+        if sel {
+            ui::round_fill(
+                c,
+                cx - col / 2.0 + 3.0,
+                y + 6.0,
+                col - 6.0,
+                h - 12.0,
+                6.0,
+                Color32::from_white_alpha(18),
+            );
+        }
+        // 全体のあとに区切り
+        if i == 1 {
+            c.fill(
+                cx - col / 2.0,
+                top,
+                1.0,
+                track,
+                Color32::from_white_alpha(40),
+            );
+        }
+        let v = (*level as f32 / 100.0).clamp(0.0, 1.0);
+        let (fill, knob, text) = if sel {
+            (ui::ORANGE, ui::YELLOW, ui::YELLOW)
+        } else {
+            (
+                Color32::from_rgb(168, 110, 46),
+                Color32::from_rgb(220, 214, 236),
+                ui::DIM,
+            )
+        };
+        ui::text_center(
+            c,
+            g,
+            &level.to_string(),
+            cx,
+            y + 12.0,
+            &ui::bold(16.0, text),
+            col - 4.0,
+        );
+        ui::round_fill(
+            c,
+            cx - 4.0,
+            top,
+            8.0,
+            track,
+            4.0,
+            Color32::from_white_alpha(30),
+        );
+        if v > 0.0 {
+            ui::round_fill(c, cx - 4.0, bottom - track * v, 8.0, track * v, 4.0, fill);
+        }
+        let ky = bottom - track * v;
+        ui::round_fill(c, cx - 14.0, ky - 5.0, 28.0, 10.0, 3.0, knob);
+        ui::text_center(
+            c,
+            g,
+            name,
+            cx,
+            bottom + 10.0,
+            &ui::plain(12.0, text),
+            col - 4.0,
+        );
     }
 }
 
@@ -3365,9 +3494,9 @@ mod tests {
     #[test]
     fn decide_opens_a_picker_that_reverts_on_back() {
         let c = Config::default();
-        let list = rows(Page::Cat(Cat::Fav), &info(&c));
+        let list = rows(Page::Mixer, &info(&c));
         let vol = ItemId::Value(Setting::MasterVolume);
-        let mut v = at(Page::Cat(Cat::Fav), &list, vol);
+        let mut v = at(Page::Mixer, &list, vol);
         assert_eq!(v.input(ConfigInput::Decide, &list).action, None);
         assert!(v.picker.is_some());
         // 数は上で増やす（その場で変える）
@@ -3382,8 +3511,9 @@ mod tests {
         );
         assert!(v.picker.is_none() && v.focus_list);
         // 選択肢の窓は下で次の選択肢へ、決定で閉じる
+        let list = rows(Page::Cat(Cat::Fav), &info(&c));
         let lag = ItemId::Value(Setting::ShowLagTime);
-        *v.cursor_mut() = find(&list, lag);
+        let mut v = at(Page::Cat(Cat::Fav), &list, lag);
         v.input(ConfigInput::Decide, &list);
         assert_eq!(
             v.input(ConfigInput::Down, &list).action,
@@ -3622,6 +3752,81 @@ mod tests {
 
     fn ids(rows: &[Row]) -> Vec<ItemId> {
         rows.iter().filter_map(|r| r.id).collect()
+    }
+
+    #[test]
+    fn the_mixer_opens_from_favorites_quick_and_pause() {
+        let mut config = Config::default();
+        config.settings.set_raw(settings::AUTO_VOLUME, 60);
+        let mut info = info(&config);
+        info.play = Some(PlayPos {
+            practice: false,
+            at_ms: 0.0,
+            end_ms: 1000.0,
+        });
+        // 全体の音量の 1 行の代わりに「音量」の 1 行
+        for page in [Page::Cat(Cat::Fav), Page::Quick, Page::Pause] {
+            let list = rows(page, &info);
+            let all = ids(&list);
+            assert!(all.contains(&ItemId::Mixer), "{page:?}");
+            assert!(!all.contains(&ItemId::Value(Setting::MasterVolume)));
+            let m = &list[find(&list, ItemId::Mixer)];
+            assert_eq!((m.name.as_str(), m.value.as_str()), ("音量", "全体 50 %"));
+        }
+        // 一時停止から開いて、その場で変え、戻ると一時停止の一覧へ（閉じない）
+        let pause = rows(Page::Pause, &info);
+        let mut v = ConfigView::panel(Page::Pause);
+        *v.cursor_mut() = find(&pause, ItemId::Mixer);
+        v.input(ConfigInput::Decide, &pause);
+        assert_eq!(v.page(), Page::Mixer);
+        let mixer = rows(Page::Mixer, &info);
+        assert_eq!(
+            ids(&mixer),
+            [
+                ItemId::Value(Setting::MasterVolume),
+                ItemId::Table(settings::AUTO_VOLUME),
+                ItemId::Table(settings::CHIP_VOLUME),
+                ItemId::Table(settings::METRONOME_VOLUME),
+                ItemId::Table(settings::SE_VOLUME),
+            ]
+        );
+        assert_eq!(page_title(Page::Mixer, &info), "音量");
+        v.input(ConfigInput::Down, &mixer);
+        assert_eq!(
+            v.input(ConfigInput::Left, &mixer),
+            Response::action(
+                Se::Move,
+                ConfigAction::Set(ItemId::Table(settings::AUTO_VOLUME), 55)
+            )
+        );
+        // 音量は「%」で、既定から変えた印がつく
+        assert_eq!(mixer[1].value, "60 %");
+        assert!(mixer[1].changed() && !mixer[2].changed());
+        assert_eq!(mixer[0].value, "50 %");
+        assert_eq!(v.input(ConfigInput::Cancel, &mixer).action, None);
+        assert_eq!(v.page(), Page::Pause);
+    }
+
+    #[test]
+    fn the_sound_category_starts_with_the_mixer() {
+        let config = Config::default();
+        let list = rows(Page::Cat(Cat::Sound), &info(&config));
+        assert_eq!(
+            (list[0].name.as_str(), &list[0].ctl),
+            ("音量", &Ctl::Heading)
+        );
+        let mixer = rows(Page::Mixer, &info(&config));
+        assert_eq!(ids(&list[1..6]), ids(&mixer));
+        assert_eq!(
+            (list[6].name.as_str(), &list[6].ctl),
+            ("鳴らすもの", &Ctl::Heading)
+        );
+        assert_eq!(list[7].id, Some(ItemId::Value(Setting::HitSound)));
+        // ほかの行は表のまま（重ねて出さない）
+        let all = ids(&list);
+        for k in settings::VOLUMES {
+            assert_eq!(all.iter().filter(|&&i| i == ItemId::Table(k)).count(), 1);
+        }
     }
 
     #[test]

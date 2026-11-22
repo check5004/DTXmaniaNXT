@@ -14,8 +14,8 @@ use engine::practice::{Attempt, SpeedPlan, place};
 use engine::stroke::{Stroke, StrokeTally};
 use records::{Lap, NoteHit, SectionClear, Session, SessionKind, StrayHit};
 
-use crate::audio::{AudioOut, Sound, click, load_sound};
-use crate::chart_sound::{AutoMix, ChartSounds, METRONOME_BAR, METRONOME_BEAT};
+use crate::audio::{AudioOut, Bus, Sound, click, load_sound};
+use crate::chart_sound::{AutoMix, ChartSounds, METRONOME_BAR, METRONOME_BEAT, auto_bus};
 use crate::history::OvercomeCheck;
 use crate::midi::RawMidi;
 use crate::practice::{
@@ -111,8 +111,6 @@ pub struct HitSoundRule {
     pub pad_first: [bool; 3],
     /// 左ペダルを踏んだら、叩いて鳴っているハイハットの音を止める
     pub muting_lp: bool,
-    /// 叩いた音の音量にかける数（上流の ChipVolume）
-    pub volume: f32,
 }
 
 impl Default for HitSoundRule {
@@ -120,7 +118,6 @@ impl Default for HitSoundRule {
         Self {
             pad_first: [false; 3],
             muting_lp: true,
-            volume: 1.0,
         }
     }
 }
@@ -291,6 +288,8 @@ pub struct Play {
     pub view_ahead_ms: f64,
     /// カウントのクリック（1 拍目、ほか）
     clicks: Option<(Sound, Sound)>,
+    /// 設定のメトロノーム。練習では、練習の決めごとのメトロノームが OFF でも周の拍で鳴らす
+    metronome: bool,
     /// 音符ごとの結果（判定したものだけ埋まる）
     note_hits: Vec<Option<NoteHit>>,
     strays: Vec<StrayHit>,
@@ -380,7 +379,8 @@ impl Play {
                 .map(|n| (n.ms, n.wav)),
         );
         let lines = beat_lines(&tempo);
-        if rules.metronome {
+        // 練習は区間の音を周の速度に伸ばしてまとめるので、メトロノームはまとめずに周ごとに鳴らす（`lay_laps`）
+        if rules.metronome && practice.is_none() {
             chart_sounds.add_metronome(lines.iter().map(|l| (l.ms, l.bar)));
         }
         // 叩き分けの寄せ方は曲全体の音符で決める（練習の区間によって判定が変わらないように）
@@ -490,6 +490,7 @@ impl Play {
             section_audio,
             view_ahead_ms: 2000.0,
             clicks,
+            metronome: rules.metronome,
             note_hits: vec![None; note_count],
             strays: Vec::new(),
             sounds,
@@ -623,15 +624,17 @@ impl Play {
                     && let Some(s) = sa.get(speed)
                     && let Some(at) = place(sa.from_ms, sa.song_len_ms, lap.audio, lap.speed)
                 {
-                    a.play_placed(s, &at, 1.0);
+                    a.play_placed(s, &at, 1.0, Bus::Song);
                 }
                 if let Some((accent, plain)) = &self.clicks {
                     for (i, &c) in lap.clicks.iter().enumerate() {
-                        a.play_at(if i == 0 { accent } else { plain }, c, CLICK_GAIN);
+                        let click = if i == 0 { accent } else { plain };
+                        a.play_at(click, c, CLICK_GAIN, Bus::Click);
                     }
-                    if p.options.metronome {
+                    if p.options.metronome || self.metronome {
                         for &(c, bar) in &lap.beats {
-                            a.play_at(if bar { accent } else { plain }, c, METRONOME_GAIN);
+                            let click = if bar { accent } else { plain };
+                            a.play_at(click, c, METRONOME_GAIN, Bus::Click);
                         }
                     }
                 }
@@ -662,7 +665,7 @@ impl Play {
             }
             self.auto_next += 1;
             if let Some(s) = self.sounds.get(&v.wav) {
-                a.play_chip(s, v.ms, v.len_ms, v.gain, v.pan);
+                a.play_chip(s, v.ms, v.len_ms, (v.gain, v.pan), auto_bus(v.wav));
             }
         }
     }
@@ -780,7 +783,7 @@ impl Play {
                 let len =
                     (s.frames() as f64 / rate * 1000.0).min(v.len_ms.unwrap_or(f64::INFINITY));
                 if v.ms + len > to {
-                    a.play_chip(s, v.ms, v.len_ms, v.gain, v.pan);
+                    a.play_chip(s, v.ms, v.len_ms, (v.gain, v.pan), auto_bus(v.wav));
                 }
             }
         }
@@ -940,8 +943,8 @@ impl Play {
                     && let Some(s) = self.sounds.get(&w)
                 {
                     let (gain, pan) = self.chart_sounds.gain_pan(w);
-                    let gain = gain * self.hit_sounds.volume * f32::from(velocity) / 127.0;
-                    a.play_now_panned(s, gain, pan, tag);
+                    let gain = gain * f32::from(velocity) / 127.0;
+                    a.play_now_panned(s, (gain, pan), tag, Bus::Hits);
                 }
             }
         }
@@ -1603,7 +1606,6 @@ mod tests {
                 auto_mix: AutoMix {
                     bgm: false,
                     shift_ms: 30.0,
-                    ..Default::default()
                 },
                 ..Default::default()
             },
@@ -1613,6 +1615,38 @@ mod tests {
         assert!(all.iter().all(|&(_, w)| w != 1));
         assert_eq!(all[..2], [(0.0, METRONOME_BAR), (500.0, METRONOME_BEAT)]);
         assert!(all.contains(&(4000.0, METRONOME_BAR)));
+    }
+
+    #[test]
+    fn practice_plays_the_metronome_per_lap_not_in_the_section_audio() {
+        // 練習の区間の音は周の速度に伸ばすので、設定のメトロノームはまとめず、周の拍で鳴らす
+        let text = "#BPM 120\n#00101: 01\n#00211: 02\n";
+        let path =
+            std::env::temp_dir().join(format!("nxt-metronome-practice-{}.dtx", std::process::id()));
+        std::fs::write(&path, text).unwrap();
+        let rules = Rules {
+            metronome: true,
+            ..Default::default()
+        };
+        let options = PracticeOptions {
+            section: engine::practice::Section::new(1, 1),
+            style: Default::default(),
+            rule: Default::default(),
+            speed: SpeedPlan::Fixed(100),
+            pitch: Default::default(),
+            metronome: false,
+            step_laps: 2,
+        };
+        let play = Play::load_practice(&path, 0.0, false, &rules, options);
+        std::fs::remove_file(&path).unwrap();
+        let play = play.unwrap();
+        assert!(play.metronome);
+        assert!(
+            play.chart_sounds
+                .auto
+                .iter()
+                .all(|v| auto_bus(v.wav) == Bus::Song)
+        );
     }
 
     #[test]
