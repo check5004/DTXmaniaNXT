@@ -13,6 +13,7 @@ use crate::practice::PracticePrefs;
 use crate::settings::{DisplayMode, Values};
 use crate::stretch::Pitch;
 use crate::update::UpdateMode;
+use crate::window_mode::{MonitorPick, Placement};
 
 /// 言語を選べるようにする。英語版の文が揃うまでは false にして、設定の「言語」を出さず日本語で動かす
 /// （途中の版で英語と日本語が混ざった画面を出さないため）。揃えたら true にする
@@ -93,6 +94,12 @@ pub struct Config {
     /// 書いていない設定のファイルは英語版の前からの人なので日本語にする（[`Config::load`]、2026-11-22 ユーザーが選んだ）
     #[serde(skip_serializing_if = "String::is_empty")]
     pub language: String,
+    /// 全画面とボーダーレスを出すモニター（`None` なら窓のあるモニター）。ウィンドウのときは、起動したときにこの真ん中に開く
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub monitor: Option<MonitorPick>,
+    /// 前回終えたときのウィンドウの位置と大きさ（全画面やボーダーレスなら、その前のウィンドウの）。次に起動したときに使う
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub window: Option<Placement>,
     /// 設定の表（[`crate::settings`]）の項目の値（config.toml の `[settings]`）。書いていないものは既定
     #[serde(skip_serializing_if = "Values::is_empty")]
     pub settings: Values,
@@ -182,6 +189,8 @@ impl Default for Config {
             last_version: String::new(),
             last_full_mode: String::new(),
             language: String::new(),
+            monitor: None,
+            window: None,
             settings: Values::default(),
         }
     }
@@ -716,6 +725,23 @@ lane = \"LP\"
         // 読めない名前やウィンドウは全画面に
         c.last_full_mode = "window".into();
         assert_eq!(c.full_mode(), DisplayMode::Fullscreen);
+    }
+
+    #[test]
+    fn picked_monitor_round_trips() {
+        let mut c = Config::default();
+        assert!(!toml::to_string(&c).unwrap().contains("monitor"));
+        c.monitor = Some(MonitorPick {
+            name: r"\\.\DISPLAY2".into(),
+            x: 2560,
+            y: -120,
+        });
+        // 表（[settings]）と並んでも読み書きできる
+        c.settings.set_display_mode(DisplayMode::Borderless);
+        let text = toml::to_string(&c).unwrap();
+        let back: Config = toml::from_str(&text).unwrap();
+        assert_eq!(back.monitor, c.monitor, "{text}");
+        assert_eq!(back.settings.display_mode(), DisplayMode::Borderless);
     }
 
     #[test]

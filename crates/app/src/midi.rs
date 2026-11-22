@@ -5,6 +5,7 @@
 //! - macOS（CoreMIDI）: CoreMIDI がポートに付ける一意の番号。挿し直しても多くは同じ
 //! - Linux（ALSA）: `client:port` の番号。挿した順で決まるので、挿し直すと変わることがある
 
+use std::sync::Mutex;
 use std::sync::mpsc::{Receiver, Sender, channel};
 
 use anyhow::Result;
@@ -181,6 +182,26 @@ pub fn base_name(name: &str) -> &str {
     name
 }
 
+/// MIDI が届いたことを主のスレッドに知らせる（フレームレートの上限で眠っていても、すぐ処理させる）
+type Waker = Box<dyn Fn() + Send>;
+
+static WAKER: Mutex<Option<Waker>> = Mutex::new(None);
+
+/// 届いたときに呼ぶものを決める（主のループを起こす）
+pub fn set_waker(waker: impl Fn() + Send + 'static) {
+    if let Ok(mut w) = WAKER.lock() {
+        *w = Some(Box::new(waker));
+    }
+}
+
+fn wake() {
+    if let Ok(w) = WAKER.lock()
+        && let Some(w) = w.as_ref()
+    {
+        w();
+    }
+}
+
 fn open_port(
     port: &midir::MidiInputPort,
     index: usize,
@@ -200,6 +221,7 @@ fn open_port(
                     arrival_us: host_us(),
                     bytes: bytes.to_vec(),
                 });
+                wake();
             },
             (),
         )

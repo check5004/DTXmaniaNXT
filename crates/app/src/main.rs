@@ -91,13 +91,14 @@ use crate::practice::{PracticeOptions, PracticeSetup};
 use crate::practice_popup::{Done, PopupInput, PopupMouse, PracticePopup};
 use crate::result_view::{Page, ResultInfo, ResultView};
 use crate::select::{PREVIEW_WAIT, SelectView};
-use crate::settings::DisplayMode;
+use crate::settings::{DisplayMode, Vsync};
 use crate::sfx::{Se, Sfx};
 use crate::shutter::Shutter;
 use crate::songs::SongList;
 use crate::time::host_us;
 use crate::title_view::{Ending, TitleItem, TitleView};
 use crate::update_view::Corner;
+use crate::window_mode::MonitorPick;
 
 struct Gpu {
     surface: wgpu::Surface<'static>,
@@ -111,6 +112,8 @@ struct Gpu {
     waited: Duration,
     /// 次に描く画面を PNG にして残す先（F12 と、記録を更新した結果の画面）
     capture: Option<PathBuf>,
+    /// この GPU と窓で使える出し方（垂直同期の低遅延が使えるか）
+    present_modes: Vec<wgpu::PresentMode>,
 }
 
 /// 描く画像をこの回数続けて受け取れなければ、画面への出力を作り直す
@@ -118,7 +121,7 @@ struct Gpu {
 const TIMEOUTS_BEFORE_RECONFIGURE: u32 = 3;
 
 impl Gpu {
-    fn new(window: Arc<Window>, vsync: bool) -> Result<Self> {
+    fn new(window: Arc<Window>, vsync: Vsync) -> Result<Self> {
         let instance = wgpu::Instance::default();
         let surface = instance
             .create_surface(window.clone())
@@ -147,7 +150,8 @@ impl Gpu {
         }
         // 遅れを小さくするため、待ち行列の深さを最小にする
         config.desired_maximum_frame_latency = 1;
-        config.present_mode = present_mode(vsync);
+        config.present_mode = present_mode(vsync, &caps.present_modes);
+        log::info!("present modes: {:?}", caps.present_modes);
         surface.configure(&device, &config);
         let egui_renderer = egui_wgpu::Renderer::new(
             &device,
@@ -163,12 +167,13 @@ impl Gpu {
             timeouts: 0,
             waited: Duration::ZERO,
             capture: None,
+            present_modes: caps.present_modes,
         })
     }
 
     /// 垂直同期（上流の VSyncWait）を切り替える
-    fn set_vsync(&mut self, on: bool) {
-        let mode = present_mode(on);
+    fn set_vsync(&mut self, vsync: Vsync) {
+        let mode = present_mode(vsync, &self.present_modes);
         if self.config.present_mode != mode {
             self.config.present_mode = mode;
             self.surface.configure(&self.device, &self.config);
@@ -311,12 +316,15 @@ impl Gpu {
     }
 }
 
-/// 垂直同期の ON / OFF に当たる出し方（選べなければ wgpu が近いものにする）
-fn present_mode(vsync: bool) -> wgpu::PresentMode {
-    if vsync {
-        wgpu::PresentMode::AutoVsync
-    } else {
-        wgpu::PresentMode::AutoNoVsync
+/// 垂直同期の選び方に当たる出し方（選べなければ wgpu が近いものにする）。
+/// 低遅延は Mailbox（モニターに合わせたまま、待たずに一番新しい絵を出す）で、使えなければ ON と同じ
+fn present_mode(vsync: Vsync, available: &[wgpu::PresentMode]) -> wgpu::PresentMode {
+    match vsync {
+        Vsync::LowLatency if available.contains(&wgpu::PresentMode::Mailbox) => {
+            wgpu::PresentMode::Mailbox
+        }
+        Vsync::On | Vsync::LowLatency => wgpu::PresentMode::AutoVsync,
+        Vsync::Off => wgpu::PresentMode::AutoNoVsync,
     }
 }
 
@@ -453,10 +461,55 @@ struct App {
     perf: perf::PerfView,
     /// 押している Alt などのキー（Alt+Enter で全画面）
     modifiers: winit::keyboard::ModifiersState,
-    /// 窓に当てた全画面と垂直同期の設定（変わったら当て直す）
-    applied_window: Option<(DisplayMode, bool)>,
+    /// 窓に当てた画面の出し方・垂直同期・出すモニター・ウィンドウの大きさ（変わったら当て直す）
+    applied_window: Option<WindowWant>,
     /// ウィンドウのときの位置と大きさ（全画面やボーダーレスから戻るときに使う）
     window_placement: Option<window_mode::Placement>,
+    /// ボーダーレスの窓をモニターに合わせ直す（DPI の違うモニターへ移ると、winit が窓の大きさを変えるので）
+    refit_window: bool,
+    /// つながっているモニター（設定の画面の「出すモニター」の選択肢。設定の画面にいるあいだ時々調べ直す）
+    monitor_list: Vec<window_mode::MonitorInfo>,
+    monitors_checked: Instant,
+    /// 窓がキーボードを受けている（ほかの窓を見ているあいだ描く回数を下げるか決める）
+    focused: bool,
+    /// フレームレートに上限があるとき、次に描く時刻
+    next_frame: Instant,
+}
+
+/// 窓に当てる設定
+#[derive(Debug, Clone, PartialEq)]
+struct WindowWant {
+    mode: DisplayMode,
+    vsync: Vsync,
+    monitor: Option<MonitorPick>,
+    /// ウィンドウの大きさ（前回のままなら `None`）
+    size: Option<(u32, u32)>,
+}
+
+impl WindowWant {
+    fn of(config: &Config) -> Self {
+        let v = &config.settings;
+        Self {
+            mode: v.display_mode(),
+            vsync: v.vsync(),
+            monitor: config.monitor.clone(),
+            size: v.window_size(),
+        }
+    }
+}
+
+/// ほかの窓を見ているあいだ（下げる設定のとき）の、1 秒に描く回数
+const BACKGROUND_FPS: u32 = 30;
+
+/// 1 フレームの間（上限が無ければ `None`）。設定の上限 `limit` と、ほかの窓を見ているあいだ下げるとき
+/// （`background`。演奏と練習の最中は呼ぶ側で false にする）の低い方
+fn frame_interval(limit: Option<u32>, background: bool) -> Option<Duration> {
+    let fps = match (limit, background) {
+        (Some(f), true) => Some(f.min(BACKGROUND_FPS)),
+        (None, true) => Some(BACKGROUND_FPS),
+        (f, false) => f,
+    };
+    fps.map(|f| Duration::from_secs_f64(1.0 / f64::from(f.max(1))))
 }
 
 /// 演奏の画面が数えたスコアを、記録に残す形にする
@@ -520,6 +573,9 @@ const APPLY_SHOW: Duration = Duration::from_millis(1500);
 
 /// MIDI の機器がつながったか外れたかを調べる間
 const PORT_CHECK_EVERY: Duration = Duration::from_secs(2);
+
+/// 設定の画面にいるあいだ、モニターがつながったか外れたかを調べる間
+const MONITOR_CHECK_EVERY: Duration = Duration::from_secs(2);
 
 /// 設定の音量（全体と、ミキサーの系統ごと）を出力に渡す。鳴っている音にもすぐ効く
 fn apply_volumes(config: &Config) {
@@ -612,6 +668,11 @@ impl App {
             modifiers: winit::keyboard::ModifiersState::empty(),
             applied_window: None,
             window_placement: None,
+            refit_window: false,
+            monitor_list: Vec::new(),
+            monitors_checked: Instant::now(),
+            focused: true,
+            next_frame: Instant::now(),
         }
     }
 
@@ -638,27 +699,106 @@ impl App {
         self.perf.feed(output, hits);
     }
 
-    /// 画面の出し方と垂直同期を設定に合わせる（設定の画面で変えたときも、ここで当てる）
+    /// 画面の出し方・垂直同期・出すモニター・ウィンドウの大きさを設定に合わせる（設定の画面で変えたときも、ここで当てる）
     fn apply_window_settings(&mut self) {
-        let v = &self.config.settings;
-        let want = (v.display_mode(), v.flag(settings::VSYNC));
-        if self.applied_window == Some(want) {
+        let want = WindowWant::of(&self.config);
+        if self.applied_window.as_ref() == Some(&want) && !self.refit_window {
             return;
         }
         if let Some(w) = &self.window {
-            window_mode::apply(
-                w,
-                self.applied_window.map(|a| a.0),
-                want.0,
-                &mut self.window_placement,
-            );
+            let target = window_mode::target(w, want.monitor.as_ref());
+            match &self.applied_window {
+                // 出し方は同じで、モニターが変わったか、DPI が変わって合わせ直す
+                Some(a) if a.mode == want.mode => {
+                    if a.monitor != want.monitor || self.refit_window {
+                        window_mode::move_to(w, want.mode, target.as_ref());
+                    }
+                }
+                applied => window_mode::apply(
+                    w,
+                    applied.as_ref().map(|a| a.mode),
+                    want.mode,
+                    &mut self.window_placement,
+                    target.as_ref(),
+                ),
+            }
+            // ウィンドウの大きさを選んだ。ウィンドウならその場で、ほかはウィンドウに戻ったときに
+            let resized = self
+                .applied_window
+                .as_ref()
+                .is_some_and(|a| a.size != want.size);
+            if let (true, Some(size)) = (resized, want.size) {
+                if want.mode == DisplayMode::Window {
+                    window_mode::resize(w, size);
+                } else if let Some(p) = &mut self.window_placement {
+                    (p.w, p.h, p.maximized) = (size.0, size.1, false);
+                }
+            }
         }
+        self.refit_window = false;
         if let Some(gpu) = &mut self.gpu {
-            gpu.set_vsync(want.1);
+            gpu.set_vsync(want.vsync);
         }
+        let mode = want.mode;
         self.applied_window = Some(want);
-        if self.config.remember_full_mode(want.0) {
+        if self.config.remember_full_mode(mode) {
             self.config.save();
+        }
+    }
+
+    /// ウィンドウの位置と大きさを、次に起動したときのために残す（終わるとき）
+    fn remember_window(&mut self) {
+        let Some(w) = &self.window else {
+            return;
+        };
+        let now = if self.config.settings.display_mode() == DisplayMode::Window {
+            window_mode::Placement::of(w)
+        } else {
+            self.window_placement
+        };
+        if let Some(p) = now
+            && self.config.window != Some(p)
+        {
+            self.config.window = Some(p);
+            self.config.save();
+        }
+    }
+
+    /// 今の 1 フレームの間（上限が無ければ `None`）
+    fn frame_interval(&self) -> Option<Duration> {
+        let v = &self.config.settings;
+        let playing = matches!(self.screen, Screen::Play(..) | Screen::Loading(..));
+        frame_interval(
+            v.fps_limit(),
+            !self.focused && !playing && v.background_low(),
+        )
+    }
+
+    /// 描き終えた。上限があれば次に描く時刻を決め、無ければすぐ次を頼む
+    fn after_frame(&mut self) {
+        match self.frame_interval() {
+            None => {
+                if let Some(w) = &self.window {
+                    w.request_redraw();
+                }
+            }
+            Some(iv) => {
+                let now = Instant::now();
+                let next = self.next_frame + iv;
+                // 遅れたら追いつこうとせず、今から数え直す
+                self.next_frame = if next > now { next } else { now };
+            }
+        }
+    }
+
+    /// つながっているモニターを調べ直す（設定の画面の選択肢。`now` でなければ間をあける）
+    fn refresh_monitors(&mut self, now: bool) {
+        if !now && self.monitors_checked.elapsed() < MONITOR_CHECK_EVERY {
+            return;
+        }
+        self.monitors_checked = Instant::now();
+        if let Some(w) = &self.window {
+            self.monitor_list = window_mode::monitors(w);
         }
     }
 
@@ -722,6 +862,7 @@ impl App {
             None
         };
         self.load_timing(chart.as_deref());
+        self.refresh_monitors(true);
         self.screen = Screen::Config(Box::default(), from_select);
         self.shutter.open(CONFIG_OPEN_DELAY);
     }
@@ -1376,7 +1517,13 @@ impl App {
         let Screen::Config(view, _) = &mut self.screen else {
             return;
         };
-        let mut info = config_info(&self.config, &self.midi, &self.monitor, &self.songs);
+        let mut info = config_info(
+            &self.config,
+            &self.midi,
+            &self.monitor,
+            &self.songs,
+            &self.monitor_list,
+        );
         info.timing = self.timing.as_ref().map(SongTiming::info);
         let rows = config_view::rows(view.page(), &info);
         let r = view.input(input, &rows);
@@ -1484,7 +1631,13 @@ impl App {
 
     /// 簡易設定の板の項目を作るのに要るもの（選んでいる曲、演奏中なら曲の位置）
     fn quick_info(&self) -> ConfigInfo<'_> {
-        let mut info = config_info(&self.config, &self.midi, &self.monitor, &self.songs);
+        let mut info = config_info(
+            &self.config,
+            &self.midi,
+            &self.monitor,
+            &self.songs,
+            &self.monitor_list,
+        );
         info.song = self.songs.selected_chart().is_some();
         info.timing = self.timing.as_ref().map(SongTiming::info);
         if let Screen::Play(p, _) = &self.screen {
@@ -1747,6 +1900,12 @@ impl App {
             ItemId::Practice(d) => {
                 config_view::set_drill(d, &mut self.config, v);
                 self.config.save();
+            }
+            ItemId::Monitor => {
+                // 窓はこのあとのフレームで移す（apply_window_settings）
+                if config_view::set_monitor(&mut self.config, &self.monitor_list, v) {
+                    self.config.save();
+                }
             }
             ItemId::DeviceUse(port) => {
                 let ports = self.ports().to_vec();
@@ -2406,6 +2565,9 @@ impl App {
     }
 
     fn redraw(&mut self) {
+        if matches!(self.screen, Screen::Config(..)) {
+            self.refresh_monitors(false);
+        }
         let (Some(window), Some(state)) = (self.window.clone(), &mut self.egui_state) else {
             return;
         };
@@ -2550,7 +2712,13 @@ impl App {
                 let painter = ctx.layer_painter(egui::LayerId::background());
                 let c = Canvas::new(&painter, ctx.content_rect());
                 self.gfx.begin(&c, ctx.pixels_per_point());
-                let mut info = config_info(&self.config, &self.midi, &self.monitor, &self.songs);
+                let mut info = config_info(
+                    &self.config,
+                    &self.midi,
+                    &self.monitor,
+                    &self.songs,
+                    &self.monitor_list,
+                );
                 info.timing = self.timing.as_ref().map(SongTiming::info);
                 let rows = config_view::rows(view.page(), &info);
                 view.draw(&c, &mut self.gfx, &rows, &info);
@@ -2577,8 +2745,13 @@ impl App {
                     p.draw(&c, &mut self.gfx);
                 }
                 if let Some(q) = &mut self.quick {
-                    let mut info =
-                        config_info(&self.config, &self.midi, &self.monitor, &self.songs);
+                    let mut info = config_info(
+                        &self.config,
+                        &self.midi,
+                        &self.monitor,
+                        &self.songs,
+                        &self.monitor_list,
+                    );
                     info.song = self.songs.selected_chart().is_some();
                     info.timing = self.timing.as_ref().map(SongTiming::info);
                     let rows = config_view::rows(q.page(), &info);
@@ -2616,8 +2789,13 @@ impl App {
                     },
                 );
                 if let Some(q) = &mut self.quick {
-                    let mut info =
-                        config_info(&self.config, &self.midi, &self.monitor, &self.songs);
+                    let mut info = config_info(
+                        &self.config,
+                        &self.midi,
+                        &self.monitor,
+                        &self.songs,
+                        &self.monitor_list,
+                    );
                     info.play = Some(play_pos(play));
                     info.timing = self.timing.as_ref().map(SongTiming::info);
                     let rows = config_view::rows(q.page(), &info);
@@ -2667,6 +2845,7 @@ fn config_info<'a>(
     midi: &Option<MidiIn>,
     monitor: &MidiMonitor,
     songs: &SongList,
+    monitors: &'a [window_mode::MonitorInfo],
 ) -> ConfigInfo<'a> {
     let ports = midi.as_ref().map_or(&[][..], |m| m.ports.as_slice());
     let profiles = inputs::profiles(config, ports);
@@ -2699,6 +2878,7 @@ fn config_info<'a>(
         song: false,
         play: None,
         timing: None,
+        monitors,
     }
 }
 
@@ -2707,16 +2887,47 @@ impl ApplicationHandler for App {
         if self.window.is_some() {
             return;
         }
-        let mode = self.config.settings.display_mode();
+        let want = WindowWant::of(&self.config);
+        let mode = want.mode;
+        // 選んだモニター（無ければ、外れていれば OS が決める）
+        let target = window_mode::target_in(
+            event_loop.available_monitors(),
+            event_loop.primary_monitor(),
+            want.monitor.as_ref(),
+        );
+        // ウィンドウの位置と大きさ（前回の位置、設定の大きさ。選んだモニターに無ければその真ん中）。
+        // 全画面やボーダーレスで開いたときは、ウィンドウに戻るときに使う
+        let all = window_mode::monitors_in(
+            event_loop.available_monitors(),
+            event_loop.primary_monitor(),
+        );
+        let opening = window_mode::opening(
+            self.config.window.as_ref(),
+            want.size,
+            &all,
+            want.monitor
+                .as_ref()
+                .and_then(|p| window_mode::find(p, &all)),
+        );
         // ボーダーレスは普通の窓で開いてから広げる（Windows では広げるまで隠しておく）
         let hide = mode == DisplayMode::Borderless && cfg!(windows);
-        let attrs = Window::default_attributes()
+        let mut attrs = Window::default_attributes()
             .with_title("DTXmaniaNXT")
             .with_inner_size(winit::dpi::LogicalSize::new(1280.0, 720.0))
             .with_visible(!hide)
             .with_fullscreen(
-                (mode == DisplayMode::Fullscreen).then_some(Fullscreen::Borderless(None)),
+                (mode == DisplayMode::Fullscreen).then(|| Fullscreen::Borderless(target.clone())),
             );
+        match (mode, opening, &target) {
+            (DisplayMode::Window, Some(o), _) => {
+                attrs = attrs.with_position(o.pos()).with_inner_size(o.size());
+            }
+            // ボーダーレスと、前回の無いウィンドウは、選んだモニターの真ん中に開く
+            (DisplayMode::Window | DisplayMode::Borderless, _, Some(t)) => {
+                attrs = attrs.with_position(window_mode::centered(t));
+            }
+            _ => {}
+        }
         let window = match event_loop.create_window(attrs) {
             Ok(w) => Arc::new(w),
             Err(e) => {
@@ -2730,12 +2941,17 @@ impl ApplicationHandler for App {
             DisplayMode::Fullscreen => DisplayMode::Fullscreen,
             _ => DisplayMode::Window,
         };
-        window_mode::apply(&window, Some(opened), mode, &mut self.window_placement);
+        // ボーダーレスへ広げる前の窓の位置ではなく、前回のウィンドウの位置へ戻れるように
+        let mut opened_at = None;
+        window_mode::apply(&window, Some(opened), mode, &mut opened_at, target.as_ref());
+        self.window_placement = opening.or(opened_at);
+        if mode == DisplayMode::Window && opening.is_some_and(|o| o.maximized) {
+            window.set_maximized(true);
+        }
         if hide {
             window.set_visible(true);
         }
-        let vsync = self.config.settings.flag(settings::VSYNC);
-        match Gpu::new(window.clone(), vsync) {
+        match Gpu::new(window.clone(), want.vsync) {
             Ok(gpu) => self.gpu = Some(gpu),
             Err(e) => {
                 self.startup_error = Some(e.context("GPU を使い始められません"));
@@ -2758,7 +2974,7 @@ impl ApplicationHandler for App {
         ));
         window.request_redraw();
         self.window = Some(window);
-        self.applied_window = Some((mode, vsync));
+        self.applied_window = Some(want);
         if let Some(path) = self.pending.take() {
             self.start(path);
         }
@@ -2777,6 +2993,14 @@ impl ApplicationHandler for App {
                 if let Some(gpu) = &mut self.gpu {
                     gpu.resize(size.width, size.height);
                 }
+            }
+            // ボーダーレスのまま DPI の違うモニターへ移ると、winit が窓の大きさを DPI に合わせて変えてしまうので、
+            // 次のフレームでモニターに合わせ直す
+            WindowEvent::ScaleFactorChanged { .. }
+                if cfg!(windows)
+                    && self.config.settings.display_mode() == DisplayMode::Borderless =>
+            {
+                self.refit_window = true;
             }
             WindowEvent::DroppedFile(path) => self.on_drop(path),
             WindowEvent::ModifiersChanged(m) => self.modifiers = m.state(),
@@ -2827,10 +3051,9 @@ impl ApplicationHandler for App {
             WindowEvent::RedrawRequested => {
                 self.pump();
                 self.redraw();
-                if let Some(w) = &self.window {
-                    w.request_redraw();
-                }
+                self.after_frame();
             }
+            WindowEvent::Focused(focused) => self.focused = focused,
             _ => {}
         }
         if self.quit {
@@ -2839,16 +3062,27 @@ impl ApplicationHandler for App {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        // 叩いた音をすぐ鳴らすため、描画を待たずに MIDI を処理する
+        // 叩いた音をすぐ鳴らすため、描画を待たずに MIDI を処理する（上限で眠っていても、MIDI が届くと起きてここに来る）
         self.pump();
         // 描画の頼みはここでも出す。描画の中で次を頼むだけだと、描画の知らせが 1 度でも来なかったとき
-        // 画面が止まったまま遊びだけ進む（頼みが重なっても描画は 1 回）
-        if let Some(w) = &self.window {
+        // 画面が止まったまま遊びだけ進む（頼みが重なっても描画は 1 回）。上限があれば、次に描く時刻まで眠る
+        let now = Instant::now();
+        let (draw, flow) = match self.frame_interval() {
+            None => (true, ControlFlow::Poll),
+            Some(iv) if now >= self.next_frame => (true, ControlFlow::WaitUntil(now + iv)),
+            Some(_) => (false, ControlFlow::WaitUntil(self.next_frame)),
+        };
+        if draw && let Some(w) = &self.window {
             w.request_redraw();
         }
+        event_loop.set_control_flow(flow);
         if self.quit {
             event_loop.exit();
         }
+    }
+
+    fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+        self.remember_window();
     }
 }
 
@@ -2931,11 +3165,44 @@ fn run() -> Result<()> {
     let arg = std::env::args_os().nth(1).map(PathBuf::from);
     let event_loop = EventLoop::new()?;
     event_loop.set_control_flow(ControlFlow::Poll);
+    // MIDI が届いたら主のループを起こす（フレームレートの上限で眠っているときも、叩いた音をすぐ鳴らす）
+    let proxy = std::sync::Mutex::new(event_loop.create_proxy());
+    midi::set_waker(move || {
+        if let Ok(p) = proxy.lock() {
+            let _ = p.send_event(());
+        }
+    });
     let mut app = App::new(arg);
     event_loop.run_app(&mut app)?;
     app.updater.apply_on_exit();
     match app.startup_error.take() {
         Some(e) => Err(e),
         None => Ok(()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn frame_interval_takes_the_lower_of_the_limit_and_the_background() {
+        assert_eq!(frame_interval(None, false), None);
+        let ms =
+            |d: Option<Duration>| d.map(|d| (d.as_secs_f64() * 1000.0 * 100.0).round() / 100.0);
+        assert_eq!(ms(frame_interval(Some(144), false)), Some(6.94));
+        // ほかの窓を見ているあいだは 30 回（上限がもっと低ければそちら）
+        assert_eq!(ms(frame_interval(None, true)), Some(33.33));
+        assert_eq!(ms(frame_interval(Some(240), true)), Some(33.33));
+        assert_eq!(ms(frame_interval(Some(20), true)), Some(50.0));
+    }
+
+    #[test]
+    fn low_latency_needs_mailbox() {
+        use wgpu::PresentMode::*;
+        assert_eq!(present_mode(Vsync::On, &[Fifo, Mailbox]), AutoVsync);
+        assert_eq!(present_mode(Vsync::LowLatency, &[Fifo, Mailbox]), Mailbox);
+        assert_eq!(present_mode(Vsync::LowLatency, &[Fifo]), AutoVsync);
+        assert_eq!(present_mode(Vsync::Off, &[Fifo]), AutoNoVsync);
     }
 }
