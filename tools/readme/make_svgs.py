@@ -750,7 +750,7 @@ def lineage(lang: str) -> Svg:
         "Where DTXmaniaNXT comes from" if en else "DTXmaniaNXT の系譜",
         "DTXMania, DTXManiaXG verK, DTXManiaNX by limyz, DTXManiaNX v2.0 by BocuD, and DTXmaniaNXT. NXT is new code; only the v2.0 skin (images and sounds) is bundled unchanged."
         if en
-        else "DTXMania、DTXManiaXG verK、limyz 版 DTXManiaNX、BocuD 版 DTXManiaNX v2.0、DTXmaniaNXT の順。NXT のプログラムは新規で、v2.0 のスキン（画像と効果音）だけを無改変で同梱。",
+        else "DTXMania、DTXManiaXG verK、limyz 版 DTXManiaNX、BocuD 版 DTXManiaNX v2.0、DTXmaniaNXT の順。NXT のソースコードは新規で、v2.0 のスキン（画像と効果音）だけを無改変で同梱。",
     )
     card_bg(s)
     nodes = [
@@ -787,7 +787,7 @@ def lineage(lang: str) -> Svg:
         else [
             ("— コード", "各プロジェクトは、左隣のプロジェクトからのフォークです。", "#8FA3BF", False),
             ("- - スキンのみ", "NXT は v2.0 の画像と効果音を無改変で同梱しています（タグ V2.0.0-20260121-5）。", MAGENTA, True),
-            ("", "NXT のプログラムは Rust で新規に書いたもので、上流のコードは含みません。", CYAN, False),
+            ("", "NXT のソースコードは Rust で新規に書いたもので、上流のコードは含みません。", CYAN, False),
         ]
     )
     for k, (lab, body, col, dashed) in enumerate(notes):

@@ -222,7 +222,7 @@ Windows では `%APPDATA%\DTXmaniaNXT` に保存されます（設定の `config
 
 DTXmaniaNXT は**非公式のファンメイド作品**です。2000 年から続く DTXMania と、その派生版を作り育ててきた方々の積み重ねがあってこそ生まれました。DTXMania に関わってきたすべての皆さまに感謝します。
 
-<p align="center"><img src="docs/readme/lineage.ja.svg" width="960" alt="DTXmaniaNXT の系譜。DTXMania（FROM・DTXMania Group、2000 年〜）、DTXManiaXG verK（kairera0467）、DTXManiaNX（limyz・fisyher）、DTXManiaNX v2.0（BocuD）、DTXmaniaNXT の順。NXT は v2.0 の画像と効果音を無改変で同梱し、プログラムは新規に書いたもの"></p>
+<p align="center"><img src="docs/readme/lineage.ja.svg" width="960" alt="DTXmaniaNXT の系譜。DTXMania（FROM・DTXMania Group、2000 年〜）、DTXManiaXG verK（kairera0467）、DTXManiaNX（limyz・fisyher）、DTXManiaNX v2.0（BocuD）、DTXmaniaNXT の順。NXT は v2.0 の画像と効果音を無改変で同梱し、ソースコードは新規に書いたもの"></p>
 
 ### DTXMania と派生版
 
@@ -239,7 +239,7 @@ DTXmaniaNXT は**非公式のファンメイド作品**です。2000 年から�
 
 ### このリポジトリの中身
 
-- **プログラム**（`main` ブランチ）は、このプロジェクトのために Rust で新しく書いたものです。DTXMania・DTXManiaNX のコードは含んでおらず、機能は同じ動きになるよう一から書き起こしています。ライセンスは [MIT](LICENSE) です。
+- **ソースコード**（`main` ブランチ）は、このプロジェクトのために Rust で新しく書いたものです。DTXMania・DTXManiaNX のコードは含んでおらず、機能は同じ動きになるよう一から書き起こしています。ライセンスは [MIT](LICENSE) です。
 - **スキン**（`assets/skin`。画面の画像と効果音）は、[BocuD/DTXmaniaNX](https://github.com/BocuD/DTXmaniaNX) のタグ `V2.0.0-20260121-5` にある `Runtime/System` フォルダを、無改変でコピーしたものです（背景動画 2 本と、Windows が自動で作る `Thumbs.db`・`desktop.ini` は除いています）。DTXManiaNX がなくても動くよう、アプリに埋め込んでいます。**スキンには MIT ライセンスは適用されません。** 権利は DTXMania・DTXManiaNX の各制作者にあります。なお、DTXManiaNX のリポジトリにはライセンスファイルがありません。上流に含まれている DTXMania の使用許諾書（`Runtime/Licenses/dtxmania.txt`、MIT ライセンスと同等の内容）は、DTXMania 本体のソフトウェアを対象としたものです。詳細は [assets/README.md](assets/README.md) をご覧ください。
 - **アプリのアイコン**は、DTXManiaNX の `dtx.ico`（DTXMania から受け継がれてきたアイコン）の「DTX」の文字を「NXT」に描き換えたものです。こちらも MIT ライセンスの対象外です。
 - **`master` ブランチ**には、参考として上流の C# 版 DTXManiaNX のコードを残しています。このリポジトリのライセンスは適用されません。
@@ -295,4 +295,4 @@ PR はフォーク元の上流ではなく、このリポジトリ（check5004/D
 
 ## ライセンス
 
-`main` ブランチのプログラムは [MIT ライセンス](LICENSE)です。`assets/skin` のスキン、`assets/icon` のアイコン、`master` ブランチにある上流のコードには適用されません（[クレジットと権利](#クレジットと権利)を参照）。
+`main` ブランチのソースコードは [MIT ライセンス](LICENSE)です。`assets/skin` のスキン、`assets/icon` のアイコン、`master` ブランチにある上流のコードには適用されません（[クレジットと権利](#クレジットと権利)を参照）。

@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="960" height="300" viewBox="0 0 960 300" role="img" aria-labelledby="title desc">
 <title id="title">DTXmaniaNXT の系譜</title>
-<desc id="desc">DTXMania、DTXManiaXG verK、limyz 版 DTXManiaNX、BocuD 版 DTXManiaNX v2.0、DTXmaniaNXT の順。NXT のプログラムは新規で、v2.0 のスキン（画像と効果音）だけを無改変で同梱。</desc>
+<desc id="desc">DTXMania、DTXManiaXG verK、limyz 版 DTXManiaNX、BocuD 版 DTXManiaNX v2.0、DTXmaniaNXT の順。NXT のソースコードは新規で、v2.0 のスキン（画像と効果音）だけを無改変で同梱。</desc>
 <style>
 text{font-family:'Hiragino Sans','Hiragino Kaku Gothic ProN','Yu Gothic UI','Yu Gothic','Meiryo','Noto Sans JP','Noto Sans CJK JP',system-ui,sans-serif}
 .mono{font-family:'JetBrains Mono','SF Mono','Cascadia Mono',Consolas,Menlo,monospace}
@@ -39,5 +39,5 @@ text{font-family:'Hiragino Sans','Hiragino Kaku Gothic ProN','Yu Gothic UI','Yu 
 <text x="78" y="236" font-size="12" fill="#C77DFF" font-weight="700" text-anchor="start">スキンのみ</text>
 <text x="200" y="236" font-size="13" fill="#9AA8BC" font-weight="400" text-anchor="start">NXT は v2.0 の画像と効果音を無改変で同梱しています（タグ V2.0.0-20260121-5）。</text>
 <circle cx="55" cy="258" r="5" fill="#5CE1E6"/>
-<text x="200" y="262" font-size="13" fill="#E8EEF7" font-weight="400" text-anchor="start">NXT のプログラムは Rust で新規に書いたもので、上流のコードは含みません。</text>
+<text x="200" y="262" font-size="13" fill="#E8EEF7" font-weight="400" text-anchor="start">NXT のソースコードは Rust で新規に書いたもので、上流のコードは含みません。</text>
 </svg>
