@@ -63,7 +63,7 @@ use winit::window::{Window, WindowId};
 
 use crate::config::Config;
 use crate::config_view::{ConfigAction, ConfigInfo, ConfigInput, ConfigView, Setting};
-use crate::game::{GaugeRule, Outcome, Play, Rules};
+use crate::game::{GaugeRule, HitSoundRule, Outcome, Play, Rules};
 use crate::gfx::{Canvas, Gfx};
 use crate::history::History;
 use crate::loading::{Job, Loading};
@@ -628,6 +628,11 @@ impl App {
                 miss_factor: v.damage_factor(),
                 risky: v.number(settings::RISKY) as u32,
                 hazard: v.flag(settings::HAZARD),
+            },
+            groups: v.lane_groups(),
+            hit_sounds: HitSoundRule {
+                pad_first: v.pad_sound_first(),
+                muting_lp: v.flag(settings::MUTING_LP),
             },
         }
     }
