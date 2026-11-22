@@ -1,7 +1,7 @@
 //! 1 曲を遊ぶ。譜面・音・判定・入力をまとめ、曲の時刻で動かす。
 //! 練習（区間ループ）も同じ形で動かす。練習の時計は「始めてからの実時間」で、周ごとに音符と BGM を後ろへ足す。
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -11,6 +11,7 @@ use engine::clock::MidiTimestampMapper;
 use engine::input::{Articulation, InputEvent, MidiMessage, MidiProfile, Normalizer, Pad};
 use engine::judge::{Hit, HitWindows, Judge, JudgeEvent, Judgement, LaneGroups, Tally};
 use engine::practice::{Attempt, SpeedPlan, place};
+use engine::stroke::{Stroke, StrokeTally};
 use records::{Lap, NoteHit, SectionClear, Session, SessionKind, StrayHit};
 
 use crate::audio::{AudioOut, Bus, Sound, click, load_sound};
@@ -61,8 +62,15 @@ pub enum PracticeEvent {
 /// 画面の効果に使う出来事。演奏画面が毎フレーム取り出す
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Fx {
-    /// 叩いた（判定に関わらず。レーンの光とパッドの動き）。`lane` は叩いたパッドのレーン
-    Hit { lane: DrumLane, velocity: u8 },
+    /// 叩いた（判定に関わらず。レーンの光とパッドの動き）。`lane` は叩いたパッドのレーン。
+    /// `rim` はスネアのリム（リムショットかクロススティック）で叩いた（自動ならリムの音符を叩いた）
+    Hit {
+        lane: DrumLane,
+        velocity: u8,
+        rim: bool,
+    },
+    /// スネアの音符を、違う所で叩いた（判定はそのまま）。`want` は叩くべきだった方
+    WrongStroke { want: Stroke },
     /// 音符を判定した（見逃しも）。`lane` と `note_ms` は音符のもの
     Judged {
         lane: DrumLane,
@@ -193,6 +201,8 @@ pub struct Outcome {
     pub started_at: i64,
     /// 練習なら、その決めごとと周ごとの成績
     pub practice: Option<PracticeOutcome>,
+    /// スネアの打ち分け（譜面にリムの音符があり、電子ドラムで叩いたときだけ）
+    pub strokes: Option<StrokeTally>,
 }
 
 /// 練習 1 回の成績
@@ -240,6 +250,8 @@ pub struct Play {
     pub song_offset_ms: f64,
     /// 叩いたときに譜面の音を鳴らすか（モジュールの音を使うなら切る）
     pub drum_sounds: bool,
+    /// スネアの音符の音のうち、リムの音らしいもの（その音のスネアの音符がリムの音符）
+    rim_wavs: HashSet<u16>,
     /// 画面の効果（演奏画面が取り出す）
     fx: Vec<Fx>,
     /// 練習の出来事（演奏画面が取り出す）
@@ -348,6 +360,7 @@ impl Play {
         }
         let tempo = TempoMap::build(&chart);
         let notes = tempo.drum_notes(&chart);
+        let rim_wavs = chart.rim_wavs(&notes);
         let notes_per_measure = count_per_measure(&notes, tempo.measure_count());
         let last_chip_ms = chart
             .chips
@@ -452,6 +465,7 @@ impl Play {
             input_offset_ms,
             song_offset_ms: 0.0,
             drum_sounds,
+            rim_wavs,
             fx: Vec::new(),
             practice_events: Vec::new(),
             seen_attempts: 0,
@@ -781,11 +795,14 @@ impl Play {
         let events = self.judge.advance(self.judge_ms(now));
         // 自動で叩いた音符は、叩いたときと同じくレーンを光らせる（音は時刻を決めて鳴らしてある）
         for e in &events {
-            let lane = self.judge.notes()[e.note].lane;
+            let note = &self.judge.notes()[e.note];
+            let lane = note.lane;
             if e.offset_ms.is_none() && self.judge.is_auto(lane) {
+                let rim = self.is_rim_note(note);
                 self.push_fx(Fx::Hit {
                     lane,
                     velocity: AUTO_VELOCITY,
+                    rim,
                 });
             }
         }
@@ -864,7 +881,16 @@ impl Play {
             return;
         }
         let ms = self.judge_ms(self.song_ms_at(at_us));
-        self.push_fx(Fx::Hit { lane, velocity });
+        let rim = lane == DrumLane::SD
+            && matches!(
+                articulation,
+                Some(Articulation::Rim | Articulation::CrossStick)
+            );
+        self.push_fx(Fx::Hit {
+            lane,
+            velocity,
+            rim,
+        });
         let events = self.judge.hit(Hit { ms, lane, velocity });
         // 自動で叩くレーンを叩いても空打ちには数えない
         if events.is_empty() && !self.judge.is_auto(lane) {
@@ -890,8 +916,8 @@ impl Play {
             // 取った音符の音を鳴らす。空打ちなら空打ちの音、無ければそのレーンの一番近い音符の音
             let wav = events
                 .first()
-                .map(|e| self.hit_wav(lane, &self.judge.notes()[e.note], ms))
-                .or_else(|| self.stray_wav(lane, ms));
+                .map(|e| self.hit_wav(lane, &self.judge.notes()[e.note], ms, articulation))
+                .or_else(|| self.stray_wav(lane, ms, articulation));
             // 上流の Muting LP: 左ペダルで、叩いて鳴っているハイハットを止める
             let muting = self.hit_sounds.muting_lp && lane == DrumLane::LP;
             let tag = if matches!(lane, DrumLane::HH | DrumLane::HHO) {
@@ -913,25 +939,90 @@ impl Play {
             }
         }
         self.show(&events);
+        // スネアの音符を違う所で叩いたら知らせる（判定はそのまま）
+        if let (Some(a), Some(e)) = (articulation, events.first()) {
+            let note = &self.judge.notes()[e.note];
+            if note.lane == DrumLane::SD
+                && let Some(want) = Stroke::of_note(self.is_rim_note(note)).wrong_for(a)
+            {
+                self.push_fx(Fx::WrongStroke { want });
+            }
+        }
+    }
+
+    /// スネアのリムの音符か（音がリムの音らしい）
+    pub fn is_rim_note(&self, note: &dtx::DrumNote) -> bool {
+        self.is_rim(note.lane, note.wav)
+    }
+
+    /// レーン `lane` の音 `wav` の音符が、スネアのリムの音符か
+    pub fn is_rim(&self, lane: DrumLane, wav: u16) -> bool {
+        lane == DrumLane::SD && self.rim_wavs.contains(&wav)
+    }
+
+    /// 譜面にスネアのリムの音符がある
+    pub fn has_rim_notes(&self) -> bool {
+        !self.rim_wavs.is_empty()
     }
 
     /// 音符の無い所でレーン `lane` を叩いたときの音。上流と同じく、空打ちの音（0xB1〜）を決めてあればそれ、
     /// 無ければそのレーンの一番近い音符（見えない音符 0x31〜 も含む）の音。
     /// 練習は周ごとに時刻を並べ直すので、並べた音符のうち一番近いものの音にする
-    fn stray_wav(&self, lane: DrumLane, ms: f64) -> Option<u16> {
+    /// スネアは、ヘッドならヘッドの音符の、クロススティックならリムの音符の一番近いものの音を先にする
+    fn stray_wav(
+        &self,
+        lane: DrumLane,
+        ms: f64,
+        articulation: Option<Articulation>,
+    ) -> Option<u16> {
         if self.practice.is_none()
             && let Some(w) = self.chart_sounds.empty_hit(lane, ms)
         {
             return Some(w);
         }
-        self.lane_wav(lane, ms)
+        let want = match (lane, articulation) {
+            (DrumLane::SD, Some(Articulation::CrossStick)) if self.has_rim_notes() => {
+                Some(Stroke::Rim)
+            }
+            (DrumLane::SD, Some(Articulation::Head)) if self.has_rim_notes() => Some(Stroke::Head),
+            _ => None,
+        };
+        want.and_then(|w| self.snare_wav(w, ms))
+            .or_else(|| self.lane_wav(lane, ms))
+    }
+
+    /// スネアの音符のうち、種類が `stroke` で曲の時刻 `ms` に一番近いものの音
+    fn snare_wav(&self, stroke: Stroke, ms: f64) -> Option<u16> {
+        self.judge
+            .notes()
+            .iter()
+            .filter(|n| n.lane == DrumLane::SD && Stroke::of_note(self.is_rim_note(n)) == stroke)
+            .min_by(|a, b| (a.ms - ms).abs().total_cmp(&(b.ms - ms).abs()))
+            .map(|n| n.wav)
     }
 
     /// 叩いて音符 `note` を取ったときの音。叩いたパッドのレーン `lane` と音符のレーンが違い（叩き分けを共通にした）、
     /// パッドの音を先にする設定なら、そのパッドのレーンの一番近い音符の音（上流 `tProcessDrumHit` の P>C）。
-    /// 譜面に無いレーンは、上流と同じく開いたハイハットと左シンバルを閉じたハイハット、ライドを右シンバルとして探す
-    fn hit_wav(&self, lane: DrumLane, note: &dtx::DrumNote, ms: f64) -> u16 {
+    /// 譜面に無いレーンは、上流と同じく開いたハイハットと左シンバルを閉じたハイハット、ライドを右シンバルとして探す。
+    /// スネアは叩いた所に合わせる（リムの音符をヘッドで叩いたら、一番近いヘッドの音符の音。[`Stroke::sound_for`]）
+    fn hit_wav(
+        &self,
+        lane: DrumLane,
+        note: &dtx::DrumNote,
+        ms: f64,
+        articulation: Option<Articulation>,
+    ) -> u16 {
         use DrumLane::*;
+        if note.lane == SD
+            && let Some(a) = articulation
+        {
+            let stroke = Stroke::of_note(self.is_rim_note(note));
+            let want = stroke.sound_for(a);
+            if want != stroke {
+                return self.snare_wav(want, ms).unwrap_or(note.wav);
+            }
+            return note.wav;
+        }
         let family = match lane {
             HH | HHO | LC => 0,
             LT | FT => 1,
@@ -1018,6 +1109,7 @@ impl Play {
             overcome: Vec::new(),
             tendencies: Vec::new(),
             started_at: self.started_at,
+            strokes: self.stroke_tally(),
             practice: self.practice.as_ref().map(|p| PracticeOutcome {
                 options: p.options,
                 laps: p.summaries(self.now_ms()),
@@ -1203,6 +1295,24 @@ impl Play {
         })
     }
 
+    /// スネアの打ち分けの数。譜面にリムの音符が無いか、電子ドラムでスネアを叩いていなければ `None`
+    fn stroke_tally(&self) -> Option<StrokeTally> {
+        if !self.has_rim_notes() {
+            return None;
+        }
+        let mut t = StrokeTally::default();
+        for (note, hit) in self.judge.notes().iter().zip(&self.note_hits) {
+            let Some(h) = hit else { continue };
+            if note.lane != DrumLane::SD || h.offset_ms.is_none() {
+                continue;
+            }
+            if let Some(a) = h.articulation {
+                t.add(Stroke::of_note(self.is_rim_note(note)), a, note.at.measure);
+            }
+        }
+        (t.rim_hit + t.head_hit > 0).then_some(t)
+    }
+
     fn show(&mut self, events: &[JudgeEvent]) {
         for e in events {
             if let Some(o) = e.offset_ms {
@@ -1323,7 +1433,7 @@ mod tests {
         let hh = chip_first.judge.notes()[0].clone();
         assert_eq!(hh.lane, DrumLane::HH);
         // 左シンバルで閉じたハイハットの音符を取っても、ふだん（C>P）は譜面の音
-        assert_eq!(chip_first.hit_wav(DrumLane::LC, &hh, 4000.0), 1);
+        assert_eq!(chip_first.hit_wav(DrumLane::LC, &hh, 4000.0, None), 1);
         let pad_first = load_text(
             "pad-first",
             text,
@@ -1337,11 +1447,74 @@ mod tests {
             },
         );
         // P>C なら叩いた左シンバルのレーンの音
-        assert_eq!(pad_first.hit_wav(DrumLane::LC, &hh, 4000.0), 2);
+        assert_eq!(pad_first.hit_wav(DrumLane::LC, &hh, 4000.0, None), 2);
         // 譜面に開いたハイハットが無ければ、閉じたハイハットの音
-        assert_eq!(pad_first.hit_wav(DrumLane::HHO, &hh, 4000.0), 1);
+        assert_eq!(pad_first.hit_wav(DrumLane::HHO, &hh, 4000.0, None), 1);
         // 同じレーンなら譜面の音のまま
-        assert_eq!(pad_first.hit_wav(DrumLane::HH, &hh, 4000.0), 1);
+        assert_eq!(pad_first.hit_wav(DrumLane::HH, &hh, 4000.0, None), 1);
+    }
+
+    #[test]
+    fn snare_sounds_and_strokes_follow_where_you_hit() {
+        // BPM 60 で 1 小節 4000ms。スネアは 4000ms（ヘッド 01）、5000ms（リム 02）、6000ms（ヘッド 01）、
+        // 8000ms（リム 03、注釈で見分ける）
+        let text = "#BPM 60\n#WAV01 snare.ogg\n#WAV02 Rim_37.ogg\n#WAV03 sn.ogg ;Snare Rim\n\
+                    #00112: 01020100\n#00212: 03\n";
+        let mut p = load_text("snare-rim", text, &Rules::default());
+        assert!(p.has_rim_notes());
+        let notes = p.judge.notes().to_vec();
+        let rims: Vec<bool> = notes.iter().map(|n| p.is_rim_note(n)).collect();
+        assert_eq!(rims, [false, true, false, true]);
+        use Articulation::*;
+        // リムの音符をリムで叩いたらリムの音、ヘッドで叩いたら一番近いヘッドの音符の音
+        assert_eq!(p.hit_wav(DrumLane::SD, &notes[1], 5000.0, Some(Rim)), 2);
+        assert_eq!(p.hit_wav(DrumLane::SD, &notes[1], 5000.0, Some(Head)), 1);
+        // 普通の音符のリムショットはそのまま、クロススティックなら一番近いリムの音符の音
+        assert_eq!(p.hit_wav(DrumLane::SD, &notes[2], 6000.0, Some(Rim)), 1);
+        assert_eq!(
+            p.hit_wav(DrumLane::SD, &notes[2], 6000.0, Some(CrossStick)),
+            2
+        );
+        assert_eq!(
+            p.hit_wav(DrumLane::SD, &notes[2], 7900.0, Some(CrossStick)),
+            3
+        );
+        // キーボードは譜面の音のまま
+        assert_eq!(p.hit_wav(DrumLane::SD, &notes[1], 5000.0, None), 2);
+        // 空打ちも叩いた所に合わせる
+        assert_eq!(p.stray_wav(DrumLane::SD, 5100.0, Some(Head)), Some(1));
+        assert_eq!(p.stray_wav(DrumLane::SD, 5900.0, Some(CrossStick)), Some(2));
+        assert_eq!(p.stray_wav(DrumLane::SD, 5900.0, Some(Rim)), Some(1));
+
+        // 電子ドラムで叩いた音符だけを数える
+        assert_eq!(p.stroke_tally(), None);
+        let hit = |n: &dtx::DrumNote, a: Option<Articulation>| {
+            Some(NoteHit {
+                at: n.at,
+                lane: n.lane,
+                judgement: Judgement::Perfect,
+                offset_ms: Some(0.0),
+                velocity: Some(100),
+                articulation: a,
+                hh_pedal: None,
+                beat_pos: None,
+            })
+        };
+        p.note_hits[0] = hit(&notes[0], Some(Head));
+        p.note_hits[1] = hit(&notes[1], Some(Head));
+        p.note_hits[2] = hit(&notes[2], None);
+        p.note_hits[3] = hit(&notes[3], Some(CrossStick));
+        let t = p.stroke_tally().unwrap();
+        assert_eq!((t.rim_hit, t.rim_ok, t.head_hit, t.head_ok), (2, 1, 1, 1));
+        assert_eq!(t.rim_missed_measures, vec![1]);
+
+        // リムの音が無い譜面では数えない
+        let plain = load_text(
+            "snare-plain",
+            "#BPM 60\n#WAV01 snare.ogg\n#00112: 01\n",
+            &Rules::default(),
+        );
+        assert!(!plain.has_rim_notes());
     }
 
     #[test]

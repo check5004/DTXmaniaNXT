@@ -14,11 +14,13 @@ use std::time::{Duration, Instant};
 use dtx::DrumLane;
 use egui::Color32;
 use engine::judge::{Judgement, Tally};
+use engine::stroke::Stroke;
 
 use crate::game::{Fx, GaugeRule, Play};
 use crate::gfx::{Canvas, Gfx, Glyphs, Opt, Src, Tex, fit_scale, src};
 use crate::lag_view::HitErrorBar;
 use crate::lane_layout::{LANES, LANES_LEFT, Lane, Layout};
+use crate::rim_look::{CHIP_H, CHIP_W, PAD_SIZE, RimLook, rim_chips, rim_ring};
 use crate::text::Style;
 
 /// 判定の線の y（上流 `nJudgeLinePosY.Drums` の既定）
@@ -96,6 +98,33 @@ const PAD_ORDER: [Lane; LANES] = [
     Lane::HH,
     Lane::LC,
 ];
+
+/// 判定の文字の絵の上から、スネアの打ち分けの札の上までの高さ
+const STROKE_TAG_DY: f32 = 118.0;
+
+/// スネアの音符を違う所で叩いたときの札（判定の文字の下に、叩くべきだった方を出す）。`cx` は札の真ん中
+fn draw_stroke_tag(c: &Canvas, g: &mut Gfx, cx: f32, y: f32, want: Stroke) {
+    let label = match want {
+        Stroke::Rim => "リム",
+        Stroke::Head => "ヘッド",
+    };
+    let style = Style {
+        px: 16.0,
+        color: Color32::WHITE,
+        bold: true,
+        shadow: None,
+        edge: None,
+        gradient: None,
+    };
+    let Some(t) = g.texts.get(label, &style) else {
+        return;
+    };
+    let (w, h) = (t.w + 16.0, t.h + 6.0);
+    let x = cx - w / 2.0;
+    c.fill(x, y, w, h, Color32::from_rgb(0xE8, 0x60, 0x20));
+    c.frame(x, y, w, h, Color32::WHITE);
+    t.draw(c, x + 8.0, y + 3.0, 1.0, 1.0);
+}
 
 /// 火花の画像の名前（`ELane` の順。左バスドラムは LP の色を変えたもの）
 const FIRE: [&str; LANES] = [
@@ -228,6 +257,17 @@ fn left_bass_tex(g: &Gfx) -> Option<Tex> {
         .tex_made("Graphics/7_chips_drums.png", "left_bass", left_bass_chips)
 }
 
+/// スネアのリムの音符のチップの絵（[`rim_chips`]。一度作ったら覚えておく）
+fn rim_tex(g: &Gfx) -> Option<Tex> {
+    g.skin
+        .tex_made("Graphics/7_chips_drums.png", "rim", rim_chips)
+}
+
+/// リムで叩いたときに光らせる、スネアのパッドの黄色い輪（[`rim_ring`]）
+fn rim_ring_tex(g: &Gfx) -> Option<Tex> {
+    g.skin.tex_made("Graphics/7_pads.png", "rim_ring", rim_ring)
+}
+
 /// スキンの絵 `rel` を水色にしたもの（足したレーンの光・火花・星）
 fn left_bass_tinted_tex(g: &Gfx, rel: &str) -> Option<Tex> {
     g.skin.tex_made(rel, "left_bass", left_bass_tinted)
@@ -321,6 +361,8 @@ struct PadState {
     dip_speed: i32,
     bright_at: Instant,
     dip_at: Instant,
+    /// 最後にスネアのリムで叩いた（パッドの面でなく黄色い輪を光らせる）
+    rim: bool,
 }
 
 impl PadState {
@@ -331,10 +373,12 @@ impl PadState {
             dip_speed: 0,
             bright_at: now,
             dip_at: now,
+            rim: false,
         }
     }
 
-    fn hit(&mut self, now: Instant) {
+    fn hit(&mut self, now: Instant, rim: bool) {
+        self.rim = rim;
         if self.bright == 0 {
             self.bright_at = now;
         }
@@ -403,6 +447,8 @@ struct JudgeShow {
     /// ずれ（ミリ秒、マイナスは早い）。見逃しは None
     lag: Option<i64>,
     start: Instant,
+    /// スネアの音符を違う所で叩いたなら、叩くべきだった方（判定の下に札を出す）
+    stroke: Option<Stroke>,
 }
 
 /// スコア（上流 `CActPerfCommonScore`：本当の点数へ 10 ミリ秒ごとに近づける）
@@ -586,6 +632,8 @@ pub struct Looks {
     pub layout: Layout,
     pub hho: HhoLook,
     pub lbd: LbdLook,
+    /// スネアのリムの音符の出し方
+    pub rim: RimLook,
 }
 
 impl Default for Looks {
@@ -640,6 +688,12 @@ impl Looks {
                 2 => LbdLook::SameAsLp,
                 3 => LbdLook::Own,
                 _ => LbdLook::BdLane,
+            },
+            rim: match v.choice(s::RIM_GRAPHICS) {
+                1 => RimLook::Hollow,
+                2 => RimLook::White,
+                3 => RimLook::Off,
+                _ => RimLook::Ears,
             },
         }
     }
@@ -821,10 +875,20 @@ impl PlayView {
         let practice = play.practice.is_some();
         for fx in play.take_fx() {
             match fx {
-                Fx::Hit { lane, velocity } => {
+                Fx::Hit {
+                    lane,
+                    velocity,
+                    rim,
+                } => {
                     let l = self.looks.lane_of(lane);
                     self.flush[l.i()] = Some((now, velocity));
-                    self.pads[l.i()].hit(now);
+                    self.pads[l.i()].hit(now, rim);
+                }
+                Fx::WrongStroke { want } => {
+                    // 同じ打撃の判定の文字（すぐ前に届く）に札を付ける
+                    if let Some(j) = self.judges[Lane::SD.i()].as_mut() {
+                        j.stroke = Some(want);
+                    }
                 }
                 Fx::Judged {
                     lane,
@@ -845,6 +909,7 @@ impl PlayView {
                         judgement,
                         lag: offset_ms.map(|o| o as i64),
                         start: now,
+                        stroke: None,
                     });
                     if !matches!(judgement, Judgement::Poor | Judgement::Miss) {
                         self.start_fire(l, self.looks.left_bass_tinted(lane), now);
@@ -874,6 +939,7 @@ impl PlayView {
                         judgement: Judgement::Miss,
                         lag: None,
                         start: now,
+                        stroke: None,
                     });
                     self.tally.combo = 0;
                     self.gauge.apply(Judgement::Miss);
@@ -1307,6 +1373,10 @@ impl PlayView {
             Some(lb) if looks.left_bass_tinted(lane) => lb,
             _ => &t,
         };
+        // スネアのリムの音符の絵（出さない設定か、譜面にリムの音符が無ければ作らない）
+        let rim_tex = (looks.rim != RimLook::Off && play.has_rim_notes())
+            .then(|| rim_tex(g))
+            .flatten();
         let ahead = |ms: f64| ((ms - now_ms) as f32) * px_per_ms;
         let visible = |ms: f64| {
             let y = looks.ahead_y(ahead(ms));
@@ -1316,7 +1386,8 @@ impl PlayView {
         let frame = count(self.entered, now, 70.0) as u32 % 8;
         let notes = play.judge.notes();
         let from = notes.partition_point(|n| n.ms < now_ms - 1000.0);
-        let mut shown: Vec<(DrumLane, f32, f32)> = Vec::new();
+        // レーン、y、濃さ、リムの音符か
+        let mut shown: Vec<(DrumLane, f32, f32, bool)> = Vec::new();
         for (i, n) in notes.iter().enumerate().skip(from) {
             let y = looks.ahead_y(ahead(n.ms));
             if looks.beyond_edge(y) {
@@ -1326,20 +1397,25 @@ impl PlayView {
                 continue;
             }
             if let Some(alpha) = looks.chip_alpha(ahead(n.ms)) {
-                shown.push((n.lane, y, alpha));
+                shown.push((n.lane, y, alpha, play.is_rim_note(n)));
             }
         }
         // 練習の助走など、判定しない音符は薄く
         if let Some(p) = &play.practice {
-            for &(ms, lane) in &p.faint {
+            for &(ms, lane, wav) in &p.faint {
                 if visible(ms)
                     && let Some(alpha) = looks.chip_alpha(ahead(ms))
                 {
-                    shown.push((lane, looks.ahead_y(ahead(ms)), 0.35 * alpha));
+                    shown.push((
+                        lane,
+                        looks.ahead_y(ahead(ms)),
+                        0.35 * alpha,
+                        play.is_rim(lane, wav),
+                    ));
                 }
             }
         }
-        for &(lane, y, alpha) in &shown {
+        for &(lane, y, alpha, _) in &shown {
             let (x, sx, w, pattern) = chip(&looks, lane);
             if !pattern {
                 continue;
@@ -1355,8 +1431,21 @@ impl PlayView {
                 },
             );
         }
-        for &(lane, y, alpha) in &shown {
+        for &(lane, y, alpha, rim) in &shown {
             let (x, sx, w, _) = chip(&looks, lane);
+            if rim && let (Some(rt), Some(rsx)) = (&rim_tex, looks.rim.sx()) {
+                c.draw_opt(
+                    rt,
+                    x - 5.0,
+                    y - 32.0,
+                    Opt {
+                        src: Some(src(rsx, 0.0, CHIP_W as f32, CHIP_H as f32)),
+                        alpha,
+                        ..Default::default()
+                    },
+                );
+                continue;
+            }
             c.draw_opt(
                 tex_of(lane),
                 x - 5.0,
@@ -1470,6 +1559,25 @@ impl PlayView {
             let s = src(sx, sy, 96.0, 96.0);
             if let Some(t) = &pads {
                 c.part(t, x, y, s);
+            }
+            // スネアのリムで叩いたら、面でなく黄色い輪を光らせる
+            if l == Lane::SD
+                && st.rim
+                && st.bright > 0
+                && let Some(t) = rim_ring_tex(g)
+            {
+                c.draw_opt(
+                    &t,
+                    x,
+                    y,
+                    Opt {
+                        src: Some(src(0.0, 0.0, PAD_SIZE as f32, PAD_SIZE as f32)),
+                        alpha: (st.bright as f32 / 4.0).min(1.0),
+                        add: true,
+                        ..Default::default()
+                    },
+                );
+                continue;
             }
             if let Some(t) = &flush
                 && st.bright > 0
@@ -1684,7 +1792,7 @@ impl PlayView {
     }
 
     /// 判定の文字とずれ（上流 `CActPerfDrumsJudgementString` のコマ送り：24 コマを 14 ミリ秒ごと）
-    fn draw_judges(&mut self, c: &Canvas, g: &Gfx, now: Instant) {
+    fn draw_judges(&mut self, c: &Canvas, g: &mut Gfx, now: Instant) {
         // 上流 `JudgementStringPosition`：レーンの上は 348、判定ラインの下は 583（Reverse では上の 80）を基準に、
         // レーンごとの段をずらす。Reverse のレーンの上は段を逆に
         let reverse = self.looks.reverse;
@@ -1752,6 +1860,9 @@ impl PlayView {
                     c.part(t, x, y + 34.0, s);
                     x += 15.0;
                 }
+            }
+            if let Some(want) = j.stroke {
+                draw_stroke_tag(c, g, xc as f32, y + STROKE_TAG_DY, want);
             }
         }
     }
@@ -2221,7 +2332,7 @@ mod tests {
     fn pad_dips_and_comes_back() {
         let t0 = Instant::now();
         let mut p = PadState::new(t0);
-        p.hit(t0);
+        p.hit(t0, false);
         p.update(t0 + Duration::from_millis(48));
         // 8 ミリ秒ごとに 2 ずつ沈み、11 で戻り始める
         assert_eq!(p.dip, 11);

@@ -1,0 +1,17 @@
+{
+  "title": "スネアのリム",
+  "notes": [
+    { "ms": 2000, "lane": "SD", "measure": 1, "pos": "0" },
+    { "ms": 2500, "lane": "SD", "measure": 1, "pos": "1/4" },
+    { "ms": 3000, "lane": "SD", "measure": 1, "pos": "1/2" },
+    { "ms": 3500, "lane": "SD", "measure": 1, "pos": "3/4" },
+    { "ms": 4000, "lane": "HH", "measure": 2, "pos": "0" },
+    { "ms": 4000, "lane": "SD", "measure": 2, "pos": "0" },
+    { "ms": 4500, "lane": "HH", "measure": 2, "pos": "1/4" },
+    { "ms": 5000, "lane": "HH", "measure": 2, "pos": "1/2" },
+    { "ms": 5000, "lane": "SD", "measure": 2, "pos": "1/2" },
+    { "ms": 5500, "lane": "HH", "measure": 2, "pos": "3/4" },
+    { "ms": 5500, "lane": "SD", "measure": 2, "pos": "3/4" }
+  ],
+  "rim_wavs": ["02", "03", "04"]
+}
