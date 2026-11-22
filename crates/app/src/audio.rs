@@ -18,6 +18,7 @@ use symphonia::core::io::{MediaSource, MediaSourceStream};
 use symphonia::core::meta::MetadataOptions;
 
 use crate::time::{duration_us, host_us};
+use crate::xa;
 
 /// 出力の形式にそろえた音（ステレオで交互に並んだ f32）
 #[derive(Clone)]
@@ -53,11 +54,24 @@ pub fn click(rate: u32, accent: bool) -> Sound {
     Sound(Arc::from(samples))
 }
 
-/// 音のファイルを読み、ステレオ・`rate` Hz にそろえる
+/// 音のファイルを読み、ステレオ・`rate` Hz にそろえる。
+/// BandJAM XA（`.xa`）は名前ではなく中身の頭で見分ける（symphonia は読めない）
 pub fn load_sound(path: &Path, rate: u32) -> Result<Sound> {
-    let file = std::fs::File::open(path).with_context(|| format!("open {}", path.display()))?;
-    let ext = path.extension().and_then(|e| e.to_str());
-    decode_sound(Box::new(file), ext, rate).with_context(|| path.display().to_string())
+    let bytes = std::fs::read(path).with_context(|| format!("open {}", path.display()))?;
+    let sound = if xa::is_xa(&bytes) {
+        xa::decode(&bytes).map(|x| xa_sound(&x, rate))
+    } else {
+        let ext = path.extension().and_then(|e| e.to_str());
+        decode_sound(Box::new(std::io::Cursor::new(bytes)), ext, rate)
+    };
+    sound.with_context(|| path.display().to_string())
+}
+
+/// 読んだ BandJAM XA の音をステレオ・`rate` Hz にそろえる
+fn xa_sound(x: &xa::Xa, rate: u32) -> Sound {
+    let samples: Vec<f32> = x.samples.iter().map(|&s| f32::from(s) / 32768.0).collect();
+    let stereo = to_stereo(&samples, x.channels);
+    Sound(Arc::from(resample_linear(&stereo, x.rate, rate)))
 }
 
 /// メモリにある音のファイル（アプリに入れたスキンの音）を読み、ステレオ・`rate` Hz にそろえる
@@ -438,6 +452,28 @@ impl AudioOut {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn xa_files_are_read_by_their_header_whatever_the_name() {
+        // 8 ビット・モノラル・24000 Hz の BandJAM XA を 1 ブロック（32 サンプル）。0x40 は 16384
+        let mut bytes = b"KWD1".to_vec();
+        bytes.extend(33u32.to_le_bytes());
+        bytes.extend(32u32.to_le_bytes());
+        bytes.extend(24_000u16.to_le_bytes());
+        bytes.extend([8, 1]);
+        bytes.resize(32, 0);
+        bytes.push(0x00);
+        bytes.extend([0x40; 32]);
+        // 名前が .ogg でも中身で見分ける
+        let path = std::env::temp_dir().join(format!("nxt-xa-test-{}.ogg", std::process::id()));
+        std::fs::write(&path, &bytes).unwrap();
+        let s = load_sound(&path, 48_000);
+        std::fs::remove_file(&path).unwrap();
+        let s = s.unwrap();
+        // 2 倍のサンプルレートにそろえ、ステレオにする
+        assert_eq!(s.frames(), 64);
+        assert_eq!(&s.samples()[..2], &[0.5, 0.5]);
+    }
 
     #[test]
     fn mono_becomes_stereo() {
