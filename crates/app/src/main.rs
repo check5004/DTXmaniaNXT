@@ -1129,6 +1129,8 @@ impl App {
         let stage_failed = self.stage_failed_enabled();
         let mut failed_out = false;
         let mut finished = false;
+        // セットの合間で「やめる」を選んだ（その時刻）
+        let mut quit_at = None;
         if let Screen::Play(play, view) = &mut self.screen
             && !closing
         {
@@ -1139,6 +1141,16 @@ impl App {
                 // 判定の線より上に見えている時間
                 play.view_ahead_ms = play_view::view_ahead_ms(self.config.scroll_px_per_ms);
                 play.update();
+                for e in play.take_break_events() {
+                    match e {
+                        game::BreakEvent::Moved => self.sfx.play(Se::Move),
+                        game::BreakEvent::Decided => self.sfx.play(Se::Decide),
+                        game::BreakEvent::Quit => {
+                            self.sfx.play(Se::Decide);
+                            quit_at = Some(play.now_ms());
+                        }
+                    }
+                }
                 view.feed(play);
                 if stage_failed && play.practice.is_none() && !play.skipped() && view.gauge_empty()
                 {
@@ -1156,6 +1168,9 @@ impl App {
             self.go_to_select();
         } else if finished {
             self.finish_play(None);
+        } else if let Some(at_ms) = quit_at {
+            // 一時停止の板の「演奏をやめる」と同じく、シャッターを閉じてから結果へ
+            self.close_then(AfterClose::Result { at_ms }, Duration::ZERO);
         }
         if self.shutter.is_closed()
             && let Some(next) = self.after_close.take()
@@ -1653,6 +1668,15 @@ impl App {
             return;
         };
         let failing = view.frozen_ms().is_some();
+        // セットの合間は ↑↓ で選び、Enter で決める（ドラムのハイタム・ロータムとシンバルと同じ）
+        if play.in_break() {
+            match code {
+                KeyCode::ArrowUp => return play.break_move(-1),
+                KeyCode::ArrowDown => return play.break_move(1),
+                KeyCode::Enter | KeyCode::NumpadEnter => return play.break_choose(),
+                _ => {}
+            }
+        }
         let toast = match code {
             // 一時停止して、一時停止の板を開く（上流 Pause。やめるのは板の「演奏をやめる」から）。
             // STAGE FAILED を出しているあいだは止めない（出し終えると選曲に戻る）
@@ -1695,10 +1719,11 @@ impl App {
                     to.max(0.0) / 1000.0
                 )
             }
-            KeyCode::Comma | KeyCode::Period if play.practice.is_some() => {
+            // セットの合間は選ぶ速度が決めるので変えない
+            KeyCode::Comma | KeyCode::Period if play.practice.is_some() && !play.in_break() => {
                 play.nudge_speed(if code == KeyCode::Comma { -1 } else { 1 });
-                let speed = play.practice.as_ref().map_or(100, |p| p.ladder().speed());
-                format!("速度 {speed}%（次の周から、助走のあと）")
+                let speed = play.practice.as_ref().map_or(100, |p| p.speed());
+                format!("速度 {speed}%（次の周から、助走のあと。セットはこの速度から数え直し）")
             }
             HIT_SOUND_KEY => {
                 play.drum_sounds = !play.drum_sounds;
@@ -2084,6 +2109,7 @@ impl App {
                             speed: p.speed,
                             pitch: p.pitch,
                             metronome: p.metronome,
+                            set_laps: p.set_laps,
                         })
                     }
                     None => options,
