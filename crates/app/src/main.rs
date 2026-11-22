@@ -1806,16 +1806,7 @@ impl App {
                 self.select_action(ui::SelectAction::Enter)
             }
             KeyCode::Backspace => self.select_action(ui::SelectAction::Back),
-            KeyCode::Escape => {
-                self.sfx.play(Se::Cancel);
-                if self.songs.back() {
-                    self.view.jumped();
-                } else {
-                    // 上流と同じく一番上で Esc ならタイトルへ（v2 はすぐ切り替え、タイトルが白から出る）
-                    self.sfx.preview(None);
-                    self.go_to_title();
-                }
-            }
+            KeyCode::Escape => self.select_cancel(),
             // v2 と同じく ← → で並べ替え、R でランダムに選ぶ。難易度は Tab（パッドの HH 2 回）
             KeyCode::ArrowLeft => self.change_sort(-1),
             KeyCode::ArrowRight => self.change_sort(1),
@@ -1824,6 +1815,18 @@ impl App {
             KeyCode::F5 => self.select_action(ui::SelectAction::Rescan),
             KeyCode::KeyP => self.select_action(ui::SelectAction::Practice),
             _ => {}
+        }
+    }
+
+    /// 選曲の「戻る」（Esc と LC。v2 の ActionCancel）。BOX の中なら 1 つ上へ出て、
+    /// 一番上ならタイトルへ（v2 はすぐ切り替え、タイトルが白から出る）
+    fn select_cancel(&mut self) {
+        self.sfx.play(Se::Cancel);
+        if self.songs.back() {
+            self.view.jumped();
+        } else {
+            self.sfx.preview(None);
+            self.go_to_title();
         }
     }
 
@@ -1912,8 +1915,8 @@ impl App {
                     DrumLane::SD => self.change_sort(-1),
                     DrumLane::FT => self.change_sort(1),
                     DrumLane::CY | DrumLane::RD => self.select_action(ui::SelectAction::Enter),
-                    // 一番上で LC を叩いてもアプリは終わらない
-                    DrumLane::LC => self.select_action(ui::SelectAction::Back),
+                    // v2 と同じく LC は Esc と同じ（BOX の中なら出て、一番上ならタイトルへ）
+                    DrumLane::LC => self.select_cancel(),
                     DrumLane::HH | DrumLane::HHO => {
                         if self.last_hh_us.is_some_and(|t| at_us - t <= DOUBLE_HIT_US) {
                             self.last_hh_us = None;
