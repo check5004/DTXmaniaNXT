@@ -130,12 +130,12 @@ impl Se {
     }
 }
 
-/// プレビューの音に付ける目印
+/// プレビューの音に付ける目印（目印はビットの組なので、目印ごとに別のビットにする）
 const PREVIEW_TAG: u8 = 1;
 /// 読み込みの音に付ける目印（読み込みをやめたら止める）
 const LOADING_TAG: u8 = 2;
 /// タイトルの音に付ける目印（上流と同じく、ほかの画面へ移ったり終わる音を鳴らしたら止める）
-const TITLE_TAG: u8 = 3;
+const TITLE_TAG: u8 = 4;
 
 pub struct Sfx {
     out: Option<AudioOut>,

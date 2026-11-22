@@ -40,6 +40,7 @@ use crate::text::Style;
 use crate::title_view::draw_scanning;
 use crate::update::UpdateMode;
 use crate::window_mode::{self, MonitorInfo};
+use i18n::{Lang, t};
 
 /// 補正の値の範囲（ミリ秒）
 pub const OFFSET_RANGE: f64 = 200.0;
@@ -187,6 +188,8 @@ pub enum Setting {
     ShowLagTimeColor,
     ShowLagHitCount,
     Update,
+    /// 画面の言語
+    Language,
 }
 
 /// 練習の決めごと（練習のポップアップと同じ項目。区間のほか）
@@ -517,6 +520,7 @@ pub fn get(s: Setting, c: &Config) -> i64 {
             .iter()
             .position(|&m| m == c.update_mode())
             .unwrap_or(0) as i64,
+        Setting::Language => Lang::ALL.iter().position(|&l| l == c.lang()).unwrap_or(0) as i64,
     }
 }
 
@@ -536,6 +540,7 @@ pub fn set(s: Setting, c: &mut Config, v: i64) {
         Setting::Update => c.set_update_mode(
             UpdateMode::ALL[v.clamp(0, UpdateMode::ALL.len() as i64 - 1) as usize],
         ),
+        Setting::Language => c.set_lang(Lang::ALL[v.clamp(0, Lang::ALL.len() as i64 - 1) as usize]),
     }
 }
 
@@ -626,6 +631,17 @@ fn value_row(s: Setting, c: &Config) -> Row {
             at as usize,
             Some(def as usize),
             "新しい版の扱いです。Setup.exe で入れたときだけ働きます。\n知らせる: 起動したときに確かめ、あればタイトルのメニューの下に出します。更新するかは自分で選びます。\n自動: 起動したときに落とし、終了したときに入れ替えます。\n確かめない: 新しい版を確かめません。",
+        ),        Setting::Language => choice(
+            id,
+            // 読めない言語にしてしまっても見つけられるように、日本語の画面でも英語の名前を添える
+            t("Language", "言語（Language）"),
+            &Lang::ALL.map(Lang::native_name),
+            at as usize,
+            None,
+            t(
+                "The language of menus and messages. Song titles and text drawn in the skin's artwork stay as they are.",
+                "メニューや知らせの文の言語です。曲名や、スキンの絵に描かれた文字は変わりません。",
+            ),
         ),
     }
 }
@@ -1338,6 +1354,9 @@ pub fn rows(page: Page, info: &ConfigInfo<'_>) -> Vec<Row> {
             s.table(Group::Practice, v);
         }
         Page::Cat(Cat::App) => {
+            if crate::config::LANGUAGE_READY {
+                s.at("").push(value_row(Setting::Language, c));
+            }
             s.at("").push(value_row(Setting::Update, c));
             s.table(Group::App, v);
         }

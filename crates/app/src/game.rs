@@ -15,7 +15,7 @@ use engine::stroke::{Stroke, StrokeTally};
 use records::{Lap, NoteHit, SectionClear, Session, SessionKind, StrayHit};
 
 use crate::audio::{AudioOut, Bus, Sound, click, load_sound};
-use crate::chart_sound::{AutoMix, ChartSounds};
+use crate::chart_sound::{AutoMix, ChartSounds, Hat};
 use crate::history::OvercomeCheck;
 use crate::midi::RawMidi;
 use crate::practice::{
@@ -116,7 +116,7 @@ pub struct HitSoundRule {
     /// 共通にしたレーンで別のレーンの音符を取ったとき、叩いたパッドのレーンの音を鳴らす
     /// （ハイハットと左シンバル、ロータムとフロアタム、シンバルとライドの順）
     pub pad_first: [bool; 3],
-    /// 左ペダルを踏んだら、叩いて鳴っているハイハットの音を止める
+    /// 閉じたハイハットか左ペダルの音を鳴らしたら、鳴っているハイハットの音（叩いた音と自動で鳴らす音）を止める
     pub muting_lp: bool,
 }
 
@@ -129,8 +129,52 @@ impl Default for HitSoundRule {
     }
 }
 
-/// 叩いたハイハットの音に付ける目印（左ペダルで止める）
+/// ハイハットの音に付ける目印（閉じたハイハットと左ペダルで止める。目印はビットの組）
 const HH_TAG: u8 = 1;
+/// 叩いたシンバルの音に付ける目印（叩いたパッドを握ったら止める。チョーク）。メトロノームの目印とも重ねない
+const CY_TAG: u8 = 4;
+const LC_TAG: u8 = 8;
+const RD_TAG: u8 = 16;
+
+/// 叩いたパッドのレーン `lane` の、握って止めるための目印（シンバルでなければ 0）
+fn choke_tag(lane: DrumLane) -> u8 {
+    match lane {
+        DrumLane::CY => CY_TAG,
+        DrumLane::LC => LC_TAG,
+        DrumLane::RD => RD_TAG,
+        _ => 0,
+    }
+}
+
+/// パッド `pad` を握ったら止める音の目印（[`engine::input`] のパッドとレーンの対応と同じ）
+fn grip_tag(pad: Pad) -> u8 {
+    match pad {
+        Pad::Crash1 => LC_TAG,
+        Pad::Crash2 => CY_TAG,
+        Pad::Ride => RD_TAG,
+        Pad::HiHat => HH_TAG,
+        _ => 0,
+    }
+}
+
+/// ハイハットの音なら [`HH_TAG`]
+fn hat_tag(hat: Option<Hat>) -> u8 {
+    if hat.is_some_and(Hat::is_hat) {
+        HH_TAG
+    } else {
+        0
+    }
+}
+
+/// 叩いた音の止め方。鳴らす音のレーン `sound_lane` と叩いたパッドのレーン `pad_lane` から、
+/// 鳴らす前に鳴っているハイハットの音を止めるか（上流の Muting LP が `muting_lp`）と、鳴らす音に付ける目印
+fn hit_sound_tags(muting_lp: bool, sound_lane: DrumLane, pad_lane: DrumLane) -> (bool, u8) {
+    let hat = Hat::of_lane(sound_lane);
+    (
+        muting_lp && hat.is_some_and(Hat::mutes),
+        hat_tag(hat) | choke_tag(pad_lane),
+    )
+}
 
 /// ゲージの増え方と減り方（上流 `CActPerfCommonGauge`）。演奏の画面がこれでゲージを動かす
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -386,8 +430,12 @@ impl Play {
             notes
                 .iter()
                 .filter(|n| auto.contains(&n.lane))
-                .map(|n| (n.ms, n.wav)),
+                .map(|n| (n.ms, n.wav, n.lane)),
         );
+        // 上流の Muting LP: 自動で鳴らすハイハットの音は、後の閉じたハイハットか左ペダルの音で止める
+        if rules.hit_sounds.muting_lp {
+            chart_sounds.mute_hats();
+        }
         // メトロノームは演奏中に切り替えられるよう、自動で鳴らす音にまとめず拍の線から鳴らす（`lay_auto`）。
         // 練習は区間の音を周の速度に伸ばしてまとめるので、周ごとに鳴らす（`lay_laps`）
         let lines = beat_lines(&tempo);
@@ -625,6 +673,17 @@ impl Play {
                 lap.start_ms,
                 lap.end_ms
             );
+            // 自動で叩く閉じたハイハットと左ペダルは、その時刻に叩いて鳴っているハイハットの音を止める
+            // （自動で叩く音は区間の音にまとめてあり、まとめるときに止めてある）
+            if self.hit_sounds.muting_lp
+                && let Some(a) = self.audio.as_mut()
+            {
+                for n in &notes {
+                    if self.judge.is_auto(n.lane) && Hat::of_lane(n.lane).is_some_and(Hat::mutes) {
+                        a.stop_at(HH_TAG, n.ms);
+                    }
+                }
+            }
             let range = self.judge.extend(notes);
             self.note_hits.resize(self.judge.notes().len(), None);
             if let Some(a) = self.audio.as_mut() {
@@ -672,8 +731,14 @@ impl Play {
                 break;
             }
             self.auto_next += 1;
+            // 上流の Muting LP: 閉じたハイハットと左ペダルは、その時刻に鳴っているハイハットの音
+            // （叩いた音も）を止める。自動で鳴らすハイハットの音どうしは `mute_hats` で止めてある
+            if self.hit_sounds.muting_lp && v.hat.is_some_and(Hat::mutes) {
+                a.stop_at(HH_TAG, v.ms);
+            }
             if let Some(s) = self.sounds.get(&v.wav) {
-                a.play_chip(s, v.ms, v.len_ms, (v.gain, v.pan), Bus::Song);
+                let route = (Bus::Song, hat_tag(v.hat));
+                a.play_chip(s, v.ms, v.len_ms, (v.gain, v.pan), route);
             }
         }
         if !self.metronome {
@@ -852,7 +917,8 @@ impl Play {
                 let len =
                     (s.frames() as f64 / rate * 1000.0).min(v.len_ms.unwrap_or(f64::INFINITY));
                 if v.ms + len > to {
-                    a.play_chip(s, v.ms, v.len_ms, (v.gain, v.pan), Bus::Song);
+                    let route = (Bus::Song, hat_tag(v.hat));
+                    a.play_chip(s, v.ms, v.len_ms, (v.gain, v.pan), route);
                 }
             }
         }
@@ -897,6 +963,7 @@ impl Play {
         let mapper = self.mappers.entry(raw.port).or_default();
         let at_us = mapper.map(Some(raw.device_us), raw.arrival_us);
         let mut hits = Vec::new();
+        let mut chokes = Vec::new();
         for &msg in msgs {
             match normalizer.feed(msg, at_us) {
                 Some(InputEvent::Hit {
@@ -920,11 +987,26 @@ impl Play {
                     }
                 }
                 Some(InputEvent::HiHatPedal { value, .. }) => self.hh_pedal = Some(value),
-                Some(InputEvent::Choke { .. }) | None => {}
+                Some(InputEvent::Choke { pad, .. }) => chokes.push(pad),
+                None => {}
             }
         }
         for (lane, velocity, host_us, articulation, hh_pedal) in hits {
             self.hit(lane, velocity, host_us, Some(articulation), hh_pedal);
+        }
+        for pad in chokes {
+            self.choke(pad);
+        }
+    }
+
+    /// シンバルのパッド `pad` を握った（Roland のチョーク）。そのパッドで叩いて鳴っている音を止める
+    fn choke(&mut self, pad: Pad) {
+        let tag = grip_tag(pad);
+        if tag == 0 || self.paused() {
+            return;
+        }
+        if let Some(a) = self.audio.as_mut() {
+            a.stop_ringing(tag);
         }
     }
 
@@ -992,28 +1074,27 @@ impl Play {
         }
         self.record(&events, articulation, hh_pedal);
         if self.drum_sounds {
-            // 取った音符の音を鳴らす。空打ちなら空打ちの音、無ければそのレーンの一番近い音符の音
-            let wav = events
-                .first()
-                .map(|e| self.hit_wav(lane, &self.judge.notes()[e.note], ms, articulation))
-                .or_else(|| self.stray_wav(lane, ms, articulation));
-            // 上流の Muting LP: 左ペダルで、叩いて鳴っているハイハットを止める
-            let muting = self.hit_sounds.muting_lp && lane == DrumLane::LP;
-            let tag = if matches!(lane, DrumLane::HH | DrumLane::HHO) {
-                HH_TAG
-            } else {
-                0
+            // 取った音符の音を鳴らす。空打ちなら空打ちの音、無ければそのレーンの一番近い音符の音。
+            // `sound_lane` は鳴らす音のレーン（上流が音を止めるかを決めるチップのチャンネル）
+            let (wav, sound_lane) = match events.first() {
+                Some(e) => {
+                    let (w, l) = self.hit_wav(lane, &self.judge.notes()[e.note], ms, articulation);
+                    (Some(w), l)
+                }
+                None => (self.stray_wav(lane, ms, articulation), lane),
             };
+            // 上流の Muting LP: 閉じたハイハットか左ペダルで、鳴っているハイハットの音を止める
+            let (muting, tag) = hit_sound_tags(self.hit_sounds.muting_lp, sound_lane, lane);
             if let Some(a) = self.audio.as_mut() {
                 if muting {
-                    a.stop(HH_TAG);
+                    a.stop_ringing(HH_TAG);
                 }
                 if let Some(w) = wav
                     && let Some(s) = self.sounds.get(&w)
                 {
                     let (gain, pan) = self.chart_sounds.gain_pan(w);
                     let gain = gain * f32::from(velocity) / 127.0;
-                    a.play_now_panned(s, (gain, pan), tag, Bus::Hits);
+                    a.play_hit(s, (gain, pan), tag);
                 }
             }
         }
@@ -1083,14 +1164,15 @@ impl Play {
     /// 叩いて音符 `note` を取ったときの音。叩いたパッドのレーン `lane` と音符のレーンが違い（叩き分けを共通にした）、
     /// パッドの音を先にする設定なら、そのパッドのレーンの一番近い音符の音（上流 `tProcessDrumHit` の P>C）。
     /// 譜面に無いレーンは、上流と同じく開いたハイハットと左シンバルを閉じたハイハット、ライドを右シンバルとして探す。
-    /// スネアは叩いた所に合わせる（リムの音符をヘッドで叩いたら、一番近いヘッドの音符の音。[`Stroke::sound_for`]）
+    /// スネアは叩いた所に合わせる（リムの音符をヘッドで叩いたら、一番近いヘッドの音符の音。[`Stroke::sound_for`]）。
+    /// 返すのは音と、その音のレーン
     fn hit_wav(
         &self,
         lane: DrumLane,
         note: &dtx::DrumNote,
         ms: f64,
         articulation: Option<Articulation>,
-    ) -> u16 {
+    ) -> (u16, DrumLane) {
         use DrumLane::*;
         if note.lane == SD
             && let Some(a) = articulation
@@ -1098,18 +1180,19 @@ impl Play {
             let stroke = Stroke::of_note(self.is_rim_note(note));
             let want = stroke.sound_for(a);
             if want != stroke {
-                return self.snare_wav(want, ms).unwrap_or(note.wav);
+                return (self.snare_wav(want, ms).unwrap_or(note.wav), SD);
             }
-            return note.wav;
+            return (note.wav, SD);
         }
+        let own = (note.wav, note.lane);
         let family = match lane {
             HH | HHO | LC => 0,
             LT | FT => 1,
             CY | RD => 2,
-            _ => return note.wav,
+            _ => return own,
         };
         if note.lane == lane || !self.hit_sounds.pad_first[family] {
-            return note.wav;
+            return own;
         }
         let has = |l: DrumLane| self.judge.notes().iter().any(|n| n.lane == l);
         let pad = match lane {
@@ -1117,7 +1200,7 @@ impl Play {
             RD if !has(RD) => CY,
             l => l,
         };
-        self.lane_wav(pad, ms).unwrap_or(note.wav)
+        self.lane_wav(pad, ms).map_or(own, |w| (w, pad))
     }
 
     /// レーン `lane` の音符（見えない音符 0x31〜 も含む）のうち、曲の時刻 `ms` に一番近いものの音。
@@ -1564,8 +1647,11 @@ mod tests {
         );
         let hh = chip_first.judge.notes()[0].clone();
         assert_eq!(hh.lane, DrumLane::HH);
-        // 左シンバルで閉じたハイハットの音符を取っても、ふだん（C>P）は譜面の音
-        assert_eq!(chip_first.hit_wav(DrumLane::LC, &hh, 4000.0, None), 1);
+        // 左シンバルで閉じたハイハットの音符を取っても、ふだん（C>P）は譜面の音（音のレーンも譜面の音符）
+        assert_eq!(
+            chip_first.hit_wav(DrumLane::LC, &hh, 4000.0, None),
+            (1, DrumLane::HH)
+        );
         let pad_first = load_text(
             "pad-first",
             text,
@@ -1579,11 +1665,57 @@ mod tests {
             },
         );
         // P>C なら叩いた左シンバルのレーンの音
-        assert_eq!(pad_first.hit_wav(DrumLane::LC, &hh, 4000.0, None), 2);
+        assert_eq!(
+            pad_first.hit_wav(DrumLane::LC, &hh, 4000.0, None),
+            (2, DrumLane::LC)
+        );
         // 譜面に開いたハイハットが無ければ、閉じたハイハットの音
-        assert_eq!(pad_first.hit_wav(DrumLane::HHO, &hh, 4000.0, None), 1);
+        assert_eq!(
+            pad_first.hit_wav(DrumLane::HHO, &hh, 4000.0, None),
+            (1, DrumLane::HH)
+        );
         // 同じレーンなら譜面の音のまま
-        assert_eq!(pad_first.hit_wav(DrumLane::HH, &hh, 4000.0, None), 1);
+        assert_eq!(pad_first.hit_wav(DrumLane::HH, &hh, 4000.0, None).0, 1);
+    }
+
+    #[test]
+    fn closed_hats_and_the_left_pedal_stop_the_ringing_hats() {
+        use DrumLane::*;
+        // 閉じたハイハットと左ペダルの音は、鳴らす前に鳴っているハイハットの音を止める（上流の Muting LP）
+        assert_eq!(hit_sound_tags(true, HH, HH), (true, HH_TAG));
+        assert_eq!(hit_sound_tags(true, LP, LP), (true, 0));
+        // 開いたハイハットは止めず、自分は後で止められる
+        assert_eq!(hit_sound_tags(true, HHO, HHO), (false, HH_TAG));
+        assert_eq!(hit_sound_tags(true, SD, SD), (false, 0));
+        // 決めるのは鳴らす音のレーン（開いたハイハットの音符を閉じたハイハットで取ったら止めない）
+        assert_eq!(hit_sound_tags(true, HHO, HH), (false, HH_TAG));
+        assert_eq!(hit_sound_tags(true, HH, HHO), (true, HH_TAG));
+        // 左シンバルで閉じたハイハットの音を鳴らしたら、ハイハットとして止め、左シンバルを握っても止まる
+        assert_eq!(hit_sound_tags(true, HH, LC), (true, HH_TAG | LC_TAG));
+        // Muting LP が OFF なら止めない
+        assert_eq!(hit_sound_tags(false, HH, HH), (false, HH_TAG));
+        assert_eq!(hit_sound_tags(false, LP, LP), (false, 0));
+    }
+
+    #[test]
+    fn gripping_a_cymbal_stops_what_that_pad_hit() {
+        // Roland の工場出荷時のノートで、握ったパッドの目印と、そのパッドで叩いた音の目印が同じ
+        let p = MidiProfile::roland_vdrums();
+        for note in [49, 55, 57, 52, 51, 59, 53] {
+            let lane = p.note_lane(note).unwrap();
+            assert_ne!(choke_tag(lane), 0, "{note}");
+            assert_eq!(grip_tag(p.notes[&note].pad), choke_tag(lane), "{note}");
+        }
+        // ハイハットを握ったらハイハットの音、シンバルでないパッドは何もしない
+        assert_eq!(grip_tag(Pad::HiHat), HH_TAG);
+        assert_eq!(grip_tag(Pad::Snare), 0);
+        // 目印はビットの組なので重ならない
+        let tags = [HH_TAG, METRONOME_TAG, CY_TAG, LC_TAG, RD_TAG];
+        for (i, a) in tags.iter().enumerate() {
+            for b in &tags[i + 1..] {
+                assert_eq!(a & b, 0);
+            }
+        }
     }
 
     #[test]
@@ -1599,20 +1731,20 @@ mod tests {
         assert_eq!(rims, [false, true, false, true]);
         use Articulation::*;
         // リムの音符をリムで叩いたらリムの音、ヘッドで叩いたら一番近いヘッドの音符の音
-        assert_eq!(p.hit_wav(DrumLane::SD, &notes[1], 5000.0, Some(Rim)), 2);
-        assert_eq!(p.hit_wav(DrumLane::SD, &notes[1], 5000.0, Some(Head)), 1);
+        assert_eq!(p.hit_wav(DrumLane::SD, &notes[1], 5000.0, Some(Rim)).0, 2);
+        assert_eq!(p.hit_wav(DrumLane::SD, &notes[1], 5000.0, Some(Head)).0, 1);
         // 普通の音符のリムショットはそのまま、クロススティックなら一番近いリムの音符の音
-        assert_eq!(p.hit_wav(DrumLane::SD, &notes[2], 6000.0, Some(Rim)), 1);
+        assert_eq!(p.hit_wav(DrumLane::SD, &notes[2], 6000.0, Some(Rim)).0, 1);
         assert_eq!(
             p.hit_wav(DrumLane::SD, &notes[2], 6000.0, Some(CrossStick)),
-            2
+            (2, DrumLane::SD)
         );
         assert_eq!(
             p.hit_wav(DrumLane::SD, &notes[2], 7900.0, Some(CrossStick)),
-            3
+            (3, DrumLane::SD)
         );
         // キーボードは譜面の音のまま
-        assert_eq!(p.hit_wav(DrumLane::SD, &notes[1], 5000.0, None), 2);
+        assert_eq!(p.hit_wav(DrumLane::SD, &notes[1], 5000.0, None).0, 2);
         // 空打ちも叩いた所に合わせる
         assert_eq!(p.stray_wav(DrumLane::SD, 5100.0, Some(Head)), Some(1));
         assert_eq!(p.stray_wav(DrumLane::SD, 5900.0, Some(CrossStick)), Some(2));
