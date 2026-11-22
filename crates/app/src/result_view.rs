@@ -213,11 +213,8 @@ impl ResultView {
         due.into_iter().map(|(_, se)| se).collect()
     }
 
-    /// ページを切り替える（←→）。練習の結果は 1 ページだけ
+    /// ページを切り替える（←→）。練習の結果の 2 ページ目は周ごとの成績の表
     pub fn turn(&mut self) {
-        if self.info.practice {
-            return;
-        }
         self.page = match self.page {
             Page::Summary => Page::Analysis,
             Page::Analysis => Page::Summary,
@@ -242,7 +239,7 @@ impl ResultView {
         let elapsed = self.entered.elapsed();
         self.draw_panels(c, g, elapsed);
         if let Some(p) = &o.practice {
-            // 練習：スコアの場所に苦手の無いセットの数、ランクとジャケットの場所にセットと周ごとの成績
+            // 練習：スコアの場所にどこまでのぼったか、ランクとジャケットの場所に段と挑戦、ミスした所
             self.draw_parameters(c, g, Some(p));
             crate::result_training::draw_practice(c, g, p);
             self.draw_title(c, g);
@@ -254,6 +251,14 @@ impl ResultView {
         crate::result_training::draw_weak(c, g, o);
         crate::lag_view::draw_result(c, g, o);
         self.draw_page_hint(c, g, "→ 詳しい結果（苦手な小節、叩き方のくせ）");
+    }
+
+    /// 練習の結果の 2 ページ目（周ごとの成績の表）
+    pub fn draw_practice_laps(&self, c: &Canvas, g: &mut Gfx, p: &crate::game::PracticeOutcome) {
+        self.draw_panels(c, g, self.entered.elapsed());
+        self.draw_parameters(c, g, Some(p));
+        crate::result_training::draw_practice_laps(c, g, p);
+        self.draw_title(c, g);
     }
 
     /// 2 ページ目の上に出す、ページの切り替えの案内
@@ -429,31 +434,33 @@ impl ResultView {
     }
 }
 
-/// 練習の結果のスコアの場所：苦手の無いセットの数と、叩いたセットの数
+/// 練習の結果のスコアの場所：クリアしたか、どこまでのぼったか
 fn draw_passed(c: &Canvas, g: &mut Gfx, p: &crate::game::PracticeOutcome) {
-    let done = p.sets.len();
-    let passed = p.sets.iter().filter(|r| r.weak().is_empty()).count();
-    g.heading(c, 30.0, 28.0, "苦手の無いセット");
-    let text = passed.min(9999).to_string();
-    let mut x = 30.0;
-    match g.skin.tex("Graphics/7_score numbersGD.png") {
-        Some(t) => {
-            for ch in text.chars() {
-                if let Some(d) = ch.to_digit(10) {
-                    c.part(&t, x, 58.0, src(d as f32 * 36.0, 0.0, 36.0, 50.0));
-                }
-                x += 34.0;
-            }
-        }
-        None => {
-            let style = Style::edged(40.0, Color32::from_rgb(220, 240, 120), Color32::BLACK, 3.0);
-            if let Some(t) = g.texts.get(&text, &style) {
-                t.draw(c, x, 58.0, 1.0, 1.0);
-                x += t.w;
-            }
-        }
+    g.heading(c, 30.0, 28.0, "練習の結果");
+    let top = p
+        .attempts
+        .iter()
+        .filter(|a| a.passed == Some(true))
+        .map(|a| a.speed)
+        .max();
+    let (text, color) = if p.cleared {
+        ("クリア".to_owned(), Color32::from_rgb(0x70, 0xE0, 0x90))
+    } else if let Some(s) = top {
+        (format!("{s}% まで OK"), Color32::from_rgb(0xFF, 0xB8, 0x40))
+    } else {
+        let speed = p
+            .attempts
+            .last()
+            .map_or(p.options.speed.first_speed(), |a| a.speed);
+        (format!("{speed}% で練習"), Color32::WHITE)
+    };
+    let style = Style {
+        bold: true,
+        ..Style::edged(36.0, color, Color32::BLACK, 3.0)
+    };
+    if let Some(t) = g.texts.get(&text, &style) {
+        t.draw_fit(c, 30.0, 56.0, 250.0);
     }
-    g.dfp(c, x + 8.0, 80.0, &format!("/ {done}"), false);
 }
 
 /// 進み具合のバー（上流 `txGenerateProgressBarHelper`：64 区間を下から、425 ドットの高さに）
@@ -594,11 +601,11 @@ mod tests {
     }
 
     #[test]
-    fn practice_has_only_the_summary_page() {
+    fn practice_turns_to_the_lap_table() {
         let mut v = ResultView::new(info(0.0, None, true));
         assert_eq!(v.page, Page::Summary);
         v.turn();
-        assert_eq!(v.page, Page::Summary);
+        assert_eq!(v.page, Page::Analysis);
         let mut v = ResultView::new(info(70.0, None, false));
         assert_eq!(v.page, Page::Summary);
         v.turn();
