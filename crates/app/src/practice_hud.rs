@@ -59,6 +59,8 @@ const BAR_H: f32 = 540.0;
 /// レーンの場所（知らせの帯の幅）
 const LANES_X: f32 = 296.0;
 const LANES_W: f32 = 558.0;
+/// レーンの高さ（判定の線と打面まで。下のゲージとずれのバーは入れない）
+const LANES_H: f32 = 625.0;
 const LANES_CX: f32 = LANES_X + LANES_W / 2.0;
 /// 知らせの帯の上の端（Reverse では下の端から同じだけ離す）と高さ
 const BANNER_Y: f32 = 96.0;
@@ -100,7 +102,7 @@ pub fn draw(
     draw_card(c, g, p, now);
     draw_banner(c, g, p, now, px_per_ms, reverse);
     draw_count_in(c, g, p, now, reverse);
-    draw_break(c, g, p, now);
+    draw_break(c, g, p, now, reverse);
 }
 
 /// 高さ `h` の知らせの帯の上の端（チップが出てくる側から `BANNER_Y` 離す）
@@ -1043,7 +1045,7 @@ fn choice_text(p: &Practice, report: &SetReport, choice: Choice) -> (String, Str
 }
 
 /// セットの合間。音符の無いレーンの上に、まとめと次の一手
-fn draw_break(c: &Canvas, g: &mut Gfx, p: &Practice, now: f64) {
+fn draw_break(c: &Canvas, g: &mut Gfx, p: &Practice, now: f64, reverse: bool) {
     let Some(b) = &p.between else {
         return;
     };
@@ -1072,11 +1074,17 @@ fn draw_break(c: &Canvas, g: &mut Gfx, p: &Practice, now: f64) {
     let (x, top, w, full) = BREAK;
     let h = content.min(full);
     let y = top + (full - h) / 2.0;
+    // 上下逆なら、レーンもパネルも上下に映す（ゲージとずれのバーの側は暗くしない）
+    let (y, lanes_y) = if reverse {
+        (720.0 - y - h, 720.0 - LANES_H)
+    } else {
+        (y, 0.0)
+    };
     c.fill(
         LANES_X,
-        0.0,
+        lanes_y,
         LANES_W,
-        625.0,
+        LANES_H,
         Color32::from_black_alpha(200).gamma_multiply(alpha),
     );
     let accent = if cleared { OK_COLOR } else { CURRENT_COLOR };
