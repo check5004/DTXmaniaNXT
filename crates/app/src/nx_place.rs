@@ -46,6 +46,7 @@ pub fn of(id: ItemId) -> Option<&'static str> {
         | ItemId::ReconnectMidi
         | ItemId::SongOffset
         | ItemId::ApplyAdvice => NEW,
+        ItemId::Mixer => "System ＞ Audio",
         ItemId::Rescan => "System ＞ Reload Songs",
         ItemId::AddSongDir | ItemId::SongDir(_) => DTX_PATH,
         // 簡易設定・一時停止の操作の行（ほかのスレッドが足した行も、ここに足すまでは何も出さない）

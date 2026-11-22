@@ -6,15 +6,24 @@ use std::collections::HashMap;
 
 use dtx::{AutoChannel, Chart, DrumLane, LaneSound, TempoMap};
 
+use crate::audio::Bus;
+
 /// メトロノームの小節の頭と拍の音に使う番号（`#WAVzz` は 36 × 36 未満なので重ならない）
 pub const METRONOME_BAR: u16 = u16::MAX;
 pub const METRONOME_BEAT: u16 = u16::MAX - 1;
 
-/// 自動で鳴らす音の鳴らし方（上流の AutoVolume、BGM Sound、BGMAdjust）
+/// 自動で鳴らす音 `wav` の系統（メトロノームはメトロノーム、ほかは曲の音。上流の AutoVolume は系統の音量でかける）
+pub fn auto_bus(wav: u16) -> Bus {
+    if matches!(wav, METRONOME_BAR | METRONOME_BEAT) {
+        Bus::Click
+    } else {
+        Bus::Song
+    }
+}
+
+/// 自動で鳴らす音の鳴らし方（上流の BGM Sound、BGMAdjust）
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AutoMix {
-    /// 自動で鳴らす音の音量にかける数（0〜1）
-    pub gain: f32,
     /// BGM（0x01）を鳴らす
     pub bgm: bool,
     /// BGM と効果音（0x61〜0x92）をずらすミリ秒（プラスで遅く。上流 `t各自動再生音チップの再生時刻を変更する`）
@@ -25,7 +34,6 @@ impl Default for AutoMix {
     /// そのまま鳴らす
     fn default() -> Self {
         Self {
-            gain: 1.0,
             bgm: true,
             shift_ms: 0.0,
         }
@@ -55,8 +63,6 @@ pub struct ChartSounds {
     hidden: Vec<LaneSound>,
     /// 音ごとの音量と左右（どちらも既定なら入れない）
     mix: HashMap<u16, (f32, f32)>,
-    /// 自動で鳴らす音の音量にかける数
-    auto_gain: f32,
 }
 
 impl ChartSounds {
@@ -65,7 +71,7 @@ impl ChartSounds {
         Self::mixed(chart, tempo, AutoMix::default())
     }
 
-    /// `auto` の音量・BGM の有無・ずらしをかけて作る
+    /// `auto` の BGM の有無・ずらしをかけて作る
     pub fn mixed(chart: &Chart, tempo: &TempoMap, auto: AutoMix) -> Self {
         let mut mix = HashMap::new();
         for c in &chart.chips {
@@ -82,7 +88,6 @@ impl ChartSounds {
             empty_hits: tempo.empty_hit_sounds(chart),
             hidden: tempo.hidden_sounds(chart),
             mix,
-            auto_gain: mix_gain(auto.gain),
         };
         sounds.auto = tempo
             .auto_sounds(chart)
@@ -97,7 +102,7 @@ impl ChartSounds {
                 AutoVoice {
                     ms: a.ms + shift,
                     wav: a.wav,
-                    gain: gain * sounds.auto_gain,
+                    gain,
                     pan,
                     len_ms: a.cut_ms.map(|cut| cut - a.ms),
                 }
@@ -130,7 +135,7 @@ impl ChartSounds {
                 AutoVoice {
                     ms,
                     wav,
-                    gain: gain * self.auto_gain,
+                    gain,
                     pan,
                     len_ms: None,
                 }
@@ -174,15 +179,6 @@ impl ChartSounds {
             .filter(|s| s.lane == lane)
             .min_by(|a, b| (a.ms - ms).abs().total_cmp(&(b.ms - ms).abs()))
             .map(|s| (s.ms, s.wav))
-    }
-}
-
-/// 音量にかける数を 0〜1 に
-fn mix_gain(g: f32) -> f32 {
-    if g.is_finite() {
-        g.clamp(0.0, 1.0)
-    } else {
-        1.0
     }
 }
 
@@ -248,22 +244,24 @@ mod tests {
             &chart,
             &TempoMap::build(&chart),
             AutoMix {
-                gain: 0.8,
                 bgm: false,
                 shift_ms: 600.0,
             },
         );
         let got: Vec<(f64, u16, f32)> = s.auto.iter().map(|a| (a.ms, a.wav, a.gain)).collect();
-        // BGM は鳴らさず、効果音だけ 600ms 遅らせ、音量は 8 割（ギターはずらさない）
-        assert_eq!(got, vec![(2000.0, 3, 0.8), (3600.0, 2, 0.8)]);
+        // BGM は鳴らさず、効果音だけ 600ms 遅らせる（ギターはずらさない）。音量は出力で系統ごとにかける
+        assert_eq!(got, vec![(2000.0, 3, 1.0), (3600.0, 2, 1.0)]);
         let mut s = s;
         s.add_auto_notes([(2000.0, 4)]);
-        assert_eq!(s.auto[0].gain, 0.8);
+        assert_eq!(s.auto[0].gain, 1.0);
         s.add_metronome([(0.0, true), (500.0, false)]);
         assert_eq!(
             (s.auto[0].wav, s.auto[0].gain, s.auto[1].wav, s.auto[1].gain),
             (METRONOME_BAR, 1.0, METRONOME_BEAT, 0.4)
         );
+        // メトロノームはメトロノームの系統、ほかは曲の音
+        assert_eq!(auto_bus(s.auto[0].wav), Bus::Click);
+        assert_eq!(auto_bus(4), Bus::Song);
     }
 
     #[test]

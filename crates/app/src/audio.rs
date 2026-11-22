@@ -184,17 +184,61 @@ fn master_gain() -> f32 {
     f32::from(MASTER_VOLUME.load(Ordering::Relaxed)) / 100.0
 }
 
+/// 音の系統（音量ミキサーのつまみ 1 本ずつ）。混ぜる前に音ごとに系統の音量をかけ、混ぜたあとに全体の音量をかける
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Bus {
+    /// 曲の音。BGM、譜面の効果音、ギターとベース、自動で叩くレーン、選曲のプレビュー（上流の AutoVolume）
+    Song,
+    /// 叩いた音（上流の ChipVolume）
+    Hits,
+    /// メトロノームと、練習の数え始めのクリック
+    Click,
+    /// 画面の効果音（カーソル・決定・結果の声など、スキンの `Sounds`）
+    Se,
+}
+
+impl Bus {
+    pub const ALL: [Bus; 4] = [Bus::Song, Bus::Hits, Bus::Click, Bus::Se];
+
+    fn index(self) -> usize {
+        self as usize
+    }
+}
+
+/// 系統ごとの音量（0〜100 %）。設定を読むまでは設定の既定と同じ
+static BUS_VOLUME: [AtomicU8; 4] = [
+    AtomicU8::new(80),
+    AtomicU8::new(100),
+    AtomicU8::new(100),
+    AtomicU8::new(100),
+];
+
+/// 系統 `bus` の音量を変える（100 より大きければ 100）。鳴っている音にもすぐ効く
+pub fn set_bus_volume(bus: Bus, percent: u8) {
+    BUS_VOLUME[bus.index()].store(percent.min(100), Ordering::Relaxed);
+}
+
+/// 系統ごとの音量の倍率（0〜1、[`Bus::ALL`] の並び）
+fn bus_gains() -> [f32; 4] {
+    std::array::from_fn(|i| f32::from(BUS_VOLUME[i].load(Ordering::Relaxed)) / 100.0)
+}
+
+/// バッファの `j` フレーム目（全部で `n`）の音量。`from` から `to` へ直線で移し、最後のフレームで `to` になる
+fn ramp((from, to): (f32, f32), j: u64, n: u64) -> f32 {
+    if from == to {
+        to
+    } else {
+        from + (to - from) * (j + 1) as f32 / n.max(1) as f32
+    }
+}
+
 /// 混ぜた音（`channels` 個ずつ交互）に全体の音量をかけ、-1〜1 に収める。
 /// 音量が変わったときは、このバッファの中で `from` から `to` へ直線で移す（プツッという音を出さない）
 fn apply_master(data: &mut [f32], channels: usize, from: f32, to: f32) {
     let channels = channels.max(1);
-    let frames = (data.len() / channels).max(1) as f32;
+    let frames = (data.len() / channels) as u64;
     for (i, frame) in data.chunks_mut(channels).enumerate() {
-        let g = if from == to {
-            to
-        } else {
-            from + (to - from) * (i + 1) as f32 / frames
-        };
+        let g = ramp((from, to), i as u64, frames);
         for s in frame {
             *s = (*s * g).clamp(-1.0, 1.0);
         }
@@ -210,6 +254,7 @@ enum Command {
         gain: f32,
         pan: f32,
         tag: u8,
+        bus: Bus,
     },
     /// `tag` の音を短いフェードで止める（選曲のプレビューの音）
     Stop(u8),
@@ -234,10 +279,12 @@ struct Voice {
     fade_out: bool,
     /// 止めるときの目印（0 は止めない）
     tag: u8,
+    /// 音量をかける系統
+    bus: Bus,
 }
 
 impl Voice {
-    fn whole(sound: Sound, start: u64, gain: f32) -> Self {
+    fn whole(sound: Sound, start: u64, gain: f32, bus: Bus) -> Self {
         let len = sound.frames() as u64;
         Self {
             sound,
@@ -249,6 +296,7 @@ impl Voice {
             fade_in: false,
             fade_out: false,
             tag: 0,
+            bus,
         }
     }
 
@@ -256,8 +304,16 @@ impl Voice {
         self.start + self.len
     }
 
-    /// 出力の `frames_done` フレーム目から `n` フレームぶん（`data`）に足す。`fade` はフェードのフレーム数
-    fn mix(&self, data: &mut [f32], channels: usize, frames_done: u64, n: u64, fade: u64) {
+    /// 出力の `frames_done` フレーム目から `n` フレームぶん（`data`）に足す。`fade` はフェードのフレーム数。
+    /// `bus` は系統の音量（このバッファの頭と終わり。変わったときはバッファの中で直線で移す）
+    fn mix(
+        &self,
+        data: &mut [f32],
+        channels: usize,
+        (frames_done, n): (u64, u64),
+        fade: u64,
+        bus: (f32, f32),
+    ) {
         if self.start >= frames_done + n || self.end() <= frames_done {
             return;
         }
@@ -266,7 +322,9 @@ impl Voice {
         let (left, right) = pan_gains(self.pan);
         for f in from..to {
             let i = f - self.start;
-            let g = self.gain * envelope(i, self.len, fade, self.fade_in, self.fade_out);
+            let g = self.gain
+                * ramp(bus, f - frames_done, n)
+                * envelope(i, self.len, fade, self.fade_in, self.fade_out);
             let src = ((self.skip + i) * 2) as usize;
             let dst = ((f - frames_done) as usize) * channels;
             data[dst] += self.sound.0[src] * g * left;
@@ -359,6 +417,7 @@ impl AudioOut {
         let mut voices: Vec<Voice> = Vec::with_capacity(1024);
         let mut frames_done: u64 = 0;
         let mut master = master_gain();
+        let mut buses = bus_gains();
         let fade = (f64::from(rate) * FADE_SECONDS) as u64;
         let stream = device.build_output_stream(
             config,
@@ -374,8 +433,9 @@ impl AudioOut {
                             gain,
                             pan,
                             tag,
+                            bus,
                         } => {
-                            let mut v = Voice::whole(sound, frames_done, gain);
+                            let mut v = Voice::whole(sound, frames_done, gain, bus);
                             v.pan = pan;
                             v.tag = tag;
                             voices.push(v);
@@ -409,9 +469,18 @@ impl AudioOut {
                     }
                     return;
                 }
+                let to_buses = bus_gains();
                 for v in &voices {
-                    v.mix(data, channels, frames_done, n, fade);
+                    let b = v.bus.index();
+                    v.mix(
+                        data,
+                        channels,
+                        (frames_done, n),
+                        fade,
+                        (buses[b], to_buses[b]),
+                    );
                 }
+                buses = to_buses;
                 voices.retain(|v| v.end() > frames_done + n);
                 let to = master_gain();
                 apply_master(data, channels, master, to);
@@ -477,15 +546,15 @@ impl AudioOut {
     }
 
     /// 曲の時刻 `song_ms` に鳴らす
-    pub fn play_at(&mut self, sound: &Sound, song_ms: f64, gain: f32) {
+    pub fn play_at(&mut self, sound: &Sound, song_ms: f64, gain: f32, bus: Bus) {
         let frame = self.frame_at(song_ms).max(0.0) as u64;
         let _ = self
             .tx
-            .push(Command::At(Voice::whole(sound.clone(), frame, gain)));
+            .push(Command::At(Voice::whole(sound.clone(), frame, gain, bus)));
     }
 
     /// 音の一部を、置いたとおりに鳴らす（練習の周の BGM）。途中から始めるときと途中で切るときは短いフェードをかける
-    pub fn play_placed(&mut self, sound: &Sound, p: &Placement, gain: f32) {
+    pub fn play_placed(&mut self, sound: &Sound, p: &Placement, gain: f32, bus: Bus) {
         let rate = f64::from(self.rate);
         let mut start = self.frame_at(p.at_ms);
         let mut skip = p.skip_ms / 1000.0 * rate;
@@ -513,6 +582,7 @@ impl AudioOut {
             fade_in,
             fade_out: p.cut_end,
             tag: 0,
+            bus,
         }));
     }
 
@@ -522,19 +592,19 @@ impl AudioOut {
         let _ = self.tx.push(Command::CancelFrom(frame));
     }
 
-    /// 譜面の音を曲の時刻 `song_ms` に、音量 `gain` と左右 `pan` で鳴らす。`len_ms` があれば、そこで短いフェードで切る
-    /// （次の音で前の音を止めるチャンネル）
+    /// 譜面の音を曲の時刻 `song_ms` に、音量 `gain` と左右 `pan` で、系統 `bus` に鳴らす。
+    /// `len_ms` があれば、そこで短いフェードで切る（次の音で前の音を止めるチャンネル）
     pub fn play_chip(
         &mut self,
         sound: &Sound,
         song_ms: f64,
         len_ms: Option<f64>,
-        gain: f32,
-        pan: f32,
+        (gain, pan): (f32, f32),
+        bus: Bus,
     ) {
         let frame = self.frame_at(song_ms);
         let rate = f64::from(self.rate);
-        let mut v = Voice::whole(sound.clone(), frame.max(0.0) as u64, gain);
+        let mut v = Voice::whole(sound.clone(), frame.max(0.0) as u64, gain, bus);
         v.pan = pan;
         // 出力を始める前の部分は飛ばす
         if frame < 0.0 {
@@ -556,28 +626,24 @@ impl AudioOut {
         let _ = self.tx.push(Command::At(v));
     }
 
-    pub fn play_now(&mut self, sound: &Sound, gain: f32) {
-        self.play_tagged(sound, gain, 0);
+    pub fn play_now(&mut self, sound: &Sound, gain: f32, bus: Bus) {
+        self.play_tagged(sound, gain, 0, bus);
     }
 
     /// すぐ鳴らす（叩いた音）。左右 `pan` と、止めるときの目印 `tag`（0 は止めない）を付ける
-    pub fn play_now_panned(&mut self, sound: &Sound, gain: f32, pan: f32, tag: u8) {
+    pub fn play_now_panned(&mut self, sound: &Sound, (gain, pan): (f32, f32), tag: u8, bus: Bus) {
         let _ = self.tx.push(Command::Now {
             sound: sound.clone(),
             gain,
             pan,
             tag,
+            bus,
         });
     }
 
     /// すぐ鳴らし、`tag`（1 以上）を付けておく。`stop` で止められる
-    pub fn play_tagged(&mut self, sound: &Sound, gain: f32, tag: u8) {
-        let _ = self.tx.push(Command::Now {
-            sound: sound.clone(),
-            gain,
-            pan: 0.0,
-            tag,
-        });
+    pub fn play_tagged(&mut self, sound: &Sound, gain: f32, tag: u8, bus: Bus) {
+        self.play_now_panned(sound, (gain, 0.0), tag, bus);
     }
 
     /// `tag` を付けて鳴らした音を止める
@@ -654,14 +720,38 @@ mod tests {
             fade_in: false,
             fade_out: false,
             tag: 0,
+            bus: Bus::Song,
         };
         let mut out = vec![0.0; 6 * 2];
-        v.mix(&mut out, 2, 0, 6, 0);
+        v.mix(&mut out, 2, (0, 6), 0, (1.0, 1.0));
         assert_eq!(out, vec![0., 0., 2., 2., 3., 3., 4., 4., 0., 0., 0., 0.]);
         // 出力のバッファの途中から（4 フレーム目〜）
         let mut out = vec![0.0; 2 * 2];
-        v.mix(&mut out, 2, 3, 2, 0);
+        v.mix(&mut out, 2, (3, 2), 0, (1.0, 1.0));
         assert_eq!(out, vec![4., 4., 0., 0.]);
+    }
+
+    #[test]
+    fn the_bus_volume_scales_each_voice_and_glides_when_it_changes() {
+        let v = Voice::whole(Sound(Arc::from(vec![1.0f32; 8])), 0, 0.5, Bus::Hits);
+        // 系統の音量 80 % なら、音の音量 0.5 にさらにかける
+        let mut out = vec![0.0; 4 * 2];
+        v.mix(&mut out, 2, (0, 4), 0, (0.8, 0.8));
+        assert!(out.iter().all(|&s| (s - 0.4).abs() < 1e-6));
+        // 100 % から 0 % へ変えたバッファは、4 フレームで下げきる（プツッと切らない）
+        let mut out = vec![0.0; 4 * 2];
+        v.mix(&mut out, 2, (0, 4), 0, (1.0, 0.0));
+        assert_eq!(out, vec![0.375, 0.375, 0.25, 0.25, 0.125, 0.125, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn bus_volumes_are_kept_per_bus() {
+        set_bus_volume(Bus::Click, 40);
+        set_bus_volume(Bus::Se, 250);
+        let g = bus_gains();
+        assert_eq!(g[Bus::Click.index()], 0.4);
+        assert_eq!(g[Bus::Se.index()], 1.0);
+        set_bus_volume(Bus::Click, 100);
     }
 
     #[test]
@@ -682,10 +772,10 @@ mod tests {
         assert_eq!(pan_gains(-3.0), (1.0, 0.0));
         let v = Voice {
             pan: 0.5,
-            ..Voice::whole(Sound(Arc::from(vec![1.0f32; 4])), 0, 1.0)
+            ..Voice::whole(Sound(Arc::from(vec![1.0f32; 4])), 0, 1.0, Bus::Song)
         };
         let mut out = vec![0.0; 4];
-        v.mix(&mut out, 2, 0, 2, 0);
+        v.mix(&mut out, 2, (0, 2), 0, (1.0, 1.0));
         assert_eq!(out, vec![0.5, 1.0, 0.5, 1.0]);
     }
 
