@@ -264,7 +264,7 @@ DTXmaniaNXT は**非公式のファンメイドのプロジェクト**です。2
 
 ### 画像について
 
-画面の画像と動画は開発中のビルドで撮ったので、ダウンロードした版とは細かい所が違うことがあります。画面に出る曲はすべて、この画像のために用意したデモ曲で、実在の曲ではありません。「Neon Skyline」は DTX Web Editor のオリジナルのデモ曲、ほかの曲名はこの README のために作った短い譜面です。画面に出る記録も作ったものです。
+画面の画像と動画は開発中のビルドで撮ったので、ダウンロードした版とは細かい所が違うことがあります。画面に出る曲はすべて、この画像のために用意したデモ曲で、実在の曲ではありません。「Neon Skyline」は DTX Web Editor のオリジナルのデモ曲、ほかの曲名は、それを写して名前を付け替えた架空の曲です。画面に出る記録も作ったものです。
 
 ## 開発者向け
 
@@ -295,7 +295,7 @@ cargo test --all
 - 判定は画面のフレームではなく、MIDI の受信時刻と音の再生位置で行います。
 - DTX の読み方は上流の DTXMania のふるまいと [DTX Web Editor](https://github.com/check5004/dtx-mania-web-editor) の `src/dtx` に合わせます。読み方を変えたら `testdata/charts` に譜面と正解を足します。
 - リリース：`main` の `Cargo.toml` の `version` を上げると、Release のワークフローがインストーラー・自動更新の材料・macOS と Linux の版を作ります。[docs/releasing.md](docs/releasing.md) を見てください。
-- README の図：アニメーションする SVG は `python3 tools/readme/make_svgs.py` で作ります（標準ライブラリだけ、英語と日本語）。
+- README の図：アニメーションする SVG は `python3 tools/readme/make_svgs.py` で作ります（標準ライブラリだけ、英語と日本語）。演奏の動画は `tools/readme/player.py` で、譜面どおりにキーを送って人が叩いたように撮ります。
 
 PR はこのリポジトリ（check5004/DTXmaniaNXT）の `main` 宛てに出してください（フォーク元の上流ではなく）。
 
