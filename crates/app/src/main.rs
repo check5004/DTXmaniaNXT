@@ -7,6 +7,10 @@
 //! - 設定（曲のフォルダ・補正値など）は config.toml に残す
 //! - 画面は DTXManiaNX と同じ画像と配置で描く。画像と音はユーザーの PC にある NX のフォルダから読む
 //! - 起動するとタイトル。そこから選曲と設定へ進む
+//! - Windows のリリース版はコンソールの窓を出さない。ログは設定のフォルダの dtxmanianxt.log にも書く（`logging`）
+
+// 開発中（debug）は、ログが見えるようにコンソールを残す
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 mod audio;
 mod band;
@@ -17,6 +21,7 @@ mod game;
 mod gfx;
 mod history;
 mod loading;
+mod logging;
 mod midi;
 mod play_view;
 mod practice;
@@ -34,6 +39,7 @@ mod title_view;
 mod ui;
 
 use std::path::PathBuf;
+use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -248,6 +254,8 @@ struct App {
     title: TitleView,
     /// 終わる（次のイベントでループを抜ける）
     quit: bool,
+    /// 起動できなかったわけ（ループを抜けてから知らせる）
+    startup_error: Option<anyhow::Error>,
     /// 選曲画面で決めたもの（暗くし終えたら始める）
     decided: Option<Decided>,
     /// 選曲画面に重ねる、練習の決めごとのポップアップ
@@ -429,6 +437,7 @@ impl App {
             sfx,
             title: TitleView::new(),
             quit: false,
+            startup_error: None,
             decided: None,
             popup: None,
             wheel: 0.0,
@@ -1588,7 +1597,7 @@ impl ApplicationHandler for App {
         let window = match event_loop.create_window(attrs) {
             Ok(w) => Arc::new(w),
             Err(e) => {
-                log::error!("cannot open a window: {e}");
+                self.startup_error = Some(anyhow::Error::new(e).context("cannot open a window"));
                 event_loop.exit();
                 return;
             }
@@ -1596,7 +1605,7 @@ impl ApplicationHandler for App {
         match Gpu::new(window.clone()) {
             Ok(gpu) => self.gpu = Some(gpu),
             Err(e) => {
-                log::error!("cannot start the GPU: {e:#}");
+                self.startup_error = Some(e.context("cannot start the GPU"));
                 event_loop.exit();
                 return;
             }
@@ -1722,13 +1731,30 @@ impl SelectMouse {
     }
 }
 
-fn main() -> Result<()> {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+fn main() -> ExitCode {
+    let log = logging::init();
+    // 主のスレッドの panic は、ログに書いたうえで（`logging`）ここで受け、終わることを知らせる
+    let error = match std::panic::catch_unwind(run) {
+        Ok(Ok(())) => return ExitCode::SUCCESS,
+        Ok(Err(e)) => {
+            log::error!("{e:#}");
+            format!("{e:#}")
+        }
+        Err(_) => logging::main_panic().unwrap_or_else(|| "panic".to_owned()),
+    };
+    logging::tell_user(&error, log.as_deref());
+    ExitCode::FAILURE
+}
+
+fn run() -> Result<()> {
     let _ = host_us();
     let arg = std::env::args_os().nth(1).map(PathBuf::from);
     let event_loop = EventLoop::new()?;
     event_loop.set_control_flow(ControlFlow::Poll);
     let mut app = App::new(arg);
     event_loop.run_app(&mut app)?;
-    Ok(())
+    match app.startup_error.take() {
+        Some(e) => Err(e),
+        None => Ok(()),
+    }
 }
