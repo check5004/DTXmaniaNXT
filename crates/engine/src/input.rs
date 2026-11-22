@@ -211,7 +211,7 @@ impl Preset {
         match self {
             Self::Roland => "Roland",
             Self::GeneralMidi => "GM",
-            Self::Empty => "None",
+            Self::Empty => "なし",
         }
     }
 

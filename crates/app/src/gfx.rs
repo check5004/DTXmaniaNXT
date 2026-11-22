@@ -637,6 +637,22 @@ pub const DFP: Glyphs<'static> = Glyphs {
 };
 
 impl Gfx {
+    /// 見出しを日本語で描く（DFP の文字は英数字しか無いので）。DFP の文字と同じ高さに、白い太字に黒い縁で。
+    /// 描いた幅を返す
+    pub fn heading(&mut self, c: &Canvas, x: f32, y: f32, text: &str) -> f32 {
+        let style = crate::text::Style {
+            bold: true,
+            ..crate::text::Style::edged(20.0, Color32::WHITE, Color32::BLACK, 2.0)
+        };
+        match self.texts.get(text, &style) {
+            Some(t) => {
+                t.draw(c, x, y + 3.0, 1.0, 1.0);
+                t.w
+            }
+            None => 0.0,
+        }
+    }
+
     /// NX の英数字の文字で描く（ポップアップのメニューなど）。スキンに無ければふつうの文字で
     pub fn dfp(&mut self, c: &Canvas, x: f32, y: f32, text: &str, emphasized: bool) {
         let file = if emphasized {

@@ -1,8 +1,9 @@
 //! 設定の画面（上流 `CStageConfig` と `CActConfigList`）。
-//! スキンの 4_ の画像で、左のメニュー（System / Drums / Exit）と、右の項目の一覧、説明のパネルを出す。
+//! スキンの 4_ の画像で、左のメニュー（システム / ドラム / 戻る）と、右の項目の一覧、説明のパネルを出す。
 //! 項目は NXT のもの（曲のフォルダ、入力と表示の補正、スクロールの速さ、パッドの割り当てなど）。
-//! 割り当ては入力機器（MIDI のポートと PC のキーボード）ごと。Drums の「Drums Keys」でレーンごとに、叩いたパッドか
-//! 押したキーを足し、「MIDI Devices」で機器ごとの出発点（Roland / GM / なし）・チャンネル・使うかどうかを決める。
+//! 割り当ては入力機器（MIDI のポートと PC のキーボード）ごと。ドラムの「パッドの割り当て」でレーンごとに、叩いたパッドか
+//! 押したキーを足し、「MIDI 機器」で機器ごとのプリセット（Roland / GM / なし）・チャンネル・使うかどうかを決める。
+//! 項目の名前と値は日本語で出す（上流は英語の名前だが、日本人に分かりにくいため。ユーザーの依頼 2026-11-22）。
 //! 出入りは NX v2.0 と同じくシャッター（`shutter`）で、白いフェードは使わない。
 //!
 //! 操作は上流と同じ。↑↓（HT / LT）で選び、Enter（CY / RD）で決め、Esc（LC）で戻る。
@@ -20,13 +21,13 @@ use winit::keyboard::KeyCode;
 
 use crate::config::{Config, MASTER_VOLUME_STEP};
 use crate::gfx::{Canvas, Gfx, src};
-use crate::inputs::LaneSource;
+use crate::inputs::{LaneSource, lane_label};
 use crate::sfx::Se;
 use crate::text::Style;
 use crate::title_view::draw_scanning;
 
 /// 左のメニュー（上流は System / Drums / Guitar / Bass / Exit。ギターとベースは扱わない）
-const MENU: [&str; 3] = ["System", "Drums", "Exit"];
+const MENU: [&str; 3] = ["システム", "ドラム", "戻る"];
 const MENU_EXIT: usize = 2;
 
 /// 項目の箱の左と、選んでいる行（0 行目）の上。行の間は 67（上流 `pt新パネルの基本座標`）
@@ -94,7 +95,7 @@ pub enum Setting {
 /// 一覧の項目
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ItemId {
-    /// `<< ReturnTo Menu`
+    /// `<< メニューに戻る`
     Return,
     AddSongDir,
     SongDir(usize),
@@ -149,9 +150,9 @@ pub struct Item {
 pub enum List {
     System,
     Drums,
-    /// Drums の中のパッドの割り当て
+    /// ドラムの中のパッドの割り当て
     DrumsKeys,
-    /// Drums の中の MIDI の機器の一覧
+    /// ドラムの中の MIDI の機器の一覧
     MidiDevices,
     /// MIDI の機器 1 つ（ポートの何番目か）の設定
     Device(usize),
@@ -202,18 +203,18 @@ pub struct ConfigInfo<'a> {
 }
 
 /// パッドの割り当ての一覧の並び（上流 `tSetupItemList_KeyAssignDrums`）
-const PADS: [(DrumLane, &str); 11] = [
-    (DrumLane::LC, "LeftCymbal"),
-    (DrumLane::HH, "HiHat(Close)"),
-    (DrumLane::HHO, "HiHat(Open)"),
-    (DrumLane::SD, "Snare"),
-    (DrumLane::BD, "Bass"),
-    (DrumLane::HT, "HighTom"),
-    (DrumLane::LT, "LowTom"),
-    (DrumLane::FT, "FloorTom"),
-    (DrumLane::CY, "RightCymbal"),
-    (DrumLane::RD, "RideCymbal"),
-    (DrumLane::LP, "LeftPedal"),
+const PADS: [DrumLane; 11] = [
+    DrumLane::LC,
+    DrumLane::HH,
+    DrumLane::HHO,
+    DrumLane::SD,
+    DrumLane::BD,
+    DrumLane::HT,
+    DrumLane::LT,
+    DrumLane::FT,
+    DrumLane::CY,
+    DrumLane::RD,
+    DrumLane::LP,
 ];
 
 fn on_off(b: bool) -> String {
@@ -239,7 +240,7 @@ fn item(id: ItemId, name: &str, value: String, desc: String) -> Item {
 fn return_item() -> Item {
     item(
         ItemId::Return,
-        "<< ReturnTo Menu",
+        "<< メニューに戻る",
         String::new(),
         "左側のメニューに戻ります。".to_owned(),
     )
@@ -250,7 +251,7 @@ fn channel_label(ch: u8) -> String {
     if (1..=16).contains(&ch) {
         ch.to_string()
     } else {
-        "ALL".to_owned()
+        "すべて".to_owned()
     }
 }
 
@@ -259,7 +260,7 @@ fn device_state(d: &DeviceRow) -> String {
     if d.disabled {
         "OFF".to_owned()
     } else if !d.open {
-        "Error".to_owned()
+        "開けません".to_owned()
     } else {
         d.preset.label().to_owned()
     }
@@ -273,7 +274,7 @@ fn device_summary(d: &DeviceRow) -> String {
         format!("開けません（ほかのアプリが使っているかも）: {e}")
     } else {
         format!(
-            "{} / ch {} / 変更 {} 個",
+            "{} / チャンネル {} / 変更 {} 個",
             d.preset.label(),
             channel_label(d.channel),
             d.changes
@@ -305,7 +306,7 @@ pub fn items(list: List, info: &ConfigInfo<'_>) -> Vec<Item> {
         List::System => {
             v.push(item(
                 ItemId::AddSongDir,
-                "Add Song Folder",
+                "曲のフォルダを足す",
                 String::new(),
                 "曲のフォルダを足します。Enter でフォルダを選びます。窓にドロップしても足せます。"
                     .to_owned(),
@@ -313,7 +314,7 @@ pub fn items(list: List, info: &ConfigInfo<'_>) -> Vec<Item> {
             for (i, d) in c.song_dirs.iter().enumerate() {
                 v.push(item(
                     ItemId::SongDir(i),
-                    &format!("Song Folder {}", i + 1),
+                    &format!("曲のフォルダ {}", i + 1),
                     folder_name(d),
                     format!(
                         "{}\nEnter で一覧から外します（ファイルは消しません）。",
@@ -323,7 +324,7 @@ pub fn items(list: List, info: &ConfigInfo<'_>) -> Vec<Item> {
             }
             v.push(item(
                 ItemId::Rescan,
-                "Reload Songs",
+                "曲を探し直す",
                 match info.scanning {
                     Some(p) => format!("{} 曲…", p.songs),
                     None => format!("{} 曲", info.song_count),
@@ -332,7 +333,7 @@ pub fn items(list: List, info: &ConfigInfo<'_>) -> Vec<Item> {
             ));
             v.push(item(
                 ItemId::Value(Setting::MasterVolume),
-                "MasterVolume",
+                "全体の音量",
                 c.master_volume().to_string(),
                 format!(
                     "全体の音量です。0 が無音で、100 が最大です。\nEnter を押してから ↑↓ で {MASTER_VOLUME_STEP} ずつ変えます。"
@@ -340,44 +341,44 @@ pub fn items(list: List, info: &ConfigInfo<'_>) -> Vec<Item> {
             ));
             v.push(item(
                 ItemId::Value(Setting::StageFailed),
-                "StageFailed",
+                "ゲージ切れで中断",
                 on_off(c.stage_failed()),
-                "ON にするとゲージがなくなった時に STAGE FAILED となり演奏が中断されます。練習では中断しません。"
+                "ON にすると、ゲージがなくなった時に STAGE FAILED（演奏失敗）となり、演奏が中断されます。練習では中断しません。"
                     .to_owned(),
             ));
             v.push(item(
                 ItemId::Value(Setting::ShowLagTime),
-                "ShowLagTime",
+                "ずれの表示",
                 match c.show_lag_time {
                     0 => "OFF",
-                    2 => "GREAT-",
+                    2 => "PERFECT 以外",
                     _ => "ON",
                 }
                 .to_owned(),
-                "判定の下に、ちょうどの時刻からのずれ（ms）を出します。\nGREAT- は PERFECT 以外のときだけ出します。"
+                "判定の下に、ちょうどの時刻からのずれ（ms）を出します。\n「PERFECT 以外」は PERFECT でなかったときだけ出します。"
                     .to_owned(),
             ));
             v.push(item(
                 ItemId::Value(Setting::ShowLagTimeColor),
-                "ShowLagTimeColor",
+                "ずれの色",
                 (if c.show_lag_time_color == 1 {
-                    "TYPE-B"
+                    "早いと赤"
                 } else {
-                    "TYPE-A"
+                    "早いと青"
                 })
                 .to_owned(),
-                "ずれの数字の色です。\nTYPE-A: 早いと青、遅いと赤。\nTYPE-B: 早いと赤、遅いと青。"
+                "ずれの数字の色です。\n早いと青: 早いと青、遅いと赤。\n早いと赤: 早いと赤、遅いと青。"
                     .to_owned(),
             ));
             v.push(item(
                 ItemId::Value(Setting::ShowLagHitCount),
-                "ShowLagHitCount",
+                "早い・遅いの数",
                 on_off(c.show_lag_hit_count),
                 "ON にすると、結果の画面に早かった数と遅かった数を出します。".to_owned(),
             ));
             v.push(item(
                 ItemId::Value(Setting::AutoUpdate),
-                "AutoUpdate",
+                "自動更新",
                 on_off(c.auto_update),
                 "ON にすると、起動したときに新しい版を GitHub から落とし、終了したときに入れ替えます。\nSetup.exe で入れたときだけ働きます。切り替えは次の起動から効きます。"
                     .to_owned(),
@@ -386,14 +387,14 @@ pub fn items(list: List, info: &ConfigInfo<'_>) -> Vec<Item> {
         List::Drums => {
             v.push(item(
                 ItemId::Value(Setting::ScrollSpeed),
-                "ScrollSpeed",
+                "譜面の速さ",
                 format!("{:.2}", c.scroll_px_per_ms),
                 "ノーツの流れるスピードです。数字が大きいほど速くなり、ノーツの間隔が広がります。演奏中は ↑↓。"
                     .to_owned(),
             ));
             v.push(item(
                 ItemId::Value(Setting::InputAdjust),
-                "InputAdjust",
+                "入力の補正",
                 format!("{:+.0} ms", c.input_offset_ms),
                 format!(
                     "叩いた時刻の補正です。結果の画面のずれが遅めなら大きく、早めなら小さくします。\n-{0:.0} ～ {0:.0}ms。演奏中は - と =。",
@@ -402,7 +403,7 @@ pub fn items(list: List, info: &ConfigInfo<'_>) -> Vec<Item> {
             ));
             v.push(item(
                 ItemId::Value(Setting::VisualAdjust),
-                "VisualAdjust",
+                "表示の補正",
                 format!("{:+.0} ms", c.visual_offset_ms),
                 format!(
                     "譜面の表示の補正です。音と見た目がずれて見えるときに直します。\n-{0:.0} ～ {0:.0}ms。演奏中は [ と ]。",
@@ -411,7 +412,7 @@ pub fn items(list: List, info: &ConfigInfo<'_>) -> Vec<Item> {
             ));
             v.push(item(
                 ItemId::Value(Setting::HitSound),
-                "HitSound",
+                "叩いた音",
                 on_off(c.drum_sounds),
                 format!(
                     "叩いたときに譜面の音を鳴らします。電子ドラムの音源の音を使うなら OFF にします。演奏中は {}。",
@@ -420,7 +421,7 @@ pub fn items(list: List, info: &ConfigInfo<'_>) -> Vec<Item> {
             ));
             v.push(item(
                 ItemId::DrumsKeys,
-                "Drums Keys",
+                "パッドの割り当て",
                 String::new(),
                 "レーンごとに、叩くパッド（MIDI のノート番号）とキーボードのキーを割り当てます。機器ごとに別々に持ちます。"
                     .to_owned(),
@@ -428,16 +429,16 @@ pub fn items(list: List, info: &ConfigInfo<'_>) -> Vec<Item> {
             let open = info.devices.iter().filter(|d| d.open).count();
             v.push(item(
                 ItemId::MidiDevices,
-                "MIDI Devices",
+                "MIDI 機器",
                 format!("{open} 台"),
                 format!(
-                    "MIDI の機器ごとに、割り当ての出発点、受けるチャンネル、使うかどうかを決めます。\n{}",
+                    "MIDI の機器ごとに、割り当てのプリセット、受けるチャンネル、使うかどうかを決めます。\n{}",
                     device_names(&info.devices)
                 ),
             ));
         }
         List::DrumsKeys => {
-            for (lane, name) in PADS {
+            for lane in PADS {
                 let sources = info.lanes.get(&lane).map_or(&[][..], Vec::as_slice);
                 let value = if sources.is_empty() {
                     "-".to_owned()
@@ -456,15 +457,15 @@ pub fn items(list: List, info: &ConfigInfo<'_>) -> Vec<Item> {
                     desc.push_str("割り当てがありません。\n");
                 }
                 desc.push_str("Enter のあとパッドを叩くかキーを押すと足します。Delete でこのレーンの割り当てを全部外します。");
-                v.push(item(ItemId::Pad(lane), name, value, desc));
+                v.push(item(ItemId::Pad(lane), lane_label(lane), value, desc));
             }
             let changed = c.has_custom_assignments();
             v.push(item(
                 ItemId::ResetPads,
-                "Reset Keys",
+                "割り当てを戻す",
                 String::new(),
                 format!(
-                    "ここで変えた割り当てを全部消して、機器ごとの出発点とキーボードの既定に戻します。{}",
+                    "ここで変えた割り当てを全部消して、機器ごとのプリセットとキーボードの既定に戻します。{}",
                     if changed { "" } else { "\n（今は変えていません）" }
                 ),
             ));
@@ -484,7 +485,7 @@ pub fn items(list: List, info: &ConfigInfo<'_>) -> Vec<Item> {
             }
             v.push(item(
                 ItemId::ReconnectMidi,
-                "Rescan Devices",
+                "機器を探し直す",
                 if info.devices.is_empty() {
                     "なし".to_owned()
                 } else {
@@ -500,34 +501,34 @@ pub fn items(list: List, info: &ConfigInfo<'_>) -> Vec<Item> {
             };
             v.push(item(
                 ItemId::DeviceInfo(i),
-                "Device",
+                "機器",
                 d.name.clone(),
                 format!("{}\n{}", d.name, device_summary(d)),
             ));
             v.push(item(
                 ItemId::DeviceUse(i),
-                "Use",
+                "使う",
                 on_off(!d.disabled),
                 "OFF にすると、このアプリはこの機器を開きません（ほかのアプリで使うときなど）。"
                     .to_owned(),
             ));
             v.push(item(
                 ItemId::DevicePreset(i),
-                "Preset",
+                "プリセット",
                 d.preset.label().to_owned(),
-                "割り当ての出発点です。Enter で替えます。\nRoland: V-Drums の既定（リムやエッジも）。\nGM: General MIDI のドラムの番号。\nNone: 何もなし。"
+                "割り当ての出発点です。Enter で替えます。\nRoland: V-Drums の既定（リムやエッジも）。\nGM: General MIDI のドラムの番号。\nなし: 何も割り当てない。"
                     .to_owned(),
             ));
             v.push(item(
                 ItemId::DeviceChannel(i),
-                "Channel",
+                "チャンネル",
                 channel_label(d.channel),
-                "受ける MIDI のチャンネルです。ALL ならどのチャンネルでも受けます。\nEnter を押してから ↑↓ で変えます。"
+                "受ける MIDI のチャンネルです。「すべて」ならどのチャンネルでも受けます。\nEnter を押してから ↑↓ で変えます。"
                     .to_owned(),
             ));
             v.push(item(
                 ItemId::DeviceMinVelocity(i),
-                "MinVelocity",
+                "最小ベロシティ",
                 if d.min_velocity == 0 {
                     "OFF".to_owned()
                 } else {
@@ -538,13 +539,13 @@ pub fn items(list: List, info: &ConfigInfo<'_>) -> Vec<Item> {
             ));
             v.push(item(
                 ItemId::DeviceReset(i),
-                "Reset Keys",
+                "割り当てを戻す",
                 if d.changes == 0 {
                     String::new()
                 } else {
                     format!("{} 個", d.changes)
                 },
-                "この機器で変えた割り当てを消して、出発点に戻します。".to_owned(),
+                "この機器で変えた割り当てを消して、プリセットに戻します。".to_owned(),
             ));
         }
     }
@@ -585,7 +586,7 @@ impl Response {
 
 pub struct ConfigView {
     menu: usize,
-    /// 出している一覧（Exit を選んでいるあいだは前の一覧のまま）
+    /// 出している一覧（「戻る」を選んでいるあいだは前の一覧のまま）
     list: List,
     /// 項目の一覧の側を操作している（でなければ左のメニュー）
     focus_list: bool,
@@ -1012,25 +1013,43 @@ fn draw_description(c: &Canvas, g: &mut Gfx, desc: &str) {
     }
 }
 
-/// 「パッドを叩いてください」の窓（上流 `CActConfigKeyAssign`：(509, 215)）
+/// 「パッドを叩いてください」の窓（上流 `CActConfigKeyAssign`：(509, 215)）。
+/// スキンの絵の文字は英語（Hit key to assign. (Cancel: ESC)）なので、枠だけ使い、中を塗って日本語で書く
 fn draw_hit_key_dialog(c: &Canvas, g: &mut Gfx) {
+    const X: f32 = 509.0;
+    const Y: f32 = 215.0;
     let t = g
         .skin
         .tex_optional("Graphics/ScreenConfig hit key to assign dialog.png")
         .or_else(|| g.skin.tex("Graphics/4_hit key to assign dialog.png"));
-    match t {
-        Some(t) => c.draw(&t, 509.0, 215.0),
+    let (w, h) = match &t {
+        Some(t) => {
+            c.draw(t, X, Y);
+            // 縁（外から 6 ピクセル）の内側を、絵の地と同じ灰色で塗る
+            c.fill(
+                X + 8.0,
+                Y + 8.0,
+                t.w - 16.0,
+                t.h - 16.0,
+                Color32::from_gray(52),
+            );
+            (t.w, t.h)
+        }
         None => {
-            c.fill(509.0, 215.0, 200.0, 100.0, Color32::from_black_alpha(220));
-            let style = Style::plain(18.0, Color32::WHITE);
-            for (i, line) in ["パッドを叩くかキーを押す", "（Esc で取りやめ）"]
-                .iter()
-                .enumerate()
-            {
-                if let Some(t) = g.texts.get(line, &style) {
-                    t.draw(c, 609.0 - t.w / 2.0, 240.0 + i as f32 * 26.0, 1.0, 1.0);
-                }
-            }
+            c.fill(X, Y, 128.0, 100.0, Color32::from_black_alpha(220));
+            (128.0, 100.0)
+        }
+    };
+    let style = Style {
+        bold: true,
+        ..Style::plain(15.0, Color32::WHITE)
+    };
+    let lines = ["パッドを叩くか", "キーを押す", "Esc で取りやめ"];
+    let top = Y + (h - lines.len() as f32 * 20.0) / 2.0;
+    for (i, line) in lines.iter().enumerate() {
+        if let Some(t) = g.texts.get(line, &style) {
+            let x = X + ((w - t.w) / 2.0).max(10.0);
+            t.draw_fit(c, x, top + i as f32 * 20.0, w - 20.0);
         }
     }
 }
@@ -1050,7 +1069,7 @@ mod tests {
                         inputs: vec!["38".to_owned(), "40".to_owned()],
                     },
                     LaneSource {
-                        source: "Keyboard".to_owned(),
+                        source: crate::inputs::KEYBOARD.to_owned(),
                         inputs: vec!["D".to_owned()],
                     },
                 ],
@@ -1066,7 +1085,7 @@ mod tests {
                     channel: 0,
                     min_velocity: 0,
                     changes: 0,
-                    last: Some("ch10 note 38 vel 100 → SD".to_owned()),
+                    last: Some("ch10 ノート 38 ベロシティ 100 → スネア".to_owned()),
                 },
                 DeviceRow {
                     name: "Finger Drum Pad".to_owned(),
@@ -1094,7 +1113,13 @@ mod tests {
             .map(|i| i.name)
             .collect();
         assert!(!names.iter().any(|n| n.contains("NX")));
-        assert!(names.contains(&"ShowLagTime".to_owned()));
+        assert!(names.contains(&"ずれの表示".to_owned()));
+        // 項目の名前は日本語（英字だけの名前は無い）
+        assert!(
+            names
+                .iter()
+                .all(|n| !n.chars().all(|ch| ch.is_ascii_alphabetic() || ch == ' '))
+        );
         let lag = items(List::System, &info(&c))
             .into_iter()
             .find(|i| i.id == ItemId::Value(Setting::ShowLagTime))
@@ -1125,7 +1150,8 @@ mod tests {
             .unwrap();
         // 機器ごとに並べる
         assert_eq!(sd.value, "38 40 / D");
-        assert!(sd.desc.starts_with("V51: 38, 40\nKeyboard: D\n"));
+        assert_eq!(sd.name, "スネア");
+        assert!(sd.desc.starts_with("V51: 38, 40\nキーボード: D\n"));
     }
 
     #[test]
@@ -1133,11 +1159,11 @@ mod tests {
         let config = Config::default();
         let list = items(List::Drums, &info(&config));
         let mut v = ready();
-        // メニューの Drums から一覧へ
+        // メニューのドラムから一覧へ
         v.input(ConfigInput::Down, &list);
         assert_eq!(v.list(), List::Drums);
         v.input(ConfigInput::Decide, &list);
-        // ScrollSpeed を選んで値を変える状態に
+        // 譜面の速さを選んで値を変える状態に
         v.input(ConfigInput::Down, &list);
         assert_eq!(list[v.cursor].id, ItemId::Value(Setting::ScrollSpeed));
         assert_eq!(v.input(ConfigInput::Decide, &list).action, None);
@@ -1162,7 +1188,7 @@ mod tests {
             .iter()
             .position(|i| i.id == ItemId::Value(Setting::MasterVolume))
             .unwrap();
-        assert_eq!(list[at].name, "MasterVolume");
+        assert_eq!(list[at].name, "全体の音量");
         assert_eq!(list[at].value, "50");
         let mut v = ready();
         v.input(ConfigInput::Decide, &list);
@@ -1234,7 +1260,11 @@ mod tests {
         let list = items(List::MidiDevices, &info);
         assert_eq!(list[1].name, "V51");
         assert_eq!(list[1].value, "Roland");
-        assert!(list[1].desc.contains("最後: ch10 note 38 vel 100 → SD"));
+        assert!(
+            list[1]
+                .desc
+                .contains("最後: ch10 ノート 38 ベロシティ 100 → スネア")
+        );
         // 2 台目（FGDP）の設定へ
         v.input(ConfigInput::Down, &list);
         v.input(ConfigInput::Down, &list);
@@ -1245,19 +1275,19 @@ mod tests {
         assert_eq!(
             names,
             [
-                "<< ReturnTo Menu",
-                "Device",
-                "Use",
-                "Preset",
-                "Channel",
-                "MinVelocity",
-                "Reset Keys"
+                "<< メニューに戻る",
+                "機器",
+                "使う",
+                "プリセット",
+                "チャンネル",
+                "最小ベロシティ",
+                "割り当てを戻す"
             ]
         );
         assert_eq!(dev[3].value, "GM");
         assert_eq!(dev[4].value, "10");
         assert_eq!(dev[5].value, "8");
-        // 出発点は Enter で替える
+        // プリセットは Enter で替える
         v.cursor = 3;
         assert_eq!(
             v.input(ConfigInput::Decide, &dev).action,
@@ -1290,7 +1320,7 @@ mod tests {
         let mut v = ready();
         v.input(ConfigInput::Up, &list);
         assert_eq!(v.menu, MENU_EXIT);
-        // Exit を選んでも一覧は前のまま
+        // 「戻る」を選んでも一覧は前のまま
         assert_eq!(v.list(), List::System);
         assert_eq!(
             v.input(ConfigInput::Decide, &list).action,

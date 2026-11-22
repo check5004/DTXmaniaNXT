@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use dtx::DrumLane;
 use egui::{Align2, Color32, FontId, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, Vec2};
 use engine::analysis::{NOTABLE_MEAN_MS, Subdivision, Tendency, WeakPhrase, notable_tendencies};
+use engine::input::{Articulation, Pad};
 use engine::judge::Judgement;
 use engine::practice::Section;
 
@@ -13,6 +14,7 @@ use crate::config::Config;
 use crate::game::{Outcome, Play, WeakMap};
 use crate::gfx::{Canvas, Gfx};
 use crate::history::{OvercomeCheck, TENDENCY_MIN_HITS, TENDENCY_SESSIONS};
+use crate::inputs::lane_label;
 
 fn judgement_label(j: Judgement) -> (&'static str, Color32) {
     match j {
@@ -137,7 +139,7 @@ pub fn draw_result(
                 draw_tendencies(ui, &o.tendencies);
                 ui.add_space(24.0);
                 if ui
-                    .button("選曲に戻る（Enter、ドラムは CY か RD）")
+                    .button("選曲に戻る（Enter、ドラムは右シンバルかライド）")
                     .clicked()
                 {
                     actions.push(ResultAction::Back);
@@ -162,7 +164,7 @@ const PAGE_EDGE: Color32 = Color32::from_gray(150);
 const PAGE_HEADING_H: f32 = 30.0;
 
 /// 結果の 2 ページ目の枠。NX の結果の背景の上に、ほかの NX の板と同じ暗い板を真ん中に置き、
-/// 左上に DFP の文字で見出しを出す
+/// 左上に DFP と同じ高さの日本語の見出しを出す
 fn result_page(ui: &mut egui::Ui, g: &mut Gfx, body: impl FnOnce(&mut egui::Ui)) {
     egui::CentralPanel::default()
         .frame(egui::Frame::NONE.inner_margin(egui::Margin {
@@ -189,7 +191,7 @@ fn result_page(ui: &mut egui::Ui, g: &mut Gfx, body: impl FnOnce(&mut egui::Ui))
                             Sense::hover(),
                         );
                         let at = c.to_nx(rect.min);
-                        g.dfp(&c, at.x - 2.0, at.y - 8.0, "ANALYSIS", false);
+                        g.heading(&c, at.x - 2.0, at.y - 8.0, "結果の分析");
                         // 背景が透けるので、文字を明るくする（弱い文字はこれを薄めた色になる）
                         ui.visuals_mut().override_text_color = Some(Color32::from_gray(225));
                         body(ui);
@@ -250,8 +252,8 @@ fn draw_tendencies(ui: &mut egui::Ui, t: &[Tendency]) {
     for n in &notable {
         ui.label(
             RichText::new(format!(
-                "{} の{}{}: 平均 {:.0}ms {}（ばらつき ±{:.0}ms、{} 打）",
-                n.lane.name(),
+                "{}の{}{}: 平均 {:.0}ms {}（ばらつき ±{:.0}ms、{} 打）",
+                lane_label(n.lane),
                 // 数字で始まるときは間をあける
                 if sub_name(n.sub).starts_with(|c: char| c.is_ascii_digit()) {
                     " "
@@ -284,7 +286,7 @@ fn draw_tendencies(ui: &mut egui::Ui, t: &[Tendency]) {
                     }
                     ui.end_row();
                     for lane in lanes {
-                        ui.label(RichText::new(lane.name()).strong());
+                        ui.label(RichText::new(lane_label(lane)).strong());
                         for sub in Subdivision::ALL {
                             match t.iter().find(|x| x.lane == lane && x.sub == sub) {
                                 Some(x) => {
@@ -472,11 +474,11 @@ fn play_info(ui: &mut egui::Ui, o: &PlayOverlay<'_>, s: f32) {
         o.config.visual_offset_ms
     )));
     ui.label(small(format!(
-        "速さ {:.2}（↑ / ↓）",
+        "譜面の速さ {:.2}（↑ / ↓）",
         o.config.scroll_px_per_ms
     )));
     ui.label(small(format!(
-        "譜面の音 {}（{}）",
+        "叩いた音 {}（{}）",
         if play.drum_sounds {
             "鳴らす"
         } else {
@@ -495,12 +497,12 @@ fn play_info(ui: &mut egui::Ui, o: &PlayOverlay<'_>, s: f32) {
             ui.label(small(format!(
                 "最後の入力 {} / {} / {}",
                 i.source,
-                opt(i.pad),
-                opt(i.articulation)
+                i.pad.map_or("-", pad_label),
+                i.articulation.map_or("-", articulation_label)
             )));
             ui.label(small(format!(
-                "レーン {} / ベロシティ {} / HH ペダル {}",
-                i.lane.map_or("-", |l| l.name()),
+                "レーン {} / ベロシティ {} / ハイハットのペダル {}",
+                i.lane.map_or("-", lane_label),
                 i.velocity,
                 opt(i.hh_pedal)
             )));
@@ -510,9 +512,39 @@ fn play_info(ui: &mut egui::Ui, o: &PlayOverlay<'_>, s: f32) {
         }
     }
     ui.label(small(format!(
-        "今の HH ペダル {}（0 で開、127 で閉）",
+        "今のハイハットのペダル {}（0 で開、127 で閉）",
         opt(play.hh_pedal)
     )));
+}
+
+/// 機器のパッドの名前（演奏中の情報の窓に出す）
+fn pad_label(p: Pad) -> &'static str {
+    match p {
+        Pad::Kick => "キック",
+        Pad::Snare => "スネア",
+        Pad::Tom1 => "タム 1",
+        Pad::Tom2 => "タム 2",
+        Pad::Tom3 => "タム 3",
+        Pad::Tom4 => "タム 4",
+        Pad::HiHat => "ハイハット",
+        Pad::HiHatPedal => "ハイハットのペダル",
+        Pad::Crash1 => "クラッシュ 1",
+        Pad::Crash2 => "クラッシュ 2",
+        Pad::Ride => "ライド",
+        Pad::Aux => "AUX",
+    }
+}
+
+/// 叩き方の名前（演奏中の情報の窓に出す）
+fn articulation_label(a: Articulation) -> &'static str {
+    match a {
+        Articulation::Head => "ヘッド",
+        Articulation::Rim => "リム",
+        Articulation::CrossStick => "クロススティック",
+        Articulation::Bow => "ボウ",
+        Articulation::Edge => "エッジ",
+        Articulation::Bell => "ベル",
+    }
 }
 
 /// 無いときは「-」と出す

@@ -96,24 +96,24 @@ impl Gpu {
         let instance = wgpu::Instance::default();
         let surface = instance
             .create_surface(window.clone())
-            .context("create surface")?;
+            .context("窓に描く準備（サーフェス）ができません")?;
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
             compatible_surface: Some(&surface),
             ..Default::default()
         }))
-        .context("no GPU adapter")?;
+        .context("使える GPU が見つかりません")?;
         log::info!("GPU: {:?}", adapter.get_info().name);
         // NX のスキンには縦 4080 の画像などがあるので、GPU が扱える一番大きい画像の大きさを使う
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             required_limits: wgpu::Limits::default().using_resolution(adapter.limits()),
             ..Default::default()
         }))
-        .context("request device")?;
+        .context("GPU を使う準備ができません")?;
         let size = window.inner_size();
         let mut config = surface
             .get_default_config(&adapter, size.width.max(1), size.height.max(1))
-            .context("surface is not supported by the adapter")?;
+            .context("この GPU では窓に描けません")?;
         // egui は sRGB でない形式を前提に色を作るので、選べるならそちらにする
         let caps = surface.get_capabilities(&adapter);
         if let Some(f) = caps.formats.iter().find(|f| !f.is_srgb()) {
@@ -635,7 +635,7 @@ impl App {
         // 譜面の音を切ったままだと、叩いても音が出ないわけが分からない。始めにしばらく知らせる
         if !play.drum_sounds {
             self.toast_for(
-                format!("譜面の音: 鳴らさない（{HIT_SOUND_KEY_NAME} で切り替え）"),
+                format!("叩いた音: 鳴らさない（{HIT_SOUND_KEY_NAME} で切り替え）"),
                 HIT_SOUND_NOTICE_FOR,
             );
         }
@@ -1273,7 +1273,7 @@ impl App {
                 self.config.drum_sounds = play.drum_sounds;
                 self.config.save();
                 format!(
-                    "譜面の音を{}",
+                    "叩いた音を{}",
                     if play.drum_sounds {
                         "鳴らす"
                     } else {
@@ -1837,7 +1837,7 @@ impl ApplicationHandler for App {
         let window = match event_loop.create_window(attrs) {
             Ok(w) => Arc::new(w),
             Err(e) => {
-                self.startup_error = Some(anyhow::Error::new(e).context("cannot open a window"));
+                self.startup_error = Some(anyhow::Error::new(e).context("窓を開けません"));
                 event_loop.exit();
                 return;
             }
@@ -1845,7 +1845,7 @@ impl ApplicationHandler for App {
         match Gpu::new(window.clone()) {
             Ok(gpu) => self.gpu = Some(gpu),
             Err(e) => {
-                self.startup_error = Some(e.context("cannot start the GPU"));
+                self.startup_error = Some(e.context("GPU を使い始められません"));
                 event_loop.exit();
                 return;
             }

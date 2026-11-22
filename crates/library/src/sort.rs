@@ -16,7 +16,7 @@ pub enum SortKind {
     /// フォルダのまま
     #[default]
     Default,
-    /// 一番上の BOX だけを並べ、BOX に入っていない曲は「No Box」に
+    /// 一番上の BOX だけを並べ、BOX に入っていない曲は「BOX の外の曲」に
     Box,
     Title,
     Artist,
@@ -140,8 +140,8 @@ pub fn sorted(lib: &Library, kind: SortKind, stats: &Stats, now: i64) -> Vec<Nod
     match kind {
         SortKind::Default => lib.nodes.clone(),
         SortKind::Box => by_box(lib),
-        SortKind::Title => by_initial(lib, |s| &s.title, "No Title"),
-        SortKind::Artist => by_initial(lib, |s| &s.artist, "No Artist"),
+        SortKind::Title => by_initial(lib, |s| &s.title, "曲名なし"),
+        SortKind::Artist => by_initial(lib, |s| &s.artist, "アーティスト名なし"),
         SortKind::Difficulty => by_difficulty(lib),
         SortKind::Level => by_level(lib),
         SortKind::Player => by_player(lib, stats, now),
@@ -193,7 +193,7 @@ fn by_box(lib: &Library) -> Vec<Node> {
         .filter(|n| matches!(n, Node::Song(_)))
         .cloned()
         .collect();
-    boxes.extend(group("No Box", loose));
+    boxes.extend(group("BOX の外の曲", loose));
     boxes
 }
 
@@ -219,7 +219,7 @@ fn fold(c: char) -> char {
     }
 }
 
-/// 頭文字の行（上流は漢字を読みに直すが、ここでは「Other」に入れる）
+/// 頭文字の行（上流は漢字を読みに直すが、ここでは「その他」に入れる）
 fn initial(text: &str) -> Initial {
     let Some(c) = text.trim().chars().next() else {
         return Initial::Empty;
@@ -271,7 +271,7 @@ fn by_initial(lib: &Library, field: fn(&Song) -> &String, empty: &str) -> Vec<No
                 Initial::Letter(i) => char::from(b'A' + i).to_string(),
                 Initial::Kana(i) => KANA_ROWS[i as usize].to_owned(),
                 Initial::Empty => empty.to_owned(),
-                Initial::Other => "Other".to_owned(),
+                Initial::Other => "その他".to_owned(),
             };
             group(
                 &title,
@@ -322,7 +322,7 @@ fn by_level(lib: &Library) -> Vec<Node> {
             let Some(c) = c else { continue };
             match c.head.level {
                 Some(l) => buckets[level_bucket(l)].push((l, s, i)),
-                // レベルの無い譜面は最後の「No Level」に
+                // レベルの無い譜面は最後の「レベルなし」に
                 None => buckets[20].push((f64::INFINITY, s, i)),
             }
         }
@@ -333,10 +333,10 @@ fn by_level(lib: &Library) -> Vec<Node> {
         .filter_map(|(k, mut charts)| {
             charts.sort_by(|a, b| by_chart_level(&(a.0, a.1), &(b.0, b.1)));
             let title = if k == 20 {
-                "No Level".to_owned()
+                "レベルなし".to_owned()
             } else {
                 let low = k as f64 / 2.0;
-                format!("Level {low:.2} - {:.2}", low + 0.49)
+                format!("レベル {low:.2}〜{:.2}", low + 0.49)
             };
             group(
                 &title,
@@ -354,13 +354,13 @@ fn by_player(lib: &Library, stats: &Stats, now: i64) -> Vec<Node> {
     // 最後に遊んだ日
     const DAY: f64 = 86_400.0;
     let names = [
-        "Today",
-        "Yesterday",
-        "This Week",
-        "This Month",
-        "This Year",
-        "Older",
-        "Never Played",
+        "今日",
+        "昨日",
+        "1 週間以内",
+        "1 か月以内",
+        "1 年以内",
+        "1 年より前",
+        "まだ遊んでいない",
     ];
     let mut recent: Vec<Vec<(i64, &Song)>> = vec![Vec::new(); names.len()];
     for s in &songs {
@@ -422,14 +422,14 @@ fn by_player(lib: &Library, stats: &Stats, now: i64) -> Vec<Node> {
         .filter_map(|(k, mut v)| {
             v.sort_by_cached_key(|(s, i)| (name_key(&s.title), *i));
             group(
-                RANK_NAMES.get(k).copied().unwrap_or("Unknown"),
+                RANK_NAMES.get(k).copied().unwrap_or("ランクなし"),
                 v.into_iter().map(|(s, i)| only_chart(s, i)).collect(),
             )
         })
         .collect();
-    group("Recently Played", recent)
+    group("最後に遊んだ日", recent)
         .into_iter()
-        .chain(group("By Clear Rank", ranks))
+        .chain(group("一番よいランク", ranks))
         .collect()
 }
 
@@ -456,7 +456,7 @@ pub fn skill_charts(lib: &Library, stats: &Stats) -> HashSet<PathBuf> {
 fn by_skill(lib: &Library, stats: &Stats) -> Vec<Node> {
     let top = top_songs(lib, stats);
     group(
-        "Top 50 Skill Songs",
+        &format!("スキルの上位 {SKILL_SONGS} 曲"),
         top.into_iter().map(|(_, s, i)| only_chart(s, i)).collect(),
     )
     .into_iter()
@@ -549,10 +549,10 @@ mod tests {
     #[test]
     fn title_groups_by_initial_and_skips_empty_boxes() {
         let t = sorted(&lib(), SortKind::Title, &Stats::new(), 0);
-        assert_eq!(titles(&t), ["A", "B", "は", "Other"]);
-        assert_eq!(titles(&inner(&t, "Other")), ["夜明け"]);
+        assert_eq!(titles(&t), ["A", "B", "は", "その他"]);
+        assert_eq!(titles(&inner(&t, "その他")), ["夜明け"]);
         let a = sorted(&lib(), SortKind::Artist, &Stats::new(), 0);
-        assert_eq!(titles(&a), ["Z", "あ", "No Artist"]);
+        assert_eq!(titles(&a), ["Z", "あ", "アーティスト名なし"]);
         // 同じ頭文字は名前の順
         assert_eq!(titles(&inner(&a, "Z")), ["夜明け", "apple"]);
     }
@@ -563,14 +563,14 @@ mod tests {
         assert_eq!(
             titles(&l),
             [
-                "Level 2.00 - 2.49",
-                "Level 5.00 - 5.49",
-                "Level 7.50 - 7.99",
-                "Level 9.50 - 9.99",
-                "No Level"
+                "レベル 2.00〜2.49",
+                "レベル 5.00〜5.49",
+                "レベル 7.50〜7.99",
+                "レベル 9.50〜9.99",
+                "レベルなし"
             ]
         );
-        let Node::Song(s) = &inner(&l, "Level 7.50 - 7.99")[0] else {
+        let Node::Song(s) = &inner(&l, "レベル 7.50〜7.99")[0] else {
             panic!()
         };
         assert_eq!(s.levels().collect::<Vec<_>>(), [2]);
@@ -583,8 +583,8 @@ mod tests {
     #[test]
     fn box_sort_keeps_top_boxes_and_loose_songs() {
         let b = sorted(&lib(), SortKind::Box, &Stats::new(), 0);
-        assert_eq!(titles(&b), ["Rock", "No Box"]);
-        assert_eq!(titles(&inner(&b, "No Box")), ["Banana", "夜明け"]);
+        assert_eq!(titles(&b), ["Rock", "BOX の外の曲"]);
+        assert_eq!(titles(&inner(&b, "BOX の外の曲")), ["Banana", "夜明け"]);
         let all = sorted(&lib(), SortKind::AllSongs, &Stats::new(), 0);
         assert_eq!(titles(&all), ["apple", "バラード", "Banana", "夜明け"]);
     }
@@ -610,16 +610,16 @@ mod tests {
             },
         );
         let p = sorted(&lib(), SortKind::Player, &stats, now);
-        assert_eq!(titles(&p), ["Recently Played", "By Clear Rank"]);
-        let recent = inner(&p, "Recently Played");
-        assert_eq!(titles(&recent), ["Today", "This Year", "Never Played"]);
-        assert_eq!(titles(&inner(&recent, "Today")), ["apple"]);
-        let ranks = inner(&p, "By Clear Rank");
-        assert_eq!(titles(&ranks), ["S", "C", "Unknown"]);
+        assert_eq!(titles(&p), ["最後に遊んだ日", "一番よいランク"]);
+        let recent = inner(&p, "最後に遊んだ日");
+        assert_eq!(titles(&recent), ["今日", "1 年以内", "まだ遊んでいない"]);
+        assert_eq!(titles(&inner(&recent, "今日")), ["apple"]);
+        let ranks = inner(&p, "一番よいランク");
+        assert_eq!(titles(&ranks), ["S", "C", "ランクなし"]);
         // apple の 0、バラード、Banana
-        assert_eq!(inner(&ranks, "Unknown").len(), 3);
+        assert_eq!(inner(&ranks, "ランクなし").len(), 3);
         let s = sorted(&lib(), SortKind::Skill, &stats, now);
-        let top = inner(&s, "Top 50 Skill Songs");
+        let top = inner(&s, "スキルの上位 50 曲");
         // 7.6 × 90 × 0.2 = 136.8、9.9 × 50 × 0.2 = 99
         assert_eq!(titles(&top), ["apple", "夜明け"]);
         let charts = skill_charts(&lib(), &stats);
