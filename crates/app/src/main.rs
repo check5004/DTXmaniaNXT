@@ -76,7 +76,7 @@ use winit::window::{Fullscreen, Window, WindowId};
 use crate::chart_sound::AutoMix;
 use crate::config::Config;
 use crate::config_view::{
-    ConfigAction, ConfigInfo, ConfigInput, ConfigView, ItemId, PlayPos, Setting,
+    ConfigAction, ConfigInfo, ConfigInput, ConfigView, Drill, ItemId, PlayPos, Setting,
 };
 use crate::game::{GaugeRule, HitSoundRule, Outcome, Play, Rules};
 use crate::gfx::{Canvas, Gfx};
@@ -1514,11 +1514,7 @@ impl App {
         info.song = self.songs.selected_chart().is_some();
         info.timing = self.timing.as_ref().map(SongTiming::info);
         if let Screen::Play(p, _) = &self.screen {
-            info.play = Some(PlayPos {
-                practice: p.practice.is_some(),
-                at_ms: p.now_ms(),
-                end_ms: p.end_ms,
-            });
+            info.play = Some(play_pos(p));
         }
         info
     }
@@ -1661,6 +1657,16 @@ impl App {
                     play.input_offset_ms = self.config.input_offset_ms;
                     play.drum_sounds = self.config.drum_sounds;
                     view.set_hit_error(self.config.settings.flag(settings::HIT_ERROR_BAR));
+                    // メトロノームは、練習でなければ設定の、練習なら練習の決めごとの行（一時停止の板）
+                    match (id, play.practice.is_some()) {
+                        (ItemId::Table(settings::METRONOME), false) => {
+                            play.set_metronome(self.config.settings.flag(settings::METRONOME));
+                        }
+                        (ItemId::Practice(Drill::Metronome), true) => {
+                            play.set_metronome(self.config.practice_metronome);
+                        }
+                        _ => {}
+                    }
                 }
             }
             ConfigAction::Run(ItemId::Resume) | ConfigAction::Leave => {
@@ -2640,11 +2646,7 @@ impl App {
                         &self.songs,
                         &self.monitor_list,
                     );
-                    info.play = Some(PlayPos {
-                        practice: play.practice.is_some(),
-                        at_ms: play.now_ms(),
-                        end_ms: play.end_ms,
-                    });
+                    info.play = Some(play_pos(play));
                     info.timing = self.timing.as_ref().map(SongTiming::info);
                     let rows = config_view::rows(q.page(), &info);
                     q.draw_panel(&c, &mut self.gfx, &rows, &info);
@@ -2674,6 +2676,16 @@ impl App {
                 view.draw_fade(&Canvas::overlay(&top, ctx.content_rect()));
             }
         }
+    }
+}
+
+/// 一時停止の板に出す、演奏しているところ
+fn play_pos(play: &Play) -> PlayPos {
+    PlayPos {
+        practice: play.practice.is_some(),
+        at_ms: play.now_ms(),
+        end_ms: play.end_ms,
+        metronome: play.metronome(),
     }
 }
 
