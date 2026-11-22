@@ -50,6 +50,7 @@ mod time;
 mod title_view;
 mod ui;
 mod update;
+mod window_mode;
 mod xa;
 
 use std::path::PathBuf;
@@ -82,6 +83,7 @@ use crate::practice::{PracticeOptions, PracticeSetup};
 use crate::practice_popup::{Done, PopupInput, PopupMouse, PracticePopup};
 use crate::result_view::{Page, ResultInfo, ResultView};
 use crate::select::{PREVIEW_WAIT, SelectView};
+use crate::settings::DisplayMode;
 use crate::sfx::{Se, Sfx};
 use crate::shutter::Shutter;
 use crate::songs::SongList;
@@ -418,7 +420,9 @@ struct App {
     /// 押している Alt などのキー（Alt+Enter で全画面）
     modifiers: winit::keyboard::ModifiersState,
     /// 窓に当てた全画面と垂直同期の設定（変わったら当て直す）
-    applied_window: Option<(bool, bool)>,
+    applied_window: Option<(DisplayMode, bool)>,
+    /// ウィンドウのときの位置と大きさ（全画面やボーダーレスから戻るときに使う）
+    window_placement: Option<window_mode::Placement>,
 }
 
 /// 演奏の画面が数えたスコアを、記録に残す形にする
@@ -553,33 +557,42 @@ impl App {
             frames: frames::FrameStats::default(),
             modifiers: winit::keyboard::ModifiersState::empty(),
             applied_window: None,
+            window_placement: None,
         }
     }
 
-    /// 全画面と垂直同期を設定に合わせる（設定の画面で変えたときも、ここで当てる）
+    /// 画面の出し方と垂直同期を設定に合わせる（設定の画面で変えたときも、ここで当てる）
     fn apply_window_settings(&mut self) {
         let v = &self.config.settings;
-        let want = (v.flag(settings::FULLSCREEN), v.flag(settings::VSYNC));
+        let want = (v.display_mode(), v.flag(settings::VSYNC));
         if self.applied_window == Some(want) {
             return;
         }
-        if let Some(w) = &self.window
-            && self.applied_window.map(|a| a.0) != Some(want.0)
-        {
-            w.set_fullscreen(want.0.then_some(Fullscreen::Borderless(None)));
+        if let Some(w) = &self.window {
+            window_mode::apply(
+                w,
+                self.applied_window.map(|a| a.0),
+                want.0,
+                &mut self.window_placement,
+            );
         }
         if let Some(gpu) = &mut self.gpu {
             gpu.set_vsync(want.1);
         }
         self.applied_window = Some(want);
+        if self.config.remember_full_mode(want.0) {
+            self.config.save();
+        }
     }
 
-    /// Alt+Enter と F11：全画面を切り替えて、設定にも残す（上流と同じく次に開いたときもそのまま）
+    /// Alt+Enter と F11：ウィンドウと、最後に使った全画面の出し方（全画面かボーダーレス）を行き来して、
+    /// 設定にも残す（上流と同じく次に開いたときもそのまま）
     fn toggle_fullscreen(&mut self) {
-        let on = !self.config.settings.flag(settings::FULLSCREEN);
-        self.config
-            .settings
-            .set_raw(settings::FULLSCREEN, i64::from(on));
+        let next = match self.config.settings.display_mode() {
+            DisplayMode::Window => self.config.full_mode(),
+            _ => DisplayMode::Window,
+        };
+        self.config.settings.set_display_mode(next);
         self.config.save();
         self.apply_window_settings();
     }
@@ -2328,11 +2341,16 @@ impl ApplicationHandler for App {
         if self.window.is_some() {
             return;
         }
-        let fullscreen = self.config.settings.flag(settings::FULLSCREEN);
+        let mode = self.config.settings.display_mode();
+        // ボーダーレスは普通の窓で開いてから広げる（Windows では広げるまで隠しておく）
+        let hide = mode == DisplayMode::Borderless && cfg!(windows);
         let attrs = Window::default_attributes()
             .with_title("DTXmaniaNXT")
             .with_inner_size(winit::dpi::LogicalSize::new(1280.0, 720.0))
-            .with_fullscreen(fullscreen.then_some(Fullscreen::Borderless(None)));
+            .with_visible(!hide)
+            .with_fullscreen(
+                (mode == DisplayMode::Fullscreen).then_some(Fullscreen::Borderless(None)),
+            );
         let window = match event_loop.create_window(attrs) {
             Ok(w) => Arc::new(w),
             Err(e) => {
@@ -2341,6 +2359,14 @@ impl ApplicationHandler for App {
                 return;
             }
         };
+        let opened = match mode {
+            DisplayMode::Fullscreen => DisplayMode::Fullscreen,
+            _ => DisplayMode::Window,
+        };
+        window_mode::apply(&window, Some(opened), mode, &mut self.window_placement);
+        if hide {
+            window.set_visible(true);
+        }
         let vsync = self.config.settings.flag(settings::VSYNC);
         match Gpu::new(window.clone(), vsync) {
             Ok(gpu) => self.gpu = Some(gpu),
@@ -2365,7 +2391,7 @@ impl ApplicationHandler for App {
         ));
         window.request_redraw();
         self.window = Some(window);
-        self.applied_window = Some((fullscreen, vsync));
+        self.applied_window = Some((mode, vsync));
         if let Some(path) = self.pending.take() {
             self.start(path);
         }
