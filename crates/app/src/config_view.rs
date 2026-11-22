@@ -206,8 +206,8 @@ pub enum Fmt {
     Channel,
     /// 0 は OFF
     OffZero,
-    /// 単位をつける
-    Unit(&'static str),
+    /// 単位をつける。0 のときに名前があればその名前（Risky の「OFF」など）
+    Unit(&'static str, Option<&'static str>),
 }
 
 impl Fmt {
@@ -219,7 +219,8 @@ impl Fmt {
             Fmt::Channel if v == 0 => "すべて".to_owned(),
             Fmt::OffZero if v == 0 => "OFF".to_owned(),
             Fmt::Channel | Fmt::OffZero => v.to_string(),
-            Fmt::Unit(u) => format!("{v}{u}"),
+            Fmt::Unit(_, Some(zero)) if v == 0 => zero.to_owned(),
+            Fmt::Unit(u, _) => format!("{v}{u}"),
         }
     }
 }
@@ -619,7 +620,7 @@ fn drill_row(d: Drill, c: &Config) -> Row {
                 i64::from(SPEED_STEP),
             ),
             def,
-            Fmt::Unit("%"),
+            Fmt::Unit("%", None),
             "練習の速度です（曲の速さの何 % か）。段階アップなら 1 周目の速度です。".to_owned(),
         ),
         Drill::Target => pick(
@@ -655,6 +656,7 @@ fn table_row(d: &'static settings::Def, v: &settings::Values) -> Row {
             max,
             step,
             unit,
+            zero,
             ..
         } => Ctl::Number {
             at: at.unwrap_or(0),
@@ -662,7 +664,7 @@ fn table_row(d: &'static settings::Def, v: &settings::Values) -> Row {
             max,
             step,
             default: def,
-            fmt: Fmt::Unit(unit),
+            fmt: Fmt::Unit(unit, zero),
         },
     };
     row(id, d.name, v.label(d.key), d.desc.to_owned(), ctl)
@@ -2790,6 +2792,30 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn every_table_item_appears_once_with_its_label() {
+        let mut c = Config::default();
+        c.settings.set_raw(settings::RISKY, 0);
+        let info = info(&c);
+        for d in settings::ALL {
+            let found: Vec<Row> = CATS
+                .iter()
+                .filter(|cat| **cat != Cat::Fav)
+                .flat_map(|cat| rows(Page::Cat(*cat), &info))
+                .filter(|r| r.id == Some(ItemId::Table(d.key)))
+                .collect();
+            assert_eq!(found.len(), 1, "{}", d.key);
+            assert_eq!(found[0].value, c.settings.label(d.key), "{}", d.key);
+        }
+        // 0 に名前がある数は、既定の値も名前で出す
+        let risky = rows(Page::Cat(Cat::Play), &info)
+            .into_iter()
+            .find(|r| r.id == Some(ItemId::Table(settings::RISKY)))
+            .unwrap();
+        assert_eq!(risky.value, "OFF");
+        assert_eq!(risky.default_label().as_deref(), Some("OFF"));
     }
 
     #[test]

@@ -64,7 +64,7 @@ use winit::window::{Window, WindowId};
 
 use crate::config::Config;
 use crate::config_view::{ConfigAction, ConfigInfo, ConfigInput, ConfigView, ItemId, Setting};
-use crate::game::{Outcome, Play};
+use crate::game::{GaugeRule, Outcome, Play, Rules};
 use crate::gfx::{Canvas, Gfx};
 use crate::history::History;
 use crate::loading::{Job, Loading};
@@ -239,8 +239,8 @@ impl Gpu {
 struct LoadSettings {
     input_offset_ms: f64,
     drum_sounds: bool,
-    /// 自動で叩くレーン
-    auto: Vec<DrumLane>,
+    /// 自動で叩くレーン、判定の幅、ゲージの決まりなど
+    rules: Rules,
     /// MIDI のポートごとの名前と割り当て（[`MidiIn::ports`] と同じ並び）
     inputs: Vec<(String, MidiProfile)>,
 }
@@ -251,9 +251,9 @@ impl LoadSettings {
         let started = Instant::now();
         let mut p = match practice {
             Some(o) => {
-                Play::load_practice(path, self.input_offset_ms, self.drum_sounds, &self.auto, o)?
+                Play::load_practice(path, self.input_offset_ms, self.drum_sounds, &self.rules, o)?
             }
-            None => Play::load(path, self.input_offset_ms, self.drum_sounds, &self.auto)?,
+            None => Play::load(path, self.input_offset_ms, self.drum_sounds, &self.rules)?,
         };
         p.set_inputs(self.inputs);
         // 「叩いても音が出ない」と言われたとき、ログで分かるように
@@ -602,18 +602,34 @@ impl App {
         LoadSettings {
             input_offset_ms: self.config.input_offset_ms,
             drum_sounds: self.config.drum_sounds,
-            // 開発用の DTXMANIANXT_AUTOPLAY=1 なら全部
-            auto: if self.autoplay {
-                DrumLane::ALL.to_vec()
-            } else {
-                self.config.settings.auto_lanes()
-            },
+            rules: self.rules(),
             inputs: self
                 .ports()
                 .iter()
                 .map(|p| p.name.clone())
                 .zip(inputs::profiles(&self.config, self.ports()))
                 .collect(),
+        }
+    }
+
+    /// 判定の決まり（設定の表から）
+    fn rules(&self) -> Rules {
+        let v = &self.config.settings;
+        Rules {
+            // 開発用の DTXMANIANXT_AUTOPLAY=1 なら全部
+            auto: if self.autoplay {
+                DrumLane::ALL.to_vec()
+            } else {
+                v.auto_lanes()
+            },
+            windows: v.hit_windows(false),
+            pedal_windows: v.hit_windows(true),
+            tight: v.flag(settings::TIGHT),
+            gauge: GaugeRule {
+                miss_factor: v.damage_factor(),
+                risky: v.number(settings::RISKY) as u32,
+                hazard: v.flag(settings::HAZARD),
+            },
         }
     }
 

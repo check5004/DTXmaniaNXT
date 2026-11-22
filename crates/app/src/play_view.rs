@@ -15,7 +15,7 @@ use dtx::DrumLane;
 use egui::Color32;
 use engine::judge::{Judgement, Tally};
 
-use crate::game::{Fx, Play};
+use crate::game::{Fx, GaugeRule, Play};
 use crate::gfx::{Canvas, Gfx, Glyphs, Opt, Src, Tex, fit_scale, src};
 use crate::text::Style;
 
@@ -347,7 +347,7 @@ pub struct PlayView {
     /// 100 コンボごとの爆発（何百コンボ目か、始めた時刻）
     bomb: Option<(u32, Instant)>,
     bombed: Vec<u32>,
-    gauge: f64,
+    gauge: Gauge,
     score: Score,
     sections: [Section; SECTIONS],
     /// 音符の数（スコアと達成率の分母）
@@ -439,8 +439,7 @@ impl PlayView {
             combo_jump: None,
             bomb: None,
             bombed: Vec::new(),
-            // 上流 `GAUGE_INITIAL`
-            gauge: 2.0 / 3.0,
+            gauge: Gauge::new(play.gauge),
             score: Score {
                 truth: 0.0,
                 shown: 0,
@@ -474,9 +473,9 @@ impl PlayView {
         }
     }
 
-    /// ゲージが尽きた（上流 `IsFailed`）
+    /// ゲージが尽きた（上流 `IsFailed`。Risky なら残りの回数が尽きた）
     pub fn gauge_empty(&self) -> bool {
-        self.gauge <= GAUGE_MIN
+        self.gauge.empty()
     }
 
     /// STAGE FAILED を始める。`now_ms` は今の曲の時刻（譜面をそこで止める）
@@ -530,7 +529,7 @@ impl PlayView {
                     if self.tally.combo > before {
                         self.combo_jump = Some(now);
                     }
-                    self.gauge = (self.gauge + gauge_delta(judgement)).clamp(GAUGE_MIN, 1.0);
+                    self.gauge.apply(judgement);
                     if !practice {
                         self.add_score(judgement, now);
                         if matches!(
@@ -543,6 +542,16 @@ impl PlayView {
                             s.hits += 1;
                         }
                     }
+                }
+                Fx::StrayMiss { lane } => {
+                    // 上流の Tight: MISS を出し、コンボを切り、MISS と同じだけゲージを減らす（MISS の数には入れない）
+                    self.judges[Lane::of(lane).i()] = Some(JudgeShow {
+                        judgement: Judgement::Miss,
+                        lag: None,
+                        start: now,
+                    });
+                    self.tally.combo = 0;
+                    self.gauge.apply(Judgement::Miss);
                 }
             }
         }
@@ -1038,7 +1047,7 @@ impl PlayView {
             );
         }
         let bar = src(0.0, 0.0, frame.w - 63.0, 31.0);
-        if self.gauge >= 1.0
+        if self.gauge.value >= 1.0
             && let Some(t) = g.skin.tex("Graphics/7_gauge_bar.jpg")
         {
             c.part(&t, X + 20.0, 635.0, bar);
@@ -1049,7 +1058,7 @@ impl PlayView {
                 635.0,
                 Opt {
                     src: Some(bar),
-                    sx: self.gauge.max(0.0) as f32,
+                    sx: self.gauge.value.max(0.0) as f32,
                     ..Default::default()
                 },
             );
@@ -1429,14 +1438,77 @@ fn score_delta(j: Judgement, tally: &Tally, notes: usize, truth: f64) -> f64 {
     delta.trunc().min(MAX_SCORE - truth).max(0.0)
 }
 
-/// XG のゲージの増減（上流 `CActPerfCommonGauge.Damage`、ダメージは普通）
+/// ゲージ（上流 `CActPerfCommonGauge`）
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Gauge {
+    /// 0〜1（尽きるのは `GAUGE_MIN`）
+    value: f64,
+    rule: GaugeRule,
+    /// Risky の残りの回数
+    risky_left: u32,
+}
+
+impl Gauge {
+    /// 上流 `Init`。ふつうは `GAUGE_INITIAL`（2/3）、Risky は満タン（1 回なら空）から
+    fn new(rule: GaugeRule) -> Self {
+        Self {
+            value: match rule.risky {
+                0 => 2.0 / 3.0,
+                1 => 0.0,
+                _ => 1.0,
+            },
+            rule,
+            risky_left: rule.risky,
+        }
+    }
+
+    /// 上流 `IsFailed`
+    fn empty(&self) -> bool {
+        if self.rule.risky > 0 {
+            self.risky_left == 0
+        } else {
+            self.value <= GAUGE_MIN
+        }
+    }
+
+    /// 判定でゲージを動かす（上流 `Damage`）
+    fn apply(&mut self, j: Judgement) {
+        let rule = self.rule;
+        let hazard = rule.hazard && matches!(j, Judgement::Great | Judgement::Good);
+        let bad = hazard || matches!(j, Judgement::Poor | Judgement::Miss);
+        let delta = if rule.risky > 0 {
+            // Risky はゲージが増えず、ミスのたびに同じだけ減る。最後の 1 回は減らさずに尽きる
+            if bad {
+                let d = if self.risky_left <= 1 {
+                    0.0
+                } else {
+                    -1.0 / f64::from(rule.risky - 1)
+                };
+                self.risky_left = self.risky_left.saturating_sub(1);
+                d
+            } else {
+                0.0
+            }
+        } else if hazard {
+            // HAZARD の GREAT・GOOD は MISS の減り（ゲージの減り方はかけない）
+            gauge_delta(Judgement::Miss)
+        } else if j == Judgement::Miss {
+            gauge_delta(j) * rule.miss_factor
+        } else {
+            gauge_delta(j)
+        };
+        self.value = (self.value + delta).clamp(GAUGE_MIN, 1.0);
+    }
+}
+
+/// XG のゲージの増減（上流 `CActPerfCommonGauge.Damage`。MISS にはゲージの減り方の数をかけて使う）
 fn gauge_delta(j: Judgement) -> f64 {
     match j {
         Judgement::Perfect => 0.005,
         Judgement::Great => 0.001,
         Judgement::Good => 0.0,
         Judgement::Poor => -0.017,
-        Judgement::Miss => -0.041 * 0.5,
+        Judgement::Miss => -0.041,
     }
 }
 
@@ -1627,6 +1699,63 @@ mod tests {
             truth = (truth + score_delta(Judgement::Perfect, &t, notes, truth)).min(MAX_SCORE);
         }
         truth
+    }
+
+    #[test]
+    fn gauge_follows_the_damage_level() {
+        let mut g = Gauge::new(GaugeRule::default());
+        g.apply(Judgement::Miss);
+        assert!((g.value - (2.0 / 3.0 - 0.0205)).abs() < 1e-9);
+        let mut small = Gauge::new(GaugeRule {
+            miss_factor: 0.25,
+            ..GaugeRule::default()
+        });
+        small.apply(Judgement::Miss);
+        assert!((small.value - (2.0 / 3.0 - 0.01025)).abs() < 1e-9);
+        // POOR には減り方をかけない
+        small.apply(Judgement::Poor);
+        assert!((small.value - (2.0 / 3.0 - 0.01025 - 0.017)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn hazard_drains_on_great_and_good() {
+        let mut g = Gauge::new(GaugeRule {
+            hazard: true,
+            ..GaugeRule::default()
+        });
+        g.apply(Judgement::Perfect);
+        g.apply(Judgement::Great);
+        g.apply(Judgement::Good);
+        assert!((g.value - (2.0 / 3.0 + 0.005 - 0.082)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn risky_fails_after_n_misses() {
+        let mut g = Gauge::new(GaugeRule {
+            risky: 3,
+            ..GaugeRule::default()
+        });
+        assert_eq!(g.value, 1.0);
+        g.apply(Judgement::Perfect);
+        assert_eq!(g.value, 1.0);
+        g.apply(Judgement::Miss);
+        assert!((g.value - 0.5).abs() < 1e-9 && !g.empty());
+        g.apply(Judgement::Poor);
+        assert!(g.value.abs() < 1e-9 && !g.empty());
+        g.apply(Judgement::Miss);
+        assert!(g.empty());
+        // 1 回なら空から始まり、1 回で尽きる
+        let mut one = Gauge::new(GaugeRule {
+            risky: 1,
+            ..GaugeRule::default()
+        });
+        assert_eq!(one.value, 0.0);
+        one.apply(Judgement::Great);
+        assert!(!one.empty());
+        one.apply(Judgement::Miss);
+        assert!(one.empty());
+        one.apply(Judgement::Miss);
+        assert_eq!(one.value, 0.0);
     }
 
     #[test]
