@@ -708,7 +708,7 @@ fn draw_next_step(c: &Canvas, g: &mut Gfx, p: &Practice, now: f64) {
         (", と . で 5% ずつ変えられます".to_owned(), GREY)
     } else if ladder.cleared() {
         (
-            "Esc で結果へ。続けて叩いても記録に残ります".to_owned(),
+            "結果へは Esc →「練習をやめる」。続けても記録に残ります".to_owned(),
             GREY,
         )
     } else if ladder.stuck() {
@@ -940,7 +940,7 @@ fn draw_clear(c: &Canvas, g: &mut Gfx, speed: u32, alpha: f32) {
     put(
         c,
         g,
-        &format!("Esc で結果へ。続けて叩けば {speed}% のまま回ります"),
+        &format!("続けて叩けば {speed}% のまま回ります。結果へは Esc →「練習をやめる」"),
         &edged(14.0, GREY),
         LANES_CX,
         ty,

@@ -394,40 +394,6 @@ pub fn play_toast(ctx: &egui::Context, c: &Canvas, msg: &str) {
         });
 }
 
-/// 一時停止の知らせ（演奏の画面の真ん中）
-pub fn pause_overlay(ctx: &egui::Context, c: &Canvas, practice: bool) {
-    egui::Area::new(egui::Id::unique("pause"))
-        .fixed_pos(c.pos(640.0, 300.0))
-        .pivot(Align2::CENTER_CENTER)
-        .interactable(false)
-        .order(egui::Order::Foreground)
-        .show(ctx, |ui| {
-            egui::Frame::new()
-                .fill(Color32::from_black_alpha(220))
-                .corner_radius(8.0)
-                .inner_margin(egui::Margin::symmetric(28, 16))
-                .show(ui, |ui| {
-                    ui.vertical_centered(|ui| {
-                        ui.label(
-                            RichText::new("PAUSE")
-                                .color(Color32::WHITE)
-                                .strong()
-                                .size(40.0 * c.scale()),
-                        );
-                        ui.label(
-                            RichText::new(if practice {
-                                "Space でつづける　R 最初から　Esc 結果へ"
-                            } else {
-                                "Space でつづける　←→ 巻き戻し・早送り　R やり直し　Esc 結果へ"
-                            })
-                            .color(Color32::from_gray(220))
-                            .size(15.0 * c.scale()),
-                        );
-                    });
-                });
-        });
-}
-
 /// 画面の下に短い知らせを出す
 pub fn message_overlay(ctx: &egui::Context, msg: &str) {
     egui::Area::new(egui::Id::unique("message"))
@@ -521,9 +487,9 @@ fn play_info(ui: &mut egui::Ui, o: &PlayOverlay<'_>, s: f32) {
         crate::HIT_SOUND_KEY_NAME
     )));
     ui.label(small(if play.practice.is_some() {
-        "←→ 区間を 1 小節ずらす、, . 速度 ±5%、Space 一時停止、R 最初から、Esc 結果へ".to_owned()
+        "←→ 区間を 1 小節ずらす、, . 速度 ±5%、R 最初から、Esc か Space 一時停止（やめるのもここから）".to_owned()
     } else {
-        "Space 一時停止、←→ 巻き戻し・早送り、R やり直し、Esc 結果へ".to_owned()
+        "←→ 巻き戻し・早送り、R やり直し、Esc か Space 一時停止（やめるのもここから）".to_owned()
     }));
     ui.separator();
     match &play.last_input {
