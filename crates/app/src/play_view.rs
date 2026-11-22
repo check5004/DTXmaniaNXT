@@ -18,13 +18,15 @@ use engine::judge::{Judgement, Tally};
 use crate::game::{Fx, GaugeRule, Play};
 use crate::gfx::{Canvas, Gfx, Glyphs, Opt, Src, Tex, fit_scale, src};
 use crate::lag_view::HitErrorBar;
-use crate::lane_layout::{Lane, Layout};
+use crate::lane_layout::{LANES, LANES_LEFT, Lane, Layout};
 use crate::text::Style;
 
 /// 判定の線の y（上流 `nJudgeLinePosY.Drums` の既定）
 pub const JUDGE_LINE_Y: f32 = 561.0;
 /// 下から上へ流すときの判定の線の y（上流の Reverse）
 const REVERSE_JUDGE_LINE_Y: f32 = 159.0;
+/// 進み具合のバーの左（上流 `CActPerfProgressBar`。左バスドラムのレーンを足したらそのぶん右へ）
+pub const PROGRESS_X: f32 = 855.0;
 /// 判定の線より上のどこまでチップを描くか（上流は判定の線から 600 ドットを超えたら打ち切る）
 const DRAW_AHEAD_PX: f32 = 600.0;
 /// 画面に入ってから暗いところから明るくなるまで
@@ -36,9 +38,10 @@ pub fn view_ahead_ms(px_per_ms: f32) -> f64 {
 }
 
 /// レーンの枠（7_Paret.png）を描く順と、切り出す x・幅（上流 `CActPerfDrumsLaneFlushD` の「動くレーン」。
-/// 置く x はレーンの並びで変わるので [`Layout`]）
-const PANEL: [(Lane, f32, f32); 10] = [
+/// 置く x はレーンの並びで変わるので [`Layout`]）。足した左バスドラムのレーンは LP の枠の色を変えたもの
+const PANEL: [(Lane, f32, f32); LANES] = [
     (Lane::LP, 121.0, 51.0),
+    (Lane::LBD, 121.0, 51.0),
     (Lane::SD, 172.0, 57.0),
     (Lane::HT, 229.0, 49.0),
     (Lane::FT, 396.0, 54.0),
@@ -50,8 +53,8 @@ const PANEL: [(Lane, f32, f32); 10] = [
     (Lane::LC, 0.0, 72.0),
 ];
 
-/// レーンの光の幅と画像（上流 `stレーンサイズ` と `strファイル名`、`ELane` の順）
-const FLUSH: [(f32, &str); 10] = [
+/// レーンの光の幅と画像（上流 `stレーンサイズ` と `strファイル名`、`ELane` の順。左バスドラムは LP の色を変えたもの）
+const FLUSH: [(f32, &str); LANES] = [
     (64.0, "leftcymbal"),
     (46.0, "hihat"),
     (54.0, "snare"),
@@ -62,10 +65,11 @@ const FLUSH: [(f32, &str); 10] = [
     (64.0, "cymbal"),
     (48.0, "leftpedal"),
     (38.0, "ridecymbal"),
+    (48.0, "leftpedal"),
 ];
 
 /// パッドの 7_pads.png の切り出しの左上（上流 `CActPerfDrumsPad.st基本位置`、`ELane` の順に並べ替えた）
-const PADS: [(f32, f32); 10] = [
+const PADS: [(f32, f32); LANES] = [
     (0.0, 0.0),    // LC
     (96.0, 0.0),   // HH
     (0.0, 96.0),   // SD
@@ -76,10 +80,12 @@ const PADS: [(f32, f32); 10] = [
     (192.0, 0.0),  // CY
     (96.0, 192.0), // LP
     (288.0, 0.0),  // RD
+    (96.0, 192.0), // LBD（LP のペダルの絵）
 ];
-/// パッドを描く順（上流 `CActPerfDrumsPad.n描画順`）
-const PAD_ORDER: [Lane; 10] = [
+/// パッドを描く順（上流 `CActPerfDrumsPad.n描画順`。足した左バスドラムは LP の次）
+const PAD_ORDER: [Lane; LANES] = [
     Lane::LP,
+    Lane::LBD,
     Lane::BD,
     Lane::SD,
     Lane::FT,
@@ -91,10 +97,13 @@ const PAD_ORDER: [Lane; 10] = [
     Lane::LC,
 ];
 
-/// 火花の画像の名前（`ELane` の順）
-const FIRE: [&str; 10] = ["LC", "HH", "SD", "BD", "HT", "LT", "FT", "CY", "LP", "RD"];
-/// 飛び散るチップの切り出しの左と幅（上流 `nノーツの左上X座標`、`nノーツの幅`）
-const PIECES: [(f32, f32); 10] = [
+/// 火花の画像の名前（`ELane` の順。左バスドラムは LP の色を変えたもの）
+const FIRE: [&str; LANES] = [
+    "LC", "HH", "SD", "BD", "HT", "LT", "FT", "CY", "LP", "RD", "LP",
+];
+/// 飛び散るチップの切り出しの左と幅（上流 `nノーツの左上X座標`、`nノーツの幅`）。
+/// 左バスドラムのレーンは [`left_bass_chips`] の絵の LP の列
+const PIECES: [(f32, f32); LANES] = [
     (538.0, 64.0),
     (70.0, 46.0),
     (126.0, 54.0),
@@ -105,19 +114,20 @@ const PIECES: [(f32, f32); 10] = [
     (358.0, 60.0),
     (660.0, 48.0),
     (432.0, 48.0),
+    (LEFT_BASS_LP_SX, 48.0),
 ];
 
 /// 判定の文字の縦の段（上流 `n文字の縦表示位置`、`ELane` の順）
-const JUDGE_ROW: [i32; 10] = [-1, 1, 1, 2, 0, 0, 1, -1, 2, 1];
+const JUDGE_ROW: [i32; LANES] = [-1, 1, 1, 2, 0, 0, 1, -1, 2, 1, 2];
 
 /// チップの x と、7_chips_drums.png の切り出しの左と幅、まわりの模様（下の段のコマ送り）を描くか
 /// （上流 `tUpdateAndDraw_Chip_Drums` と `tUpdateAndDraw_Chip_PatternOnly_Drums`）。
-/// BD のレーンに出す左バスドラムは、BD の絵から作った [`left_bass_chips`] の絵を使う（切り出しは BD と同じ）
+/// 水色の左バスドラムは、[`left_bass_chips`] の絵から切り出す（BD のレーンなら BD の列、足したレーンなら LP の列）
 fn chip(looks: &Looks, l: DrumLane) -> (f32, f32, f32, bool) {
-    let x = if looks.left_bass_on_bd(l) {
-        looks.layout.chip[Lane::BD.i()]
-    } else {
+    let x = if l == DrumLane::HHO {
         looks.layout.chip_x(l)
+    } else {
+        looks.layout.chip[looks.lane_of(l).i()]
     };
     match l {
         DrumLane::HH => (x, 70.0, 56.0, true),
@@ -138,43 +148,89 @@ fn chip(looks: &Looks, l: DrumLane) -> (f32, f32, f32, bool) {
         DrumLane::LC => (x, 538.0, 74.0, true),
         DrumLane::LP => (x, 660.0, 58.0, true),
         DrumLane::LBD => match looks.lbd {
-            LbdLook::BdLane => (x, 0.0, 70.0, true),
+            LbdLook::BdLane => (x, 0.0, BD_CHIP_W as f32, true),
+            LbdLook::OwnLane => (x, LEFT_BASS_LP_SX, LP_CHIP_W as f32, true),
             LbdLook::SameAsLp => (x, 660.0, 58.0, true),
             LbdLook::Own => (x, 480.0, 58.0, true),
         },
     }
 }
 
-/// BD のレーンに出す左バスドラムの色（色相、度）。BD の絵（青紫、およそ 251 度）をこの色相に回す
-const LEFT_BASS_HUE: f32 = 331.0;
-/// 左バスドラムの絵の鮮やかさを BD の何倍にするか（BD は淡いので、ほかのレーンの絵と同じくらいに上げる）
-const LEFT_BASS_SATURATION: f32 = 1.8;
-/// 左バスドラムの色の見本（設定の配置図に使う）
-pub const LEFT_BASS_COLOR: Color32 = Color32::from_rgb(255, 110, 190);
-/// 左バスドラムの絵を作る元（7_chips_drums.png の BD の列）の幅
-const BD_CHIP_W: u32 = 70;
+/// 左バスドラムのレーンを足したときに、コンボを右へずらす幅（画面の右の端に収まるだけ）
+const COMBO_SHIFT: f32 = 30.0;
 
-/// 7_chips_drums.png の BD の列（チップ・模様・飛び散るかけら）を左右に返し（足の模様を左足に）、
-/// 色を [`LEFT_BASS_HUE`] に変えた絵。幅は BD の列と同じで、高さは元の絵と同じ
+/// 左バスドラムの色（色相、度。水色）。BD（青紫、およそ 251 度）と LP（ピンク、およそ 331 度）の絵をこの色相に回す
+const LEFT_BASS_HUE: f32 = 190.0;
+/// 左バスドラムの絵の鮮やかさを元の何倍にするか（BD の絵は淡いので、ほかのレーンの絵と同じくらいに上げる）
+const LEFT_BASS_SATURATION_BD: f32 = 1.9;
+const LEFT_BASS_SATURATION_LP: f32 = 1.1;
+/// 左バスドラムの色の見本（設定の配置図に使う）
+pub const LEFT_BASS_COLOR: Color32 = Color32::from_rgb(102, 230, 255);
+/// 7_chips_drums.png の BD の列の幅と、LP の列の左と幅
+const BD_CHIP_W: u32 = 70;
+const LP_CHIP_SX: u32 = 660;
+const LP_CHIP_W: u32 = 58;
+/// [`left_bass_chips`] の絵の中の、LP の列から作った絵の左
+const LEFT_BASS_LP_SX: f32 = BD_CHIP_W as f32;
+/// 7_Paret.png の LP の枠の左と幅
+const LP_PANEL_SX: u32 = 121;
+const LP_PANEL_W: u32 = 51;
+
+/// 1 ドットの色相を [`LEFT_BASS_HUE`] にし、彩度を `sat` 倍にする（明るさと透明さはそのまま）
+fn tint(p: image::Rgba<u8>, sat: f32) -> image::Rgba<u8> {
+    let image::Rgba([r, g, b, a]) = p;
+    if a == 0 {
+        return p;
+    }
+    let (_, s, v) = rgb_to_hsv(r, g, b);
+    let (r, g, b) = hsv_to_rgb(LEFT_BASS_HUE, (s * sat).min(1.0), v);
+    image::Rgba([r, g, b, a])
+}
+
+/// 水色の左バスドラムのチップ。左から、7_chips_drums.png の BD の列（チップ・模様・飛び散るかけら）を
+/// 左右に返した（足の模様を左足に）もの（BD のレーンに出すとき）と、LP の列（もとから左足）のもの（足したレーン）
 pub fn left_bass_chips(src: image::RgbaImage) -> image::RgbaImage {
-    let w = BD_CHIP_W.min(src.width());
-    let mut out = image::RgbaImage::new(w, src.height());
+    let bd = BD_CHIP_W.min(src.width());
+    let lp = LP_CHIP_W.min(src.width().saturating_sub(LP_CHIP_SX));
+    let mut out = image::RgbaImage::new(bd + lp, src.height());
     for (x, y, p) in out.enumerate_pixels_mut() {
-        let image::Rgba([r, g, b, a]) = *src.get_pixel(w - 1 - x, y);
-        if a == 0 {
-            continue;
-        }
-        let (_, s, v) = rgb_to_hsv(r, g, b);
-        let (r, g, b) = hsv_to_rgb(LEFT_BASS_HUE, (s * LEFT_BASS_SATURATION).min(1.0), v);
-        *p = image::Rgba([r, g, b, a]);
+        *p = if x < bd {
+            tint(*src.get_pixel(bd - 1 - x, y), LEFT_BASS_SATURATION_BD)
+        } else {
+            tint(
+                *src.get_pixel(LP_CHIP_SX + x - bd, y),
+                LEFT_BASS_SATURATION_LP,
+            )
+        };
     }
     out
 }
 
-/// BD のレーンに出す左バスドラムの絵（[`left_bass_chips`]。一度作ったら覚えておく）
+/// 足した左バスドラムのレーンの枠（7_Paret.png の LP の枠を水色に）
+fn left_bass_panel(src: image::RgbaImage) -> image::RgbaImage {
+    let w = LP_PANEL_W.min(src.width().saturating_sub(LP_PANEL_SX));
+    image::RgbaImage::from_fn(w, src.height(), |x, y| {
+        tint(*src.get_pixel(LP_PANEL_SX + x, y), 1.0)
+    })
+}
+
+/// 絵の全体を水色に（足したレーンの光・火花・星。LP のものから作る）
+fn left_bass_tinted(mut src: image::RgbaImage) -> image::RgbaImage {
+    for p in src.pixels_mut() {
+        *p = tint(*p, 1.0);
+    }
+    src
+}
+
+/// 水色の左バスドラムのチップの絵（[`left_bass_chips`]。一度作ったら覚えておく）
 fn left_bass_tex(g: &Gfx) -> Option<Tex> {
     g.skin
         .tex_made("Graphics/7_chips_drums.png", "left_bass", left_bass_chips)
+}
+
+/// スキンの絵 `rel` を水色にしたもの（足したレーンの光・火花・星）
+fn left_bass_tinted_tex(g: &Gfx, rel: &str) -> Option<Tex> {
+    g.skin.tex_made(rel, "left_bass", left_bass_tinted)
 }
 
 /// RGB（0〜255）を色相（0〜360 度）・彩度・明度（0〜1）に
@@ -373,12 +429,12 @@ pub struct PlayView {
     /// 難易度の名前（7_Difficulty.png のどこを切り出すかを Script/difficult.dtxs で引く）
     diff_panel: (f32, f32),
     /// 叩いた時刻と強さ（レーンの光）
-    flush: [Option<(Instant, u8)>; 10],
-    pads: [PadState; 10],
-    fires: [Option<Instant>; 10],
+    flush: [Option<(Instant, u8)>; LANES],
+    pads: [PadState; LANES],
+    fires: [Option<Instant>; LANES],
     stars: Vec<Star>,
     pieces: Vec<Piece>,
-    judges: [Option<JudgeShow>; 10],
+    judges: [Option<JudgeShow>; LANES],
     tally: Tally,
     /// コンボが増えた時刻（数字が跳ねる）
     combo_jump: Option<Instant>,
@@ -487,11 +543,13 @@ pub enum HhoLook {
     Closed,
 }
 
-/// 左バスドラムのチップの出し方（NXT の既定と、上流 `eLBDGraphics`）
+/// 左バスドラムのチップの出し方（NXT の 2 つと、上流 `eLBDGraphics`）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LbdLook {
-    /// BD のレーンに、BD の絵の色を変えて出す（NXT の既定）
+    /// BD のレーンに、BD の絵を水色にして出す（NXT の既定）
     BdLane,
+    /// LP の右に足したレーンに、LP の絵を水色にして出す
+    OwnLane,
     /// LP のレーンに LP と同じ絵（A）
     SameAsLp,
     /// LP のレーンに LP と色の違う絵（B）
@@ -578,8 +636,9 @@ impl Looks {
                 _ => HhoLook::Nx,
             },
             lbd: match v.choice(s::LBD_GRAPHICS) {
-                1 => LbdLook::SameAsLp,
-                2 => LbdLook::Own,
+                1 => LbdLook::OwnLane,
+                2 => LbdLook::SameAsLp,
+                3 => LbdLook::Own,
                 _ => LbdLook::BdLane,
             },
         }
@@ -589,13 +648,14 @@ impl Looks {
     pub fn lane_of(&self, l: DrumLane) -> Lane {
         match (l, self.lbd) {
             (DrumLane::LBD, LbdLook::BdLane) => Lane::BD,
+            (DrumLane::LBD, LbdLook::OwnLane) => Lane::LBD,
             _ => Lane::of(l),
         }
     }
 
-    /// BD のレーンに出す左バスドラムか（色を変えた絵を使う）
-    fn left_bass_on_bd(&self, l: DrumLane) -> bool {
-        l == DrumLane::LBD && self.lbd == LbdLook::BdLane
+    /// 水色の左バスドラムか（[`left_bass_chips`] の絵を使う）
+    fn left_bass_tinted(&self, l: DrumLane) -> bool {
+        l == DrumLane::LBD && matches!(self.lbd, LbdLook::BdLane | LbdLook::OwnLane)
     }
 
     /// 判定ラインの y（上流 `nJudgeLinePosY.Drums`）
@@ -684,12 +744,12 @@ impl PlayView {
         Self {
             entered: now,
             diff_panel: difficulty_cell("7", label).unwrap_or((0.0, 0.0)),
-            flush: [None; 10],
-            pads: [PadState::new(now); 10],
-            fires: [None; 10],
+            flush: [None; LANES],
+            pads: [PadState::new(now); LANES],
+            fires: [None; LANES],
             stars: Vec::new(),
             pieces: Vec::new(),
-            judges: [None; 10],
+            judges: [None; LANES],
             tally: Tally::default(),
             combo_jump: None,
             bomb: None,
@@ -787,7 +847,7 @@ impl PlayView {
                         start: now,
                     });
                     if !matches!(judgement, Judgement::Poor | Judgement::Miss) {
-                        self.start_fire(l, self.looks.left_bass_on_bd(lane), now);
+                        self.start_fire(l, self.looks.left_bass_tinted(lane), now);
                     }
                     let before = self.tally.combo;
                     self.tally.add(judgement);
@@ -921,11 +981,11 @@ impl PlayView {
         {
             c.draw_opt(
                 &t,
-                295.0,
+                LANES_LEFT,
                 self.looks.judge_y(),
                 Opt {
                     src: Some(src(0.0, 0.0, t.w, 6.0)),
-                    sx: 559.0 / t.w,
+                    sx: self.looks.layout.width() / t.w,
                     ..Default::default()
                 },
             );
@@ -950,6 +1010,7 @@ impl PlayView {
                 play.last_chip_ms,
                 px_per_ms,
                 self.looks.reverse,
+                self.looks.layout.extra_w(),
             );
         }
         self.draw_failed(c, g, now);
@@ -1022,14 +1083,19 @@ impl PlayView {
         } else {
             "Graphics/7_Paret.png"
         };
+        let layout = self.looks.layout;
         if let Some(t) = g.skin.tex(paret) {
             for (l, sx, w) in PANEL {
-                c.part(
-                    &t,
-                    self.looks.layout.panel[l.i()],
-                    0.0,
-                    src(sx, 0.0, w, 720.0),
-                );
+                if l == Lane::LBD {
+                    // 足した左バスドラムのレーン（LP の枠を水色に）
+                    if layout.left_bass_lane
+                        && let Some(t) = g.skin.tex_made(paret, "left_bass", left_bass_panel)
+                    {
+                        c.part(&t, layout.panel[l.i()], 0.0, src(0.0, 0.0, w, 720.0));
+                    }
+                    continue;
+                }
+                c.part(&t, layout.panel[l.i()], 0.0, src(sx, 0.0, w, 720.0));
             }
         }
         let (flush, reverse) = (self.looks.lane_flush, self.looks.reverse);
@@ -1048,12 +1114,16 @@ impl PlayView {
                 *slot = None;
                 continue;
             }
-            let x = self.looks.layout.flush[i];
+            let x = layout.flush[i];
             let (w, name) = FLUSH[i];
             let rev = if reverse { " reverse" } else { "" };
-            let Some(t) = g.skin.tex(&format!(
-                "Graphics/ScreenPlayDrums lane flush {name}{rev}.png"
-            )) else {
+            let rel = format!("Graphics/ScreenPlayDrums lane flush {name}{rev}.png");
+            let tex = if i == Lane::LBD.i() {
+                left_bass_tinted_tex(g, &rel)
+            } else {
+                g.skin.tex(&rel)
+            };
+            let Some(t) = tex else {
                 continue;
             };
             let step = (v as i32 * 740 / 100) as f32;
@@ -1091,11 +1161,21 @@ impl PlayView {
         let looks = self.looks;
         let y_of = |ms: f64| looks.ahead_y(((ms - now_ms) as f32) * px_per_ms);
         let bar_lines = looks.bar_lines;
+        let width = looks.layout.width();
         let draw = |ms: f64, bar: bool| {
             let y = y_of(ms);
             if bar_lines && (-4.0..724.0).contains(&y) {
                 let sy = if bar { 769.0 } else { 772.0 };
-                c.part(&t, 295.0, y - 1.0, src(0.0, sy, 559.0, 2.0));
+                c.draw_opt(
+                    &t,
+                    LANES_LEFT,
+                    y - 1.0,
+                    Opt {
+                        src: Some(src(0.0, sy, 559.0, 2.0)),
+                        sx: width / 559.0,
+                        ..Default::default()
+                    },
+                );
             }
         };
         match &play.practice {
@@ -1156,11 +1236,11 @@ impl PlayView {
             return;
         };
         let looks = self.looks;
-        let left_bass = (looks.lbd == LbdLook::BdLane)
+        let left_bass = matches!(looks.lbd, LbdLook::BdLane | LbdLook::OwnLane)
             .then(|| left_bass_tex(g))
             .flatten();
         let tex_of = |lane: DrumLane| match &left_bass {
-            Some(lb) if looks.left_bass_on_bd(lane) => lb,
+            Some(lb) if looks.left_bass_tinted(lane) => lb,
             _ => &t,
         };
         let ahead = |ms: f64| ((ms - now_ms) as f32) * px_per_ms;
@@ -1240,40 +1320,46 @@ impl PlayView {
         let Some(t) = g.skin.tex("Graphics/7_shutter.png") else {
             return;
         };
+        // 左バスドラムのレーンを足したら、そのぶん横に伸ばす
+        let o = Opt {
+            sx: (t.w + self.looks.layout.extra_w()) / t.w,
+            ..Default::default()
+        };
         if top > 0.0 {
-            c.draw(&t, 295.0, (-720.0 + top * 7.2).floor());
+            c.draw_opt(&t, LANES_LEFT, (-720.0 + top * 7.2).floor(), o);
         }
         if bottom > 0.0 {
-            c.draw(&t, 295.0, (720.0 - bottom * 7.2).floor());
+            c.draw_opt(&t, LANES_LEFT, (720.0 - bottom * 7.2).floor(), o);
         }
     }
 
     /// 進み具合のバー（上流 `CActPerfProgressBar`）
     fn draw_progress(&self, c: &Canvas, g: &Gfx, play: &Play, now_ms: f64) {
-        const X: f32 = 855.0;
+        // 左バスドラムのレーンを足したら、そのぶん右へ
+        let x = PROGRESS_X + self.looks.layout.extra_w();
         const Y: f32 = 15.0;
         const W: f32 = 20.0;
         const H: f32 = 540.0;
         if let Some(t) = g.skin.tex("Graphics/7_Drum_Progress_bg.png") {
-            c.draw(&t, X - 2.0, Y - 15.0);
+            c.draw(&t, x - 2.0, Y - 15.0);
         }
         // 5 ドットごとの縞
-        c.fill(X, Y, W + 2.0, H, Color32::from_rgb(10, 10, 10));
+        c.fill(x, Y, W + 2.0, H, Color32::from_rgb(10, 10, 10));
         let mut y = 5.0;
         while y < H {
-            c.fill(X, Y + y, W + 2.0, 5.0, Color32::from_rgb(14, 14, 14));
+            c.fill(x, Y + y, W + 2.0, 5.0, Color32::from_rgb(14, 14, 14));
             y += 10.0;
         }
-        c.fill(X + W, Y, 1.0, H, Color32::from_white_alpha(64));
-        c.fill(X + W + 1.0, Y, 1.0, H, Color32::from_white_alpha(32));
+        c.fill(x + W, Y, 1.0, H, Color32::from_white_alpha(64));
+        c.fill(x + W + 1.0, Y, 1.0, H, Color32::from_white_alpha(32));
         if play.practice.is_some() || play.last_chip_ms <= 0.0 {
             return;
         }
         let done = ((now_ms / play.last_chip_ms) as f32 * H).clamp(0.0, H);
         if done > 0.0 {
-            c.fill(X, Y + H - done, W, done, Color32::from_white_alpha(48));
+            c.fill(x, Y + H - done, W, done, Color32::from_white_alpha(48));
             c.fill(
-                X,
+                x,
                 Y + H - done,
                 W,
                 done.min(8.0),
@@ -1298,7 +1384,7 @@ impl PlayView {
             } else {
                 Color32::from_rgb(0, 191, 255)
             };
-            c.fill(X, Y + top, w, h, color);
+            c.fill(x, Y + top, w, h, color);
         }
     }
 
@@ -1310,6 +1396,9 @@ impl PlayView {
         let pads = g.skin.tex("Graphics/7_pads.png");
         let flush = g.skin.tex("Graphics/ScreenPlayDrums pads flush.png");
         for l in PAD_ORDER {
+            if !self.looks.layout.shows(l) {
+                continue;
+            }
             let x = self.looks.layout.pad[l.i()];
             let (sx, sy) = PADS[l.i()];
             let st = self.pads[l.i()];
@@ -1441,6 +1530,12 @@ impl PlayView {
             return;
         }
         let combo = self.tally.combo;
+        // 左バスドラムのレーンを足して右へ寄った進み具合のバーに、コンボの数字がかからないように
+        let shift = if self.looks.layout.left_bass_lane {
+            COMBO_SHIFT
+        } else {
+            0.0
+        };
         // 100 コンボごとの爆発（上流 `CActPerfDrumsComboDGB`）
         let hundred = combo / 100;
         if combo >= 100 && combo > hundred + 100 && !self.bombed.contains(&hundred) {
@@ -1454,7 +1549,7 @@ impl PlayView {
             } else if let Some(t) = g.skin.tex("Graphics/7_combobomb.png") {
                 c.draw_opt(
                     &t,
-                    845.0,
+                    845.0 + shift,
                     -130.0,
                     Opt {
                         src: Some(src(0.0, f as f32 * 340.0, 360.0, 340.0)),
@@ -1487,7 +1582,12 @@ impl PlayView {
                 0.0
             }
         };
-        c.part(&t, 985.0, 222.0 + pulse, src(0.0, 320.0, 250.0, 60.0));
+        c.part(
+            &t,
+            985.0 + shift,
+            222.0 + pulse,
+            src(0.0, 320.0, 250.0, 60.0),
+        );
         let digits: Vec<u32> = combo
             .to_string()
             .chars()
@@ -1496,7 +1596,7 @@ impl PlayView {
             .collect();
         let n = digits.len() as i64;
         let big = g.skin.tex("Graphics/ScreenPlayDrums combo_2.png");
-        let mut x = 1245.0;
+        let mut x = 1245.0 + shift;
         for (i, &d) in digits.iter().enumerate() {
             let j = jump(jump_index - (n - i as i64 - 1));
             if n < 4 {
@@ -1530,7 +1630,7 @@ impl PlayView {
             (JudgePosition::Below, false) => (583, 32),
             (JudgePosition::Below, true) => (80, 32),
             (JudgePosition::Off, _) => {
-                self.judges = [None; 10];
+                self.judges = [None; LANES];
                 return;
             }
         };
@@ -1607,10 +1707,16 @@ impl PlayView {
             if v >= 40 {
                 return false;
             }
-            if let Some(t) = g.skin.tex(&format!(
+            let rel = format!(
                 "Graphics/ScreenPlayDrums chip star_{}.png",
                 FIRE[s.lane.i()]
-            )) {
+            );
+            let tex = if s.lane == Lane::LBD {
+                left_bass_tinted_tex(g, &rel)
+            } else {
+                g.skin.tex(&rel)
+            };
+            if let Some(t) = tex {
                 let f = s.radius * (std::f32::consts::FRAC_PI_2 * v as f32 / 100.0).cos();
                 c.draw_rot(
                     &t,
@@ -1671,10 +1777,13 @@ impl PlayView {
                 *slot = None;
                 continue;
             }
-            let Some(t) = g.skin.tex(&format!(
-                "Graphics/ScreenPlayDrums chip fire_{}.png",
-                FIRE[i]
-            )) else {
+            let rel = format!("Graphics/ScreenPlayDrums chip fire_{}.png", FIRE[i]);
+            let tex = if i == Lane::LBD.i() {
+                left_bass_tinted_tex(g, &rel)
+            } else {
+                g.skin.tex(&rel)
+            };
+            let Some(t) = tex else {
                 continue;
             };
             let f = 0.4 + 0.8 * (v / 50.0 * std::f64::consts::FRAC_PI_2).cos() as f32;
@@ -2143,38 +2252,59 @@ mod tests {
         let mut v = s::Values::default();
         let d = Looks::from_settings(&v);
         assert_eq!(d.lbd, LbdLook::BdLane);
+        assert!(!d.layout.left_bass_lane);
         assert_eq!(d.lane_of(DrumLane::LBD), Lane::BD);
         assert_eq!(d.lane_of(DrumLane::LP), Lane::LP);
         // BD と同じ x と切り出し（絵は色を変えたもの）
         assert_eq!(chip(&d, DrumLane::LBD), chip(&d, DrumLane::BD));
-        assert!(d.left_bass_on_bd(DrumLane::LBD) && !d.left_bass_on_bd(DrumLane::BD));
+        assert!(d.left_bass_tinted(DrumLane::LBD) && !d.left_bass_tinted(DrumLane::BD));
+        // LP の右に足したレーン。絵は水色の絵の LP の列から
+        v.set_raw(s::LBD_GRAPHICS, 1);
+        let own = Looks::from_settings(&v);
+        assert_eq!(own.lbd, LbdLook::OwnLane);
+        assert!(own.layout.left_bass_lane);
+        assert_eq!(own.lane_of(DrumLane::LBD), Lane::LBD);
+        let (x, cut, w, _) = chip(&own, DrumLane::LBD);
+        assert_eq!(
+            (x, cut, w),
+            (own.layout.chip[Lane::LBD.i()], LEFT_BASS_LP_SX, 58.0)
+        );
+        assert!(x > own.layout.chip[Lane::LP.i()]);
+        assert!(own.left_bass_tinted(DrumLane::LBD));
         // NX の A と B は LP のレーン
-        for (raw, look, sx) in [(1, LbdLook::SameAsLp, 660.0), (2, LbdLook::Own, 480.0)] {
+        for (raw, look, sx) in [(2, LbdLook::SameAsLp, 660.0), (3, LbdLook::Own, 480.0)] {
             v.set_raw(s::LBD_GRAPHICS, raw);
             let nx = Looks::from_settings(&v);
             assert_eq!(nx.lbd, look);
+            assert!(!nx.layout.left_bass_lane);
             assert_eq!(nx.lane_of(DrumLane::LBD), Lane::LP);
             let (x, cut, _, _) = chip(&nx, DrumLane::LBD);
             assert_eq!((x, cut), (nx.layout.chip[Lane::LP.i()], sx));
-            assert!(!nx.left_bass_on_bd(DrumLane::LBD));
+            assert!(!nx.left_bass_tinted(DrumLane::LBD));
         }
     }
 
     #[test]
     fn left_bass_chips_are_the_bd_chips_flipped_and_recolored() {
         let mut src = image::RgbaImage::new(718, 4);
-        // BD の列の左端に淡い青紫、右端に透明。ほかの列は使わない
+        // BD の列の左端に淡い青紫、LP の列の左端にピンク。ほかの列は使わない
         src.put_pixel(0, 1, image::Rgba([150, 130, 255, 200]));
         src.put_pixel(100, 1, image::Rgba([255, 0, 0, 255]));
+        src.put_pixel(660, 1, image::Rgba([255, 80, 170, 255]));
         let out = left_bass_chips(src);
-        assert_eq!((out.width(), out.height()), (70, 4));
-        // 左右に返したので右端へ。透明さはそのまま、色相は LEFT_BASS_HUE、明るさは元のまま
+        assert_eq!((out.width(), out.height()), (70 + 58, 4));
+        // BD の列は左右に返したので右端へ。透明さはそのまま、色相は LEFT_BASS_HUE、明るさは元のまま
         let p = out.get_pixel(69, 1);
         assert_eq!(p[3], 200);
         let (h, s, v) = rgb_to_hsv(p[0], p[1], p[2]);
         assert!((h - LEFT_BASS_HUE).abs() < 2.0, "{h}");
         assert!(s > 0.4 && (v - 1.0).abs() < 0.01, "{s} {v}");
         assert_eq!(out.get_pixel(0, 1)[3], 0);
+        // LP の列は返さずにその後ろへ
+        let p = out.get_pixel(70, 1);
+        assert_eq!(p[3], 255);
+        let (h, _, _) = rgb_to_hsv(p[0], p[1], p[2]);
+        assert!((h - LEFT_BASS_HUE).abs() < 2.0, "{h}");
     }
 
     #[test]

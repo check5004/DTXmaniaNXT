@@ -61,7 +61,6 @@ const LANES_X: f32 = 296.0;
 const LANES_W: f32 = 558.0;
 /// レーンの高さ（判定の線と打面まで。下のゲージとずれのバーは入れない）
 const LANES_H: f32 = 625.0;
-const LANES_CX: f32 = LANES_X + LANES_W / 2.0;
 /// 知らせの帯の上の端（Reverse では下の端から同じだけ離す）と高さ
 const BANNER_Y: f32 = 96.0;
 const BANNER_H: f32 = 150.0;
@@ -86,7 +85,9 @@ const GREY: Color32 = Color32::from_gray(200);
 
 /// 練習中の表示をすべて描く。`now` は表示の補正を足した実時間、`last_chip_ms` は曲の最後の音の時刻、
 /// `px_per_ms` は音符の落ちる速さ（判定の音符が知らせの帯に届く前に帯を消す）、`reverse` は下から上へ流すか
-/// （知らせとカウントを上下逆の側に出す）
+/// （知らせとカウントを上下逆の側に出す）、`wide` は左バスドラムのレーンを足して広げた幅（レーンの上のものを広げ、
+/// 進み具合のバーをずらす）
+#[allow(clippy::too_many_arguments)]
 pub fn draw(
     c: &Canvas,
     g: &mut Gfx,
@@ -95,14 +96,15 @@ pub fn draw(
     last_chip_ms: f64,
     px_per_ms: f32,
     reverse: bool,
+    wide: f32,
 ) {
-    draw_progress(c, p, now, last_chip_ms);
+    draw_progress(c, p, now, last_chip_ms, wide);
     draw_lap_and_speed(c, g, p, now);
     draw_recent(c, g, p);
     draw_card(c, g, p, now);
-    draw_banner(c, g, p, now, px_per_ms, reverse);
-    draw_count_in(c, g, p, now, reverse);
-    draw_break(c, g, p, now, reverse);
+    draw_banner(c, g, p, now, px_per_ms, reverse, wide);
+    draw_count_in(c, g, p, now, reverse, wide);
+    draw_break(c, g, p, now, reverse, wide);
 }
 
 /// 高さ `h` の知らせの帯の上の端（チップが出てくる側から `BANNER_Y` 離す）
@@ -1045,7 +1047,8 @@ fn choice_text(p: &Practice, report: &SetReport, choice: Choice) -> (String, Str
 }
 
 /// セットの合間。音符の無いレーンの上に、まとめと次の一手
-fn draw_break(c: &Canvas, g: &mut Gfx, p: &Practice, now: f64, reverse: bool) {
+fn draw_break(c: &Canvas, g: &mut Gfx, p: &Practice, now: f64, reverse: bool, wide: f32) {
+    let lanes_w = LANES_W + wide;
     let Some(b) = &p.between else {
         return;
     };
@@ -1072,6 +1075,7 @@ fn draw_break(c: &Canvas, g: &mut Gfx, p: &Practice, now: f64, reverse: bool) {
         + b.choices.list.len() as f32 * CHOICE_PITCH
         + 40.0;
     let (x, top, w, full) = BREAK;
+    let w = w + wide;
     let h = content.min(full);
     let y = top + (full - h) / 2.0;
     // 上下逆なら、レーンもパネルも上下に映す（ゲージとずれのバーの側は暗くしない）
@@ -1083,7 +1087,7 @@ fn draw_break(c: &Canvas, g: &mut Gfx, p: &Practice, now: f64, reverse: bool) {
     c.fill(
         LANES_X,
         lanes_y,
-        LANES_W,
+        lanes_w,
         LANES_H,
         Color32::from_black_alpha(200).gamma_multiply(alpha),
     );
@@ -1325,7 +1329,17 @@ fn banner(p: &Practice, now: f64, px_per_ms: f32) -> Option<(&LapState, Cue, f32
 }
 
 /// セットの始めと速度を変えた周の助走で、レーンの真ん中に知らせる
-fn draw_banner(c: &Canvas, g: &mut Gfx, p: &Practice, now: f64, px_per_ms: f32, reverse: bool) {
+fn draw_banner(
+    c: &Canvas,
+    g: &mut Gfx,
+    p: &Practice,
+    now: f64,
+    px_per_ms: f32,
+    reverse: bool,
+    wide: f32,
+) {
+    let lanes_w = LANES_W + wide;
+    let lanes_cx = LANES_X + lanes_w / 2.0;
     let Some((lap, cue, alpha)) = banner(p, now, px_per_ms) else {
         return;
     };
@@ -1384,15 +1398,15 @@ fn draw_banner(c: &Canvas, g: &mut Gfx, p: &Practice, now: f64, px_per_ms: f32, 
     c.fill(
         LANES_X,
         top,
-        LANES_W,
+        lanes_w,
         BANNER_H,
         Color32::from_black_alpha(175).gamma_multiply(alpha),
     );
-    c.fill(LANES_X, top, LANES_W, 3.0, color.gamma_multiply(alpha));
+    c.fill(LANES_X, top, lanes_w, 3.0, color.gamma_multiply(alpha));
     c.fill(
         LANES_X,
         top + BANNER_H - 3.0,
-        LANES_W,
+        lanes_w,
         3.0,
         color.gamma_multiply(alpha),
     );
@@ -1401,10 +1415,10 @@ fn draw_banner(c: &Canvas, g: &mut Gfx, p: &Practice, now: f64, px_per_ms: f32, 
         g,
         &head,
         &bold(30.0, color),
-        LANES_CX,
+        lanes_cx,
         top + 8.0,
         Align::Center,
-        LANES_W - 20.0,
+        lanes_w - 20.0,
         alpha,
     );
     // 80% → 90%（変えないときは速度だけ）
@@ -1417,7 +1431,7 @@ fn draw_banner(c: &Canvas, g: &mut Gfx, p: &Practice, now: f64, px_per_ms: f32, 
             let arrow_w = 50.0;
             let total =
                 score_digits_width(g, &from, scale) + arrow_w + score_digits_width(g, &to, scale);
-            let mut at = LANES_CX - total / 2.0;
+            let mut at = lanes_cx - total / 2.0;
             at = score_digits(c, g, &from, at, digits_y, scale, alpha);
             put(
                 c,
@@ -1434,7 +1448,7 @@ fn draw_banner(c: &Canvas, g: &mut Gfx, p: &Practice, now: f64, px_per_ms: f32, 
         }
         None => {
             let w = score_digits_width(g, &to, scale);
-            score_digits(c, g, &to, LANES_CX - w / 2.0, digits_y, scale, alpha);
+            score_digits(c, g, &to, lanes_cx - w / 2.0, digits_y, scale, alpha);
         }
     }
     put(
@@ -1442,10 +1456,10 @@ fn draw_banner(c: &Canvas, g: &mut Gfx, p: &Practice, now: f64, px_per_ms: f32, 
         g,
         &sub,
         &edged(16.0, Color32::WHITE),
-        LANES_CX,
+        lanes_cx,
         top + 110.0,
         Align::Center,
-        LANES_W - 24.0,
+        lanes_w - 24.0,
         alpha,
     );
 }
@@ -1459,7 +1473,8 @@ fn bar_y(song_ms: f64, last_chip_ms: f64) -> f32 {
 }
 
 /// 進み具合のバーに、曲の中の区間と、今叩いている位置
-fn draw_progress(c: &Canvas, p: &Practice, now: f64, last_chip_ms: f64) {
+fn draw_progress(c: &Canvas, p: &Practice, now: f64, last_chip_ms: f64, wide: f32) {
+    let bar_x = BAR_X + wide;
     if last_chip_ms <= 0.0 {
         return;
     }
@@ -1467,8 +1482,8 @@ fn draw_progress(c: &Canvas, p: &Practice, now: f64, last_chip_ms: f64) {
     let top = bar_y(t.end_ms, last_chip_ms);
     let bottom = bar_y(t.start_ms, last_chip_ms);
     let h = (bottom - top).max(3.0);
-    c.fill(BAR_X, top, BAR_W, h, SECTION_COLOR.gamma_multiply(0.35));
-    c.frame(BAR_X, top, BAR_W, h, SECTION_COLOR);
+    c.fill(bar_x, top, BAR_W, h, SECTION_COLOR.gamma_multiply(0.35));
+    c.frame(bar_x, top, BAR_W, h, SECTION_COLOR);
     // 今の周の、区間の頭から叩いたところまで
     let Some(i) = p.current_lap(now) else {
         return;
@@ -1476,9 +1491,9 @@ fn draw_progress(c: &Canvas, p: &Practice, now: f64, last_chip_ms: f64) {
     let song = p.laps[i].plan.song_ms(now).clamp(t.start_ms, t.end_ms);
     let at = bar_y(song, last_chip_ms);
     if bottom > at {
-        c.fill(BAR_X, at, BAR_W, bottom - at, Color32::from_white_alpha(70));
+        c.fill(bar_x, at, BAR_W, bottom - at, Color32::from_white_alpha(70));
     }
-    c.fill(BAR_X - 3.0, at - 1.0, BAR_W + 6.0, 2.0, Color32::WHITE);
+    c.fill(bar_x - 3.0, at - 1.0, BAR_W + 6.0, 2.0, Color32::WHITE);
 }
 
 // ---- 助走のカウント ----
@@ -1492,7 +1507,8 @@ fn count_in(p: &Practice, now: f64) -> Option<(usize, f64)> {
 }
 
 /// 助走のカウントを大きく。クリックが鳴るたびに大きく出て縮む
-fn draw_count_in(c: &Canvas, g: &mut Gfx, p: &Practice, now: f64, reverse: bool) {
+fn draw_count_in(c: &Canvas, g: &mut Gfx, p: &Practice, now: f64, reverse: bool, wide: f32) {
+    let lanes_cx = LANES_X + (LANES_W + wide) / 2.0;
     let Some((n, since)) = count_in(p, now) else {
         return;
     };
@@ -1506,7 +1522,7 @@ fn draw_count_in(c: &Canvas, g: &mut Gfx, p: &Practice, now: f64, reverse: bool)
             let (w, h) = (120.0, 160.0);
             c.draw_opt(
                 &t,
-                LANES_CX - w * scale / 2.0,
+                lanes_cx - w * scale / 2.0,
                 cy - h * scale / 2.0,
                 Opt {
                     src: Some(src((d % 5) as f32 * w, (d / 5) as f32 * h, w, h)),
@@ -1520,7 +1536,7 @@ fn draw_count_in(c: &Canvas, g: &mut Gfx, p: &Practice, now: f64, reverse: bool)
         None => {
             let style = Style::edged(96.0, Color32::WHITE, Color32::BLACK, 4.0);
             if let Some(t) = g.texts.get(&d.to_string(), &style) {
-                t.draw(c, LANES_CX - t.w / 2.0, cy - t.h / 2.0, 1.0, 1.0);
+                t.draw(c, lanes_cx - t.w / 2.0, cy - t.h / 2.0, 1.0, 1.0);
             }
         }
     }

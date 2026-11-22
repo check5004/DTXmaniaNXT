@@ -140,12 +140,12 @@ fn lane_index(lane: dtx::DrumLane) -> usize {
 }
 
 impl Details {
-    /// グラフの列ごとの音符の数と、その一番大きい数。左バスドラムは、演奏の画面で BD のレーンに出すなら
-    /// BD の列に、LP のレーンに出すなら LP の列に足す
-    fn columns(&self, left_bass_on_bd: bool) -> ([[u16; BINS]; GRAPH_LANES], u16) {
+    /// グラフの列ごとの音符の数と、その一番大きい数。左バスドラムは、演奏の画面で LP と分けて出すなら
+    /// （BD のレーンか、足したレーン）BD の列に、LP のレーンに出すなら LP の列に足す
+    fn columns(&self, left_bass_apart: bool) -> ([[u16; BINS]; GRAPH_LANES], u16) {
         let mut cols = [[0u16; BINS]; GRAPH_LANES];
         cols.copy_from_slice(&self.bins[..GRAPH_LANES]);
-        let to = if left_bass_on_bd { 5 } else { 2 };
+        let to = if left_bass_apart { 5 } else { 2 };
         for (cell, add) in cols[to].iter_mut().zip(self.bins[LEFT_BASS_ROW]) {
             *cell = cell.saturating_add(add);
         }
@@ -203,8 +203,8 @@ pub struct SelectView {
     /// 読み終えた譜面の混み具合（読めなかったものは None）
     details: HashMap<PathBuf, Option<Details>>,
     details_jobs: Jobs<PathBuf, Option<Details>>,
-    /// 左バスドラムを BD のレーンに出す（密度のグラフで BD の列に数える）。設定から毎回入れる
-    pub left_bass_on_bd: bool,
+    /// 左バスドラムを LP と分けて出す（密度のグラフで BD の列に数える）。設定から毎回入れる
+    pub left_bass_apart: bool,
 }
 
 impl Default for SelectView {
@@ -228,7 +228,7 @@ impl SelectView {
             found: HashMap::new(),
             details: HashMap::new(),
             details_jobs: Jobs::new("chart details", 1, |path: &PathBuf| read_details(path)),
-            left_bass_on_bd: true,
+            left_bass_apart: true,
         }
     }
 
@@ -684,7 +684,7 @@ impl SelectView {
         let Some(d) = chart.and_then(|ch| self.details(&ch.path)) else {
             return;
         };
-        let (cols, peak) = d.columns(self.left_bass_on_bd);
+        let (cols, peak) = d.columns(self.left_bass_apart);
         if peak > 0 {
             let cell = GRAPH_H / BINS as f32;
             for (lane, bins) in cols.iter().enumerate() {
@@ -1214,7 +1214,7 @@ mod tests {
             note(5000.0, DrumLane::SD),
         ]);
         assert_eq!(d.total, 4);
-        // BD のレーンに出すなら BD の列（5）に、LP のレーンに出すなら LP の列（2）に足す
+        // LP と分けて出すなら BD の列（5）に、LP のレーンに出すなら LP の列（2）に足す
         let (cols, peak) = d.columns(true);
         assert_eq!((cols[5][0], cols[2][0], peak), (2, 1, 2));
         let (cols, peak) = d.columns(false);

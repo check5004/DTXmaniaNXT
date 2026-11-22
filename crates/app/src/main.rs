@@ -2518,7 +2518,7 @@ impl App {
                 let c = Canvas::new(&painter, ctx.content_rect());
                 self.gfx.begin(&c, ctx.pixels_per_point());
                 self.view.update(&mut self.songs);
-                self.view.left_bass_on_bd = self.config.settings.left_bass_on_bd();
+                self.view.left_bass_apart = self.config.settings.left_bass_apart();
                 self.view.draw(&c, &mut self.gfx, &self.songs);
                 if let Some(p) = &self.popup {
                     p.draw(&c, &mut self.gfx);

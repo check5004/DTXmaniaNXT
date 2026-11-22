@@ -2,11 +2,13 @@
 //! レーンの枠・レーンの光・チップ・パッド・火花・判定の文字の x を、上流の表と同じ値で持つ。
 //! 上流は種類ごとの表（`nチャンネルtoX座標B` など）と、既定の表からずらす決まりで書いているので、
 //! ここでは並び 4 つ × RD の位置 2 つの結果を表にした。
+//! 左バスドラムのレーン（NXT だけのもの）を足すときは、LP のすぐ右に LP と同じ幅で入れ、右の側をずらす。
 
 use dtx::DrumLane;
 
-/// 上流の `ELane`（ドラムの 10 レーン）。表の添字に使う
+/// 上流の `ELane`（ドラムの 10 レーン）と、NXT で足せる左バスドラムのレーン。表の添字に使う
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(clippy::upper_case_acronyms)]
 pub enum Lane {
     LC,
     HH,
@@ -18,7 +20,12 @@ pub enum Lane {
     CY,
     LP,
     RD,
+    /// 左バスドラム（LP の右に足したときだけ使う）
+    LBD,
 }
+
+/// レーンの数（左バスドラムのレーンも入れて）
+pub const LANES: usize = 11;
 
 impl Lane {
     /// 叩いた・判定したレーンを上流のレーンに（上流 `nパッド0Atoレーン07`、`nチャンネル0Atoレーン07`）
@@ -202,17 +209,32 @@ const JUDGE_XW: [[(i32, i32); 10]; 4] = [
 /// HH オープンのチップの x（並びによらない。上流 `nチャンネルtoX座標` の HHO）
 const HHO_CHIP_X: f32 = 373.0;
 
+/// レーンを並べる左の端と、上流の 10 レーンの幅（判定の線・小節線・シャッターの幅）
+pub const LANES_LEFT: f32 = 295.0;
+const LANES_W: f32 = 559.0;
+/// 足す左バスドラムのレーンの幅（LP の枠と同じ）
+pub const LEFT_BASS_W: f32 = 51.0;
+
+/// 上流の表（10 レーン）を、左バスドラムのぶんも入れた長さにする（左バスドラムは LP と同じ値）
+fn with_left_bass<T: Copy>(a: [T; 10]) -> [T; LANES] {
+    let mut out = [a[Lane::LP.i()]; LANES];
+    out[..10].copy_from_slice(&a);
+    out
+}
+
 /// レーンごとの x（`Lane` の順）
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Layout {
-    pub panel: [f32; 10],
-    pub flush: [f32; 10],
-    pub chip: [f32; 10],
-    pub pad: [f32; 10],
+    pub panel: [f32; LANES],
+    pub flush: [f32; LANES],
+    pub chip: [f32; LANES],
+    pub pad: [f32; LANES],
     /// 火花の中心（+320 する前）
-    pub fire: [f32; 10],
+    pub fire: [f32; LANES],
     /// 判定の文字の x と幅
-    pub judge: [(i32, i32); 10],
+    pub judge: [(i32, i32); LANES],
+    /// LP の右に左バスドラムのレーンを足した
+    pub left_bass_lane: bool,
 }
 
 impl Default for Layout {
@@ -225,12 +247,13 @@ impl Layout {
     pub fn new(lanes: LaneType, rd: RdPosition) -> Self {
         let t = lanes as usize;
         let mut l = Self {
-            panel: PANEL_X[t],
-            flush: FLUSH_X[t],
-            chip: CHIP_X[t],
-            pad: PAD_X[t],
-            fire: FIRE_X[t],
-            judge: JUDGE_XW[t],
+            panel: with_left_bass(PANEL_X[t]),
+            flush: with_left_bass(FLUSH_X[t]),
+            chip: with_left_bass(CHIP_X[t]),
+            pad: with_left_bass(PAD_X[t]),
+            fire: with_left_bass(FIRE_X[t]),
+            judge: with_left_bass(JUDGE_XW[t]),
+            left_bass_lane: false,
         };
         if rd == RdPosition::LeftOfCy {
             let (cy, rd) = (Lane::CY.i(), Lane::RD.i());
@@ -253,7 +276,55 @@ impl Layout {
                 _ => {}
             }
         }
+        l.chip[Lane::LBD.i()] = l.chip[Lane::LP.i()];
         l
+    }
+
+    /// LP のすぐ右に左バスドラムのレーンを足す（実物のツインペダルと同じく、左ペダルの右に左のビーター）。
+    /// LP より右のレーンは [`LEFT_BASS_W`] だけ右へずらす
+    pub fn with_left_bass_lane(mut self) -> Self {
+        if self.left_bass_lane {
+            return self;
+        }
+        let (lp, lbd) = (Lane::LP.i(), Lane::LBD.i());
+        let w = LEFT_BASS_W;
+        for i in 0..LANES {
+            if i != lbd && self.panel[i] > self.panel[lp] {
+                self.panel[i] += w;
+                self.flush[i] += w;
+                self.chip[i] += w;
+                self.pad[i] += w;
+                self.fire[i] += w;
+                self.judge[i].0 += w as i32;
+            }
+        }
+        self.panel[lbd] = self.panel[lp] + w;
+        self.flush[lbd] = self.flush[lp] + w;
+        self.chip[lbd] = self.chip[lp] + w;
+        self.pad[lbd] = self.pad[lp] + w;
+        self.fire[lbd] = self.fire[lp] + w;
+        self.judge[lbd] = (self.judge[lp].0 + w as i32, self.judge[lp].1);
+        self.left_bass_lane = true;
+        self
+    }
+
+    /// 足したレーンのぶんの幅（足していなければ 0）
+    pub fn extra_w(&self) -> f32 {
+        if self.left_bass_lane {
+            LEFT_BASS_W
+        } else {
+            0.0
+        }
+    }
+
+    /// レーン全体の幅（判定の線・小節線・シャッターの幅）
+    pub fn width(&self) -> f32 {
+        LANES_W + self.extra_w()
+    }
+
+    /// このレーンを描くか（左バスドラムのレーンは足したときだけ）
+    pub fn shows(&self, l: Lane) -> bool {
+        l != Lane::LBD || self.left_bass_lane
     }
 
     /// 設定の表の「レーンの並び」と「RD の位置」から
@@ -269,7 +340,12 @@ impl Layout {
             1 => RdPosition::LeftOfCy,
             _ => RdPosition::Right,
         };
-        Self::new(lanes, rd)
+        let l = Self::new(lanes, rd);
+        if v.left_bass_lane() {
+            l.with_left_bass_lane()
+        } else {
+            l
+        }
     }
 
     /// チップを置くレーンの x（絵による細かいずらしは描く側で）
@@ -285,7 +361,7 @@ impl Layout {
 mod tests {
     use super::*;
 
-    const LANES: [Lane; 10] = [
+    const ALL_LANES: [Lane; LANES] = [
         Lane::LC,
         Lane::HH,
         Lane::SD,
@@ -296,23 +372,29 @@ mod tests {
         Lane::CY,
         Lane::LP,
         Lane::RD,
+        Lane::LBD,
     ];
 
-    /// 枠の幅（7_Paret.png の切り出しの幅。`Lane` の順）
-    const PANEL_W: [f32; 10] = [72.0, 49.0, 57.0, 69.0, 49.0, 49.0, 54.0, 70.0, 51.0, 38.0];
+    /// 枠の幅（7_Paret.png の切り出しの幅。`Lane` の順。左バスドラムは LP と同じ）
+    const PANEL_W: [f32; LANES] = [
+        72.0, 49.0, 57.0, 69.0, 49.0, 49.0, 54.0, 70.0, 51.0, 38.0, 51.0,
+    ];
 
+    /// 並び 4 つ × RD の位置 2 つ × 左バスドラムのレーンの有無
     fn all() -> Vec<(LaneType, RdPosition, Layout)> {
         let mut v = Vec::new();
         for t in [LaneType::A, LaneType::B, LaneType::C, LaneType::D] {
             for rd in [RdPosition::Right, RdPosition::LeftOfCy] {
-                v.push((t, rd, Layout::new(t, rd)));
+                let l = Layout::new(t, rd);
+                v.push((t, rd, l));
+                v.push((t, rd, l.with_left_bass_lane()));
             }
         }
         v
     }
 
     fn order(l: &Layout) -> Vec<Lane> {
-        let mut lanes = LANES.to_vec();
+        let mut lanes: Vec<Lane> = ALL_LANES.into_iter().filter(|&x| l.shows(x)).collect();
         lanes.sort_by(|a, b| l.panel[a.i()].total_cmp(&l.panel[b.i()]));
         lanes
     }
@@ -332,6 +414,11 @@ mod tests {
                 LaneType::D => vec![LC, HH, SD, HT, LP, BD, LT, FT],
             };
             want.extend(ends(rd));
+            // 左バスドラムのレーンは LP のすぐ右
+            if l.left_bass_lane {
+                let lp = want.iter().position(|&x| x == LP).unwrap();
+                want.insert(lp + 1, LBD);
+            }
             assert_eq!(order(&l), want, "{t:?} {rd:?}");
         }
     }
@@ -345,13 +432,20 @@ mod tests {
                 let gap = l.panel[w[1].i()] - end;
                 assert!(gap.abs() <= 1.0, "{t:?} {rd:?} {:?}→{:?} {gap}", w[0], w[1]);
             }
+            // 右の端は判定の線などの幅と同じ
+            let last = lanes.last().unwrap().i();
+            let right = l.panel[last] + PANEL_W[last];
+            assert!(
+                (right - (LANES_LEFT + l.width())).abs() <= 1.0,
+                "{t:?} {rd:?} {right}"
+            );
         }
     }
 
     #[test]
     fn every_part_of_a_lane_sits_on_its_panel() {
         for (t, rd, l) in all() {
-            for lane in LANES {
+            for lane in ALL_LANES.into_iter().filter(|&x| l.shows(x)) {
                 let i = lane.i();
                 let (left, right) = (l.panel[i] - 4.0, l.panel[i] + PANEL_W[i] + 4.0);
                 let inside = |x: f32, what: &str| {
@@ -381,5 +475,12 @@ mod tests {
         assert_eq!(l, Layout::new(LaneType::D, RdPosition::LeftOfCy));
         assert_eq!(l.chip_x(DrumLane::LBD), 527.0);
         assert_eq!(l.chip_x(DrumLane::HHO), HHO_CHIP_X);
+        assert!(!l.left_bass_lane && l.extra_w() == 0.0);
+        // 左バスドラムのレーンを足す出し方
+        v.set_raw(s::LBD_GRAPHICS, 1);
+        let l = Layout::from_settings(&v);
+        assert!(l.left_bass_lane && l.shows(Lane::LBD));
+        assert_eq!(l.width(), 559.0 + LEFT_BASS_W);
+        assert_eq!(l.chip[Lane::LBD.i()], 527.0 + LEFT_BASS_W);
     }
 }

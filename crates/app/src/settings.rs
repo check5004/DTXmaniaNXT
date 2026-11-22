@@ -261,9 +261,11 @@ const HHO_GRAPHICS_CHOICES: &[Choice] = choices![
     "c" => "C（クローズと同じ）",
 ];
 
-/// 左バスドラムの出し方。先頭は NXT の既定（BD のレーンに色を変えて出す）、あとの 2 つは上流 `eLBDGraphics.Drums`
+/// 左バスドラムの出し方。先頭の 2 つは NXT のもの（BD のレーンに水色で出す、LP の右に水色のレーンを足す）、
+/// あとの 2 つは上流 `eLBDGraphics.Drums`
 const LBD_GRAPHICS_CHOICES: &[Choice] = choices![
-    "bd_lane" => "BD のレーンに色違いで",
+    "bd_lane" => "BD のレーンに水色で",
+    "own_lane" => "LP の右にレーンを足す（水色）",
     "a" => "LP のレーンに同じ絵（NX の A）",
     "b" => "LP のレーンに紫の絵（NX の B）",
 ];
@@ -711,7 +713,7 @@ pub const ALL: &[Def] = &[
         VIEW_ORDER,
         "左バスドラムの出し方（LBDGraphics）",
         LBD_GRAPHICS_CHOICES,
-        "左バスドラム（LBD）の音符を BD のレーンに色を変えて出すか、NX と同じく LP のレーンに出すか。\n光・判定の文字・火花も、音符を出したレーンに出します。",
+        "左バスドラム（LBD）の音符を BD のレーンに水色で出すか、LP の右に足したレーン（実物のツインペダルと同じ並び）に出すか、NX と同じく LP のレーンに出すか。\n光・判定の文字・火花も、音符を出したレーンに出します。",
     ),
     view_choice(
         HID_SUD,
@@ -1099,9 +1101,14 @@ impl Values {
         self.0.insert(key.to_owned(), v);
     }
 
-    /// 左バスドラムを BD のレーンに出す（出し方の先頭の選択肢）
-    pub fn left_bass_on_bd(&self) -> bool {
-        self.choice(LBD_GRAPHICS) == 0
+    /// LP の右に左バスドラムのレーンを足す（出し方の 2 つめ）
+    pub fn left_bass_lane(&self) -> bool {
+        self.choice(LBD_GRAPHICS) == 1
+    }
+
+    /// 左バスドラムを LP と分けて出す（BD のレーンか、足したレーン）。分けないのは NX の 2 つ
+    pub fn left_bass_apart(&self) -> bool {
+        self.choice(LBD_GRAPHICS) <= 1
     }
 
     /// 叩き分け（上流の HH / FT / CY / BD Group と CymbalFree）
