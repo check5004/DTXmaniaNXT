@@ -1548,7 +1548,7 @@ impl App {
             KeyCode::Comma | KeyCode::Period if play.practice.is_some() => {
                 play.nudge_speed(if code == KeyCode::Comma { -1 } else { 1 });
                 let speed = play.practice.as_ref().map_or(100, |p| p.ladder().speed());
-                format!("次の周から速度 {speed}%")
+                format!("速度 {speed}%（次の周から、助走のあと）")
             }
             HIT_SOUND_KEY => {
                 play.drum_sounds = !play.drum_sounds;
@@ -1927,6 +1927,7 @@ impl App {
                             rule: p.rule,
                             speed: p.speed,
                             pitch: p.pitch,
+                            metronome: p.metronome,
                         })
                     }
                     None => options,

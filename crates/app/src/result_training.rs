@@ -1,6 +1,7 @@
 //! 結果の画面に足すトレーニングの表示（NX の部品で）。
 //!
-//! - 練習の結果：ランクとジャケットの場所に、周ごとの成績の表（DFP の見出し）を出す
+//! - 練習の結果：ランクとジャケットの場所に、合格の数・クリア・気づいたこと（空打ちの偏り、ずれ）と、
+//!   周ごとの成績の表を出す
 //! - ふだんのプレイ：右の空いた場所に、苦手な小節を進み具合のバーの形（黒地に縞）で出す
 
 use egui::Color32;
@@ -8,13 +9,20 @@ use engine::practice::{PASSES_TO_UP, Section, SpeedPlan, speed_percent};
 
 use crate::band::{Band, BandData, CLEARED_COLOR};
 use crate::game::{Outcome, PracticeOutcome};
-use crate::gfx::Gfx;
-use crate::gfx::{Canvas, DFP};
-use crate::practice::LapSummary;
+use crate::gfx::{Canvas, Gfx};
+use crate::inputs::lane_label;
+use crate::practice::{
+    LapSummary, StrayHint, WEAK_VELOCITY, rule_pass_label, section_label, style_label,
+};
 use crate::text::Style;
 
 const PASS_COLOR: Color32 = Color32::from_rgb(0x70, 0xE0, 0x90);
 const FAIL_COLOR: Color32 = Color32::from_rgb(0xF0, 0x80, 0x60);
+/// 気づいたこと（空打ちの偏り、ずれ）
+const NOTE_COLOR: Color32 = Color32::from_rgb(0xFF, 0xD0, 0x80);
+/// ずれの平均をこれ以上なら知らせる（ミリ秒）と、そのために要る打った数
+const OFFSET_NOTE_MS: f64 = 10.0;
+const OFFSET_NOTE_HITS: usize = 30;
 
 /// 練習の結果の欄（ランクとジャケットの場所）
 const PRACTICE: (f32, f32, f32, f32) = (480.0, 24.0, 780.0, 590.0);
@@ -50,51 +58,81 @@ fn text(c: &Canvas, g: &mut Gfx, s: &str, x: f32, y: f32, px: f32, color: Color3
 }
 
 fn section_text(s: Section) -> String {
-    if s.first == s.last {
-        format!("小節 {}", s.first)
-    } else {
-        format!("小節 {}〜{}", s.first, s.last)
-    }
+    section_label(s)
 }
 
 fn plan_text(p: SpeedPlan) -> String {
     match p {
-        SpeedPlan::Fixed(s) => format!("Fixed {s}%"),
-        SpeedPlan::Ladder { start, target } => format!("Ladder {start}% → {target}%"),
+        SpeedPlan::Fixed(s) => format!("固定 {s}%"),
+        SpeedPlan::Ladder { start, target } => format!("段階アップ {start}% → {target}%"),
     }
 }
 
-/// 練習の結果。周ごとの成績の表と、合格の数、クリア
+/// 長い文を幅 `max_w` で折り返して描き、次の行の y を返す
+#[allow(clippy::too_many_arguments)]
+fn paragraph(
+    c: &Canvas,
+    g: &mut Gfx,
+    s: &str,
+    x: f32,
+    mut y: f32,
+    px: f32,
+    color: Color32,
+    max_w: f32,
+) -> f32 {
+    for line in g.texts.wrap(s, px, max_w) {
+        text(c, g, &line, x, y, px, color);
+        y += px + 6.0;
+    }
+    y
+}
+
+/// 空打ちが一つのパッドの弱い打に偏っているときの知らせ
+fn stray_note(h: &StrayHint) -> String {
+    format!(
+        "空打ち {} 回のうち {} 回が{}で、{} 回は強さ {WEAK_VELOCITY} 未満の弱い打でした。パッドが振動を拾いすぎているかもしれません。設定の「MIDI 機器」で最小ベロシティを上げると減ります。",
+        h.total,
+        h.count,
+        lane_label(h.lane),
+        h.weak
+    )
+}
+
+/// ずれが一つの向きに偏っているときの知らせ
+fn offset_note((mean, hits): (f64, usize)) -> Option<String> {
+    (hits >= OFFSET_NOTE_HITS && mean.abs() >= OFFSET_NOTE_MS).then(|| {
+        format!(
+            "叩くタイミングは平均 {mean:+.0}ms（{}）でした。いつもこうなら、入力の補正（演奏中に - / =）で合わせると判定が楽になります。",
+            if mean < 0.0 { "早め" } else { "遅め" }
+        )
+    })
+}
+
+/// 練習の結果。合格の数、クリア、気づいたこと、周ごとの成績の表
 pub fn draw_practice(c: &Canvas, g: &mut Gfx, p: &PracticeOutcome) {
     let (x, y, w, h) = PRACTICE;
     panel(c, PRACTICE);
     let left = x + 20.0;
-    g.dfp(c, left, y + 10.0, "PRACTICE RESULT", false);
+    let heading_w = g.heading(c, left, y + 10.0, "練習の結果");
     let o = p.options;
-    let style = match o.style {
-        engine::practice::LoopStyle::Connect => "Connect",
-        engine::practice::LoopStyle::Restart => "Restart",
-    };
-    let rule = match o.rule {
-        engine::practice::PassRule::Easy => "Easy",
-        engine::practice::PassRule::Normal => "Normal",
-        engine::practice::PassRule::Strict => "Strict",
-    };
     let head = format!(
-        "{}　{style} / {rule} / {}",
+        "{}　{} / {} / {}",
         section_text(o.section),
+        style_label(o.style),
+        rule_pass_label(o.rule),
         plan_text(o.speed)
     );
     text(
         c,
         g,
         &head,
-        left + DFP.width("PRACTICE RESULT") + 24.0,
+        left + heading_w + 24.0,
         y + 14.0,
         18.0,
         Color32::WHITE,
     );
     let mut ty = y + 50.0;
+    let max_w = w - 40.0;
     let done: Vec<&LapSummary> = p.laps.iter().filter(|l| l.completed).collect();
     if done.is_empty() {
         text(
@@ -109,24 +147,31 @@ pub fn draw_practice(c: &Canvas, g: &mut Gfx, p: &PracticeOutcome) {
         ty += 30.0;
     } else {
         let passed = done.iter().filter(|l| l.passed == Some(true)).count();
-        let rate = done.iter().map(|l| l.perfect_rate()).sum::<f64>() / done.len() as f64;
         let line = format!(
-            "{} 周のうち合格 {passed} 周、PERFECT の割合の平均 {:.0}%",
+            "{} 周のうち合格 {passed} 周（{}）",
             done.len(),
-            rate * 100.0
+            rule_pass_label(o.rule)
         );
         text(c, g, &line, left, ty, 20.0, Color32::WHITE);
         ty += 28.0;
-        if let Some(top) = done
+        let reached = done.iter().map(|l| speed_percent(l.speed)).max();
+        let top = done
             .iter()
             .filter(|l| l.passed == Some(true))
             .map(|l| speed_percent(l.speed))
-            .max()
-        {
+            .max();
+        let mut parts = Vec::new();
+        if let (SpeedPlan::Ladder { start, target }, Some(r)) = (o.speed, reached) {
+            parts.push(format!("{start}% から始めて {r}% まで（目標 {target}%）"));
+        }
+        if let Some(top) = top {
+            parts.push(format!("合格した一番速い速度 {top}%"));
+        }
+        if !parts.is_empty() {
             text(
                 c,
                 g,
-                &format!("合格した一番速い速度 {top}%"),
+                &parts.join("　"),
                 left,
                 ty,
                 16.0,
@@ -138,9 +183,25 @@ pub fn draw_practice(c: &Canvas, g: &mut Gfx, p: &PracticeOutcome) {
     if p.cleared
         && let SpeedPlan::Ladder { target, .. } = o.speed
     {
-        let line = format!("クリア！ 目標の {target}% で {PASSES_TO_UP} 周続けて合格しました");
+        let line = format!("クリア！ 目標の {target}% で {PASSES_TO_UP} 回合格しました");
         text(c, g, &line, left, ty, 20.0, PASS_COLOR);
         ty += 28.0;
+    }
+    // 気づいたこと
+    if let Some(hint) = &p.strays {
+        ty = paragraph(
+            c,
+            g,
+            &stray_note(hint),
+            left,
+            ty + 2.0,
+            14.0,
+            NOTE_COLOR,
+            max_w,
+        );
+    }
+    if let Some(note) = p.offset.and_then(offset_note) {
+        ty = paragraph(c, g, &note, left, ty + 2.0, 14.0, NOTE_COLOR, max_w);
     }
     if p.laps.len() > done.len() {
         text(
@@ -159,25 +220,26 @@ pub fn draw_practice(c: &Canvas, g: &mut Gfx, p: &PracticeOutcome) {
         lap_table(c, g, &done, left, ty, y + h - 44.0);
     }
     // 操作の案内
-    let keys = "R：もう一度　　P：区間を選び直す　　Enter（CY / RD）：選曲に戻る";
+    let keys =
+        "R：もう一度　　P：区間を選び直す　　Enter（ドラムは右シンバルかライド）：選曲に戻る";
     let style = Style::edged(15.0, Color32::from_gray(220), Color32::BLACK, 1.5);
     if let Some(t) = g.texts.get(keys, &style) {
-        t.draw(c, x + (w - t.w) / 2.0, y + h - 30.0, 1.0, 1.0);
+        t.draw_fit(c, x + ((w - t.w) / 2.0).max(10.0), y + h - 30.0, w - 20.0);
     }
 }
 
 /// 表の列（見出し、左の端からの位置）
 const COLUMNS: [(&str, f32); 10] = [
-    ("LAP", 0.0),
-    ("SPEED", 56.0),
+    ("周", 0.0),
+    ("速度", 56.0),
     ("PERFECT", 138.0),
     ("GREAT", 268.0),
     ("GOOD", 344.0),
     ("POOR", 414.0),
     ("MISS", 482.0),
-    ("STRAY", 546.0),
-    ("OFFSET", 616.0),
-    ("", 706.0),
+    ("空打ち", 546.0),
+    ("ずれ", 616.0),
+    ("", 718.0),
 ];
 
 /// 周ごとの成績の表。入りきらないときは新しい周を出す
@@ -269,7 +331,7 @@ pub fn draw_weak(c: &Canvas, g: &mut Gfx, o: &Outcome) {
     };
     let (x, y, pw, ph) = WEAK;
     panel(c, WEAK);
-    g.dfp(c, x + 12.0, y + 8.0, "WEAK MEASURES", false);
+    g.heading(c, x + 12.0, y + 8.0, "苦手な小節");
     let source = match (w.plays, w.practice_laps) {
         (0, 0) => "記録なし".to_owned(),
         (p, 0) => format!("直近のプレイ {p} 回から"),
