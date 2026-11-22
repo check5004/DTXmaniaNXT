@@ -96,6 +96,66 @@ impl History {
             .ok()
     }
 
+    /// 曲の一覧の譜面の隣にある NX の score.ini を、まだなら記録に引き継ぐ。引き継いだ譜面の数を返す
+    pub fn import_nx_scores(&mut self, library: &library::Library) -> usize {
+        let Some(records) = self.records.as_mut() else {
+            return 0;
+        };
+        let done = match records.imported_files() {
+            Ok(d) => d,
+            Err(e) => {
+                log::warn!("cannot read the records: {e}");
+                return 0;
+            }
+        };
+        let now = unix_now();
+        let mut count = 0;
+        for song in library.all_songs() {
+            for chart in song.charts.iter().flatten() {
+                let ini_path = crate::nx_import::score_ini_path(&chart.path);
+                let file = ini_path.to_string_lossy();
+                if done.contains(file.as_ref()) {
+                    continue;
+                }
+                let Ok(bytes) = std::fs::read(&ini_path) else {
+                    continue;
+                };
+                let ini = nx::ScoreIni::parse(&dtx::decode(&bytes).0);
+                let modified = std::fs::metadata(&ini_path)
+                    .and_then(|m| m.modified())
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map_or(now, |d| d.as_secs() as i64);
+                let sessions = crate::nx_import::sessions(&ini, modified);
+                // 譜面が読めなければ、次に開いたときにもう一度
+                let Ok(chart_bytes) = std::fs::read(&chart.path) else {
+                    continue;
+                };
+                let path = chart.path.to_string_lossy();
+                let title = if chart.head.title.is_empty() {
+                    &song.title
+                } else {
+                    &chart.head.title
+                };
+                let key = ChartKey {
+                    path: &path,
+                    title,
+                    artist: &chart.head.artist,
+                    hash: records::hash_bytes(&chart_bytes),
+                };
+                match records.import(&file, &key, &sessions, now) {
+                    Ok(()) if !sessions.is_empty() => count += 1,
+                    Ok(()) => {}
+                    Err(e) => log::warn!("{file}: cannot import: {e}"),
+                }
+            }
+        }
+        if count > 0 {
+            log::info!("imported NX scores of {count} charts");
+        }
+        count
+    }
+
     /// 譜面のこれまでのベスト。`before`（セッションの番号）があれば、それより前のプレイだけから。
     /// 記録が読めなければ None
     pub fn best_score(&self, path: &Path, before: Option<i64>) -> Option<BestScore> {
@@ -277,4 +337,10 @@ impl History {
             }
         }
     }
+}
+
+fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64)
 }
