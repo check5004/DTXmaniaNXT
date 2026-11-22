@@ -11,6 +11,9 @@ use serde::{Deserialize, Serialize};
 use crate::practice::PracticePrefs;
 use crate::stretch::Pitch;
 
+/// 設定の画面で全体の音量を 1 回で変える幅（%）
+pub const MASTER_VOLUME_STEP: u8 = 5;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
@@ -28,6 +31,9 @@ pub struct Config {
     pub scroll_px_per_ms: f32,
     /// 叩いたときに譜面の音を鳴らす（モジュールの音を使うなら切る）
     pub drum_sounds: bool,
+    /// 全体の音量（0〜100 %、上流 `MasterVolume`）。書いていなければ 50。
+    /// NX の Config.ini からは引き継がない（NX の既定の 100 だと大きすぎる）
+    pub master_volume: u8,
     /// 最後に選んだ難易度（0〜4）
     pub level: usize,
     /// 練習の周のつなぎ方（"connect" か "restart"）
@@ -72,6 +78,7 @@ impl Default for Config {
             visual_offset_ms: 0.0,
             scroll_px_per_ms: 0.6,
             drum_sounds: true,
+            master_volume: crate::audio::DEFAULT_MASTER_VOLUME,
             level: 2,
             practice_style: LoopStyle::default().name().to_owned(),
             practice_rule: PassRule::default().name().to_owned(),
@@ -153,6 +160,18 @@ impl Config {
         self.show_lag_time = nx.show_lag_time.unwrap_or(0);
         self.show_lag_time_color = u8::from(nx.lag_color_swapped);
         self.show_lag_hit_count = nx.show_lag_hit_count;
+    }
+
+    /// 全体の音量（%）。ファイルに 100 より大きく書いてあれば 100
+    pub fn master_volume(&self) -> u8 {
+        self.master_volume.min(100)
+    }
+
+    /// 全体の音量を `steps` 段変える（1 段 5 %、0〜100）
+    pub fn nudge_master_volume(&mut self, steps: i32) {
+        let step = i32::from(MASTER_VOLUME_STEP);
+        let now = (i32::from(self.master_volume()) + step / 2) / step;
+        self.master_volume = ((now + steps) * step).clamp(0, 100) as u8;
     }
 
     /// STAGE FAILED にする（書いていなければ ON）
@@ -288,6 +307,8 @@ mod tests {
         assert_eq!(c.input_offset_ms, 12.0);
         assert_eq!(c.scroll_px_per_ms, 0.6);
         assert!(c.drum_sounds);
+        // 前の版の設定（音量の項目が無い）でも 50 % で鳴らす
+        assert_eq!(c.master_volume(), 50);
         assert_eq!(c.loop_style(), LoopStyle::Connect);
         assert_eq!(c.pass_rule(), PassRule::Normal);
         assert_eq!(c.speed_plan(), SpeedPlan::default());
@@ -376,10 +397,46 @@ mod tests {
     }
 
     #[test]
+    fn master_volume_defaults_to_half_and_moves_in_steps() {
+        let mut c = Config::default();
+        assert_eq!(c.master_volume(), 50);
+        c.nudge_master_volume(-3);
+        assert_eq!(c.master_volume(), 35);
+        c.nudge_master_volume(-100);
+        assert_eq!(c.master_volume(), 0);
+        c.nudge_master_volume(100);
+        assert_eq!(c.master_volume(), 100);
+        // ファイルに書いた半端な値や大きすぎる値は、刻みに合わせて直す
+        let mut c: Config = toml::from_str("master_volume = 42\n").unwrap();
+        c.nudge_master_volume(1);
+        assert_eq!(c.master_volume(), 45);
+        let mut c: Config = toml::from_str("master_volume = 200\n").unwrap();
+        assert_eq!(c.master_volume(), 100);
+        c.nudge_master_volume(-1);
+        assert_eq!(c.master_volume(), 95);
+    }
+
+    #[test]
+    fn master_volume_is_kept_for_the_next_version() {
+        // 一度下げた音量は保存して読み直しても同じ（版を上げても設定のファイルは同じ所）
+        let mut c = Config::default();
+        c.nudge_master_volume(-6);
+        let text = toml::to_string_pretty(&c).unwrap();
+        assert!(text.contains("master_volume = 20"));
+        let back: Config = toml::from_str(&text).unwrap();
+        assert_eq!(back.master_volume(), 20);
+        // NX の設定を引き継いでも音量は変わらない
+        let mut c = back;
+        c.adopt_nx(&nx::NxConfig::parse("[System]\nMasterVolume=100\n"));
+        assert_eq!(c.master_volume(), 20);
+    }
+
+    #[test]
     fn round_trip() {
         let mut c = Config::default();
         c.song_dirs.push(PathBuf::from("曲"));
         c.level = 4;
+        c.master_volume = 70;
         c.stage_failed = Some(false);
         c.show_lag_time = 2;
         c.show_lag_time_color = 1;
