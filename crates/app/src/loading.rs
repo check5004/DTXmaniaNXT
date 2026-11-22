@@ -36,22 +36,14 @@ pub struct Loading {
 
 impl Loading {
     /// `path` は譜面、`label` は難易度の名前（選曲画面で選んだもの）。`job` は曲を読んでいるスレッド
-    pub fn new(
-        path: &Path,
-        label: &str,
-        skin_dir: Option<&Path>,
-        wait: Duration,
-        job: Job<Play>,
-    ) -> Self {
+    pub fn new(path: &Path, label: &str, wait: Duration, job: Job<Play>) -> Self {
         let head = library::scan::read_head(path).unwrap_or_default();
         let preimage = path
             .parent()
             .zip(Some(head.preimage.trim()))
             .filter(|(_, name)| !name.is_empty())
             .and_then(|(dir, name)| library::scan::resolve(dir, name));
-        let diff_panel = skin_dir
-            .and_then(|d| difficulty_cell(d, "6", label))
-            .unwrap_or((0.0, 0.0));
+        let diff_panel = difficulty_cell("6", label).unwrap_or((0.0, 0.0));
         Self {
             head,
             preimage,

@@ -1,6 +1,6 @@
 //! 設定の画面（上流 `CStageConfig` と `CActConfigList`）。
 //! スキンの 4_ の画像で、左のメニュー（System / Drums / Exit）と、右の項目の一覧、説明のパネルを出す。
-//! 項目は NXT のもの（NX のフォルダ、曲のフォルダ、入力と表示の補正、スクロールの速さ、パッドの割り当てなど）。
+//! 項目は NXT のもの（曲のフォルダ、入力と表示の補正、スクロールの速さ、パッドの割り当てなど）。
 //!
 //! 操作は上流と同じ。↑↓（HT / LT）で選び、Enter（CY / RD）で決め、Esc（LC）で戻る。
 //! 数の項目は Enter で値を変える状態になり、↑↓ で値を変えて、もう一度 Enter で戻る。
@@ -13,7 +13,7 @@ use dtx::DrumLane;
 use egui::Color32;
 use library::Progress;
 
-use crate::config::Config;
+use crate::config::{Config, MASTER_VOLUME_STEP};
 use crate::gfx::{Canvas, Gfx, src};
 use crate::sfx::Se;
 use crate::text::Style;
@@ -43,7 +43,6 @@ pub const OFFSET_RANGE: f64 = 200.0;
 /// 画面から App に頼むこと
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ConfigAction {
-    ChooseNx,
     AddSongDir,
     RemoveSongDir(usize),
     Rescan,
@@ -63,11 +62,15 @@ pub enum ConfigAction {
 /// 値を変えられる設定
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Setting {
+    MasterVolume,
     InputAdjust,
     VisualAdjust,
     ScrollSpeed,
     StageFailed,
     HitSound,
+    ShowLagTime,
+    ShowLagTimeColor,
+    ShowLagHitCount,
     AutoUpdate,
 }
 
@@ -76,7 +79,6 @@ pub enum Setting {
 pub enum ItemId {
     /// `<< ReturnTo Menu`
     Return,
-    NxDir,
     AddSongDir,
     SongDir(usize),
     Rescan,
@@ -93,7 +95,12 @@ impl ItemId {
     fn is_integer(self) -> bool {
         matches!(
             self,
-            ItemId::Value(Setting::InputAdjust | Setting::VisualAdjust | Setting::ScrollSpeed)
+            ItemId::Value(
+                Setting::MasterVolume
+                    | Setting::InputAdjust
+                    | Setting::VisualAdjust
+                    | Setting::ScrollSpeed
+            )
         )
     }
 }
@@ -119,14 +126,6 @@ pub enum List {
 /// 項目を作るのに要るもの
 pub struct ConfigInfo<'a> {
     pub config: &'a Config,
-    /// 選んだ DTXManiaNX のフォルダ
-    pub nx_root: Option<&'a Path>,
-    /// 選んだ NX のフォルダが今もある
-    pub nx_found: bool,
-    /// NX から写したスキンを使っている
-    pub nx_copied: bool,
-    /// NX の Config.ini の STAGE FAILED
-    pub nx_stage_failed: Option<bool>,
     /// 今の割り当て（レーン → ノート番号）
     pub lanes: BTreeMap<DrumLane, Vec<u8>>,
     pub midi_ports: &'a [String],
@@ -160,33 +159,6 @@ fn folder_name(p: &Path) -> String {
     )
 }
 
-/// NX Folder の説明。写したか、NX を消してよいか、曲のフォルダが NX の中にあるか
-fn nx_description(info: &ConfigInfo<'_>) -> String {
-    let Some(root) = info.nx_root else {
-        return "DTXManiaNX のフォルダを選ぶと、画像と音、パッドの割り当てを NXT に写して、NX と同じ画面にします。"
-            .to_owned();
-    };
-    let state = match (info.nx_copied, info.nx_found) {
-        (true, true) => {
-            "画像と音、パッドの割り当ては NXT に写してあります。選び直すと写し直します。"
-        }
-        (true, false) => "NX は見つかりませんが、写した画像と音で動いています。",
-        (false, _) => "画像と音を NXT に写せませんでした。NX のフォルダから読んでいます。",
-    };
-    let note = match (info.config.songs_in_nx(), info.nx_found) {
-        (true, true) => {
-            "曲のフォルダが NX の中にあります。NX を消す前に曲を別の場所へ移してください。"
-                .to_owned()
-        }
-        (true, false) => {
-            "NX の中にあった曲のフォルダも見つかりません。曲を移した先を Add Song Folder で選んでください。"
-                .to_owned()
-        }
-        (false, _) => root.display().to_string(),
-    };
-    format!("{state}\n{note}")
-}
-
 fn item(id: ItemId, name: &str, value: String, desc: String) -> Item {
     Item {
         id,
@@ -211,12 +183,6 @@ pub fn items(list: List, info: &ConfigInfo<'_>) -> Vec<Item> {
     let mut v = vec![return_item()];
     match list {
         List::System => {
-            v.push(item(
-                ItemId::NxDir,
-                "NX Folder",
-                info.nx_root.map_or("未設定".to_owned(), folder_name),
-                nx_description(info),
-            ));
             v.push(item(
                 ItemId::AddSongDir,
                 "Add Song Folder",
@@ -244,16 +210,50 @@ pub fn items(list: List, info: &ConfigInfo<'_>) -> Vec<Item> {
                 },
                 "曲のフォルダを探し直して、曲の一覧を作り直します。".to_owned(),
             ));
-            let stage_failed = match c.stage_failed {
-                Some(b) => on_off(b),
-                None => format!("NX ({})", on_off(info.nx_stage_failed.unwrap_or(true))),
-            };
+            v.push(item(
+                ItemId::Value(Setting::MasterVolume),
+                "MasterVolume",
+                c.master_volume().to_string(),
+                format!(
+                    "全体の音量です。0 が無音で、100 が最大です。\nEnter を押してから ↑↓ で {MASTER_VOLUME_STEP} ずつ変えます。"
+                ),
+            ));
             v.push(item(
                 ItemId::Value(Setting::StageFailed),
                 "StageFailed",
-                stage_failed,
-                "ON にするとゲージがなくなった時に STAGE FAILED となり演奏が中断されます。\nEnter で ON → OFF → NX の設定に従う。"
+                on_off(c.stage_failed()),
+                "ON にするとゲージがなくなった時に STAGE FAILED となり演奏が中断されます。練習では中断しません。"
                     .to_owned(),
+            ));
+            v.push(item(
+                ItemId::Value(Setting::ShowLagTime),
+                "ShowLagTime",
+                match c.show_lag_time {
+                    0 => "OFF",
+                    2 => "GREAT-",
+                    _ => "ON",
+                }
+                .to_owned(),
+                "判定の下に、ちょうどの時刻からのずれ（ms）を出します。\nGREAT- は PERFECT 以外のときだけ出します。"
+                    .to_owned(),
+            ));
+            v.push(item(
+                ItemId::Value(Setting::ShowLagTimeColor),
+                "ShowLagTimeColor",
+                (if c.show_lag_time_color == 1 {
+                    "TYPE-B"
+                } else {
+                    "TYPE-A"
+                })
+                .to_owned(),
+                "ずれの数字の色です。\nTYPE-A: 早いと青、遅いと赤。\nTYPE-B: 早いと赤、遅いと青。"
+                    .to_owned(),
+            ));
+            v.push(item(
+                ItemId::Value(Setting::ShowLagHitCount),
+                "ShowLagHitCount",
+                on_off(c.show_lag_hit_count),
+                "ON にすると、結果の画面に早かった数と遅かった数を出します。".to_owned(),
             ));
             v.push(item(
                 ItemId::Midi,
@@ -349,8 +349,7 @@ pub fn items(list: List, info: &ConfigInfo<'_>) -> Vec<Item> {
                 } else {
                     format!("{changed} 個")
                 },
-                "ここで変えた割り当てを消して、Roland の既定と NX の Config.ini の割り当てに戻します。"
-                    .to_owned(),
+                "ここで変えた割り当てを消して、Roland の既定に戻します。".to_owned(),
             ));
         }
     }
@@ -535,7 +534,6 @@ impl ConfigView {
                         self.waiting = Some(lane);
                         return Response::se(Se::Decide);
                     }
-                    ItemId::NxDir => ConfigAction::ChooseNx,
                     ItemId::AddSongDir => ConfigAction::AddSongDir,
                     ItemId::SongDir(i) => ConfigAction::RemoveSongDir(i),
                     ItemId::Rescan => ConfigAction::Rescan,
@@ -812,10 +810,6 @@ mod tests {
     fn info(config: &Config) -> ConfigInfo<'_> {
         ConfigInfo {
             config,
-            nx_root: None,
-            nx_found: false,
-            nx_copied: false,
-            nx_stage_failed: None,
             lanes: BTreeMap::from([(DrumLane::SD, vec![38, 40])]),
             midi_ports: &[],
             scanning: None,
@@ -824,30 +818,19 @@ mod tests {
     }
 
     #[test]
-    fn nx_folder_tells_whether_nx_can_be_deleted() {
-        let mut c = Config::default();
-        assert!(nx_description(&info(&c)).contains("写して"));
-        let nx = std::path::PathBuf::from("/nx");
-        c.nx_dir = Some(nx.clone());
-        c.song_dirs = vec![nx.join("Songs")];
-        let mut i = info(&c);
-        i.nx_root = Some(&nx);
-        i.nx_copied = true;
-        i.nx_found = true;
-        let d = nx_description(&i);
-        assert!(d.contains("写してあります") && d.contains("NX を消す前に"));
-        // NX を消したあと
-        i.nx_found = false;
-        let d = nx_description(&i);
-        assert!(d.contains("写した画像と音で動いています") && d.contains("Add Song Folder"));
-        // 曲が NX の外なら場所を出す
-        let mut c2 = c.clone();
-        c2.song_dirs = vec![std::path::PathBuf::from("/songs")];
-        let mut i = info(&c2);
-        i.nx_root = Some(&nx);
-        i.nx_copied = true;
-        i.nx_found = true;
-        assert!(nx_description(&i).ends_with(&nx.display().to_string()));
+    fn system_list_has_no_nx_folder() {
+        let c = Config::default();
+        let names: Vec<String> = items(List::System, &info(&c))
+            .into_iter()
+            .map(|i| i.name)
+            .collect();
+        assert!(!names.iter().any(|n| n.contains("NX")));
+        assert!(names.contains(&"ShowLagTime".to_owned()));
+        let lag = items(List::System, &info(&c))
+            .into_iter()
+            .find(|i| i.id == ItemId::Value(Setting::ShowLagTime))
+            .unwrap();
+        assert_eq!(lag.value, "ON");
     }
 
     fn ready() -> ConfigView {
@@ -894,6 +877,26 @@ mod tests {
         // Esc で値の変更をやめても一覧に残る
         v.input(ConfigInput::Cancel, &list);
         assert!(v.focus_list && !v.editing);
+    }
+
+    #[test]
+    fn master_volume_is_in_system_and_starts_at_half() {
+        let config = Config::default();
+        let list = items(List::System, &info(&config));
+        let at = list
+            .iter()
+            .position(|i| i.id == ItemId::Value(Setting::MasterVolume))
+            .unwrap();
+        assert_eq!(list[at].name, "MasterVolume");
+        assert_eq!(list[at].value, "50");
+        let mut v = ready();
+        v.input(ConfigInput::Decide, &list);
+        v.cursor = at;
+        assert_eq!(v.input(ConfigInput::Decide, &list).action, None);
+        assert_eq!(
+            v.input(ConfigInput::Down, &list).action,
+            Some(ConfigAction::Nudge(Setting::MasterVolume, -1))
+        );
     }
 
     #[test]

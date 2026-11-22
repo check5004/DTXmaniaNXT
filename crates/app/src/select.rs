@@ -342,7 +342,6 @@ impl SelectView {
     pub fn draw(&mut self, c: &Canvas, g: &mut Gfx, songs: &SongList) {
         self.update(songs);
         let ms = self.entered.elapsed().as_secs_f64() * 1000.0;
-        let skin = g.skin.is_loaded();
         // 背景
         if let Some(t) = g.skin.tex("Graphics/5_background.jpg") {
             c.draw(&t, 0.0, 0.0);
@@ -373,9 +372,6 @@ impl SelectView {
             c.draw(&t, 0.0, 720.0 - t.h);
         }
         self.draw_scrollbar(c, g, songs, common);
-        if !skin {
-            draw_no_skin(c, g);
-        }
         if let Some((kind, t)) = self.fade {
             let p = (t.elapsed().as_secs_f32() / FADE.as_secs_f32()).min(1.0);
             let a = match kind {
@@ -847,18 +843,6 @@ fn draw_information(c: &Canvas, g: &Gfx, ms: f64) {
         );
     } else {
         c.part(&t, 4.0, 0.0, src(0.0, lower * 42.0, 240.0, 42.0));
-    }
-}
-
-/// スキンが無いときの案内
-fn draw_no_skin(c: &Canvas, g: &mut Gfx) {
-    c.fill(240.0, 640.0, 800.0, 60.0, Color32::from_black_alpha(200));
-    let s = Style::plain(22.0, Color32::WHITE);
-    if let Some(t) = g.texts.get(
-        "DTXManiaNX のフォルダを選ぶと、NX と同じ画面になります（F1 で設定）",
-        &s,
-    ) {
-        t.draw(c, 640.0 - t.w / 2.0, 655.0, 1.0, 1.0);
     }
 }
 
