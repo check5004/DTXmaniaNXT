@@ -367,7 +367,7 @@ pub const CYMBAL_FREE: &str = "cymbal_free";
 pub const HH_PRIORITY: &str = "hh_priority";
 pub const FT_PRIORITY: &str = "ft_priority";
 pub const CY_PRIORITY: &str = "cy_priority";
-/// 左ペダルで鳴っているハイハットの音を止める（上流の Muting LP）
+/// 閉じたハイハットと左ペダルで、鳴っているハイハットの音を止める（上流の Muting LP）
 pub const MUTING_LP: &str = "muting_lp";
 
 const GROUP_SECTION: &str = "叩き分け";
@@ -879,9 +879,9 @@ pub const ALL: &[Def] = &[
         key: MUTING_LP,
         group: Group::Pads,
         section: "ペダル",
-        name: "左ペダルでハイハットを止める（Muting LP）",
+        name: "閉じたハイハットと左ペダルで止める（Muting LP）",
         kind: Kind::Toggle { default: true },
-        desc: "左ペダルを踏むと、鳴っているハイハットの音（叩いた音）を止めます。",
+        desc: "閉じたハイハット（HH）か左ペダル（LP）の音が鳴ると、鳴っているハイハットの音（開いたハイハットも）を止めます。叩いた音も、自動で叩くレーンや譜面の自動のハイハットの音も同じです。",
         in_play: false,
     },
     volume(
