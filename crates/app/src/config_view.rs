@@ -14,6 +14,7 @@
 //! 項目の多くは設定の表（[`crate::settings`]）から作る。表に足した項目は、分類と小見出しのとおりにここへ出る。
 //! 出入りは NX v2.0 と同じくシャッター（`shutter`）。
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -38,6 +39,7 @@ use crate::stretch::Pitch;
 use crate::text::Style;
 use crate::title_view::draw_scanning;
 use crate::update::UpdateMode;
+use crate::window_mode::{self, MonitorInfo};
 use i18n::{Lang, t};
 
 /// 補正の値の範囲（ミリ秒）
@@ -255,6 +257,8 @@ pub enum ItemId {
     SongOffset,
     /// 補正をおすすめの値にする（全体とこの曲）
     ApplyAdvice,
+    /// 全画面とボーダーレスを出すモニター（0 は窓のあるモニター、1 からはつながっているモニターの並び）
+    Monitor,
 }
 
 /// 数の見せ方
@@ -304,7 +308,7 @@ pub enum Ctl {
     },
     /// 選択肢から 1 つ
     Choice {
-        labels: Vec<&'static str>,
+        labels: Vec<Cow<'static, str>>,
         at: usize,
         default: Option<usize>,
     },
@@ -380,16 +384,19 @@ impl Row {
             Ctl::Toggle { default, .. } => default.map(on_off),
             Ctl::Choice {
                 labels, default, ..
-            } => default.and_then(|d| labels.get(d)).map(|s| (*s).to_owned()),
+            } => default.and_then(|d| labels.get(d)).map(|s| s.to_string()),
             Ctl::Number { default, fmt, .. } => default.map(|d| fmt.show(d)),
             _ => None,
         }
     }
 
     /// 選択肢の名前と、今は何番目か（ON / OFF も 2 つの選択肢。混ざっていれば何番目でもない）
-    pub fn options(&self) -> Option<(Vec<&'static str>, Option<usize>)> {
+    pub fn options(&self) -> Option<(Vec<Cow<'static, str>>, Option<usize>)> {
         match &self.ctl {
-            Ctl::Toggle { on, .. } => Some((vec!["ON", "OFF"], on.map(|b| if b { 0 } else { 1 }))),
+            Ctl::Toggle { on, .. } => Some((
+                vec!["ON".into(), "OFF".into()],
+                on.map(|b| if b { 0 } else { 1 }),
+            )),
             Ctl::Choice { labels, at, .. } => Some((labels.clone(), Some(*at))),
             _ => None,
         }
@@ -450,7 +457,7 @@ fn choice(
         labels.get(at).copied().unwrap_or("").to_owned(),
         desc.to_owned(),
         Ctl::Choice {
-            labels: labels.to_vec(),
+            labels: labels.iter().map(|&l| Cow::Borrowed(l)).collect(),
             at,
             default,
         },
@@ -756,7 +763,7 @@ fn table_row(d: &'static settings::Def, v: &settings::Values) -> Row {
             default: def.map(|a| a != 0),
         },
         Kind::Choice { choices, .. } => Ctl::Choice {
-            labels: choices.iter().map(|c| c.label).collect(),
+            labels: choices.iter().map(|c| Cow::Borrowed(c.label)).collect(),
             at: at.unwrap_or(0) as usize,
             default: def.map(|a| a as usize),
         },
@@ -884,6 +891,60 @@ pub struct ConfigInfo<'a> {
     pub play: Option<PlayPos>,
     /// 補正とおすすめ（簡易設定・一時停止・設定の画面を開いたときに記録から出す）
     pub timing: Option<TimingInfo>,
+    /// つながっているモニター（出すモニターの選択肢。左から）
+    pub monitors: &'a [MonitorInfo],
+}
+
+/// 出すモニターの選択肢の、窓のあるモニター（選んでいない）の名前
+const MONITOR_AUTO: &str = "自動（窓のあるモニター）";
+/// 選んだモニターが外れているときの選択肢の名前
+const MONITOR_GONE: &str = "選んだモニター（外れています）";
+
+/// 出すモニターの行。選択肢は「自動」、つながっているモニター、選んだモニターが外れていればその印
+fn monitor_row(c: &Config, monitors: &[MonitorInfo]) -> Row {
+    let mut labels: Vec<Cow<'static, str>> = vec![MONITOR_AUTO.into()];
+    labels.extend(
+        monitors
+            .iter()
+            .enumerate()
+            .map(|(i, m)| Cow::Owned(m.label(i, monitors))),
+    );
+    let at = match &c.monitor {
+        None => 0,
+        Some(pick) => match window_mode::find(pick, monitors) {
+            Some(i) => i + 1,
+            None => {
+                labels.push(MONITOR_GONE.into());
+                labels.len() - 1
+            }
+        },
+    };
+    row(
+        ItemId::Monitor,
+        "出すモニター",
+        labels[at].to_string(),
+        "全画面とボーダーレスを出すモニターです。選ぶとその場で移ります。ウィンドウも、起動したときはこのモニターに開きます。\n自動か、選んだモニターが外れているときは、窓のあるモニターに出します。"
+            .to_owned(),
+        Ctl::Choice {
+            labels,
+            at,
+            default: Some(0),
+        },
+    )
+}
+
+/// 一覧の「出すモニター」の値（[`monitor_row`] の何番目か）を設定にする。外れている前の選びはそのまま（変えたら true）
+pub fn set_monitor(c: &mut Config, monitors: &[MonitorInfo], v: i64) -> bool {
+    let pick = match v {
+        0 => None,
+        v if v >= 1 && v as usize <= monitors.len() => Some(monitors[v as usize - 1].pick()),
+        _ => return false,
+    };
+    if c.monitor == pick {
+        return false;
+    }
+    c.monitor = pick;
+    true
 }
 
 /// 補正とおすすめ
@@ -1150,7 +1211,16 @@ pub fn rows(page: Page, info: &ConfigInfo<'_>) -> Vec<Row> {
                 s.at(" ").push(quit_row(practice));
             }
         }
-        Page::Cat(Cat::Display) => s.table(Group::Display, v),
+        Page::Cat(Cat::Display) => {
+            s.table(Group::Display, v);
+            // 画面の出し方のすぐ下に、出すモニター（つながっているモニターで選択肢が変わるので表に無い）
+            let r = s.at("");
+            let at = r
+                .iter()
+                .position(|r| r.id == Some(ItemId::Table(settings::DISPLAY_MODE)))
+                .map_or(0, |i| i + 1);
+            r.insert(at, monitor_row(c, info.monitors));
+        }
         Page::Cat(Cat::Play) => {
             s.at("演奏の決まり")
                 .push(value_row(Setting::StageFailed, c));
@@ -3449,6 +3519,7 @@ mod tests {
             song: true,
             play: None,
             timing: None,
+            monitors: &[],
         }
     }
 
@@ -3474,6 +3545,72 @@ mod tests {
         }
         *v.cursor_mut() = find(rows, id);
         v
+    }
+
+    fn screens() -> Vec<MonitorInfo> {
+        let m = |name: &str, x: i32, w: i32, h: i32, primary: bool| MonitorInfo {
+            name: name.to_owned(),
+            rect: window_mode::Rect { x, y: 0, w, h },
+            hz: Some(60),
+            primary,
+        };
+        vec![
+            m(r"\\.\DISPLAY1", 0, 2560, 1440, true),
+            m(r"\\.\DISPLAY2", 2560, 1920, 1080, false),
+        ]
+    }
+
+    #[test]
+    fn monitor_row_follows_display_mode_and_lists_the_screens() {
+        let mut c = Config::default();
+        let list = screens();
+        let with_screens = ConfigInfo {
+            monitors: &list,
+            ..info(&c)
+        };
+        let rows = rows(Page::Cat(Cat::Display), &with_screens);
+        let i = rows
+            .iter()
+            .position(|r| r.id == Some(ItemId::Table(settings::DISPLAY_MODE)))
+            .unwrap();
+        let r = &rows[i + 1];
+        assert_eq!(r.id, Some(ItemId::Monitor));
+        assert_eq!(r.value, MONITOR_AUTO);
+        assert_eq!(
+            r.options().unwrap().0,
+            [
+                MONITOR_AUTO,
+                "1：2560×1440 60Hz（メイン）",
+                "2：1920×1080 60Hz（メインの右）"
+            ]
+        );
+        assert!(!r.changed());
+        // 2 枚目を選ぶ
+        assert!(set_monitor(&mut c, &list, 2));
+        assert!(!set_monitor(&mut c, &list, 2));
+        assert_eq!(c.monitor, Some(list[1].pick()));
+        let r = monitor_row(&c, &list);
+        assert_eq!(r.value, "2：1920×1080 60Hz（メインの右）");
+        assert!(r.changed());
+        // 外れたら印の選択肢を足して、選びは消さない
+        let r = monitor_row(&c, &list[..1]);
+        assert_eq!(r.value, MONITOR_GONE);
+        assert_eq!(
+            r.options().unwrap(),
+            (
+                vec![
+                    MONITOR_AUTO.into(),
+                    "1：2560×1440 60Hz（メイン）".into(),
+                    MONITOR_GONE.into()
+                ],
+                Some(2)
+            )
+        );
+        assert!(!set_monitor(&mut c, &list[..1], 2));
+        assert_eq!(c.monitor, Some(list[1].pick()));
+        // 自動に戻す
+        assert!(set_monitor(&mut c, &list, 0));
+        assert_eq!(c.monitor, None);
     }
 
     #[test]
