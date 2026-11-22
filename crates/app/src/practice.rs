@@ -908,6 +908,12 @@ impl Practice {
             .collect()
     }
 
+    /// 画面の時刻（周を並べた実時間）の、譜面の中の時刻。1 周目の助走の間は 1 周目の並びで
+    pub fn chart_ms(&self, now_ms: f64) -> f64 {
+        let i = self.current_lap(now_ms).unwrap_or(0);
+        self.laps.get(i).map_or(now_ms, |l| l.plan.song_ms(now_ms))
+    }
+
     /// 今叩いている周の番号（0 から）。1 周目の助走の間は None
     pub fn current_lap(&self, now_ms: f64) -> Option<usize> {
         self.laps

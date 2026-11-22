@@ -168,6 +168,9 @@ pub const LBD_GRAPHICS: &str = "lbd_graphics";
 pub const RIM_GRAPHICS: &str = "rim_graphics";
 /// ずれのバー（叩いた音符のずれを、判定の線の時刻を真ん中にした横の目盛りに印で出す）
 pub const HIT_ERROR_BAR: &str = "hit_error_bar";
+/// 譜面の動画（上流 `bAVIEnabled` と `nMovieAlpha`）
+pub const AVI: &str = "avi";
+pub const MOVIE_ALPHA: &str = "movie_alpha";
 
 /// 選択肢の表を `[key, label]` の並びから作る
 macro_rules! choices {
@@ -266,7 +269,7 @@ const RD_POSITION_CHOICES: &[Choice] = choices![
 
 /// 上流 `eHHOGraphics.Drums`
 const HHO_GRAPHICS_CHOICES: &[Choice] = choices![
-    "a" => "A（NX の絵）",
+    "a" => "A（丸あり）",
     "b" => "B（丸なし）",
     "c" => "C（クローズと同じ）",
 ];
@@ -276,8 +279,8 @@ const HHO_GRAPHICS_CHOICES: &[Choice] = choices![
 const LBD_GRAPHICS_CHOICES: &[Choice] = choices![
     "bd_lane" => "BD のレーンに水色で",
     "own_lane" => "LP の右にレーンを足す（水色）",
-    "a" => "LP のレーンに同じ絵（NX の A）",
-    "b" => "LP のレーンに紫の絵（NX の B）",
+    "a" => "LP のレーンに同じ絵",
+    "b" => "LP のレーンに紫の絵",
 ];
 
 /// スネアのリムの音符の出し方（並びは [`crate::rim_look::RimLook`] と同じ）
@@ -291,6 +294,8 @@ const RIM_GRAPHICS_CHOICES: &[Choice] = choices![
 const VIEW_LANES: &str = "画面の部品";
 const VIEW_ORDER: &str = "レーンとチップ";
 const VIEW_HIDE: &str = "見えにくくする";
+/// 画面の「動画」（NX v2.0 では System ＞ Graphics）
+const DISPLAY_MOVIE: &str = "動画";
 
 /// 0〜100 の数（判定ラインの高さ、シャッター）
 const fn percent(
@@ -731,14 +736,14 @@ pub const ALL: &[Def] = &[
         VIEW_ORDER,
         "オープンハイハットの絵（HHOGraphics）",
         HHO_GRAPHICS_CHOICES,
-        "A は NX の絵、B は A のまわりの丸を消した絵、C はクローズのハイハットと同じ絵です。",
+        "A はまわりに丸のある絵、B は丸を消した絵、C はクローズのハイハットと同じ絵です。",
     ),
     view_choice(
         LBD_GRAPHICS,
         VIEW_ORDER,
         "左バスドラムの出し方（LBDGraphics）",
         LBD_GRAPHICS_CHOICES,
-        "左バスドラム（LBD）の音符を BD のレーンに水色で出すか、LP の右に足したレーン（実物のツインペダルと同じ並び）に出すか、NX と同じく LP のレーンに出すか。\n光・判定の文字・火花も、音符を出したレーンに出します。",
+        "左バスドラム（LBD）の音符を BD のレーンに水色で出すか、LP の右に足したレーン（実物のツインペダルと同じ並び）に出すか、LP のレーンに出すか。\n光・判定の文字・火花も、音符を出したレーンに出します。",
     ),
     view_choice(
         RIM_GRAPHICS,
@@ -830,6 +835,31 @@ pub const ALL: &[Def] = &[
         desc: "コンボがこの数になったら、コンボの数を出します。",
         in_play: false,
     },
+    Def {
+        key: AVI,
+        group: Group::Display,
+        section: DISPLAY_MOVIE,
+        name: "動画（AVI）",
+        kind: Kind::Toggle { default: true },
+        desc: "譜面の動画（#AVI）をレーンの後ろに流します。\n今は Windows だけで、MP4 や AVI を Windows の機能で読みます。",
+        in_play: false,
+    },
+    Def {
+        key: MOVIE_ALPHA,
+        group: Group::Display,
+        section: DISPLAY_MOVIE,
+        name: "レーンの透け具合（MovieAlpha）",
+        kind: Kind::Number {
+            min: 0,
+            max: 100,
+            step: 10,
+            default: 0,
+            unit: " %",
+            zero: None,
+        },
+        desc: "レーンの板をどれだけ透かすか（0〜100 %）。上げると後ろの動画や背景が見えます。",
+        in_play: false,
+    },
     priority(
         HH_PRIORITY,
         "ハイハットの音（HH Priority）",
@@ -858,7 +888,7 @@ pub const ALL: &[Def] = &[
         AUTO_VOLUME,
         "BGM の音量（AutoVolume）",
         80,
-        "曲の音の音量です。BGM のほか、譜面の効果音、自動で叩くレーンの音、選曲のプレビューも入ります（全体の音量にさらにかけます）。\nNX と同じく既定は 80 %。",
+        "曲の音の音量です。BGM のほか、譜面の効果音、自動で叩くレーンの音、選曲のプレビューも入ります（全体の音量にさらにかけます）。",
     ),
     volume(
         CHIP_VOLUME,
