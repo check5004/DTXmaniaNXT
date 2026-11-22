@@ -1,5 +1,6 @@
 //! タイトルの画面（上流 `CStageTitle`）と、終わるときの画面（上流 `CStageEnd`）。
-//! スキンの 2_ の画像で、背景とロゴとメニュー（GAME START / CONFIGURATION / EXIT）を出す。
+//! スキンの 2_ の画像で、背景とロゴとメニューを出す。メニューの文字は日本語（はじめる / 設定 / 終わる）で描き、
+//! 2_menu.png からはカーソルの帯と光だけを使う（絵の文字は英語の Start / Config / Quit のため）。
 //! 入るときは白からフェードし、決めたら App がシャッター（`shutter`）を閉じて次の画面へ移る（NX v2.0）。
 //! 曲を探しているあいだは左上に「曲を探しています」の画像を明滅させる（上流 `CActEnumSongs`）。
 //! 新しい版を落とし終えたら左下に知らせる（このアプリだけ。版の表示と同じ白い縁取りの文字）。
@@ -17,6 +18,18 @@ const MENU_H: f32 = 39.0;
 const MENU_W: f32 = 227.0;
 const MENU_X: f32 = 506.0;
 const MENU_Y: f32 = 513.0;
+
+/// メニューの文字（上から GameStart / Config / Exit）
+const MENU_LABELS: [&str; 3] = ["はじめる", "設定", "終わる"];
+
+/// メニューの文字の見た目（2_menu.png の文字に似せて、白い太字に紺の縁と紫の影）
+fn menu_style() -> Style {
+    Style {
+        bold: true,
+        shadow: Some((Color32::from_rgb(131, 0, 164), 2.0)),
+        ..Style::edged(26.0, Color32::WHITE, Color32::from_rgb(0, 0, 25), 3.0)
+    }
+}
 
 /// 白いフェードの長さ（上流 `CActFIFOWhite`：0〜100 を 5 ミリ秒ずつ）
 const FADE: Duration = Duration::from_millis(500);
@@ -177,14 +190,19 @@ impl TitleView {
                 );
             }
             c.part(&t, MENU_X, y, src(0.0, MENU_H * 4.0, MENU_W, MENU_H));
-            // 上流と同じく OPTION の行は描かない
-            c.part(&t, MENU_X, MENU_Y, src(0.0, 0.0, MENU_W, MENU_H));
-            c.part(
-                &t,
-                MENU_X,
-                MENU_Y + MENU_H,
-                src(0.0, MENU_H * 2.0, MENU_W, MENU_H * 2.0),
-            );
+            // 上流と同じく OPTION の行は描かない。絵の文字（英語）の代わりに日本語で
+            let style = menu_style();
+            for (i, label) in MENU_LABELS.iter().enumerate() {
+                if let Some(t) = g.texts.get(label, &style) {
+                    t.draw(
+                        c,
+                        MENU_X + (MENU_W - t.w) / 2.0,
+                        MENU_Y + i as f32 * MENU_H + (MENU_H - t.h) / 2.0,
+                        1.0,
+                        1.0,
+                    );
+                }
+            }
         } else {
             draw_plain_menu(c, g, self.cursor);
         }
@@ -229,7 +247,7 @@ pub fn draw_scanning(c: &Canvas, g: &mut Gfx, since: Instant) {
 
 /// スキンが無いときのメニュー
 fn draw_plain_menu(c: &Canvas, g: &mut Gfx, cursor: usize) {
-    for (i, name) in ["はじめる", "設定", "終わる"].iter().enumerate() {
+    for (i, name) in MENU_LABELS.iter().enumerate() {
         let color = if i == cursor {
             Color32::from_rgb(255, 200, 0)
         } else {

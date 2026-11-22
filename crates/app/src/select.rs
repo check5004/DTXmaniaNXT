@@ -42,6 +42,8 @@ const SORT_Y: f32 = 35.0;
 const SORT_SPACING: f32 = 90.0;
 const SORT_SELECTED: usize = 2;
 const SORT_DIP: f32 = 18.0;
+/// 並べ替えのアイコンの絵の、名前の文字が始まる高さ（ここから下は描かず、日本語の名前に替える）
+const SORT_LABEL_TOP: f32 = 47.0;
 /// 難易度のパネル（v2 `StatusPane`：左下を (430, 720) に合わせる。難易度ごとに 74 上へ）
 const PANE_X: f32 = 430.0;
 const PANE_Y: f32 = 720.0;
@@ -579,7 +581,30 @@ impl SelectView {
             let t = (OFFSET_RANGE - (center - x).abs()).clamp(0.0, OFFSET_RANGE) / OFFSET_RANGE;
             let y = SORT_Y + 40.0 + t * SORT_DIP;
             if let Some(tex) = g.skin.tex(&format!("Graphics/Sorting/{}.png", kind.icon())) {
-                c.draw(&tex, x - tex.w / 2.0, y - tex.h / 2.0);
+                // 絵の下の英語の名前（By Title など）は切り落とし、日本語の名前を同じ所に描く
+                let top = y - tex.h / 2.0;
+                let cut = SORT_LABEL_TOP.min(tex.h);
+                c.part(&tex, x - tex.w / 2.0, top, src(0.0, 0.0, tex.w, cut));
+                let (label, gold) = sort_label(kind);
+                let style = if gold {
+                    Style {
+                        bold: true,
+                        ..Style::edged(
+                            13.0,
+                            Color32::from_rgb(238, 227, 33),
+                            Color32::from_rgb(90, 84, 20),
+                            2.0,
+                        )
+                    }
+                } else {
+                    Style {
+                        bold: true,
+                        ..Style::edged(13.0, Color32::WHITE, Color32::from_gray(80), 2.0)
+                    }
+                };
+                if let Some(t) = g.texts.get(label, &style) {
+                    t.draw_fit(c, x - t.w.min(tex.w) / 2.0, top + cut - 2.0, tex.w);
+                }
             }
         }
     }
@@ -794,6 +819,21 @@ fn selection_key(songs: &SongList) -> SelectionKey {
         songs.cursor,
         songs.level,
     )
+}
+
+/// 並べ替えの日本語の名前と、金色で出すか（スキンの絵の名前は、おすすめと遊んだ記録だけ金色）
+fn sort_label(kind: SortKind) -> (&'static str, bool) {
+    match kind {
+        SortKind::Default => ("フォルダ順", true),
+        SortKind::Box => ("BOX", true),
+        SortKind::Title => ("曲名", false),
+        SortKind::Artist => ("アーティスト", false),
+        SortKind::Difficulty => ("難易度", false),
+        SortKind::Level => ("レベル", false),
+        SortKind::Player => ("遊んだ記録", true),
+        SortKind::AllSongs => ("全曲", false),
+        SortKind::Skill => ("スキル", false),
+    }
 }
 
 /// BOX の中の曲の数（中の BOX の曲も数える）
