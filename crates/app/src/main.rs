@@ -40,6 +40,7 @@ mod time;
 mod title_view;
 mod ui;
 mod update;
+mod xa;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -243,9 +244,11 @@ impl LoadSettings {
             None => Play::load(path, self.input_offset_ms, self.drum_sounds)?,
         };
         p.set_midi_profile(self.profile);
+        // 「叩いても音が出ない」と言われたとき、ログで分かるように
         log::info!(
-            "loaded in {:.0}ms",
-            started.elapsed().as_secs_f64() * 1000.0
+            "loaded in {:.0}ms (hit sounds {})",
+            started.elapsed().as_secs_f64() * 1000.0,
+            if self.drum_sounds { "on" } else { "off" }
         );
         Ok(p)
     }
@@ -306,7 +309,7 @@ struct App {
     wheel: f32,
     /// 演奏中に設定と入力の情報を出す（I で切り替え）
     show_play_info: bool,
-    /// 演奏中に設定を変えたときの短い知らせ（出した時刻）
+    /// 演奏中の短い知らせ（消す時刻）
     toast: Option<(String, Instant)>,
     /// 音符を自動で叩く（開発用。`DTXMANIANXT_AUTOPLAY=1`）
     autoplay: bool,
@@ -329,6 +332,14 @@ const MIN_LOADING: Duration = Duration::from_millis(1500);
 
 /// 演奏中の知らせを出しておく時間
 const TOAST_FOR: Duration = Duration::from_millis(1500);
+/// 譜面の音を切っているときに、演奏の始めに知らせを出しておく時間
+const HIT_SOUND_NOTICE_FOR: Duration = Duration::from_secs(4);
+
+/// 演奏中に譜面の音（叩いた音）を切り替えるキー。キーボードで叩くキー（A〜L、Q、Z）から離しておく
+/// （前の M は J・K のすぐ下で、叩くつもりで押すと気づかないうちに切れてしまう）
+const HIT_SOUND_KEY: KeyCode = KeyCode::F2;
+/// [`HIT_SOUND_KEY`] の表示の名前
+const HIT_SOUND_KEY_NAME: &str = "F2";
 
 /// 選曲画面で決めたもの
 enum Decided {
@@ -540,6 +551,13 @@ impl App {
         let lag = play_view::LagDigits::from_config(&self.config);
         let view = PlayView::new(&play, &label, lag);
         self.message = None;
+        // 譜面の音を切ったままだと、叩いても音が出ないわけが分からない。始めにしばらく知らせる
+        if !play.drum_sounds {
+            self.toast_for(
+                format!("譜面の音: 鳴らさない（{HIT_SOUND_KEY_NAME} で切り替え）"),
+                HIT_SOUND_NOTICE_FOR,
+            );
+        }
         self.screen = Screen::Play(Box::new(play), Box::new(view));
     }
 
@@ -594,7 +612,12 @@ impl App {
 
     /// 演奏中に設定を変えたことを知らせる
     fn toast(&mut self, text: String) {
-        self.toast = Some((text, Instant::now()));
+        self.toast_for(text, TOAST_FOR);
+    }
+
+    /// 演奏中に `time` のあいだ知らせを出す
+    fn toast_for(&mut self, text: String, time: Duration) {
+        self.toast = Some((text, Instant::now() + time));
     }
 
     /// 練習の決めごとのポップアップを選曲画面に開く。`previous` があればその区間とつなぎ方を選んでおく
@@ -1072,7 +1095,7 @@ impl App {
                 let speed = play.practice.as_ref().map_or(100, |p| p.ladder().speed());
                 format!("次の周から速度 {speed}%")
             }
-            KeyCode::KeyM => {
+            HIT_SOUND_KEY => {
                 play.drum_sounds = !play.drum_sounds;
                 self.config.drum_sounds = play.drum_sounds;
                 self.config.save();
@@ -1421,7 +1444,7 @@ impl App {
         let toast = self
             .toast
             .as_ref()
-            .filter(|(_, at)| at.elapsed() < TOAST_FOR)
+            .filter(|(_, until)| Instant::now() < *until)
             .map(|(t, _)| t.clone());
         let scanning = self.songs.scanning().is_some();
         let update = self.updater.ready().map(str::to_owned);

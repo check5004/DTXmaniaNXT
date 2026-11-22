@@ -310,8 +310,10 @@ pub fn items(list: List, info: &ConfigInfo<'_>) -> Vec<Item> {
                 ItemId::Value(Setting::HitSound),
                 "HitSound",
                 on_off(c.drum_sounds),
-                "叩いたときに譜面の音を鳴らします。電子ドラムの音源の音を使うなら OFF にします。演奏中は M。"
-                    .to_owned(),
+                format!(
+                    "叩いたときに譜面の音を鳴らします。電子ドラムの音源の音を使うなら OFF にします。演奏中は {}。",
+                    crate::HIT_SOUND_KEY_NAME
+                ),
             ));
             v.push(item(
                 ItemId::DrumsKeys,
