@@ -44,6 +44,7 @@ pub fn of(id: ItemId) -> Option<&'static str> {
         | ItemId::DeviceChannel(_)
         | ItemId::DeviceReset(_)
         | ItemId::ReconnectMidi
+        | ItemId::OpenEditor
         | ItemId::SongOffset
         | ItemId::ApplyAdvice => NEW,
         ItemId::Mixer => "System ＞ Audio",
