@@ -509,8 +509,8 @@ const fn hit_window(
     }
 }
 
-const HIT_DESC: &str = "音符の時刻から前後この幅までに叩くと、この判定になります（上流の既定は PERFECT 34、GREAT 67、GOOD 84、POOR 117）。\nPOOR の幅の外は空打ちです。狭い判定の幅が広い判定を越えたら、広い判定もそこまで広げて使います。";
-const PEDAL_HIT_DESC: &str = "バスドラム・左ペダル・左バスドラムの判定の幅です（上流の DrumPedal〜）。\nほかのレーンと同じく、狭い判定の幅が広い判定を越えたら、広い判定もそこまで広げて使います。";
+const HIT_DESC: &str = "音符の時刻から前後この幅までに叩くと、この判定になります（既定は PERFECT 34、GREAT 67、GOOD 84、POOR 117）。\nPOOR の幅の外は空打ちです。狭い判定の幅が広い判定を越えたら、広い判定もそこまで広げて使います。";
+const PEDAL_HIT_DESC: &str = "バスドラム・左ペダル・左バスドラムだけの判定の幅です（既定はほかのレーンと同じ PERFECT 34、GREAT 67、GOOD 84、POOR 117）。\nほかのレーンと同じく、狭い判定の幅が広い判定を越えたら、広い判定もそこまで広げて使います。";
 
 /// オートのまとめての切り替え
 pub const AUTO_ALL: &str = "auto_all";

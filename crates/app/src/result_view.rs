@@ -263,7 +263,7 @@ impl ResultView {
 
     /// 2 ページ目の上に出す、ページの切り替えの案内
     pub fn draw_analysis_hint(&self, c: &Canvas, g: &mut Gfx) {
-        self.draw_page_hint(c, g, "← NX の結果の画面");
+        self.draw_page_hint(c, g, "← スコアとランク");
     }
 
     /// 入ってきたときのフェード。いちばん上に描く
