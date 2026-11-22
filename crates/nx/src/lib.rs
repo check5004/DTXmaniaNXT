@@ -3,14 +3,17 @@
 //! - `Config.ini`（UTF-16LE）から曲のフォルダ（`DTXPath`）、スキン（`SkinPath`）、パッドの割り当て（`[DrumsKeyAssign]`）、表示の設定
 //! - 使うスキンのフォルダ（`System/<スキン>/`）を上流 DTXManiaNX（`CSkin.cs`）と同じ順で選ぶ
 //! - 大文字・小文字を区別せずにファイルを探す（曲のフォルダの中のファイルにも使う）
+//! - 譜面の隣の `score.ini` のドラムの記録（NXT の記録に引き継ぐ）
 //!
 //! NXT の画面の画像と音はアプリに入れてあるので（`assets/skin`）、NX は要らない。
 //! ここは 0.1 で NX のフォルダを選んでいた人の設定を引き継ぐのに使う。
 
 mod config;
+mod score_ini;
 mod skin;
 
 pub use config::{KeyAssign, NxConfig};
+pub use score_ini::{ScoreIni, ScoreRecord};
 pub use skin::{find_file, is_install, is_skin, skin_dir};
 
 use std::path::{Path, PathBuf};

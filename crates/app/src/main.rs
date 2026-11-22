@@ -27,6 +27,7 @@ mod inputs;
 mod loading;
 mod logging;
 mod midi;
+mod nx_import;
 mod play_view;
 mod practice;
 mod practice_hud;
@@ -1009,7 +1010,10 @@ impl App {
 
     /// 届いた MIDI をすべて処理し、時間を進める
     fn pump(&mut self) {
-        self.songs.poll();
+        // 曲を探し終えたら、譜面の隣の NX の score.ini をまだなら記録に引き継ぐ
+        if self.songs.poll() && self.history.import_nx_scores(&self.songs.library) > 0 {
+            self.songs.set_stats(self.history.chart_stats());
+        }
         self.check_ports();
         let mut assigned = None;
         let closing = self.after_close.is_some();

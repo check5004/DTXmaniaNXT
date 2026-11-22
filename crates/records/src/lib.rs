@@ -123,6 +123,14 @@ const MIGRATIONS: &[&str] = &[
         cleared INTEGER NOT NULL
     );
     ",
+    // 4: 引き継いだ NX の score.ini（同じファイルを 2 度読まない）
+    "
+    CREATE TABLE imported_files (
+        path TEXT PRIMARY KEY,
+        -- 引き継いだ時刻（UNIX 秒）
+        imported_at INTEGER NOT NULL
+    );
+    ",
 ];
 
 /// 譜面 1 つの見分け方
@@ -139,6 +147,8 @@ pub struct ChartKey<'a> {
 pub enum SessionKind {
     Play,
     Practice,
+    /// NX の score.ini から引き継いだプレイ（スコアと判定の数だけで、音符ごとの結果は無い。苦手の分析には使わない）
+    Imported,
 }
 
 impl SessionKind {
@@ -146,11 +156,12 @@ impl SessionKind {
         match self {
             Self::Play => "play",
             Self::Practice => "practice",
+            Self::Imported => "imported",
         }
     }
 
     fn from_name(name: &str) -> Option<Self> {
-        [Self::Play, Self::Practice]
+        [Self::Play, Self::Practice, Self::Imported]
             .into_iter()
             .find(|k| k.name() == name)
     }
@@ -325,36 +336,7 @@ impl Records {
     /// セッションを 1 つ残す。返すのはセッションの番号
     pub fn save(&mut self, chart: &ChartKey, session: &Session) -> Result<i64> {
         let tx = self.conn.transaction()?;
-        let chart_id = upsert_chart(&tx, chart, session.started_at)?;
-        tx.execute(
-            "INSERT INTO sessions (chart_id, kind, started_at, chart_hash, settings)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![
-                chart_id,
-                session.kind.name(),
-                session.started_at,
-                hash_text(chart.hash),
-                session.settings
-            ],
-        )?;
-        let session_id = tx.last_insert_rowid();
-        for (i, lap) in session.laps.iter().enumerate() {
-            insert_lap(&tx, session_id, i, lap)?;
-        }
-        if let Some(p) = &session.score {
-            tx.execute(
-                "INSERT INTO play_scores (session_id, score, rate, progress, cleared)
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![session_id, p.score, p.rate, p.progress, p.cleared],
-            )?;
-        }
-        if let Some(c) = session.clear {
-            tx.execute(
-                "INSERT INTO clears (chart_id, session_id, first_measure, last_measure, speed, cleared_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                params![chart_id, session_id, c.first, c.last, c.speed, session.started_at],
-            )?;
-        }
+        let session_id = insert_session(&tx, chart, session)?;
         tx.commit()?;
         Ok(session_id)
     }
@@ -434,6 +416,31 @@ impl Records {
             })
         })?
         .collect()
+    }
+
+    /// もう引き継いだファイル（NX の score.ini）
+    pub fn imported_files(&self) -> Result<std::collections::HashSet<String>> {
+        let mut q = self.conn.prepare("SELECT path FROM imported_files")?;
+        q.query_map([], |row| row.get(0))?.collect()
+    }
+
+    /// ファイルから引き継いだセッションを残し、そのファイルを引き継ぎ済みにする（まとめて 1 回で）
+    pub fn import(
+        &mut self,
+        file: &str,
+        chart: &ChartKey,
+        sessions: &[Session],
+        at: i64,
+    ) -> Result<()> {
+        let tx = self.conn.transaction()?;
+        for session in sessions {
+            insert_session(&tx, chart, session)?;
+        }
+        tx.execute(
+            "INSERT OR REPLACE INTO imported_files (path, imported_at) VALUES (?1, ?2)",
+            params![file, at],
+        )?;
+        tx.commit()
     }
 
     /// 譜面ごとの最後に遊んだ時刻（UNIX 秒。練習も含む）
@@ -570,6 +577,41 @@ impl Records {
             })
             .collect()
     }
+}
+
+/// セッションを 1 つ書く（譜面が無ければ足す）。返すのはセッションの番号
+fn insert_session(tx: &Transaction, chart: &ChartKey, session: &Session) -> Result<i64> {
+    let chart_id = upsert_chart(tx, chart, session.started_at)?;
+    tx.execute(
+        "INSERT INTO sessions (chart_id, kind, started_at, chart_hash, settings)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![
+            chart_id,
+            session.kind.name(),
+            session.started_at,
+            hash_text(chart.hash),
+            session.settings
+        ],
+    )?;
+    let session_id = tx.last_insert_rowid();
+    for (i, lap) in session.laps.iter().enumerate() {
+        insert_lap(tx, session_id, i, lap)?;
+    }
+    if let Some(p) = &session.score {
+        tx.execute(
+            "INSERT INTO play_scores (session_id, score, rate, progress, cleared)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![session_id, p.score, p.rate, p.progress, p.cleared],
+        )?;
+    }
+    if let Some(c) = session.clear {
+        tx.execute(
+                "INSERT INTO clears (chart_id, session_id, first_measure, last_measure, speed, cleared_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![chart_id, session_id, c.first, c.last, c.speed, session.started_at],
+            )?;
+    }
+    Ok(session_id)
 }
 
 fn upsert_chart(tx: &Transaction, chart: &ChartKey, now: i64) -> Result<i64> {
@@ -1020,6 +1062,31 @@ mod tests {
             }),
             ..play(started_at, 1.0, vec![hit(1, Judgement::Perfect)])
         }
+    }
+
+    #[test]
+    fn imported_sessions_count_and_files_are_remembered() {
+        let mut r = Records::open_in_memory().unwrap();
+        let file = "songs/a/master.dtx.score.ini";
+        assert!(r.imported_files().unwrap().is_empty());
+        let all2 = "2".repeat(64);
+        let mut nx = scored(50, 700_000, 80.0, &all2, true);
+        nx.kind = SessionKind::Imported;
+        nx.laps[0].hits.clear();
+        r.import(file, &chart(1), &[nx], 999).unwrap();
+        assert!(r.imported_files().unwrap().contains(file));
+        let b = r.best_score("songs/a/master.dtx", None).unwrap();
+        assert_eq!((b.rate, b.score), (Some(80.0), Some(700_000)));
+        assert_eq!(r.cleared_plays().unwrap().len(), 1);
+        // 苦手の分析（直近の周）には入れない
+        assert!(
+            r.recent_results("songs/a/master.dtx", 5, 5, None)
+                .unwrap()
+                .is_empty()
+        );
+        // 中身が無くても、読んだことは残す（次に開いたとき読み直さない）
+        r.import("b.dtx.score.ini", &chart(2), &[], 999).unwrap();
+        assert_eq!(r.imported_files().unwrap().len(), 2);
     }
 
     #[test]
