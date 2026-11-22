@@ -1,6 +1,8 @@
 //! 設定の画面（上流 `CStageConfig` と `CActConfigList`）。
 //! スキンの 4_ の画像で、左のメニュー（System / Drums / Exit）と、右の項目の一覧、説明のパネルを出す。
 //! 項目は NXT のもの（曲のフォルダ、入力と表示の補正、スクロールの速さ、パッドの割り当てなど）。
+//! 割り当ては入力機器（MIDI のポートと PC のキーボード）ごと。Drums の「Drums Keys」でレーンごとに、叩いたパッドか
+//! 押したキーを足し、「MIDI Devices」で機器ごとの出発点（Roland / GM / なし）・チャンネル・使うかどうかを決める。
 //!
 //! 操作は上流と同じ。↑↓（HT / LT）で選び、Enter（CY / RD）で決め、Esc（LC）で戻る。
 //! 数の項目は Enter で値を変える状態になり、↑↓ で値を変えて、もう一度 Enter で戻る。
@@ -11,10 +13,13 @@ use std::time::{Duration, Instant};
 
 use dtx::DrumLane;
 use egui::Color32;
+use engine::input::Preset;
 use library::Progress;
+use winit::keyboard::KeyCode;
 
 use crate::config::{Config, MASTER_VOLUME_STEP};
 use crate::gfx::{Canvas, Gfx, src};
+use crate::inputs::LaneSource;
 use crate::sfx::Se;
 use crate::text::Style;
 use crate::title_view::draw_scanning;
@@ -51,10 +56,24 @@ pub enum ConfigAction {
     Nudge(Setting, i32),
     /// ON と OFF などを切り替える
     Toggle(Setting),
-    /// ノート番号をレーンに割り当てる
-    AssignPad(DrumLane, u8),
-    /// このアプリで変えたパッドの割り当てを消す
+    /// MIDI のポート（何番目か）のノート番号をレーンに割り当てる
+    AssignPad(DrumLane, usize, u8),
+    /// キーボードのキーをレーンに割り当てる
+    AssignKey(DrumLane, KeyCode),
+    /// レーンの割り当てを、すべての機器とキーボードから外す
+    ClearLane(DrumLane),
+    /// このアプリで変えた割り当てをすべて消す
     ResetPads,
+    /// 機器（ポートの何番目か）を使うかどうかを切り替える
+    ToggleDevice(usize),
+    /// 機器の割り当ての出発点を次のものにする
+    NextPreset(usize),
+    /// 機器の受けるチャンネルを 1 段変える（すべて → 1 → … → 16）
+    NudgeChannel(usize, i32),
+    /// 機器の捨てる弱さ（ベロシティ）を 1 段変える
+    NudgeMinVelocity(usize, i32),
+    /// 機器の割り当てを出発点に戻す
+    ResetDevice(usize),
     /// 設定の画面を出る（フェードを終えた）
     Leave,
 }
@@ -81,12 +100,24 @@ pub enum ItemId {
     AddSongDir,
     SongDir(usize),
     Rescan,
-    Midi,
     Value(Setting),
     /// パッドの割り当ての一覧へ
     DrumsKeys,
     Pad(DrumLane),
     ResetPads,
+    /// MIDI の機器の一覧へ
+    MidiDevices,
+    /// MIDI の機器を探し直す
+    ReconnectMidi,
+    /// MIDI の機器（ポートの何番目か）の設定へ
+    Device(usize),
+    /// 機器の名前と最後に届いた入力（見るだけ）
+    DeviceInfo(usize),
+    DeviceUse(usize),
+    DevicePreset(usize),
+    DeviceChannel(usize),
+    DeviceMinVelocity(usize),
+    DeviceReset(usize),
 }
 
 impl ItemId {
@@ -99,7 +130,8 @@ impl ItemId {
                     | Setting::InputAdjust
                     | Setting::VisualAdjust
                     | Setting::ScrollSpeed
-            )
+            ) | ItemId::DeviceChannel(_)
+                | ItemId::DeviceMinVelocity(_)
         )
     }
 }
@@ -120,14 +152,52 @@ pub enum List {
     Drums,
     /// Drums の中のパッドの割り当て
     DrumsKeys,
+    /// Drums の中の MIDI の機器の一覧
+    MidiDevices,
+    /// MIDI の機器 1 つ（ポートの何番目か）の設定
+    Device(usize),
+}
+
+impl List {
+    /// Esc や「戻る」で行く一覧（`None` なら左のメニューへ）
+    fn parent(self) -> Option<List> {
+        match self {
+            List::System | List::Drums => None,
+            List::DrumsKeys | List::MidiDevices => Some(List::Drums),
+            List::Device(_) => Some(List::MidiDevices),
+        }
+    }
+}
+
+/// MIDI の機器 1 つ（OS が見せるポート）の様子
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeviceRow {
+    pub name: String,
+    /// OS のポートの ID
+    pub id: String,
+    pub open: bool,
+    /// 開けなかったわけ
+    pub error: Option<String>,
+    /// 使わない設定
+    pub disabled: bool,
+    pub preset: Preset,
+    /// 受けるチャンネル（1〜16、0 はすべて）
+    pub channel: u8,
+    /// これより弱い打撃は捨てる（0 は捨てない）
+    pub min_velocity: u8,
+    /// 出発点から変えた割り当ての数
+    pub changes: usize,
+    /// 最後に届いた打撃
+    pub last: Option<String>,
 }
 
 /// 項目を作るのに要るもの
 pub struct ConfigInfo<'a> {
     pub config: &'a Config,
-    /// 今の割り当て（レーン → ノート番号）
-    pub lanes: BTreeMap<DrumLane, Vec<u8>>,
-    pub midi_ports: &'a [String],
+    /// レーンを叩ける入力（機器ごと）
+    pub lanes: BTreeMap<DrumLane, Vec<LaneSource>>,
+    /// MIDI の機器（OS が見せるポートの並び）
+    pub devices: Vec<DeviceRow>,
     pub scanning: Option<Progress>,
     pub song_count: usize,
 }
@@ -174,6 +244,58 @@ fn return_item() -> Item {
         String::new(),
         "左側のメニューに戻ります。".to_owned(),
     )
+}
+
+/// チャンネルの表示（0 はすべて）
+fn channel_label(ch: u8) -> String {
+    if (1..=16).contains(&ch) {
+        ch.to_string()
+    } else {
+        "ALL".to_owned()
+    }
+}
+
+/// 機器の一覧の値（出発点か、使っていないわけ）
+fn device_state(d: &DeviceRow) -> String {
+    if d.disabled {
+        "OFF".to_owned()
+    } else if !d.open {
+        "Error".to_owned()
+    } else {
+        d.preset.label().to_owned()
+    }
+}
+
+/// 機器の様子の説明（説明のパネルに出す）
+fn device_summary(d: &DeviceRow) -> String {
+    let state = if d.disabled {
+        "使わない設定です。".to_owned()
+    } else if let Some(e) = &d.error {
+        format!("開けません（ほかのアプリが使っているかも）: {e}")
+    } else {
+        format!(
+            "{} / ch {} / 変更 {} 個",
+            d.preset.label(),
+            channel_label(d.channel),
+            d.changes
+        )
+    };
+    match &d.last {
+        Some(last) => format!("{state}\n最後: {last}"),
+        None => format!("{state}\n叩くとここに届いた内容が出ます。"),
+    }
+}
+
+/// 機器の名前の並び（説明のパネルに出す）
+fn device_names(devices: &[DeviceRow]) -> String {
+    if devices.is_empty() {
+        return "つながっている機器はありません。".to_owned();
+    }
+    devices
+        .iter()
+        .map(|d| d.name.as_str())
+        .collect::<Vec<_>>()
+        .join("、")
 }
 
 /// 一覧の項目
@@ -254,23 +376,6 @@ pub fn items(list: List, info: &ConfigInfo<'_>) -> Vec<Item> {
                 on_off(c.show_lag_hit_count),
                 "ON にすると、結果の画面に早かった数と遅かった数を出します。".to_owned(),
             ));
-            v.push(item(
-                ItemId::Midi,
-                "MIDI Input",
-                if info.midi_ports.is_empty() {
-                    "なし".to_owned()
-                } else {
-                    format!("{} 個", info.midi_ports.len())
-                },
-                format!(
-                    "MIDI の入力: {}\nEnter でつなぎ直します（電子ドラムを後からつないだとき）。",
-                    if info.midi_ports.is_empty() {
-                        "なし".to_owned()
-                    } else {
-                        info.midi_ports.join("、")
-                    }
-                ),
-            ));
         }
         List::Drums => {
             v.push(item(
@@ -311,39 +416,129 @@ pub fn items(list: List, info: &ConfigInfo<'_>) -> Vec<Item> {
                 ItemId::DrumsKeys,
                 "Drums Keys",
                 String::new(),
-                "ドラムのパッドの割り当て（MIDI のノート番号）を設定します。".to_owned(),
+                "レーンごとに、叩くパッド（MIDI のノート番号）とキーボードのキーを割り当てます。機器ごとに別々に持ちます。"
+                    .to_owned(),
+            ));
+            let open = info.devices.iter().filter(|d| d.open).count();
+            v.push(item(
+                ItemId::MidiDevices,
+                "MIDI Devices",
+                format!("{open} 台"),
+                format!(
+                    "MIDI の機器ごとに、割り当ての出発点、受けるチャンネル、使うかどうかを決めます。\n{}",
+                    device_names(&info.devices)
+                ),
             ));
         }
         List::DrumsKeys => {
             for (lane, name) in PADS {
-                let notes = info
-                    .lanes
-                    .get(&lane)
-                    .filter(|n| !n.is_empty())
-                    .map_or("-".to_owned(), |n| {
-                        n.iter().map(u8::to_string).collect::<Vec<_>>().join(", ")
-                    });
-                let key = crate::keyboard_key(lane)
-                    .map_or(String::new(), |k| format!("キーボードでは {k}。"));
-                v.push(item(
-                    ItemId::Pad(lane),
-                    name,
-                    notes.clone(),
-                    format!(
-                        "{name} に割り当てる MIDI のノート番号です。\nEnter を押してからパッドを叩くと、そのノートをここに割り当てます。{key}"
-                    ),
-                ));
+                let sources = info.lanes.get(&lane).map_or(&[][..], Vec::as_slice);
+                let value = if sources.is_empty() {
+                    "-".to_owned()
+                } else {
+                    sources
+                        .iter()
+                        .map(|s| s.inputs.join(" "))
+                        .collect::<Vec<_>>()
+                        .join(" / ")
+                };
+                let mut desc: String = sources
+                    .iter()
+                    .map(|s| format!("{}: {}\n", s.source, s.inputs.join(", ")))
+                    .collect();
+                if sources.is_empty() {
+                    desc.push_str("割り当てがありません。\n");
+                }
+                desc.push_str("Enter のあとパッドを叩くかキーを押すと足します。Delete でこのレーンの割り当てを全部外します。");
+                v.push(item(ItemId::Pad(lane), name, value, desc));
             }
-            let changed = c.pad_notes.len();
+            let changed = c.has_custom_assignments();
             v.push(item(
                 ItemId::ResetPads,
                 "Reset Keys",
-                if changed == 0 {
+                String::new(),
+                format!(
+                    "ここで変えた割り当てを全部消して、機器ごとの出発点とキーボードの既定に戻します。{}",
+                    if changed { "" } else { "\n（今は変えていません）" }
+                ),
+            ));
+        }
+        List::MidiDevices => {
+            for (i, d) in info.devices.iter().enumerate() {
+                v.push(item(
+                    ItemId::Device(i),
+                    &d.name,
+                    device_state(d),
+                    format!(
+                        "{}\n{}\nEnter でこの機器の設定を開きます。",
+                        d.name,
+                        device_summary(d)
+                    ),
+                ));
+            }
+            v.push(item(
+                ItemId::ReconnectMidi,
+                "Rescan Devices",
+                if info.devices.is_empty() {
+                    "なし".to_owned()
+                } else {
+                    format!("{} 台", info.devices.len())
+                },
+                "MIDI の機器を探し直して、開き直します。後からつないだ機器は、この画面にいれば自動でも見つけます。"
+                    .to_owned(),
+            ));
+        }
+        List::Device(i) => {
+            let Some(d) = info.devices.get(i) else {
+                return v;
+            };
+            v.push(item(
+                ItemId::DeviceInfo(i),
+                "Device",
+                d.name.clone(),
+                format!("{}\n{}", d.name, device_summary(d)),
+            ));
+            v.push(item(
+                ItemId::DeviceUse(i),
+                "Use",
+                on_off(!d.disabled),
+                "OFF にすると、このアプリはこの機器を開きません（ほかのアプリで使うときなど）。"
+                    .to_owned(),
+            ));
+            v.push(item(
+                ItemId::DevicePreset(i),
+                "Preset",
+                d.preset.label().to_owned(),
+                "割り当ての出発点です。Enter で替えます。\nRoland: V-Drums の既定（リムやエッジも）。\nGM: General MIDI のドラムの番号。\nNone: 何もなし。"
+                    .to_owned(),
+            ));
+            v.push(item(
+                ItemId::DeviceChannel(i),
+                "Channel",
+                channel_label(d.channel),
+                "受ける MIDI のチャンネルです。ALL ならどのチャンネルでも受けます。\nEnter を押してから ↑↓ で変えます。"
+                    .to_owned(),
+            ));
+            v.push(item(
+                ItemId::DeviceMinVelocity(i),
+                "MinVelocity",
+                if d.min_velocity == 0 {
+                    "OFF".to_owned()
+                } else {
+                    d.min_velocity.to_string()
+                },
+                "これより弱い打撃（ベロシティ）を捨てます。隣のパッドにつられて鳴る弱い音を除きます。\nEnter を押してから ↑↓ で変えます。"
+                    .to_owned(),
+            ));
+            v.push(item(
+                ItemId::DeviceReset(i),
+                "Reset Keys",
+                if d.changes == 0 {
                     String::new()
                 } else {
-                    format!("{changed} 個")
+                    format!("{} 個", d.changes)
                 },
-                "ここで変えた割り当てを消して、Roland の既定に戻します。".to_owned(),
+                "この機器で変えた割り当てを消して、出発点に戻します。".to_owned(),
             ));
         }
     }
@@ -430,11 +625,39 @@ impl ConfigView {
         self.waiting.is_some()
     }
 
-    /// 待っているパッドにノートを割り当てる
-    pub fn pad_hit(&mut self, note: u8) -> Response {
+    /// 待っているレーンに、MIDI のポート（何番目か）のノートを割り当てる
+    pub fn pad_hit(&mut self, port: usize, note: u8) -> Response {
         match self.waiting.take() {
-            Some(lane) => Response::action(Se::Decide, ConfigAction::AssignPad(lane, note)),
+            Some(lane) => Response::action(Se::Decide, ConfigAction::AssignPad(lane, port, note)),
             None => Response::default(),
+        }
+    }
+
+    /// 待っているあいだに押したキー。割り当てられるキーなら割り当て、Delete ならレーンの割り当てを全部外す。
+    /// 待っていなければ、またはほかのキー（Esc など）なら `None`（ふつうの操作として扱う）
+    pub fn key_hit(&mut self, code: KeyCode) -> Option<Response> {
+        let lane = self.waiting?;
+        if code == KeyCode::Delete {
+            self.waiting = None;
+            return Some(Response::action(Se::Decide, ConfigAction::ClearLane(lane)));
+        }
+        if crate::inputs::assignable(code) {
+            self.waiting = None;
+            return Some(Response::action(
+                Se::Decide,
+                ConfigAction::AssignKey(lane, code),
+            ));
+        }
+        None
+    }
+
+    /// MIDI の機器がつながったり外れたりした（機器の番号が変わるので、機器の設定を開いていたら一覧へ戻る）
+    pub fn devices_changed(&mut self) {
+        if matches!(self.list, List::Device(_)) {
+            self.list = List::MidiDevices;
+            self.cursor = 0;
+            self.pending = 0;
+            self.editing = false;
         }
     }
 
@@ -465,6 +688,22 @@ impl ConfigView {
         self.moved_at = Instant::now();
     }
 
+    /// 一つ上の一覧へ（一番上なら左のメニューへ）。機器の設定からは、その機器の行に戻る
+    fn back(&mut self) {
+        let from = self.list;
+        match from.parent() {
+            Some(parent) => {
+                self.set_list(parent);
+                if let List::Device(i) = from {
+                    // 0 行目は「戻る」
+                    self.cursor = i + 1;
+                }
+            }
+            None => self.focus_list = false,
+        }
+        self.moved();
+    }
+
     pub fn input(&mut self, input: ConfigInput, items: &[Item]) -> Response {
         if !self.ready() {
             return Response::default();
@@ -490,10 +729,18 @@ impl ConfigView {
                 let d: i64 = if input == ConfigInput::Up { -1 } else { 1 };
                 if self.editing {
                     // 上流と同じく ↑ で値を増やす
-                    if let ItemId::Value(s) = it.id {
-                        return Response::action(Se::Move, ConfigAction::Nudge(s, -d as i32));
-                    }
-                    return Response::default();
+                    return match it.id {
+                        ItemId::Value(s) => {
+                            Response::action(Se::Move, ConfigAction::Nudge(s, -d as i32))
+                        }
+                        ItemId::DeviceChannel(i) => {
+                            Response::action(Se::Move, ConfigAction::NudgeChannel(i, -d as i32))
+                        }
+                        ItemId::DeviceMinVelocity(i) => {
+                            Response::action(Se::Move, ConfigAction::NudgeMinVelocity(i, -d as i32))
+                        }
+                        _ => Response::default(),
+                    };
                 }
                 self.cursor = (self.cursor as i64 + d).rem_euclid(n as i64) as usize;
                 self.pending += d * 100;
@@ -511,19 +758,19 @@ impl ConfigView {
                 }
                 let action = match it.id {
                     ItemId::Return => {
-                        if self.list == List::DrumsKeys {
-                            self.set_list(List::Drums);
-                        } else {
-                            self.focus_list = false;
-                        }
+                        self.back();
+                        return Response::se(Se::Decide);
+                    }
+                    ItemId::DrumsKeys | ItemId::MidiDevices | ItemId::Device(_) => {
+                        self.set_list(match it.id {
+                            ItemId::DrumsKeys => List::DrumsKeys,
+                            ItemId::Device(i) => List::Device(i),
+                            _ => List::MidiDevices,
+                        });
                         self.moved();
                         return Response::se(Se::Decide);
                     }
-                    ItemId::DrumsKeys => {
-                        self.set_list(List::DrumsKeys);
-                        self.moved();
-                        return Response::se(Se::Decide);
-                    }
+                    ItemId::DeviceInfo(_) => return Response::default(),
                     ItemId::Pad(lane) => {
                         self.waiting = Some(lane);
                         return Response::se(Se::Decide);
@@ -531,21 +778,25 @@ impl ConfigView {
                     ItemId::AddSongDir => ConfigAction::AddSongDir,
                     ItemId::SongDir(i) => ConfigAction::RemoveSongDir(i),
                     ItemId::Rescan => ConfigAction::Rescan,
-                    ItemId::Midi => ConfigAction::ReconnectMidi,
+                    ItemId::ReconnectMidi => ConfigAction::ReconnectMidi,
                     ItemId::Value(s) => ConfigAction::Toggle(s),
                     ItemId::ResetPads => ConfigAction::ResetPads,
+                    ItemId::DeviceUse(i) => ConfigAction::ToggleDevice(i),
+                    ItemId::DevicePreset(i) => ConfigAction::NextPreset(i),
+                    ItemId::DeviceReset(i) => ConfigAction::ResetDevice(i),
+                    ItemId::DeviceChannel(_) | ItemId::DeviceMinVelocity(_) => {
+                        return Response::default();
+                    }
                 };
                 Response::action(Se::Decide, action)
             }
             ConfigInput::Cancel => {
                 if self.editing {
                     self.editing = false;
-                } else if self.list == List::DrumsKeys {
-                    self.set_list(List::Drums);
+                    self.moved();
                 } else {
-                    self.focus_list = false;
+                    self.back();
                 }
-                self.moved();
                 Response::se(Se::Cancel)
             }
         }
@@ -785,7 +1036,7 @@ fn draw_hit_key_dialog(c: &Canvas, g: &mut Gfx) {
         None => {
             c.fill(509.0, 215.0, 200.0, 100.0, Color32::from_black_alpha(220));
             let style = Style::plain(18.0, Color32::WHITE);
-            for (i, line) in ["パッドを叩いてください", "（Esc で取りやめ）"]
+            for (i, line) in ["パッドを叩くかキーを押す", "（Esc で取りやめ）"]
                 .iter()
                 .enumerate()
             {
@@ -804,8 +1055,45 @@ mod tests {
     fn info(config: &Config) -> ConfigInfo<'_> {
         ConfigInfo {
             config,
-            lanes: BTreeMap::from([(DrumLane::SD, vec![38, 40])]),
-            midi_ports: &[],
+            lanes: BTreeMap::from([(
+                DrumLane::SD,
+                vec![
+                    LaneSource {
+                        source: "V51".to_owned(),
+                        inputs: vec!["38".to_owned(), "40".to_owned()],
+                    },
+                    LaneSource {
+                        source: "Keyboard".to_owned(),
+                        inputs: vec!["D".to_owned()],
+                    },
+                ],
+            )]),
+            devices: vec![
+                DeviceRow {
+                    name: "V51".to_owned(),
+                    id: "v51".to_owned(),
+                    open: true,
+                    error: None,
+                    disabled: false,
+                    preset: Preset::Roland,
+                    channel: 0,
+                    min_velocity: 0,
+                    changes: 0,
+                    last: Some("ch10 note 38 vel 100 → SD".to_owned()),
+                },
+                DeviceRow {
+                    name: "Finger Drum Pad".to_owned(),
+                    id: "fgdp".to_owned(),
+                    open: true,
+                    error: None,
+                    disabled: false,
+                    preset: Preset::GeneralMidi,
+                    channel: 10,
+                    min_velocity: 8,
+                    changes: 3,
+                    last: None,
+                },
+            ],
             scanning: None,
             song_count: 3,
         }
@@ -836,7 +1124,13 @@ mod tests {
     #[test]
     fn lists_start_with_return_to_menu() {
         let config = Config::default();
-        for list in [List::System, List::Drums, List::DrumsKeys] {
+        for list in [
+            List::System,
+            List::Drums,
+            List::DrumsKeys,
+            List::MidiDevices,
+            List::Device(0),
+        ] {
             assert_eq!(items(list, &info(&config))[0].id, ItemId::Return);
         }
         let keys = items(List::DrumsKeys, &info(&config));
@@ -844,7 +1138,9 @@ mod tests {
             .iter()
             .find(|i| i.id == ItemId::Pad(DrumLane::SD))
             .unwrap();
-        assert_eq!(sd.value, "38, 40");
+        // 機器ごとに並べる
+        assert_eq!(sd.value, "38 40 / D");
+        assert!(sd.desc.starts_with("V51: 38, 40\nKeyboard: D\n"));
     }
 
     #[test]
@@ -909,15 +1205,97 @@ mod tests {
         // 待っているあいだは動かない
         assert_eq!(v.input(ConfigInput::Down, &list), Response::default());
         assert_eq!(
-            v.pad_hit(48).action,
-            Some(ConfigAction::AssignPad(DrumLane::HT, 48))
+            v.pad_hit(1, 48).action,
+            Some(ConfigAction::AssignPad(DrumLane::HT, 1, 48))
         );
         assert!(!v.waiting_pad());
+        // キーでも割り当てる。演奏の操作のキーは割り当てない
+        v.input(ConfigInput::Decide, &list);
+        assert_eq!(v.key_hit(KeyCode::KeyR), None);
+        assert_eq!(
+            v.key_hit(KeyCode::KeyX).and_then(|r| r.action),
+            Some(ConfigAction::AssignKey(DrumLane::HT, KeyCode::KeyX))
+        );
+        // Delete で全部外す
+        v.input(ConfigInput::Decide, &list);
+        assert_eq!(
+            v.key_hit(KeyCode::Delete).and_then(|r| r.action),
+            Some(ConfigAction::ClearLane(DrumLane::HT))
+        );
+        // 待っていなければキーは扱わない
+        assert_eq!(v.key_hit(KeyCode::KeyX), None);
         // Esc で取りやめ
         v.input(ConfigInput::Decide, &list);
         v.input(ConfigInput::Cancel, &list);
         assert!(!v.waiting_pad());
-        assert_eq!(v.pad_hit(48).action, None);
+        assert_eq!(v.pad_hit(0, 48).action, None);
+    }
+
+    #[test]
+    fn devices_have_their_own_settings() {
+        let config = Config::default();
+        let info = info(&config);
+        let drums = items(List::Drums, &info);
+        let mut v = ready();
+        v.list = List::Drums;
+        v.focus_list = true;
+        v.cursor = drums
+            .iter()
+            .position(|i| i.id == ItemId::MidiDevices)
+            .unwrap();
+        assert_eq!(drums[v.cursor].value, "2 台");
+        v.input(ConfigInput::Decide, &drums);
+        assert_eq!(v.list(), List::MidiDevices);
+        let list = items(List::MidiDevices, &info);
+        assert_eq!(list[1].name, "V51");
+        assert_eq!(list[1].value, "Roland");
+        assert!(list[1].desc.contains("最後: ch10 note 38 vel 100 → SD"));
+        // 2 台目（FGDP）の設定へ
+        v.input(ConfigInput::Down, &list);
+        v.input(ConfigInput::Down, &list);
+        v.input(ConfigInput::Decide, &list);
+        assert_eq!(v.list(), List::Device(1));
+        let dev = items(List::Device(1), &info);
+        let names: Vec<&str> = dev.iter().map(|i| i.name.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "<< ReturnTo Menu",
+                "Device",
+                "Use",
+                "Preset",
+                "Channel",
+                "MinVelocity",
+                "Reset Keys"
+            ]
+        );
+        assert_eq!(dev[3].value, "GM");
+        assert_eq!(dev[4].value, "10");
+        assert_eq!(dev[5].value, "8");
+        // 出発点は Enter で替える
+        v.cursor = 3;
+        assert_eq!(
+            v.input(ConfigInput::Decide, &dev).action,
+            Some(ConfigAction::NextPreset(1))
+        );
+        // チャンネルは Enter のあと ↑↓
+        v.cursor = 4;
+        assert_eq!(v.input(ConfigInput::Decide, &dev).action, None);
+        assert_eq!(
+            v.input(ConfigInput::Up, &dev).action,
+            Some(ConfigAction::NudgeChannel(1, 1))
+        );
+        v.input(ConfigInput::Decide, &dev);
+        // Esc で機器の一覧の、その機器の行へ戻る
+        v.input(ConfigInput::Cancel, &dev);
+        assert_eq!(v.list(), List::MidiDevices);
+        assert_eq!(v.cursor, 2);
+        v.input(ConfigInput::Cancel, &list);
+        assert_eq!(v.list(), List::Drums);
+        // つながる機器が変わったら、機器の設定から一覧へ戻る
+        v.list = List::Device(0);
+        v.devices_changed();
+        assert_eq!(v.list(), List::MidiDevices);
     }
 
     #[test]
