@@ -131,7 +131,8 @@ fn pack_rows(data: &[u8], width: u32, height: u32, row_bytes: u32, order: Order)
     let (w, row) = (width as usize * 4, row_bytes as usize);
     let mut out = Vec::with_capacity(w * height as usize);
     for y in 0..height as usize {
-        for px in data[y * row..y * row + w].chunks_exact(4) {
+        let (pixels, _) = data[y * row..y * row + w].as_chunks::<4>();
+        for px in pixels {
             let (r, b) = match order {
                 Order::Rgba => (px[0], px[2]),
                 Order::Bgra => (px[2], px[0]),
