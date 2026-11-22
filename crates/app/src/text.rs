@@ -3,6 +3,9 @@
 //! NX の既定のフォントは MS P ゴシックなので、Windows ではそれを使う。
 //! 他の OS では近い日本語のフォントを探す。フォントのファイルはアプリに同梱しない。
 //! 窓の大きさに合わせた細かさで画像にし、NX の座標での大きさで描く。
+//!
+//! 画像にするのは窓が大きいほど重い（2560×1440 で曲名 1 つ 10〜30 ミリ秒）。選曲画面の曲名のように
+//! 次々に要るものは [`Texts::request`] で別のスレッドに頼み、できたものを [`Texts::ready`] で描く。
 
 use std::collections::HashMap;
 
@@ -10,6 +13,7 @@ use ab_glyph::{Font, FontArc, PxScale, ScaleFont, point};
 use egui::Color32;
 
 use crate::gfx::{Canvas, Opt, Tex};
+use crate::jobs::Jobs;
 
 /// フォントの候補（ファイル、コレクションの中の名前）。上から順に探す
 const CANDIDATES: &[(&str, Option<&str>)] = &[
@@ -139,7 +143,7 @@ impl Text {
     }
 }
 
-#[derive(Hash, PartialEq, Eq)]
+#[derive(Hash, PartialEq, Eq, Clone)]
 struct Key {
     text: String,
     style: [u32; 9],
@@ -170,6 +174,33 @@ fn key(text: &str, s: &Style, raster: f32) -> Key {
     }
 }
 
+/// 別のスレッドで文字を画像にする仕事（見分けるのは `key` だけ）
+#[derive(Clone)]
+struct Job {
+    key: Key,
+    style: Style,
+    raster: f32,
+}
+
+impl PartialEq for Job {
+    fn eq(&self, other: &Self) -> bool {
+        self.key == other.key
+    }
+}
+
+impl Eq for Job {}
+
+impl std::hash::Hash for Job {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.key.hash(state);
+    }
+}
+
+/// 文字を画像にするスレッドの数
+const THREADS: usize = 2;
+/// これだけのフレームのあいだ頼み直されなかった仕事は捨てる（通り過ぎた曲名）
+const STALE_FRAMES: u64 = 20;
+
 /// 作った文字の画像を覚えておく
 pub struct Texts {
     ctx: egui::Context,
@@ -178,16 +209,34 @@ pub struct Texts {
     frame: u64,
     /// 今の窓での NX の 1 ピクセルあたりの画面のピクセル数
     raster: f32,
+    /// 別のスレッドで画像にする（フォントが無ければ無い）
+    jobs: Option<Jobs<Job, Option<egui::ColorImage>>>,
 }
 
 impl Texts {
     pub fn new(ctx: &egui::Context) -> Self {
+        let font = load_font();
+        let jobs = font.clone().map(|f| {
+            Jobs::new("text", THREADS, move |j: &Job| {
+                render(&f, &j.key.text, &j.style, j.raster)
+            })
+        });
         Self {
             ctx: ctx.clone(),
-            font: load_font(),
+            font,
             map: HashMap::new(),
             frame: 0,
             raster: 1.0,
+            jobs,
+        }
+    }
+
+    fn to_text(&self, img: egui::ColorImage, raster: f32) -> Text {
+        let (w, h) = (img.size[0] as f32 / raster, img.size[1] as f32 / raster);
+        Text {
+            tex: Tex::new(&self.ctx, "text", img),
+            w,
+            h,
         }
     }
 
@@ -199,6 +248,17 @@ impl Texts {
         if raster != self.raster {
             self.raster = raster;
             self.map.clear();
+        }
+        let done = match &mut self.jobs {
+            Some(jobs) => jobs.poll(self.frame.saturating_sub(STALE_FRAMES)),
+            None => Vec::new(),
+        };
+        for (job, img) in done {
+            // 頼んだあとで窓の大きさが変わったものは捨てる
+            if job.raster == self.raster {
+                let t = img.map(|img| self.to_text(img, job.raster));
+                self.map.insert(job.key, (t, self.frame));
+            }
         }
         if self.map.len() > 400 {
             let frame = self.frame;
@@ -228,18 +288,42 @@ impl Texts {
         }
         let t = self.font.as_ref().and_then(|f| {
             let img = render(f, text, style, self.raster)?;
-            let (w, h) = (
-                img.size[0] as f32 / self.raster,
-                img.size[1] as f32 / self.raster,
-            );
-            Some(Text {
-                tex: Tex::new(&self.ctx, "text", img),
-                w,
-                h,
-            })
+            Some(self.to_text(img, self.raster))
         });
         self.map.insert(k, (t.clone(), frame));
         t
+    }
+
+    /// 別のスレッドで画像にするよう頼む（できていれば何もしない）。後で頼んだものほど先にできる。
+    /// 要るあいだは毎フレーム頼み直す（頼み直されなくなった仕事は捨てる）
+    pub fn request(&mut self, text: &str, style: &Style) {
+        if text.is_empty() {
+            return;
+        }
+        let k = key(text, style, self.raster);
+        if let Some((_, used)) = self.map.get_mut(&k) {
+            *used = self.frame;
+            return;
+        }
+        if let Some(jobs) = &mut self.jobs {
+            let job = Job {
+                key: k,
+                style: *style,
+                raster: self.raster,
+            };
+            jobs.request(&job, self.frame);
+        }
+    }
+
+    /// できている文字の画像（[`Texts::request`] で頼んだもの。まだなら None）
+    pub fn ready(&mut self, text: &str, style: &Style) -> Option<Text> {
+        if text.is_empty() {
+            return None;
+        }
+        let frame = self.frame;
+        let (t, used) = self.map.get_mut(&key(text, style, self.raster))?;
+        *used = frame;
+        t.clone()
     }
 }
 
@@ -327,29 +411,55 @@ fn coverage(font: &FontArc, text: &str, px: f32) -> (Vec<f32>, usize, usize) {
     (cov, w, h)
 }
 
-/// 濃さを周り `r` ピクセルに広げる（縁取りと太字に使う）
+/// 楕円（横の半径 `rx`、縦の半径 `ry`）の、縦に `dy` 離れた行での横の半径
+fn half_width(rx: usize, ry: usize, dy: usize) -> usize {
+    let (rx2, ry2) = ((rx * rx).max(1) as f32, (ry * ry).max(1) as f32);
+    (0..=rx)
+        .rev()
+        .find(|&dx| (dx * dx) as f32 / rx2 + (dy * dy) as f32 / ry2 <= 1.0 + 1e-3)
+        .unwrap_or(0)
+}
+
+/// 濃さを周りの楕円（横 `rx`、縦 `ry` ピクセル）に広げる（縁取りと太字に使う）。
+/// 横の幅ごとの最大を先に作り、行ごとに楕円の幅のものを縦に重ねる（1 点ごとに楕円の中を全部見るより速い）
 fn dilate(cov: &[f32], w: usize, h: usize, rx: usize, ry: usize) -> Vec<f32> {
     if rx == 0 && ry == 0 {
         return cov.to_vec();
     }
-    let mut out = vec![0.0f32; w * h];
-    let (rx2, ry2) = ((rx * rx).max(1) as f32, (ry * ry).max(1) as f32);
-    for y in 0..h {
-        for x in 0..w {
-            let mut m = 0.0f32;
-            for dy in -(ry as i64)..=(ry as i64) {
-                for dx in -(rx as i64)..=(rx as i64) {
-                    // 楕円の中だけ
-                    if (dx * dx) as f32 / rx2 + (dy * dy) as f32 / ry2 > 1.0 + 1e-3 {
-                        continue;
-                    }
-                    let (sx, sy) = (x as i64 + dx, y as i64 + dy);
-                    if sx >= 0 && sy >= 0 && (sx as usize) < w && (sy as usize) < h {
-                        m = m.max(cov[sy as usize * w + sx as usize]);
-                    }
+    // rows[r]：横に ±r の最大（r - 1 のものの左・中・右の最大）
+    let mut rows: Vec<Vec<f32>> = Vec::with_capacity(rx + 1);
+    rows.push(cov.to_vec());
+    for r in 1..=rx {
+        let prev = &rows[r - 1];
+        let mut next = prev.clone();
+        for y in 0..h {
+            let line = &prev[y * w..(y + 1) * w];
+            let out = &mut next[y * w..(y + 1) * w];
+            for x in 0..w {
+                let mut m = line[x];
+                if x > 0 {
+                    m = m.max(line[x - 1]);
                 }
+                if x + 1 < w {
+                    m = m.max(line[x + 1]);
+                }
+                out[x] = m;
             }
-            out[y * w + x] = m;
+        }
+        rows.push(next);
+    }
+    let mut out = vec![0.0f32; w * h];
+    for dy in -(ry as i64)..=(ry as i64) {
+        let src = &rows[half_width(rx, ry, dy.unsigned_abs() as usize)];
+        for y in 0..h {
+            let sy = y as i64 + dy;
+            if sy < 0 || sy as usize >= h {
+                continue;
+            }
+            let line = &src[sy as usize * w..(sy as usize + 1) * w];
+            for (o, &v) in out[y * w..(y + 1) * w].iter_mut().zip(line) {
+                *o = o.max(v);
+            }
         }
     }
     out
@@ -472,6 +582,65 @@ mod tests {
         // 行より長い語は分ける
         assert_eq!(w("Enter", 3.0), ["Ent", "er"]);
         assert_eq!(w("a\nb", 9.0), ["a", "b"]);
+    }
+
+    /// 1 点ごとに楕円の中を全部見る（[`dilate`] の答え合わせ）
+    fn dilate_naive(cov: &[f32], w: usize, h: usize, rx: usize, ry: usize) -> Vec<f32> {
+        let mut out = vec![0.0f32; w * h];
+        let (rx2, ry2) = ((rx * rx).max(1) as f32, (ry * ry).max(1) as f32);
+        for y in 0..h {
+            for x in 0..w {
+                let mut m = 0.0f32;
+                for dy in -(ry as i64)..=(ry as i64) {
+                    for dx in -(rx as i64)..=(rx as i64) {
+                        if (dx * dx) as f32 / rx2 + (dy * dy) as f32 / ry2 > 1.0 + 1e-3 {
+                            continue;
+                        }
+                        let (sx, sy) = (x as i64 + dx, y as i64 + dy);
+                        if sx >= 0 && sy >= 0 && (sx as usize) < w && (sy as usize) < h {
+                            m = m.max(cov[sy as usize * w + sx as usize]);
+                        }
+                    }
+                }
+                out[y * w + x] = m;
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn dilate_matches_the_ellipse() {
+        let (w, h) = (23, 17);
+        // 決まった乱れ（xorshift）
+        let mut seed = 0x2545_f491_u32;
+        let cov: Vec<f32> = (0..w * h)
+            .map(|_| {
+                seed ^= seed << 13;
+                seed ^= seed >> 17;
+                seed ^= seed << 5;
+                if seed.is_multiple_of(7) {
+                    (seed % 1000) as f32 / 1000.0
+                } else {
+                    0.0
+                }
+            })
+            .collect();
+        for (rx, ry) in [
+            (1, 1),
+            (2, 2),
+            (3, 3),
+            (4, 4),
+            (6, 6),
+            (3, 1),
+            (0, 2),
+            (2, 0),
+        ] {
+            assert_eq!(
+                dilate(&cov, w, h, rx, ry),
+                dilate_naive(&cov, w, h, rx, ry),
+                "rx {rx} ry {ry}"
+            );
+        }
     }
 
     #[test]
