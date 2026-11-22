@@ -111,9 +111,14 @@ const PIECES: [(f32, f32); 10] = [
 const JUDGE_ROW: [i32; 10] = [-1, 1, 1, 2, 0, 0, 1, -1, 2, 1];
 
 /// チップの x と、7_chips_drums.png の切り出しの左と幅、まわりの模様（下の段のコマ送り）を描くか
-/// （上流 `tUpdateAndDraw_Chip_Drums` と `tUpdateAndDraw_Chip_PatternOnly_Drums`）
+/// （上流 `tUpdateAndDraw_Chip_Drums` と `tUpdateAndDraw_Chip_PatternOnly_Drums`）。
+/// BD のレーンに出す左バスドラムは、BD の絵から作った [`left_bass_chips`] の絵を使う（切り出しは BD と同じ）
 fn chip(looks: &Looks, l: DrumLane) -> (f32, f32, f32, bool) {
-    let x = looks.layout.chip_x(l);
+    let x = if looks.left_bass_on_bd(l) {
+        looks.layout.chip[Lane::BD.i()]
+    } else {
+        looks.layout.chip_x(l)
+    };
     match l {
         DrumLane::HH => (x, 70.0, 56.0, true),
         DrumLane::SD => (x, 126.0, 64.0, true),
@@ -133,10 +138,84 @@ fn chip(looks: &Looks, l: DrumLane) -> (f32, f32, f32, bool) {
         DrumLane::LC => (x, 538.0, 74.0, true),
         DrumLane::LP => (x, 660.0, 58.0, true),
         DrumLane::LBD => match looks.lbd {
+            LbdLook::BdLane => (x, 0.0, 70.0, true),
             LbdLook::SameAsLp => (x, 660.0, 58.0, true),
             LbdLook::Own => (x, 480.0, 58.0, true),
         },
     }
+}
+
+/// BD のレーンに出す左バスドラムの色（色相、度）。BD の絵（青紫、およそ 251 度）をこの色相に回す
+const LEFT_BASS_HUE: f32 = 331.0;
+/// 左バスドラムの絵の鮮やかさを BD の何倍にするか（BD は淡いので、ほかのレーンの絵と同じくらいに上げる）
+const LEFT_BASS_SATURATION: f32 = 1.8;
+/// 左バスドラムの色の見本（設定の配置図に使う）
+pub const LEFT_BASS_COLOR: Color32 = Color32::from_rgb(255, 110, 190);
+/// 左バスドラムの絵を作る元（7_chips_drums.png の BD の列）の幅
+const BD_CHIP_W: u32 = 70;
+
+/// 7_chips_drums.png の BD の列（チップ・模様・飛び散るかけら）を左右に返し（足の模様を左足に）、
+/// 色を [`LEFT_BASS_HUE`] に変えた絵。幅は BD の列と同じで、高さは元の絵と同じ
+pub fn left_bass_chips(src: image::RgbaImage) -> image::RgbaImage {
+    let w = BD_CHIP_W.min(src.width());
+    let mut out = image::RgbaImage::new(w, src.height());
+    for (x, y, p) in out.enumerate_pixels_mut() {
+        let image::Rgba([r, g, b, a]) = *src.get_pixel(w - 1 - x, y);
+        if a == 0 {
+            continue;
+        }
+        let (_, s, v) = rgb_to_hsv(r, g, b);
+        let (r, g, b) = hsv_to_rgb(LEFT_BASS_HUE, (s * LEFT_BASS_SATURATION).min(1.0), v);
+        *p = image::Rgba([r, g, b, a]);
+    }
+    out
+}
+
+/// BD のレーンに出す左バスドラムの絵（[`left_bass_chips`]。一度作ったら覚えておく）
+fn left_bass_tex(g: &Gfx) -> Option<Tex> {
+    g.skin
+        .tex_made("Graphics/7_chips_drums.png", "left_bass", left_bass_chips)
+}
+
+/// RGB（0〜255）を色相（0〜360 度）・彩度・明度（0〜1）に
+fn rgb_to_hsv(r: u8, g: u8, b: u8) -> (f32, f32, f32) {
+    let (r, g, b) = (
+        f32::from(r) / 255.0,
+        f32::from(g) / 255.0,
+        f32::from(b) / 255.0,
+    );
+    let max = r.max(g).max(b);
+    let min = r.min(g).min(b);
+    let d = max - min;
+    let h = if d == 0.0 {
+        0.0
+    } else if max == r {
+        60.0 * ((g - b) / d).rem_euclid(6.0)
+    } else if max == g {
+        60.0 * ((b - r) / d + 2.0)
+    } else {
+        60.0 * ((r - g) / d + 4.0)
+    };
+    let s = if max == 0.0 { 0.0 } else { d / max };
+    (h, s, max)
+}
+
+/// [`rgb_to_hsv`] の逆
+fn hsv_to_rgb(h: f32, s: f32, v: f32) -> (u8, u8, u8) {
+    let c = v * s;
+    let hp = h.rem_euclid(360.0) / 60.0;
+    let x = c * (1.0 - (hp.rem_euclid(2.0) - 1.0).abs());
+    let (r, g, b) = match hp as u32 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    let m = v - c;
+    let to = |f: f32| ((f + m) * 255.0).round().clamp(0.0, 255.0) as u8;
+    (to(r), to(g), to(b))
 }
 
 /// 判定の画像の列（上流の 7_judge strings.png の並び）
@@ -250,6 +329,8 @@ struct Star {
 #[derive(Debug, Clone, Copy)]
 struct Piece {
     lane: Lane,
+    /// 左バスドラムの色の絵から切り出す
+    left_bass: bool,
     start: Instant,
     steps: u32,
     xl: f32,
@@ -406,12 +487,14 @@ pub enum HhoLook {
     Closed,
 }
 
-/// 左バスドラムのチップの絵（上流 `eLBDGraphics`）
+/// 左バスドラムのチップの出し方（NXT の既定と、上流 `eLBDGraphics`）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LbdLook {
-    /// LP と同じ絵（A）
+    /// BD のレーンに、BD の絵の色を変えて出す（NXT の既定）
+    BdLane,
+    /// LP のレーンに LP と同じ絵（A）
     SameAsLp,
-    /// LP と色の違う絵（B）
+    /// LP のレーンに LP と色の違う絵（B）
     Own,
 }
 
@@ -495,10 +578,24 @@ impl Looks {
                 _ => HhoLook::Nx,
             },
             lbd: match v.choice(s::LBD_GRAPHICS) {
-                1 => LbdLook::Own,
-                _ => LbdLook::SameAsLp,
+                1 => LbdLook::SameAsLp,
+                2 => LbdLook::Own,
+                _ => LbdLook::BdLane,
             },
         }
+    }
+
+    /// 叩いた・判定したレーンを、光や判定の文字を出すレーンに（左バスドラムは出し方で変わる）
+    pub fn lane_of(&self, l: DrumLane) -> Lane {
+        match (l, self.lbd) {
+            (DrumLane::LBD, LbdLook::BdLane) => Lane::BD,
+            _ => Lane::of(l),
+        }
+    }
+
+    /// BD のレーンに出す左バスドラムか（色を変えた絵を使う）
+    fn left_bass_on_bd(&self, l: DrumLane) -> bool {
+        l == DrumLane::LBD && self.lbd == LbdLook::BdLane
     }
 
     /// 判定ラインの y（上流 `nJudgeLinePosY.Drums`）
@@ -665,7 +762,7 @@ impl PlayView {
         for fx in play.take_fx() {
             match fx {
                 Fx::Hit { lane, velocity } => {
-                    let l = Lane::of(lane);
+                    let l = self.looks.lane_of(lane);
                     self.flush[l.i()] = Some((now, velocity));
                     self.pads[l.i()].hit(now);
                 }
@@ -675,7 +772,7 @@ impl PlayView {
                     offset_ms,
                     note_ms,
                 } => {
-                    let l = Lane::of(lane);
+                    let l = self.looks.lane_of(lane);
                     match offset_ms {
                         Some(o) if o > 0.0 => self.late += 1,
                         Some(_) => self.early += 1,
@@ -690,7 +787,7 @@ impl PlayView {
                         start: now,
                     });
                     if !matches!(judgement, Judgement::Poor | Judgement::Miss) {
-                        self.start_fire(l, now);
+                        self.start_fire(l, self.looks.left_bass_on_bd(lane), now);
                     }
                     let before = self.tally.combo;
                     self.tally.add(judgement);
@@ -713,7 +810,7 @@ impl PlayView {
                 }
                 Fx::StrayMiss { lane } => {
                     // 上流の Tight: MISS を出し、コンボを切り、MISS と同じだけゲージを減らす（MISS の数には入れない）
-                    self.judges[Lane::of(lane).i()] = Some(JudgeShow {
+                    self.judges[self.looks.lane_of(lane).i()] = Some(JudgeShow {
                         judgement: Judgement::Miss,
                         lag: None,
                         start: now,
@@ -729,7 +826,8 @@ impl PlayView {
 
     /// 火花と星と飛び散るチップを出す（上流 `CActPerfDrumsChipFireD.Start`）
     /// 叩いたときの効果の設定（上流 `eAttackEffect`）で、出すものを選ぶ。判定ラインを上げたら一緒に上げる
-    fn start_fire(&mut self, l: Lane, now: Instant) {
+    /// `left_bass` なら、飛び散るチップを左バスドラムの色にする
+    fn start_fire(&mut self, l: Lane, left_bass: bool, now: Instant) {
         let attack = self.looks.attack;
         if attack == AttackEffect::AllOff {
             return;
@@ -764,6 +862,7 @@ impl PlayView {
             let deg = 1.0_f32.to_radians();
             self.pieces.push(Piece {
                 lane: l,
+                left_bass,
                 start: now,
                 steps: 0,
                 xl: x + shift,
@@ -1057,6 +1156,13 @@ impl PlayView {
             return;
         };
         let looks = self.looks;
+        let left_bass = (looks.lbd == LbdLook::BdLane)
+            .then(|| left_bass_tex(g))
+            .flatten();
+        let tex_of = |lane: DrumLane| match &left_bass {
+            Some(lb) if looks.left_bass_on_bd(lane) => lb,
+            _ => &t,
+        };
         let ahead = |ms: f64| ((ms - now_ms) as f32) * px_per_ms;
         let visible = |ms: f64| {
             let y = looks.ahead_y(ahead(ms));
@@ -1095,7 +1201,7 @@ impl PlayView {
                 continue;
             }
             c.draw_opt(
-                &t,
+                tex_of(lane),
                 x - 5.0,
                 y - 32.0,
                 Opt {
@@ -1108,7 +1214,7 @@ impl PlayView {
         for &(lane, y, alpha) in &shown {
             let (x, sx, w, _) = chip(&looks, lane);
             c.draw_opt(
-                &t,
+                tex_of(lane),
                 x - 5.0,
                 y - 32.0,
                 Opt {
@@ -1523,6 +1629,12 @@ impl PlayView {
         });
         // 飛び散るチップ：10 ミリ秒ごとに 44 コマ、半透明（120/255）
         let chips = g.skin.tex("Graphics/7_chips_drums.png");
+        let left_bass = self
+            .pieces
+            .iter()
+            .any(|p| p.left_bass)
+            .then(|| left_bass_tex(g))
+            .flatten();
         self.pieces.retain_mut(|p| {
             let v = count(p.start, now, 10.0).min(44.0) as u32;
             let gravity = (0.031_f32 * 2.0).exp() / 2.0;
@@ -1537,7 +1649,8 @@ impl PlayView {
             if v >= 44 {
                 return false;
             }
-            if let Some(t) = &chips {
+            let tex = if p.left_bass { &left_bass } else { &chips };
+            if let Some(t) = tex {
                 let (left, w) = PIECES[p.lane.i()];
                 let o = Opt {
                     src: Some(src(left, 640.0, ((w + 10.0) / 2.0).floor(), 64.0)),
@@ -2022,6 +2135,60 @@ mod tests {
         v.set_raw(s::LANE_DISP, 2);
         let line_off = Looks::from_settings(&v);
         assert!(!line_off.bar_lines && !line_off.dark_lanes);
+    }
+
+    #[test]
+    fn left_bass_goes_to_the_bd_lane_by_default() {
+        use crate::settings as s;
+        let mut v = s::Values::default();
+        let d = Looks::from_settings(&v);
+        assert_eq!(d.lbd, LbdLook::BdLane);
+        assert_eq!(d.lane_of(DrumLane::LBD), Lane::BD);
+        assert_eq!(d.lane_of(DrumLane::LP), Lane::LP);
+        // BD と同じ x と切り出し（絵は色を変えたもの）
+        assert_eq!(chip(&d, DrumLane::LBD), chip(&d, DrumLane::BD));
+        assert!(d.left_bass_on_bd(DrumLane::LBD) && !d.left_bass_on_bd(DrumLane::BD));
+        // NX の A と B は LP のレーン
+        for (raw, look, sx) in [(1, LbdLook::SameAsLp, 660.0), (2, LbdLook::Own, 480.0)] {
+            v.set_raw(s::LBD_GRAPHICS, raw);
+            let nx = Looks::from_settings(&v);
+            assert_eq!(nx.lbd, look);
+            assert_eq!(nx.lane_of(DrumLane::LBD), Lane::LP);
+            let (x, cut, _, _) = chip(&nx, DrumLane::LBD);
+            assert_eq!((x, cut), (nx.layout.chip[Lane::LP.i()], sx));
+            assert!(!nx.left_bass_on_bd(DrumLane::LBD));
+        }
+    }
+
+    #[test]
+    fn left_bass_chips_are_the_bd_chips_flipped_and_recolored() {
+        let mut src = image::RgbaImage::new(718, 4);
+        // BD の列の左端に淡い青紫、右端に透明。ほかの列は使わない
+        src.put_pixel(0, 1, image::Rgba([150, 130, 255, 200]));
+        src.put_pixel(100, 1, image::Rgba([255, 0, 0, 255]));
+        let out = left_bass_chips(src);
+        assert_eq!((out.width(), out.height()), (70, 4));
+        // 左右に返したので右端へ。透明さはそのまま、色相は LEFT_BASS_HUE、明るさは元のまま
+        let p = out.get_pixel(69, 1);
+        assert_eq!(p[3], 200);
+        let (h, s, v) = rgb_to_hsv(p[0], p[1], p[2]);
+        assert!((h - LEFT_BASS_HUE).abs() < 2.0, "{h}");
+        assert!(s > 0.4 && (v - 1.0).abs() < 0.01, "{s} {v}");
+        assert_eq!(out.get_pixel(0, 1)[3], 0);
+    }
+
+    #[test]
+    fn hsv_round_trips() {
+        for (r, g, b) in [
+            (0, 0, 0),
+            (255, 255, 255),
+            (255, 0, 0),
+            (12, 200, 90),
+            (150, 130, 255),
+        ] {
+            let (h, s, v) = rgb_to_hsv(r, g, b);
+            assert_eq!(hsv_to_rgb(h, s, v), (r, g, b));
+        }
     }
 
     #[test]

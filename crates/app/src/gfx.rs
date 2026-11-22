@@ -371,6 +371,36 @@ impl Skin {
         self.tex(rel)
     }
 
+    /// スキンの画像 `rel` を `make` で描き換えた画像（`tag` で見分けて、一度作ったら覚えておく）
+    pub fn tex_made(
+        &self,
+        rel: &str,
+        tag: &str,
+        make: fn(image::RgbaImage) -> image::RgbaImage,
+    ) -> Option<Tex> {
+        let name = format!("{rel}#{tag}");
+        let key = (name.clone(), false);
+        if let Some(t) = self.cache.borrow().get(&key) {
+            return t.clone();
+        }
+        let tex = crate::skin::read(rel)
+            .and_then(|bytes| match image::load_from_memory(&bytes) {
+                Ok(img) => Some(img),
+                Err(e) => {
+                    log::warn!("skin: {rel}: {e}");
+                    None
+                }
+            })
+            .map(|img| {
+                let made = make(img.to_rgba8());
+                let size = [made.width() as usize, made.height() as usize];
+                let image = egui::ColorImage::from_rgba_unmultiplied(size, made.as_raw());
+                Tex::new(&self.ctx, &name, image)
+            });
+        self.cache.borrow_mut().insert(key, tex.clone());
+        tex
+    }
+
     fn tex_with(&self, rel: &str, black_key: bool) -> Option<Tex> {
         let key = (rel.to_owned(), black_key);
         if let Some(t) = self.cache.borrow().get(&key) {

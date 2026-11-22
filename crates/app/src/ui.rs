@@ -503,6 +503,7 @@ fn play_info(ui: &mut egui::Ui, o: &PlayOverlay<'_>, s: f32) {
 fn pad_label(p: Pad) -> &'static str {
     match p {
         Pad::Kick => "キック",
+        Pad::LeftKick => "左のキック",
         Pad::Snare => "スネア",
         Pad::Tom1 => "タム 1",
         Pad::Tom2 => "タム 2",
