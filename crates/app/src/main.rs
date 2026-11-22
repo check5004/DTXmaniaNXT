@@ -383,6 +383,8 @@ impl App {
         if config.take_over_nx() {
             config.save();
         }
+        // 最初の音（タイトルの音）から設定の音量で鳴らす
+        audio::set_master_volume(config.master_volume());
         let mut pending = None;
         // 引数がフォルダなら曲のフォルダに足し、譜面ならすぐ遊ぶ
         if let Some(p) = arg {
@@ -930,8 +932,13 @@ impl App {
             ConfigAction::Nudge(s, d) => {
                 let c = &mut self.config;
                 let r = config_view::OFFSET_RANGE;
+                let steps = d;
                 let d = f64::from(d);
                 match s {
+                    Setting::MasterVolume => {
+                        c.nudge_master_volume(steps);
+                        audio::set_master_volume(c.master_volume());
+                    }
                     Setting::InputAdjust => {
                         c.input_offset_ms = (c.input_offset_ms.round() + d).clamp(-r, r);
                     }

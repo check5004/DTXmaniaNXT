@@ -23,7 +23,7 @@ DTX 形式の譜面で遊べる、ドラムのゲーム兼練習アプリです�
 1. 起動すると NX と同じタイトルの画面になります（GAME START / CONFIGURATION / EXIT。曲を探しているあいだは左上に印が出ます）。初めは CONFIGURATION の System にある「Add Song Folder」で曲のフォルダを選びます。曲のフォルダをウィンドウにドロップしても足せます（DTXManiaNX の曲を使うなら、NX のフォルダか、その中の曲のフォルダを選びます）。
    - 0.1 で「NX Folder」を選んでいた場合は、0.2 を初めて起動したときに、その NX のパッドの割り当てと表示の設定（StageFailed、ShowLagTime など）を一度だけ引き継ぎます。0.1 が設定のフォルダの `nx` に写した NX のスキンは、もう使わないので消します。
    - 設定の画面は NX と同じ配置です（左のメニュー、右の項目、説明のパネル）。↑↓ で選び、Enter で決め、Esc で戻ります。数の項目は Enter で値を変える状態になり、↑↓ で変えて Enter で戻ります。電子ドラムでは HT / LT で選び、CY か RD で決め、LC で戻ります。選曲の画面から F1 でも開けます。
-   - System：曲のフォルダ（Add Song Folder で足し、各フォルダは Enter で一覧から外す）、曲の探し直し、StageFailed（ON / OFF）、ShowLagTime（判定のずれの数字。OFF / ON / GREAT- は PERFECT 以外だけ）、ShowLagTimeColor（ずれの数字の色）、ShowLagHitCount（結果の画面に早かった数と遅かった数）、MIDI の入力のつなぎ直し。
+   - System：曲のフォルダ（Add Song Folder で足し、各フォルダは Enter で一覧から外す）、曲の探し直し、MasterVolume（全体の音量。0〜100 で、初めは 50）、StageFailed（ON / OFF）、ShowLagTime（判定のずれの数字。OFF / ON / GREAT- は PERFECT 以外だけ）、ShowLagTimeColor（ずれの数字の色）、ShowLagHitCount（結果の画面に早かった数と遅かった数）、MIDI の入力のつなぎ直し。
    - Drums：スクロールの速さ、入力の補正、表示の補正、叩いたときの譜面の音、Drums Keys（パッドの割り当て）。Drums Keys でパッドを選んで Enter を押し、そのパッドを叩くと、そのノート番号がそのパッドに割り当たります（`config.toml` の `pad_notes` に残し、Roland の既定より優先します。Reset Keys で消せます）。
 2. GAME START で選曲の画面になります。↑↓ で曲を選び、←→ で難易度、Enter で始めます。BOX は Enter で入り、Backspace か Esc で出ます（一番上で Esc を押すとタイトルに戻ります。タイトルで Esc か EXIT を選ぶと終わります）。マウスのホイールでも動かせ、曲バーを押すとそこへ動きます（選んでいる曲を押すと始めます）。始めると NX と同じ読み込みの画面が「Now loading」の音が鳴り終わるまで出て、演奏の画面になります（読み込みの画面で Esc を押すと選曲に戻ります）。
 3. 電子ドラムは、つないでおけば起動したときに見つけます。無ければキーボードで叩けます（A S Z D G F H J K L、Q で HH オープン）。

@@ -13,7 +13,7 @@ use dtx::DrumLane;
 use egui::Color32;
 use library::Progress;
 
-use crate::config::Config;
+use crate::config::{Config, MASTER_VOLUME_STEP};
 use crate::gfx::{Canvas, Gfx, src};
 use crate::sfx::Se;
 use crate::text::Style;
@@ -62,6 +62,7 @@ pub enum ConfigAction {
 /// 値を変えられる設定
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Setting {
+    MasterVolume,
     InputAdjust,
     VisualAdjust,
     ScrollSpeed,
@@ -93,7 +94,12 @@ impl ItemId {
     fn is_integer(self) -> bool {
         matches!(
             self,
-            ItemId::Value(Setting::InputAdjust | Setting::VisualAdjust | Setting::ScrollSpeed)
+            ItemId::Value(
+                Setting::MasterVolume
+                    | Setting::InputAdjust
+                    | Setting::VisualAdjust
+                    | Setting::ScrollSpeed
+            )
         )
     }
 }
@@ -202,6 +208,14 @@ pub fn items(list: List, info: &ConfigInfo<'_>) -> Vec<Item> {
                     None => format!("{} 曲", info.song_count),
                 },
                 "曲のフォルダを探し直して、曲の一覧を作り直します。".to_owned(),
+            ));
+            v.push(item(
+                ItemId::Value(Setting::MasterVolume),
+                "MasterVolume",
+                c.master_volume().to_string(),
+                format!(
+                    "全体の音量です。0 が無音で、100 が最大です。\nEnter を押してから ↑↓ で {MASTER_VOLUME_STEP} ずつ変えます。"
+                ),
             ));
             v.push(item(
                 ItemId::Value(Setting::StageFailed),
@@ -855,6 +869,26 @@ mod tests {
         // Esc で値の変更をやめても一覧に残る
         v.input(ConfigInput::Cancel, &list);
         assert!(v.focus_list && !v.editing);
+    }
+
+    #[test]
+    fn master_volume_is_in_system_and_starts_at_half() {
+        let config = Config::default();
+        let list = items(List::System, &info(&config));
+        let at = list
+            .iter()
+            .position(|i| i.id == ItemId::Value(Setting::MasterVolume))
+            .unwrap();
+        assert_eq!(list[at].name, "MasterVolume");
+        assert_eq!(list[at].value, "50");
+        let mut v = ready();
+        v.input(ConfigInput::Decide, &list);
+        v.cursor = at;
+        assert_eq!(v.input(ConfigInput::Decide, &list).action, None);
+        assert_eq!(
+            v.input(ConfigInput::Down, &list).action,
+            Some(ConfigAction::Nudge(Setting::MasterVolume, -1))
+        );
     }
 
     #[test]

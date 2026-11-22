@@ -2,6 +2,7 @@
 //! 決めたフレームに鳴らす。出力のコールバックごとに「このバッファが鳴るホスト時刻」を時計に渡す。
 
 use std::path::Path;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result, anyhow};
@@ -153,6 +154,39 @@ fn resample_linear(stereo: &[f32], from: u32, to: u32) -> Vec<f32> {
 /// 切れ目にかけるフェードの長さ（秒）。プツッという音を消す
 const FADE_SECONDS: f64 = 0.005;
 
+/// 全体の音量の既定（%）。設定が無いときもこの大きさで鳴らす（上流の既定の 100 は大きすぎる）
+pub const DEFAULT_MASTER_VOLUME: u8 = 50;
+
+/// 全体の音量（0〜100 %、上流 `MasterVolume`）。どの出力にも、混ぜたあとにかける
+static MASTER_VOLUME: AtomicU8 = AtomicU8::new(DEFAULT_MASTER_VOLUME);
+
+/// 全体の音量を変える（100 より大きければ 100）。鳴っている音にもすぐ効く
+pub fn set_master_volume(percent: u8) {
+    MASTER_VOLUME.store(percent.min(100), Ordering::Relaxed);
+}
+
+/// 全体の音量の倍率（0〜1。上流と同じく % をそのまま倍率にする）
+fn master_gain() -> f32 {
+    f32::from(MASTER_VOLUME.load(Ordering::Relaxed)) / 100.0
+}
+
+/// 混ぜた音（`channels` 個ずつ交互）に全体の音量をかけ、-1〜1 に収める。
+/// 音量が変わったときは、このバッファの中で `from` から `to` へ直線で移す（プツッという音を出さない）
+fn apply_master(data: &mut [f32], channels: usize, from: f32, to: f32) {
+    let channels = channels.max(1);
+    let frames = (data.len() / channels).max(1) as f32;
+    for (i, frame) in data.chunks_mut(channels).enumerate() {
+        let g = if from == to {
+            to
+        } else {
+            from + (to - from) * (i + 1) as f32 / frames
+        };
+        for s in frame {
+            *s = (*s * g).clamp(-1.0, 1.0);
+        }
+    }
+}
+
 enum Command {
     /// 決めたフレームから鳴らす（曲の BGM など）
     At(Voice),
@@ -270,6 +304,7 @@ impl AudioOut {
         let cb_clock = clock.clone();
         let mut voices: Vec<Voice> = Vec::with_capacity(1024);
         let mut frames_done: u64 = 0;
+        let mut master = master_gain();
         let fade = (f64::from(rate) * FADE_SECONDS) as u64;
         let stream = device.build_output_stream(
             config,
@@ -300,9 +335,9 @@ impl AudioOut {
                     v.mix(data, channels, frames_done, n, fade);
                 }
                 voices.retain(|v| v.end() > frames_done + n);
-                for s in data.iter_mut() {
-                    *s = s.clamp(-1.0, 1.0);
-                }
+                let to = master_gain();
+                apply_master(data, channels, master, to);
+                master = to;
                 if let Ok(mut c) = cb_clock.try_lock() {
                     c.on_buffer(play_us, frames_done);
                 }
@@ -453,6 +488,22 @@ mod tests {
         let mut out = vec![0.0; 2 * 2];
         v.mix(&mut out, 2, 3, 2, 0);
         assert_eq!(out, vec![4., 4., 0., 0.]);
+    }
+
+    #[test]
+    fn master_volume_scales_then_clips() {
+        // 50 % なら半分。混ぜて 1 を超えた所も、半分にしてから収める
+        let mut out = vec![0.4, -0.4, 1.6, -3.0];
+        apply_master(&mut out, 2, 0.5, 0.5);
+        assert_eq!(out, vec![0.2, -0.2, 0.8, -1.0]);
+        // 変わったときはバッファの中で少しずつ。最後のフレームで新しい音量になる
+        let mut out = vec![1.0; 4 * 2];
+        apply_master(&mut out, 2, 1.0, 0.5);
+        assert_eq!(out, vec![0.875, 0.875, 0.75, 0.75, 0.625, 0.625, 0.5, 0.5]);
+        // モノラルの出力でも
+        let mut out = vec![1.0, 1.0];
+        apply_master(&mut out, 1, 0.0, 0.0);
+        assert_eq!(out, vec![0.0, 0.0]);
     }
 
     #[test]
