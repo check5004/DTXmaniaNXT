@@ -151,6 +151,10 @@ pub const ATTACK_EFFECT: &str = "attack_effect";
 pub const JUDGE_POSITION: &str = "judge_position";
 pub const COMBO_DISP: &str = "combo_disp";
 pub const MIN_COMBO: &str = "min_combo";
+pub const LANE_TYPE: &str = "lane_type";
+pub const RD_POSITION: &str = "rd_position";
+pub const HHO_GRAPHICS: &str = "hho_graphics";
+pub const LBD_GRAPHICS: &str = "lbd_graphics";
 
 /// 選択肢の表を `[key, label]` の並びから作る
 macro_rules! choices {
@@ -198,7 +202,35 @@ pub const JUDGE_POSITION_CHOICES: &[Choice] = choices![
     "off" => "出さない",
 ];
 
+/// 上流 `eLaneType.Drums`（名前は HH と LT のあいだの並び）
+const LANE_TYPE_CHOICES: &[Choice] = choices![
+    "a" => "A（LP SD HT BD）",
+    "b" => "B（SD LP BD HT）",
+    "c" => "C（LP SD BD HT）",
+    "d" => "D（SD HT LP BD）",
+];
+
+/// 上流 `eRDPosition`（並びは上流と逆で、既定の RCRD が先）
+const RD_POSITION_CHOICES: &[Choice] = choices![
+    "right" => "CY RD（右端が RD）",
+    "left_of_cy" => "RD CY（右端が CY）",
+];
+
+/// 上流 `eHHOGraphics.Drums`
+const HHO_GRAPHICS_CHOICES: &[Choice] = choices![
+    "a" => "A（NX の絵）",
+    "b" => "B（丸なし）",
+    "c" => "C（クローズと同じ）",
+];
+
+/// 上流 `eLBDGraphics.Drums`
+const LBD_GRAPHICS_CHOICES: &[Choice] = choices![
+    "a" => "A（LP と同じ）",
+    "b" => "B（LP と色を分ける）",
+];
+
 const VIEW_LANES: &str = "画面の部品";
+const VIEW_ORDER: &str = "レーンとチップ";
 const VIEW_HIDE: &str = "見えにくくする";
 
 /// 0〜100 の数（判定ラインの高さ、シャッター）
@@ -601,6 +633,34 @@ pub const ALL: &[Def] = &[
         "流れ方",
         "判定ラインの高さ（JudgeLinePos）",
         "判定ラインを下から何ドット上げるか（0〜100）。チップと小節線、火花も一緒に動きます。",
+    ),
+    view_choice(
+        LANE_TYPE,
+        VIEW_ORDER,
+        "レーンの並び（LaneType）",
+        LANE_TYPE_CHOICES,
+        "HH と LT のあいだの並び。B はペダルとタム、C はタムをまとめ、D は左右対称。\nCY と RD は「RD の位置」で決まり、パッドや判定の文字も一緒に動きます。",
+    ),
+    view_choice(
+        RD_POSITION,
+        VIEW_ORDER,
+        "RD の位置（RDPosition）",
+        RD_POSITION_CHOICES,
+        "ライドシンバルのレーンを右端に置くか、シンバル（CY）の左に置くか。",
+    ),
+    view_choice(
+        HHO_GRAPHICS,
+        VIEW_ORDER,
+        "オープンハイハットの絵（HHOGraphics）",
+        HHO_GRAPHICS_CHOICES,
+        "A は NX の絵、B は A のまわりの丸を消した絵、C はクローズのハイハットと同じ絵です。",
+    ),
+    view_choice(
+        LBD_GRAPHICS,
+        VIEW_ORDER,
+        "左バスドラムの絵（LBDGraphics）",
+        LBD_GRAPHICS_CHOICES,
+        "左バスドラム（LBD）のチップを、左ペダル（LP）と同じ絵にするか、色の違う絵にするか。",
     ),
     view_choice(
         HID_SUD,

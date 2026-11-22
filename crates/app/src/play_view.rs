@@ -2,8 +2,8 @@
 //! `CActPerfDrumsPad`、`CActPerfDrumsChipFireD`、`CActPerfDrumsJudgementString`、`CActPerfCommonCombo`、
 //! `CActPerfDrumsComboDGB`、`CActPerfDrumsGauge`、`CActPerfDrumsScore`、`CActPerfDrumsStatusPanel`、
 //! `CActPerfPanelString`、`CActPerfProgressBar`）と同じ画像を同じ座標と順で描く。
-//! 座標と動きの速さは上流のコードから写している。設定は上流の既定（レーンの並び A、RD は右端、
-//! 判定の文字はコマ送り、XG のスコアとゲージ）に合わせる。
+//! 座標と動きの速さは上流のコードから写している。レーンの並び（LaneType・RDPosition）は `lane_layout`。
+//! 判定の文字はコマ送り、スコアとゲージは XG のもの（上流の既定）だけ。
 //!
 //! 判定は `Play` が MIDI の時刻と音の再生位置で行う。この画面は `Play` から出来事（叩いた・判定した）を
 //! 受け取り、光やコンボなどの動きを実時間で進めて描くだけ。
@@ -17,6 +17,7 @@ use engine::judge::{Judgement, Tally};
 
 use crate::game::{Fx, GaugeRule, Play};
 use crate::gfx::{Canvas, Gfx, Glyphs, Opt, Src, Tex, fit_scale, src};
+use crate::lane_layout::{Lane, Layout};
 use crate::text::Style;
 
 /// 判定の線の y（上流 `nJudgeLinePosY.Drums` の既定）
@@ -31,83 +32,47 @@ pub fn view_ahead_ms(px_per_ms: f32) -> f64 {
     f64::from(DRAW_AHEAD_PX / px_per_ms.max(0.01))
 }
 
-/// 上流の `ELane`（ドラムの 10 レーン）。表の添字に使う
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Lane {
-    LC,
-    HH,
-    SD,
-    BD,
-    HT,
-    LT,
-    FT,
-    CY,
-    LP,
-    RD,
-}
-
-impl Lane {
-    /// 叩いた・判定したレーンを上流のレーンに（上流 `nパッド0Atoレーン07`、`nチャンネル0Atoレーン07`）
-    fn of(l: DrumLane) -> Self {
-        match l {
-            DrumLane::HH | DrumLane::HHO => Self::HH,
-            DrumLane::SD => Self::SD,
-            DrumLane::BD => Self::BD,
-            DrumLane::HT => Self::HT,
-            DrumLane::LT => Self::LT,
-            DrumLane::FT => Self::FT,
-            DrumLane::CY => Self::CY,
-            DrumLane::RD => Self::RD,
-            DrumLane::LC => Self::LC,
-            DrumLane::LP | DrumLane::LBD => Self::LP,
-        }
-    }
-
-    fn i(self) -> usize {
-        self as usize
-    }
-}
-
-/// レーンの枠（7_Paret.png）を描く順と、置く x・切り出す x・幅（上流 `CActPerfDrumsLaneFlushD` の「動くレーン」）
-const PANEL: [(f32, f32, f32); 10] = [
-    (416.0, 121.0, 51.0), // LP
-    (467.0, 172.0, 57.0), // SD
-    (524.0, 229.0, 49.0), // HT
-    (691.0, 396.0, 54.0), // FT
-    (642.0, 347.0, 49.0), // LT
-    (573.0, 278.0, 69.0), // BD
-    (367.0, 72.0, 49.0),  // HH
-    (815.0, 520.0, 38.0), // RD
-    (745.0, 450.0, 70.0), // CY
-    (295.0, 0.0, 72.0),   // LC
+/// レーンの枠（7_Paret.png）を描く順と、切り出す x・幅（上流 `CActPerfDrumsLaneFlushD` の「動くレーン」。
+/// 置く x はレーンの並びで変わるので [`Layout`]）
+const PANEL: [(Lane, f32, f32); 10] = [
+    (Lane::LP, 121.0, 51.0),
+    (Lane::SD, 172.0, 57.0),
+    (Lane::HT, 229.0, 49.0),
+    (Lane::FT, 396.0, 54.0),
+    (Lane::LT, 347.0, 49.0),
+    (Lane::BD, 278.0, 69.0),
+    (Lane::HH, 72.0, 49.0),
+    (Lane::RD, 520.0, 38.0),
+    (Lane::CY, 450.0, 70.0),
+    (Lane::LC, 0.0, 72.0),
 ];
 
-/// レーンの光の x と幅と画像（上流 `stレーンサイズ` と `strファイル名`、`ELane` の順）
-const FLUSH: [(f32, f32, &str); 10] = [
-    (298.0, 64.0, "leftcymbal"),
-    (370.0, 46.0, "hihat"),
-    (470.0, 54.0, "snare"),
-    (582.0, 60.0, "bass"),
-    (528.0, 46.0, "hitom"),
-    (645.0, 46.0, "lowtom"),
-    (694.0, 46.0, "floortom"),
-    (748.0, 64.0, "cymbal"),
-    (419.0, 48.0, "leftpedal"),
-    (815.0, 38.0, "ridecymbal"),
+/// レーンの光の幅と画像（上流 `stレーンサイズ` と `strファイル名`、`ELane` の順）
+const FLUSH: [(f32, &str); 10] = [
+    (64.0, "leftcymbal"),
+    (46.0, "hihat"),
+    (54.0, "snare"),
+    (60.0, "bass"),
+    (46.0, "hitom"),
+    (46.0, "lowtom"),
+    (46.0, "floortom"),
+    (64.0, "cymbal"),
+    (48.0, "leftpedal"),
+    (38.0, "ridecymbal"),
 ];
 
-/// パッドの x と 7_pads.png の切り出しの左上（上流 `CActPerfDrumsPad.st基本位置`、`ELane` の順に並べ替えた）
-const PADS: [(f32, f32, f32); 10] = [
-    (263.0, 0.0, 0.0),    // LC
-    (336.0, 96.0, 0.0),   // HH
-    (446.0, 0.0, 96.0),   // SD
-    (565.0, 0.0, 192.0),  // BD
-    (510.0, 96.0, 96.0),  // HT
-    (622.0, 192.0, 96.0), // LT
-    (672.0, 288.0, 96.0), // FT
-    (735.0, 192.0, 0.0),  // CY
-    (396.0, 96.0, 192.0), // LP
-    (791.0, 288.0, 0.0),  // RD
+/// パッドの 7_pads.png の切り出しの左上（上流 `CActPerfDrumsPad.st基本位置`、`ELane` の順に並べ替えた）
+const PADS: [(f32, f32); 10] = [
+    (0.0, 0.0),    // LC
+    (96.0, 0.0),   // HH
+    (0.0, 96.0),   // SD
+    (0.0, 192.0),  // BD
+    (96.0, 96.0),  // HT
+    (192.0, 96.0), // LT
+    (288.0, 96.0), // FT
+    (192.0, 0.0),  // CY
+    (96.0, 192.0), // LP
+    (288.0, 0.0),  // RD
 ];
 /// パッドを描く順（上流 `CActPerfDrumsPad.n描画順`）
 const PAD_ORDER: [Lane; 10] = [
@@ -123,19 +88,8 @@ const PAD_ORDER: [Lane; 10] = [
     Lane::LC,
 ];
 
-/// 火花の中心（+320 する前。上流 `nレーンの中央X座標`）と画像の名前
-const FIRE: [(f32, &str); 10] = [
-    (7.0, "LC"),
-    (71.0, "HH"),
-    (176.0, "SD"),
-    (293.0, "BD"),
-    (230.0, "HT"),
-    (349.0, "LT"),
-    (398.0, "FT"),
-    (464.0, "CY"),
-    (124.0, "LP"),
-    (514.0, "RD"),
-];
+/// 火花の画像の名前（`ELane` の順）
+const FIRE: [&str; 10] = ["LC", "HH", "SD", "BD", "HT", "LT", "FT", "CY", "LP", "RD"];
 /// 飛び散るチップの切り出しの左と幅（上流 `nノーツの左上X座標`、`nノーツの幅`）
 const PIECES: [(f32, f32); 10] = [
     (538.0, 64.0),
@@ -150,35 +104,35 @@ const PIECES: [(f32, f32); 10] = [
     (432.0, 48.0),
 ];
 
-/// 判定の文字を出すレーンの x と幅（上流 `sizeXW`）と、縦の段（上流 `n文字の縦表示位置`）
-const JUDGE_POS: [(i32, i32, i32); 10] = [
-    (290, 80, -1),
-    (367, 46, 1),
-    (470, 54, 1),
-    (582, 60, 2),
-    (528, 46, 0),
-    (645, 46, 0),
-    (694, 46, 1),
-    (748, 64, -1),
-    (419, 46, 2),
-    (815, 80, 1),
-];
+/// 判定の文字の縦の段（上流 `n文字の縦表示位置`、`ELane` の順）
+const JUDGE_ROW: [i32; 10] = [-1, 1, 1, 2, 0, 0, 1, -1, 2, 1];
 
-/// チップの x と、7_chips_drums.png の切り出しの左と幅（上流 `nチャンネルtoX座標` と `tUpdateAndDraw_Chip_Drums`）
-fn chip(l: DrumLane) -> (f32, f32, f32) {
+/// チップの x と、7_chips_drums.png の切り出しの左と幅、まわりの模様（下の段のコマ送り）を描くか
+/// （上流 `tUpdateAndDraw_Chip_Drums` と `tUpdateAndDraw_Chip_PatternOnly_Drums`）
+fn chip(looks: &Looks, l: DrumLane) -> (f32, f32, f32, bool) {
+    let x = looks.layout.chip_x(l);
     match l {
-        DrumLane::HH => (370.0, 70.0, 56.0),
-        DrumLane::SD => (470.0, 126.0, 64.0),
-        DrumLane::BD => (582.0, 0.0, 70.0),
-        DrumLane::HT => (527.0, 190.0, 56.0),
-        DrumLane::LT => (645.0, 246.0, 56.0),
-        DrumLane::CY => (748.0, 358.0, 74.0),
-        DrumLane::FT => (694.0, 302.0, 56.0),
-        // HH オープンは 1 ドット右（上流 eHHOGraphics A の x + 14 - 13）
-        DrumLane::HHO => (374.0, 612.0, 48.0),
-        DrumLane::RD => (815.0, 432.0, 48.0),
-        DrumLane::LC => (298.0, 538.0, 74.0),
-        DrumLane::LP | DrumLane::LBD => (419.0, 660.0, 58.0),
+        DrumLane::HH => (x, 70.0, 56.0, true),
+        DrumLane::SD => (x, 126.0, 64.0, true),
+        DrumLane::BD => (x, 0.0, 70.0, true),
+        DrumLane::HT => (x, 190.0, 56.0, true),
+        DrumLane::LT => (x, 246.0, 56.0, true),
+        DrumLane::CY => (x, 358.0, 74.0, true),
+        DrumLane::FT => (x, 302.0, 56.0, true),
+        // HH オープンの A と B は 1 ドット右（上流の x + 14 - 13）。B は丸（模様）を描かない。
+        // C はクローズの絵を 3 ドット左（上流の x + 13 - 16）
+        DrumLane::HHO => match looks.hho {
+            HhoLook::Nx => (x + 1.0, 612.0, 48.0, true),
+            HhoLook::NoCircle => (x + 1.0, 612.0, 48.0, false),
+            HhoLook::Closed => (x - 3.0, 70.0, 56.0, true),
+        },
+        DrumLane::RD => (x, 432.0, 48.0, true),
+        DrumLane::LC => (x, 538.0, 74.0, true),
+        DrumLane::LP => (x, 660.0, 58.0, true),
+        DrumLane::LBD => match looks.lbd {
+            LbdLook::SameAsLp => (x, 660.0, 58.0, true),
+            LbdLook::Own => (x, 480.0, 58.0, true),
+        },
     }
 }
 
@@ -436,6 +390,26 @@ pub enum JudgePosition {
     Off,
 }
 
+/// オープンハイハットのチップの絵（上流 `eHHOGraphics`）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HhoLook {
+    /// NX の絵（A）
+    Nx,
+    /// A のまわりの丸を描かない（B）
+    NoCircle,
+    /// クローズと同じ絵（C）
+    Closed,
+}
+
+/// 左バスドラムのチップの絵（上流 `eLBDGraphics`）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LbdLook {
+    /// LP と同じ絵（A）
+    SameAsLp,
+    /// LP と色の違う絵（B）
+    Own,
+}
+
 /// 譜面の見た目の設定（設定の表の「譜面の見た目」から）
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Looks {
@@ -458,6 +432,10 @@ pub struct Looks {
     pub min_combo: u32,
     /// 進み具合のバーを出す（Dark が FULL なら出さない）
     pub progress: bool,
+    /// レーンの並び
+    pub layout: Layout,
+    pub hho: HhoLook,
+    pub lbd: LbdLook,
 }
 
 impl Default for Looks {
@@ -499,6 +477,16 @@ impl Looks {
             combo: v.flag(s::COMBO_DISP),
             min_combo: v.number(s::MIN_COMBO) as u32,
             progress: !v.dark_full(),
+            layout: Layout::from_settings(v),
+            hho: match v.choice(s::HHO_GRAPHICS) {
+                1 => HhoLook::NoCircle,
+                2 => HhoLook::Closed,
+                _ => HhoLook::Nx,
+            },
+            lbd: match v.choice(s::LBD_GRAPHICS) {
+                1 => LbdLook::Own,
+                _ => LbdLook::SameAsLp,
+            },
         }
     }
 
@@ -701,7 +689,7 @@ impl PlayView {
         }
         let up = self.looks.judge_line_up;
         self.fires[l.i()] = Some(now);
-        let cx = FIRE[l.i()].0 + 320.0;
+        let cx = self.looks.layout.fire[l.i()] + 320.0;
         if matches!(attack, AttackEffect::AllOn | AttackEffect::ChipOff) && self.stars.len() < 240 {
             for _ in 0..16 {
                 let deg = self.rng.below(360) as f32;
@@ -720,7 +708,7 @@ impl PlayView {
         }
         if attack == AttackEffect::AllOn && self.pieces.len() < 8 {
             let w = PIECES[l.i()].1;
-            let x = FIRE[l.i()].0 + w + 312.0;
+            let x = self.looks.layout.fire[l.i()] + w + 312.0;
             let shift = match l {
                 Lane::LC | Lane::BD | Lane::CY => 0.0,
                 Lane::HH => 20.0,
@@ -878,8 +866,13 @@ impl PlayView {
             "Graphics/7_Paret.png"
         };
         if let Some(t) = g.skin.tex(paret) {
-            for (x, sx, w) in PANEL {
-                c.part(&t, x, 0.0, src(sx, 0.0, w, 720.0));
+            for (l, sx, w) in PANEL {
+                c.part(
+                    &t,
+                    self.looks.layout.panel[l.i()],
+                    0.0,
+                    src(sx, 0.0, w, 720.0),
+                );
             }
         }
         let flush = self.looks.lane_flush;
@@ -898,7 +891,8 @@ impl PlayView {
                 *slot = None;
                 continue;
             }
-            let (x, w, name) = FLUSH[i];
+            let x = self.looks.layout.flush[i];
+            let (w, name) = FLUSH[i];
             let Some(t) = g
                 .skin
                 .tex(&format!("Graphics/ScreenPlayDrums lane flush {name}.png"))
@@ -1025,7 +1019,10 @@ impl PlayView {
             }
         }
         for &(lane, y, alpha) in &shown {
-            let (x, sx, w) = chip(lane);
+            let (x, sx, w, pattern) = chip(&looks, lane);
+            if !pattern {
+                continue;
+            }
             c.draw_opt(
                 &t,
                 x - 5.0,
@@ -1038,7 +1035,7 @@ impl PlayView {
             );
         }
         for &(lane, y, alpha) in &shown {
-            let (x, sx, w) = chip(lane);
+            let (x, sx, w, _) = chip(&looks, lane);
             c.draw_opt(
                 &t,
                 x - 5.0,
@@ -1131,7 +1128,8 @@ impl PlayView {
         let pads = g.skin.tex("Graphics/7_pads.png");
         let flush = g.skin.tex("Graphics/ScreenPlayDrums pads flush.png");
         for l in PAD_ORDER {
-            let (x, sx, sy) = PADS[l.i()];
+            let x = self.looks.layout.pad[l.i()];
+            let (sx, sy) = PADS[l.i()];
             let st = self.pads[l.i()];
             let y = 570.0 + st.dip as f32;
             let s = src(sx, sy, 96.0, 96.0);
@@ -1359,7 +1357,8 @@ impl PlayView {
                 *slot = None;
                 continue;
             }
-            let (lx, lw, row) = JUDGE_POS[i];
+            let (lx, lw) = self.looks.layout.judge[i];
+            let row = JUDGE_ROW[i];
             let xc = lx + lw / 2;
             let x = (xc - 122) as f32;
             let y = (base + row * 32 - 87) as f32;
@@ -1423,7 +1422,7 @@ impl PlayView {
             }
             if let Some(t) = g.skin.tex(&format!(
                 "Graphics/ScreenPlayDrums chip star_{}.png",
-                FIRE[s.lane.i()].1
+                FIRE[s.lane.i()]
             )) {
                 let f = s.radius * (std::f32::consts::FRAC_PI_2 * v as f32 / 100.0).cos();
                 c.draw_rot(
@@ -1480,7 +1479,7 @@ impl PlayView {
             }
             let Some(t) = g.skin.tex(&format!(
                 "Graphics/ScreenPlayDrums chip fire_{}.png",
-                FIRE[i].1
+                FIRE[i]
             )) else {
                 continue;
             };
@@ -1491,7 +1490,7 @@ impl PlayView {
                 add: true,
                 ..Default::default()
             };
-            let x = FIRE[i].0 + 320.0;
+            let x = self.looks.layout.fire[i] + 320.0;
             let y = self.looks.judge_y() + 4.0;
             c.draw_rot(&t, x, y, 0.0, o);
             c.draw_rot(&t, x, y, 0.0, o);
