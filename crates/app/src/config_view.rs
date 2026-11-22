@@ -136,6 +136,10 @@ pub enum Page {
     Lanes,
     /// MIDI の機器（ポートの何番目か）
     Device(usize),
+    /// 選曲で BD を 2 回叩いて開く簡易設定（よく使う項目と、練習・すべての設定へ）
+    Quick,
+    /// 演奏中の一時停止（演奏に戻る・やり直す・演奏中に変えてよい項目・やめる）
+    Pause,
 }
 
 /// 値を変えられる設定（`Config` の欄）
@@ -192,6 +196,18 @@ pub enum ItemId {
     DeviceReset(usize),
     /// MIDI の機器を探し直す
     ReconnectMidi,
+    /// 簡易設定から、選んでいる曲の区間練習へ
+    PracticeSong,
+    /// 簡易設定から、設定の画面へ
+    AllSettings,
+    /// 一時停止をやめて演奏に戻る
+    Resume,
+    /// はじめからやり直す
+    Retry,
+    /// 演奏をやめて結果へ
+    Quit,
+    /// 曲の位置（秒。◀▶ で早送り・巻き戻し）
+    Seek,
 }
 
 /// 数の見せ方
@@ -206,6 +222,8 @@ pub enum Fmt {
     Channel,
     /// 0 は OFF
     OffZero,
+    /// 分と秒（曲の位置）
+    Clock,
     /// 単位をつける。0 のときに名前があればその名前（Risky の「OFF」など）
     Unit(&'static str, Option<&'static str>),
 }
@@ -219,6 +237,7 @@ impl Fmt {
             Fmt::Channel if v == 0 => "すべて".to_owned(),
             Fmt::OffZero if v == 0 => "OFF".to_owned(),
             Fmt::Channel | Fmt::OffZero => v.to_string(),
+            Fmt::Clock => clock(v),
             Fmt::Unit(_, Some(zero)) if v == 0 => zero.to_owned(),
             Fmt::Unit(u, _) => format!("{v}{u}"),
         }
@@ -742,6 +761,20 @@ pub struct ConfigInfo<'a> {
     pub devices: Vec<DeviceRow>,
     pub scanning: Option<Progress>,
     pub song_count: usize,
+    /// 選曲で曲を選んでいる（BOX でない。簡易設定の「この曲を区間練習」）
+    pub song: bool,
+    /// 演奏中（一時停止の一覧に出す、曲の位置）
+    pub play: Option<PlayPos>,
+}
+
+/// 一時停止しているところ
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PlayPos {
+    pub practice: bool,
+    /// 曲の時刻（ミリ秒）
+    pub at_ms: f64,
+    /// 曲の終わり（ミリ秒）
+    pub end_ms: f64,
 }
 
 /// パッドの割り当ての並び（上流 `tSetupItemList_KeyAssignDrums`）。順に割り当てるときもこの順
@@ -817,19 +850,99 @@ pub fn rows(page: Page, info: &ConfigInfo<'_>) -> Vec<Row> {
     let v = &c.settings;
     let mut s = Sections::default();
     match page {
-        Page::Cat(Cat::Fav) => {
+        Page::Cat(Cat::Fav) => s.at("").extend(favorites(c)),
+        Page::Quick => {
             let r = s.at("");
+            r.extend(favorites(c));
+            r.push(heading(" "));
+            if info.song {
+                r.push(action(
+                    ItemId::PracticeSong,
+                    "この曲を区間練習",
+                    String::new(),
+                    "選んでいる曲の、区間練習の決めごとを開きます（キーボードなら P）。".to_owned(),
+                    None,
+                ));
+            }
+            r.push(action(
+                ItemId::AllSettings,
+                "すべての設定へ",
+                String::new(),
+                "設定の画面を開きます（キーボードなら F1）。閉じると選曲に戻ります。".to_owned(),
+                None,
+            ));
+        }
+        Page::Pause => {
+            let practice = info.play.is_some_and(|p| p.practice);
+            let r = s.at("");
+            let mut resume = action(
+                ItemId::Resume,
+                if practice {
+                    "練習に戻る"
+                } else {
+                    "演奏に戻る"
+                },
+                String::new(),
+                "一時停止をやめて、止めたところから続けます（Esc でも戻ります）。".to_owned(),
+                None,
+            );
+            resume.tone = Tone::Strong;
+            r.push(resume);
+            r.push(action(
+                ItemId::Retry,
+                if practice {
+                    "区間のはじめから"
+                } else {
+                    "はじめからやり直す"
+                },
+                String::new(),
+                if practice {
+                    "今の区間を、助走からやり直します（キーボードなら R）。"
+                } else {
+                    "曲をはじめからやり直します（キーボードなら R）。"
+                }
+                .to_owned(),
+                None,
+            ));
+            let r = s.at("演奏中に変えられる設定");
+            if let Some(p) = info.play.filter(|p| !p.practice) {
+                r.push(seek_row(p, v.number(settings::SKIP_MS)));
+            }
             for x in [
                 Setting::ScrollSpeed,
                 Setting::InputAdjust,
+                Setting::VisualAdjust,
                 Setting::HitSound,
                 Setting::MasterVolume,
                 Setting::ShowLagTime,
-                Setting::StageFailed,
             ] {
                 r.push(value_row(x, c));
             }
-            r.push(table_row(settings::def(settings::AUTO_ALL), v));
+            for d in settings::ALL
+                .iter()
+                .filter(|d| d.in_play && d.key != settings::SKIP_MS)
+            {
+                r.push(table_row(d, v));
+            }
+            let r = s.at(" ");
+            let mut quit = action(
+                ItemId::Quit,
+                if practice {
+                    "練習をやめる"
+                } else {
+                    "演奏をやめる"
+                },
+                String::new(),
+                if practice {
+                    "練習をやめて、結果の画面へ。"
+                } else {
+                    "演奏をやめて、結果の画面へ（ここまでの記録になります）。"
+                }
+                .to_owned(),
+                None,
+            );
+            quit.tone = Tone::Danger;
+            r.push(quit);
         }
         Page::Cat(Cat::Play) => {
             s.at("演奏の決まり")
@@ -1067,10 +1180,58 @@ pub fn rows(page: Page, info: &ConfigInfo<'_>) -> Vec<Row> {
     s.rows()
 }
 
+/// よく使う項目（設定の画面の「よく使う」と、選曲の簡易設定）
+fn favorites(c: &Config) -> Vec<Row> {
+    let mut r: Vec<Row> = [
+        Setting::ScrollSpeed,
+        Setting::InputAdjust,
+        Setting::HitSound,
+        Setting::MasterVolume,
+        Setting::ShowLagTime,
+        Setting::StageFailed,
+    ]
+    .into_iter()
+    .map(|x| value_row(x, c))
+    .collect();
+    r.push(table_row(settings::def(settings::AUTO_ALL), &c.settings));
+    r.push(table_row(settings::def(settings::HID_SUD), &c.settings));
+    r
+}
+
+/// 分と秒（1:05）
+fn clock(s: i64) -> String {
+    format!("{}:{:02}", s / 60, s % 60)
+}
+
+/// 一時停止の、曲の位置の行（◀▶ で `skip_ms` ずつ飛ぶ）
+fn seek_row(p: PlayPos, skip_ms: i64) -> Row {
+    let at = (p.at_ms.max(0.0) / 1000.0) as i64;
+    let end = (p.end_ms.max(0.0) / 1000.0).ceil() as i64;
+    let step = (skip_ms / 1000).max(1);
+    row(
+        ItemId::Seek,
+        "曲の位置",
+        format!("{} / {}", clock(at), clock(end)),
+        format!(
+            "◀▶ で {step} 秒ずつ巻き戻し・早送りします（幅は「アプリ」の「早送り・巻き戻しの幅」）。\n飛んだプレイは記録に残しません。"
+        ),
+        Ctl::Number {
+            at,
+            min: 0,
+            max: end,
+            step,
+            default: None,
+            fmt: Fmt::Clock,
+        },
+    )
+}
+
 /// 一覧の題
 fn page_title(page: Page, info: &ConfigInfo<'_>) -> String {
     match page {
         Page::Cat(c) => c.name().to_owned(),
+        Page::Quick => "簡易設定".to_owned(),
+        Page::Pause => "一時停止".to_owned(),
         Page::Lanes => "パッドとキーの割り当て".to_owned(),
         Page::Device(i) => info
             .devices
@@ -1186,6 +1347,8 @@ pub struct ConfigView {
     entered: Instant,
     /// 出ると決めた（あとは操作を受け付けない）
     leaving: bool,
+    /// 選曲や一時停止に重ねる板（左の列が無く、一番上で戻ると閉じる）
+    panel: bool,
 }
 
 impl Default for ConfigView {
@@ -1210,6 +1373,17 @@ impl ConfigView {
             toast: None,
             entered: Instant::now(),
             leaving: false,
+            panel: false,
+        }
+    }
+
+    /// 選曲の簡易設定や、演奏中の一時停止の板（[`Page::Quick`] か [`Page::Pause`]）
+    pub fn panel(page: Page) -> Self {
+        Self {
+            focus_list: true,
+            stack: vec![Level { page, cursor: 0 }],
+            panel: true,
+            ..Self::new()
         }
     }
 
@@ -1429,10 +1603,12 @@ impl ConfigView {
         Response::se(Se::Decide)
     }
 
-    /// 一つ上の一覧へ（分類の一覧なら左の列へ）
+    /// 一つ上の一覧へ（分類の一覧なら左の列へ。重ねた板なら閉じる）
     fn back(&mut self) -> Response {
         if self.stack.len() > 1 {
             self.stack.pop();
+        } else if self.panel {
+            return self.leave(Se::Cancel);
         } else {
             self.focus_list = false;
         }
@@ -1628,6 +1804,14 @@ const LIST_X: f32 = 284.0;
 const LIST_Y: f32 = 104.0;
 const LIST_W: f32 = 572.0;
 const LIST_H: f32 = 576.0;
+/// 選ぶ窓の左
+const PICKER_X: f32 = 520.0;
+/// 重ねる板（選曲の簡易設定、一時停止）の一覧と、その下の説明
+const PANEL_X: f32 = 640.0;
+const PANEL_Y: f32 = 24.0;
+const PANEL_W: f32 = 616.0;
+const PANEL_H: f32 = 560.0;
+const PANEL_DESC_H: f32 = 86.0;
 /// 説明の板
 const DETAIL_X: f32 = 872.0;
 const DETAIL_W: f32 = 376.0;
@@ -1736,7 +1920,12 @@ fn hints_for(view: &ConfigView, row: Option<&Row>) -> Vec<ui::Hint<'static>> {
         v.push((&[Pad::FT], "→ 開く"));
     }
     v.push((&[Pad::CY, Pad::RD], decide));
-    v.push((&[Pad::LC], "戻る（Esc）"));
+    let back = match (view.panel && view.stack.len() == 1, view.page()) {
+        (true, Page::Pause) => "演奏に戻る（Esc）",
+        (true, _) => "閉じる（Esc）",
+        _ => "戻る（Esc）",
+    };
+    v.push((&[Pad::LC], back));
     v
 }
 
@@ -1757,7 +1946,7 @@ impl ConfigView {
         self.draw_title(c, g, info);
         self.draw_rail(c, g);
         let cursor = self.focus_list.then(|| self.level().cursor);
-        self.draw_list(c, g, rows, cursor, info);
+        self.draw_list(c, g, rows, cursor, info, (LIST_X, LIST_Y, LIST_W, LIST_H));
         let row = cursor.and_then(|i| rows.get(i));
         self.draw_detail(c, g, row, info);
         if let Some(t) = g.skin.tex("Graphics/4_footer panel.png") {
@@ -1767,7 +1956,7 @@ impl ConfigView {
             .picker
             .and_then(|p| rows.iter().find(|r| r.id == Some(p.id)));
         if let Some(r) = picked {
-            draw_picker(c, g, r);
+            draw_picker(c, g, r, PICKER_X);
         }
         if let Some(cf) = &self.confirm {
             draw_confirm(c, g, cf);
@@ -1791,6 +1980,44 @@ impl ConfigView {
         }
         if info.scanning.is_some() {
             draw_scanning(c, g, self.entered);
+        }
+    }
+
+    /// 選曲や演奏の画面に重ねて描く（下の画面は描いてある）。右に一覧、その下に説明
+    pub fn draw_panel(&mut self, c: &Canvas, g: &mut Gfx, rows: &[Row], info: &ConfigInfo<'_>) {
+        self.sync(rows);
+        c.cover(Color32::from_rgba_premultiplied(3, 2, 8, 190));
+        // 一覧の高さは行に合わせ、説明はそのすぐ下に
+        let total: f32 = rows.iter().map(row_height).sum();
+        let h = (HEAD_H + total + 16.0).min(PANEL_H);
+        let desc_y = PANEL_Y + h + 10.0;
+        // 下の画面が透けて読みにくくならないよう、板の下は塗りつぶす
+        let solid = Color32::from_rgb(9, 7, 17);
+        c.fill(PANEL_X, PANEL_Y, PANEL_W, h, solid);
+        c.fill(PANEL_X, desc_y, PANEL_W, PANEL_DESC_H, solid);
+        let cursor = Some(self.level().cursor);
+        self.draw_list(c, g, rows, cursor, info, (PANEL_X, PANEL_Y, PANEL_W, h));
+        let row = cursor.and_then(|i| rows.get(i));
+        draw_panel_desc(c, g, row, desc_y);
+        let picked = self
+            .picker
+            .and_then(|p| rows.iter().find(|r| r.id == Some(p.id)));
+        if let Some(r) = picked {
+            draw_picker(c, g, r, PANEL_X - 330.0 - 40.0);
+        }
+        if let Some(cf) = &self.confirm {
+            draw_confirm(c, g, cf);
+        }
+        ui::legend(c, g, &hints_for(self, picked.or(row)));
+        if self
+            .toast
+            .as_ref()
+            .is_some_and(|(_, at)| at.elapsed() >= TOAST_FOR)
+        {
+            self.toast = None;
+        }
+        if let Some((t, _)) = &self.toast {
+            draw_toast(c, g, t);
         }
     }
 
@@ -1851,8 +2078,8 @@ impl ConfigView {
         rows: &[Row],
         cursor: Option<usize>,
         info: &ConfigInfo<'_>,
+        (x, y, w, h): (f32, f32, f32, f32),
     ) {
-        let (x, y, w, h) = (LIST_X, LIST_Y, LIST_W, LIST_H);
         ui::panel(c, x, y, w, h);
         ui::text(
             c,
@@ -2002,6 +2229,47 @@ impl ConfigView {
         preview_box(c, pv);
         draw_preview(c, g, r, info, pv, self.entered);
     }
+}
+
+/// 重ねる板の下の、選んでいる項目の説明
+fn draw_panel_desc(c: &Canvas, g: &mut Gfx, row: Option<&Row>, y: f32) {
+    let (x, w, h) = (PANEL_X, PANEL_W, PANEL_DESC_H);
+    ui::panel(c, x, y, w, h);
+    let Some(r) = row else {
+        return;
+    };
+    let nw = ui::text(
+        c,
+        g,
+        r.name.trim_start(),
+        x + 20.0,
+        y + 10.0,
+        &ui::bold(17.0, Color32::WHITE),
+        w - 220.0,
+    );
+    if let Some(d) = r.default_label() {
+        let tone = if r.changed() { ui::ORANGE } else { ui::DIM };
+        ui::text(
+            c,
+            g,
+            &format!("既定: {d}"),
+            x + 20.0 + nw + 16.0,
+            y + 13.0,
+            &ui::plain(14.0, tone),
+            w - nw - 60.0,
+        );
+    }
+    ui::paragraph(
+        c,
+        g,
+        &r.desc,
+        x + 20.0,
+        y + 38.0,
+        w - 40.0,
+        21.0,
+        y + h - 4.0,
+        &ui::plain(14.0, Color32::from_rgb(226, 221, 239)),
+    );
 }
 
 /// 一覧の 1 行
@@ -2455,40 +2723,39 @@ fn short_lane(lane: DrumLane) -> &'static str {
 }
 
 /// 選択肢か数を選ぶ窓
-fn draw_picker(c: &Canvas, g: &mut Gfx, r: &Row) {
-    const X: f32 = 520.0;
+fn draw_picker(c: &Canvas, g: &mut Gfx, r: &Row, x: f32) {
     const Y: f32 = 200.0;
     const W: f32 = 330.0;
     c.cover(Color32::from_black_alpha(90));
     let title = ui::bold(20.0, Color32::WHITE);
     let note = ui::plain(14.0, ui::DIM);
     if let Ctl::Number { fmt, default, .. } = &r.ctl {
-        ui::pick_panel(c, X, Y, W, 210.0);
+        ui::pick_panel(c, x, Y, W, 210.0);
         ui::text(
             c,
             g,
             r.name.trim_start(),
-            X + 20.0,
+            x + 20.0,
             Y + 14.0,
             &title,
             W - 40.0,
         );
-        ui::triangle(c, X + W / 2.0, Y + 66.0, 18.0, -2, ui::YELLOW);
+        ui::triangle(c, x + W / 2.0, Y + 66.0, 18.0, -2, ui::YELLOW);
         ui::text_center(
             c,
             g,
             &r.value,
-            X + W / 2.0,
+            x + W / 2.0,
             Y + 86.0,
             &ui::glow(40.0),
             W - 20.0,
         );
-        ui::triangle(c, X + W / 2.0, Y + 150.0, 18.0, 2, ui::YELLOW);
+        ui::triangle(c, x + W / 2.0, Y + 150.0, 18.0, 2, ui::YELLOW);
         let text = match default {
             Some(d) => format!("既定 {}", fmt.show(*d)),
             None => String::new(),
         };
-        ui::text(c, g, &text, X + 20.0, Y + 178.0, &note, W - 40.0);
+        ui::text(c, g, &text, x + 20.0, Y + 178.0, &note, W - 40.0);
         return;
     }
     let Some((labels, at)) = r.options() else {
@@ -2500,12 +2767,12 @@ fn draw_picker(c: &Canvas, g: &mut Gfx, r: &Row) {
         _ => None,
     };
     let h = 64.0 + labels.len() as f32 * 38.0;
-    ui::pick_panel(c, X, Y, W, h);
+    ui::pick_panel(c, x, Y, W, h);
     ui::text(
         c,
         g,
         r.name.trim_start(),
-        X + 20.0,
+        x + 20.0,
         Y + 14.0,
         &title,
         W - 40.0,
@@ -2514,16 +2781,16 @@ fn draw_picker(c: &Canvas, g: &mut Gfx, r: &Row) {
         let ly = Y + 54.0 + i as f32 * 38.0;
         let sel = Some(i) == at;
         if sel {
-            ui::selection(c, X + 10.0, ly, W - 20.0, 34.0, 1.0);
+            ui::selection(c, x + 10.0, ly, W - 20.0, 34.0, 1.0);
         }
         let style = if sel {
             ui::bold(18.0, ui::YELLOW)
         } else {
             ui::plain(18.0, ui::TEXT)
         };
-        let lw = ui::text(c, g, label, X + 26.0, ly + 6.0, &style, W - 120.0);
+        let lw = ui::text(c, g, label, x + 26.0, ly + 6.0, &style, W - 120.0);
         if Some(i) == default {
-            ui::text(c, g, "（既定）", X + 30.0 + lw, ly + 9.0, &note, 80.0);
+            ui::text(c, g, "（既定）", x + 30.0 + lw, ly + 9.0, &note, 80.0);
         }
     }
 }
@@ -2747,6 +3014,8 @@ mod tests {
             ],
             scanning: None,
             song_count: 3,
+            song: true,
+            play: None,
         }
     }
 
@@ -3163,6 +3432,90 @@ mod tests {
         );
         // 出ると決めたあとは動かない
         assert_eq!(v.input(ConfigInput::Down, &list), Response::default());
+    }
+
+    fn ids(rows: &[Row]) -> Vec<ItemId> {
+        rows.iter().filter_map(|r| r.id).collect()
+    }
+
+    #[test]
+    fn quick_settings_are_the_favorites_then_practice_and_all_settings() {
+        let config = Config::default();
+        let mut info = info(&config);
+        let fav = ids(&rows(Page::Cat(Cat::Fav), &info));
+        let quick = ids(&rows(Page::Quick, &info));
+        assert_eq!(quick[..fav.len()], fav[..]);
+        assert_eq!(
+            quick[fav.len()..],
+            [ItemId::PracticeSong, ItemId::AllSettings]
+        );
+        // BOX を選んでいるときは区間練習が無い
+        info.song = false;
+        let quick = ids(&rows(Page::Quick, &info));
+        assert_eq!(quick[fav.len()..], [ItemId::AllSettings]);
+        // 値の行は設定の画面と同じに動く（◀▶ でその場で変える）
+        let list = rows(Page::Quick, &info);
+        let mut v = ConfigView::panel(Page::Quick);
+        assert_eq!(
+            v.input(ConfigInput::Right, &list),
+            Response::action(
+                Se::Move,
+                ConfigAction::Set(ItemId::Value(Setting::ScrollSpeed), 13)
+            )
+        );
+        v.input(ConfigInput::Decide, &list);
+        assert!(v.picker.is_some());
+        v.input(ConfigInput::Cancel, &list);
+        // 一番上で戻ると閉じる（左の列は無い）
+        assert_eq!(
+            v.input(ConfigInput::Cancel, &list),
+            Response::action(Se::Cancel, ConfigAction::Leave)
+        );
+    }
+
+    #[test]
+    fn pause_starts_on_resume_and_seeks_with_left_and_right() {
+        let config = Config::default();
+        let mut info = info(&config);
+        info.play = Some(PlayPos {
+            practice: false,
+            at_ms: 83_400.0,
+            end_ms: 200_000.0,
+        });
+        let list = rows(Page::Pause, &info);
+        let all = ids(&list);
+        assert_eq!(all[..3], [ItemId::Resume, ItemId::Retry, ItemId::Seek]);
+        assert_eq!(all.last(), Some(&ItemId::Quit));
+        // 演奏の前にしか効かない項目は出さない
+        assert!(!all.contains(&ItemId::Value(Setting::StageFailed)));
+        assert!(!all.contains(&ItemId::Table(settings::AUTO_ALL)));
+        let seek = &list[find(&list, ItemId::Seek)];
+        assert_eq!(seek.value, "1:23 / 3:20");
+        let mut v = ConfigView::panel(Page::Pause);
+        assert_eq!(
+            v.input(ConfigInput::Decide, &list),
+            Response::action(Se::Decide, ConfigAction::Run(ItemId::Resume))
+        );
+        let mut v = ConfigView::panel(Page::Pause);
+        v.input(ConfigInput::Down, &list);
+        v.input(ConfigInput::Down, &list);
+        assert_eq!(
+            v.input(ConfigInput::Left, &list),
+            Response::action(Se::Move, ConfigAction::Set(ItemId::Seek, 78))
+        );
+        assert_eq!(
+            v.input(ConfigInput::Cancel, &list),
+            Response::action(Se::Cancel, ConfigAction::Leave)
+        );
+        // 練習では曲の位置の行が無い（←→ は区間をずらすキー）
+        info.play = Some(PlayPos {
+            practice: true,
+            at_ms: 0.0,
+            end_ms: 1000.0,
+        });
+        let list = rows(Page::Pause, &info);
+        assert!(!ids(&list).contains(&ItemId::Seek));
+        assert_eq!(list[0].name, "練習に戻る");
     }
 
     #[test]
