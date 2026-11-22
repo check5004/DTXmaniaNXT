@@ -32,6 +32,8 @@ const UPDATE_X: f32 = 471.0;
 const UPDATE_Y: f32 = 645.0;
 const UPDATE_W: f32 = 300.0;
 const UPDATE_H: f32 = 40.0;
+// 「更新」の行は画面の下の案内の帯にかからない
+const _: () = assert!(UPDATE_Y + UPDATE_H < ui::LEGEND_Y);
 
 /// 更新のあとの知らせを出しておく時間（秒）と、消えていく時間
 const UPDATED_FOR: f32 = 10.0;
@@ -489,11 +491,6 @@ mod tests {
         assert_eq!(row_y(1) - row_y(0), MENU_H);
         // 「更新」の行は板の下に離れている
         assert!(row_y(3) > row_y(2) + MENU_H);
-    }
-
-    #[test]
-    fn the_update_row_stays_above_the_help_bar() {
-        assert!(UPDATE_Y + UPDATE_H < ui::LEGEND_Y);
     }
 
     #[test]
