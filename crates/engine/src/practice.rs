@@ -513,10 +513,11 @@ pub const PASSES_TO_UP: u32 = 2;
 pub const FAILS_TO_DOWN: u32 = 5;
 /// 同じ速度でこれだけ不合格がたまったら、行き詰まっているとみなす（手で下げる案内を出す）
 pub const FAILS_WHEN_STUCK: u32 = 8;
-/// 段階アップで上げる幅（%）。上げるのは大きく、下げるのは小さく（2026-11-22 ユーザーの指定）
+/// 段階アップで上げる幅（%）
 pub const LADDER_UP: u32 = 10;
-/// 段階アップで下げる幅（%）
-pub const LADDER_DOWN: u32 = 5;
+/// 段階アップで下げる幅（%）。5% では下げても助けにならないので、上げと同じ 10%
+/// （2026-11-22 ユーザーの指定）
+pub const LADDER_DOWN: u32 = 10;
 
 /// 周の結果で速度がどう動いたか
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1075,40 +1076,44 @@ mod tests {
 
     #[test]
     fn ladder_goes_down_after_five_fails_but_not_below_start() {
-        let mut l = ladder(70, 100);
+        let mut l = ladder(60, 100);
+        for _ in 0..2 {
+            l.record(60, true);
+        }
         for _ in 0..2 {
             l.record(70, true);
         }
         assert_eq!(l.speed(), 80);
-        assert_eq!(l.next_down(), Some(75));
+        assert_eq!(l.next_down(), Some(70));
         for _ in 1..FAILS_TO_DOWN {
             assert_eq!(l.record(80, false), SpeedChange::Stay);
         }
-        // 下げるのは 5%。一度届いた速度は覚えておく
+        // 下げるのも 10%。一度届いた速度は覚えておく
         assert_eq!(l.record(80, false), SpeedChange::Down);
-        assert_eq!((l.speed(), l.peak()), (75, 80));
-        // はしごは、通った遅い速度、今、この先（10% ずつ、目標で止める）
-        assert_eq!(l.steps(), vec![70, 75, 85, 95, 100]);
-        // 75% で合格がそろうと 85% へ。80% は合格していないので済んだ段にしない
+        assert_eq!((l.speed(), l.peak()), (70, 80));
+        // はしごは、合格して上げた遅い速度、今、この先（10% ずつ、目標で止める）
+        assert_eq!(l.steps(), vec![60, 70, 80, 90, 100]);
+        // 70% で合格がそろうと 80% へ
         let mut up = l.clone();
-        up.record(75, true);
-        up.record(75, true);
-        assert_eq!(up.steps(), vec![70, 75, 85, 95, 100]);
+        up.record(70, true);
+        up.record(70, true);
+        assert_eq!(up.steps(), vec![60, 70, 80, 90, 100]);
+        assert_eq!(up.speed(), 80);
         for _ in 0..FAILS_TO_DOWN {
-            l.record(75, false);
+            l.record(70, false);
         }
-        assert_eq!(l.speed(), 70);
+        assert_eq!(l.speed(), 60);
         // 始めの速度より下には下げない
         assert_eq!(l.next_down(), None);
         for _ in 0..FAILS_TO_DOWN {
-            assert_eq!(l.record(70, false), SpeedChange::Stay);
+            assert_eq!(l.record(60, false), SpeedChange::Stay);
         }
-        assert_eq!(l.speed(), 70);
+        assert_eq!(l.speed(), 60);
         // 合格をはさんでも不合格はたまる。たまったら行き詰まり
-        l.record(70, true);
+        l.record(60, true);
         assert!(!l.stuck());
         for _ in 0..3 {
-            l.record(70, false);
+            l.record(60, false);
         }
         assert_eq!(l.fails_here(), FAILS_WHEN_STUCK);
         assert!(l.stuck());
