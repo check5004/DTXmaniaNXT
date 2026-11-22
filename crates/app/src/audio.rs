@@ -2,7 +2,7 @@
 //! 決めたフレームに鳴らす。出力のコールバックごとに「このバッファが鳴るホスト時刻」を時計に渡す。
 
 use std::path::Path;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result, anyhow};
@@ -213,6 +213,8 @@ enum Command {
     },
     /// `tag` の音を短いフェードで止める（選曲のプレビューの音）
     Stop(u8),
+    /// 鳴っている音と、鳴らす予定の音をすべて短いフェードで止める（早送り・巻き戻し）
+    StopAll,
 }
 
 /// 鳴らす音 1 つ。音の `skip` フレーム目から `len` フレームを、出力の `start` フレーム目から鳴らす
@@ -273,6 +275,21 @@ impl Voice {
     }
 }
 
+/// バッファ全体に直線のフェードをかける（`rise` なら 0 から上げ、でなければ 0 まで下げる）
+fn fade_buffer(data: &mut [f32], channels: usize, rise: bool) {
+    let frames = data.len() / channels.max(1);
+    if frames == 0 {
+        return;
+    }
+    for (i, frame) in data.chunks_mut(channels.max(1)).enumerate() {
+        let t = i as f32 / frames as f32;
+        let g = if rise { t } else { 1.0 - t };
+        for v in frame {
+            *v *= g;
+        }
+    }
+}
+
 /// 左右 `pan`（-1〜1）のときの左と右の音量。真ん中は両方 1 で、右へ振るほど左を下げる
 pub fn pan_gains(pan: f32) -> (f32, f32) {
     let pan = pan.clamp(-1.0, 1.0);
@@ -302,6 +319,8 @@ pub struct AudioOut {
     clock: Arc<Mutex<AudioClock>>,
     rate: u32,
     start_ms: f64,
+    /// 一時停止（出力を無音にし、フレームを進めない）
+    paused: Arc<AtomicBool>,
     pub device_name: String,
 }
 
@@ -331,6 +350,10 @@ impl AudioOut {
         let (tx, mut rx) = rtrb::RingBuffer::<Command>::new(4096);
 
         let cb_clock = clock.clone();
+        let paused = Arc::new(AtomicBool::new(false));
+        let cb_paused = paused.clone();
+        // 前のバッファを止めていたか（止める・動かす切れ目にフェードをかける）
+        let mut was_paused = false;
         let mut voices: Vec<Voice> = Vec::with_capacity(1024);
         let mut frames_done: u64 = 0;
         let mut master = master_gain();
@@ -362,10 +385,27 @@ impl AudioOut {
                                 v.fade_out = true;
                             }
                         }
+                        Command::StopAll => {
+                            // まだ始まっていない音は捨て、鳴っている音はフェードで止める
+                            voices.retain(|v| v.start < frames_done);
+                            for v in voices.iter_mut() {
+                                let played = frames_done - v.start;
+                                v.len = v.len.min(played + fade);
+                                v.fade_out = true;
+                            }
+                        }
                     }
                 }
                 let n = (data.len() / channels) as u64;
                 data.fill(0.0);
+                let pause = cb_paused.load(Ordering::Relaxed);
+                if pause && was_paused {
+                    // 止めているあいだは無音で、フレームも曲の時刻も進めない
+                    if let Ok(mut c) = cb_clock.try_lock() {
+                        c.on_hold(play_us, frames_done);
+                    }
+                    return;
+                }
                 for v in &voices {
                     v.mix(data, channels, frames_done, n, fade);
                 }
@@ -373,6 +413,11 @@ impl AudioOut {
                 let to = master_gain();
                 apply_master(data, channels, master, to);
                 master = to;
+                if pause != was_paused {
+                    // 止める切れ目は下げきり、動かし直す切れ目は上げる
+                    fade_buffer(data, channels, !pause);
+                    was_paused = pause;
+                }
                 if let Ok(mut c) = cb_clock.try_lock() {
                     c.on_buffer(play_us, frames_done);
                 }
@@ -388,6 +433,7 @@ impl AudioOut {
             clock,
             rate,
             start_ms,
+            paused,
             device_name,
         })
     }
@@ -405,6 +451,21 @@ impl AudioOut {
     /// ホスト時刻 `host_us` の曲の時刻
     pub fn song_ms_at(&self, host_us: i64) -> Option<f64> {
         self.clock.lock().ok()?.song_ms_at(host_us)
+    }
+
+    /// 一時停止する（`true`）か、動かし直す（`false`）。止めているあいだは無音で、曲の時刻も進まない
+    pub fn set_paused(&self, paused: bool) {
+        self.paused.store(paused, Ordering::Relaxed);
+    }
+
+    /// 曲の時刻を `delta_ms` だけずらす（早送り・巻き戻し）。鳴っている音と鳴らす予定の音はすべて止めるので、
+    /// ずらした先で鳴らす音は呼ぶ側が渡し直す
+    pub fn seek(&mut self, delta_ms: f64) {
+        let _ = self.tx.push(Command::StopAll);
+        self.start_ms += delta_ms;
+        if let Ok(mut c) = self.clock.lock() {
+            c.shift(delta_ms);
+        }
     }
 
     /// 時刻 `ms` が出力の何フレーム目か（出力を始める前ならマイナス）
@@ -592,6 +653,16 @@ mod tests {
         let mut out = vec![0.0; 2 * 2];
         v.mix(&mut out, 2, 3, 2, 0);
         assert_eq!(out, vec![4., 4., 0., 0.]);
+    }
+
+    #[test]
+    fn pausing_fades_the_edge_of_the_buffer() {
+        let mut down = vec![1.0f32; 8];
+        fade_buffer(&mut down, 2, false);
+        assert_eq!(down, vec![1.0, 1.0, 0.75, 0.75, 0.5, 0.5, 0.25, 0.25]);
+        let mut up = vec![1.0f32; 4];
+        fade_buffer(&mut up, 2, true);
+        assert_eq!(up, vec![0.0, 0.0, 0.5, 0.5]);
     }
 
     #[test]
