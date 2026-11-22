@@ -12,7 +12,7 @@ DTX 形式の譜面で遊べる、ドラムのゲーム兼練習アプリです�
 
 ### ダウンロード
 
-[リリース](https://github.com/check5004/DTXmaniaNXT/releases/latest)から、Windows は [DTXmaniaNXT.exe](https://github.com/check5004/DTXmaniaNXT/releases/latest/download/DTXmaniaNXT.exe)（いつも最新の版）をダウンロードし、好きなフォルダに置いて起動します。インストールは要りません。ライセンスの表記つきの zip、macOS（Apple シリコン）と Linux（x86_64）の版も同じページにあります。
+[リリース](https://github.com/check5004/DTXmaniaNXT/releases/latest)から、Windows は [DTXmaniaNXT.exe](https://github.com/check5004/DTXmaniaNXT/releases/latest/download/DTXmaniaNXT.exe)（いつも最新の版）をダウンロードし、好きなフォルダに置いて起動します。Windows はこの exe 1 つだけで、インストールは要りません。macOS（Apple シリコン）と Linux（x86_64）の版も同じページにあります。
 
 - 署名をしていないので、Windows で「Windows によって PC が保護されました」と出たら「詳細情報」→「実行」を押します。
 - 新しい版は exe を置き換えるだけです。設定と記録は別のフォルダ（下の `%APPDATA%\DTXmaniaNXT`）にあるので引き継がれます。
@@ -85,7 +85,7 @@ cargo test --all
 ## リリースの出し方
 
 1. `Cargo.toml` の `[workspace.package]` の `version` を上げる PR を出して `main` に入れる（[SemVer](https://semver.org/lang/ja/)。1.0 までは、遊び方や記録が変わるときに 0.x の x を、直しだけなら最後の数を上げる）。
-2. `main` に入ると [Release](.github/workflows/release.yml) のワークフローが、タグ `v<version>`（例: `v0.2.0`）と GitHub のリリースを作り、Windows の exe と zip、macOS と Linux の tar.gz、`SHA256SUMS.txt` を載せます。リリースの説明は `.github/release/notes.md` と、前のリリースから入った PR の一覧です。
+2. `main` に入ると [Release](.github/workflows/release.yml) のワークフローが、タグ `v<version>`（例: `v0.2.0`）と GitHub のリリースを作り、Windows の exe（1 つだけ）、macOS と Linux の tar.gz、`THIRD-PARTY-LICENSES.html`、`SHA256SUMS.txt` を載せます。リリースの説明は `.github/release/notes.md` と、前のリリースから入った PR の一覧です。
 3. macOS か Linux のビルドだけ落ちたときは、Windows の分だけでリリースします。あとで Actions の画面から Release を Run workflow で動かすと、そのタグのコミットから作り直してファイルを差し替えます。
 
 ビルドと詰め方は `.github/release/` のスクリプトにあります。Windows の exe は C のランタイムを入れて作るので（`.cargo/config.toml` の `crt-static`）、VC++ の再頒布パッケージが無い PC でも起動します。ライセンスの表記（`THIRD-PARTY-LICENSES.html`）は [cargo-about](https://github.com/EmbarkStudios/cargo-about) で作ります。
