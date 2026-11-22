@@ -2397,7 +2397,7 @@ fn hints_for(view: &ConfigView, row: Option<&Row>) -> Vec<ui::Hint<'static>> {
         Some(Ctl::Choice { .. } | Ctl::Number { .. }) => t("Choose (Enter)", "選ぶ（Enter）"),
         Some(Ctl::Page(_)) => t("Open (Enter)", "開く（Enter）"),
         Some(Ctl::Lane(_)) => t("Add/Remove by Hitting (Enter)", "叩いて足す・外す（Enter）"),
-        Some(Ctl::Action { .. }) => t("Run (Enter)", "実行（Enter）"),
+        Some(Ctl::Action { .. }) => t("Select (Enter)", "実行（Enter）"),
         _ => t("Select (Enter)", "決定（Enter）"),
     };
     if row.is_some_and(Row::editable) {
@@ -3275,7 +3275,11 @@ fn preview_offset(
     ui::text(
         c,
         g,
-        &format!("-{0:.0} 〜 +{0:.0} ms", OFFSET_RANGE),
+        &tf!(
+            "-{0:.0} to +{0:.0} ms",
+            "-{0:.0} 〜 +{0:.0} ms",
+            OFFSET_RANGE
+        ),
         x + 12.0,
         y + h - 22.0,
         &ui::plain(13.0, ui::MUTED),

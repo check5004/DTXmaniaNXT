@@ -341,10 +341,10 @@ const HHO_GRAPHICS_CHOICES: &[Choice] = choices![
 /// 左バスドラムの出し方。先頭の 2 つは NXT のもの（BD のレーンに水色で出す、LP の右に水色のレーンを足す）、
 /// あとの 2 つは上流 `eLBDGraphics.Drums`
 const LBD_GRAPHICS_CHOICES: &[Choice] = choices![
-    "bd_lane" => tr("Light Blue on the BD Lane", "BD のレーンに水色で"),
-    "own_lane" => tr("Own Lane Right of LP (light blue)", "LP の右にレーンを足す（水色）"),
-    "a" => tr("On the LP Lane (same look)", "LP のレーンに同じ絵"),
-    "b" => tr("On the LP Lane (purple)", "LP のレーンに紫の絵"),
+    "bd_lane" => tr("BD Lane (light blue)", "BD のレーンに水色で"),
+    "own_lane" => tr("Own Lane Beside LP", "LP の右にレーンを足す（水色）"),
+    "a" => tr("LP Lane (same look)", "LP のレーンに同じ絵"),
+    "b" => tr("LP Lane (purple)", "LP のレーンに紫の絵"),
 ];
 
 /// スネアのリムの音符の出し方（並びは [`crate::rim_look::RimLook`] と同じ）
