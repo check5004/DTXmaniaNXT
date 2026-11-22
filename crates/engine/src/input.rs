@@ -5,6 +5,9 @@
 //! - ヘッド・リム・クロススティック、シンバルのボウ・エッジ・ベル
 //! - シンバルのチョーク（ポリフォニック・アフタータッチ）
 //! - 弱すぎる入力（クロストーク）と、同じパッドの短すぎる連打（二重トリガー）を捨てる
+//!
+//! 割り当て（[`MidiProfile`]）は入力機器（MIDI のポート）ごとに 1 つ持つ。チャンネルは既定ではすべて受け、
+//! 機器ごとに 1 つのチャンネルに絞ることもできる。同じチャンネルで送る機器どうしも、ポートで見分ける。
 
 use std::collections::BTreeMap;
 
@@ -69,6 +72,185 @@ impl MidiMessage {
                 value: d(1)?,
             }),
             _ => None,
+        }
+    }
+
+    /// バイト列に入っているメッセージをすべて読む。OS によっては 1 回に複数のメッセージが届き、
+    /// ランニングステータス（2 つめから状態のバイトを省く書き方）も使われる。
+    /// クロックなどのリアルタイムのメッセージ（0xF8〜）とシステムエクスクルーシブは読み飛ばす
+    pub fn parse_all(bytes: &[u8]) -> Vec<Self> {
+        let mut out = Vec::new();
+        let mut running: Option<u8> = None;
+        let mut i = 0;
+        while i < bytes.len() {
+            let b = bytes[i];
+            if b >= 0xF8 {
+                i += 1;
+                continue;
+            }
+            if b >= 0xF0 {
+                // システムのメッセージはランニングステータスを打ち切る。続くデータのバイトは読み飛ばす
+                running = None;
+                i += 1;
+                while i < bytes.len() && bytes[i] < 0x80 {
+                    i += 1;
+                }
+                continue;
+            }
+            let (status, start) = if b >= 0x80 {
+                (b, i + 1)
+            } else if let Some(s) = running {
+                (s, i)
+            } else {
+                // 状態のわからないデータのバイト
+                i += 1;
+                continue;
+            };
+            let len = match status & 0xF0 {
+                0xC0 | 0xD0 => 1,
+                _ => 2,
+            };
+            let data: Vec<u8> = bytes[start..]
+                .iter()
+                .copied()
+                .filter(|&d| d < 0xF8)
+                .take(len)
+                .collect();
+            if data.len() < len {
+                break;
+            }
+            if let Some(at) = data.iter().position(|&d| d >= 0x80) {
+                // 途中で次の状態のバイトが来た（壊れたメッセージ）。そこから読み直す
+                running = None;
+                i = start + at;
+                continue;
+            }
+            let mut msg = vec![status];
+            msg.extend_from_slice(&data);
+            if let Some(m) = Self::parse(&msg) {
+                out.push(m);
+            }
+            running = Some(status);
+            // 間にリアルタイムのバイトがあれば、その分も進める
+            let mut taken = 0;
+            i = start;
+            while taken < len {
+                if bytes[i] < 0xF8 {
+                    taken += 1;
+                }
+                i += 1;
+            }
+        }
+        out
+    }
+
+    /// チャンネル（0〜15。画面に出すときは 1 を足す）
+    pub fn channel(&self) -> u8 {
+        match *self {
+            Self::NoteOn { channel, .. }
+            | Self::NoteOff { channel, .. }
+            | Self::ControlChange { channel, .. }
+            | Self::PolyAftertouch { channel, .. } => channel,
+        }
+    }
+
+    /// ログと設定の画面に出す短い説明（チャンネルは 1〜16）
+    pub fn describe(&self) -> String {
+        match *self {
+            Self::NoteOn {
+                channel,
+                note,
+                velocity,
+            } => format!("ch{} note {note} vel {velocity}", channel + 1),
+            Self::NoteOff { channel, note } => format!("ch{} note {note} off", channel + 1),
+            Self::ControlChange {
+                channel,
+                controller,
+                value,
+            } => format!("ch{} CC{controller} = {value}", channel + 1),
+            Self::PolyAftertouch {
+                channel,
+                note,
+                pressure,
+            } => format!("ch{} aftertouch {note} = {pressure}", channel + 1),
+        }
+    }
+}
+
+/// 割り当ての出発点（機器ごとに選べる）
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Preset {
+    /// Roland V-Drums の工場出荷時のノート番号（リム・エッジ・ベルを打ち分ける）
+    Roland,
+    /// General MIDI のドラムの番号（多くの機器の既定）
+    #[default]
+    GeneralMidi,
+    /// 何も割り当てない（すべて自分で割り当てる）
+    Empty,
+}
+
+impl Preset {
+    pub const ALL: [Preset; 3] = [Self::Roland, Self::GeneralMidi, Self::Empty];
+
+    /// 設定のファイルに書く名前
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Roland => "roland",
+            Self::GeneralMidi => "gm",
+            Self::Empty => "empty",
+        }
+    }
+
+    /// [`Preset::name`] の逆
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|p| p.name() == name)
+    }
+
+    /// 画面に出す名前
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Roland => "Roland",
+            Self::GeneralMidi => "GM",
+            Self::Empty => "None",
+        }
+    }
+
+    /// 次のもの（設定の画面で Enter を押すたびに替える）
+    pub fn next(self) -> Self {
+        let i = Self::ALL.iter().position(|&p| p == self).unwrap_or(0);
+        Self::ALL[(i + 1) % Self::ALL.len()]
+    }
+
+    /// ポートの名前から出発点を選ぶ。Roland の電子ドラムらしい名前なら Roland、ほかは GM
+    pub fn detect(port_name: &str) -> Self {
+        let lower = port_name.to_lowercase();
+        let tokens: Vec<&str> = lower
+            .split(|c: char| !c.is_ascii_alphanumeric())
+            .filter(|t| !t.is_empty())
+            .collect();
+        let roland = lower.contains("roland")
+            || lower.contains("v-drums")
+            || lower.contains("td-")
+            || tokens.iter().any(|t| {
+                matches!(*t, "v51" | "v71" | "vdrums")
+                    || t.starts_with("vad")
+                    || t.starts_with("spd")
+                    || (t.len() > 2
+                        && t.starts_with("td")
+                        && t[2..].bytes().all(|b| b.is_ascii_digit()))
+            });
+        if roland {
+            Self::Roland
+        } else {
+            Self::GeneralMidi
+        }
+    }
+
+    pub fn profile(self) -> MidiProfile {
+        match self {
+            Self::Roland => MidiProfile::roland_vdrums(),
+            Self::GeneralMidi => MidiProfile::general_midi(),
+            Self::Empty => MidiProfile::empty(),
         }
     }
 }
@@ -161,6 +343,11 @@ pub struct MidiProfile {
     pub retrigger_guard_us: Option<i64>,
     /// ハイハットの開き具合を表すコントロールチェンジの番号
     pub hh_pedal_cc: u8,
+    /// このチャンネル（0〜15）だけ受ける。`None` ならすべて受ける
+    pub channel: Option<u8>,
+    /// シンバルのポリフォニック・アフタータッチをチョーク（握って止めた）と読む。
+    /// Roland はチョークにだけ送るが、叩くたびに減っていく圧を送り続ける機器（YAMAHA FGDP など）もある
+    pub choke_by_aftertouch: bool,
 }
 
 impl MidiProfile {
@@ -213,7 +400,64 @@ impl MidiProfile {
             min_velocity: 0,
             retrigger_guard_us: None,
             hh_pedal_cc: 4,
+            channel: None,
+            choke_by_aftertouch: true,
         }
+    }
+
+    /// 何も割り当てない
+    pub fn empty() -> Self {
+        Self {
+            name: "None".to_owned(),
+            notes: BTreeMap::new(),
+            hi_hat: HiHatMode::Note,
+            min_velocity: 0,
+            retrigger_guard_us: None,
+            hh_pedal_cc: 4,
+            channel: None,
+            choke_by_aftertouch: false,
+        }
+    }
+
+    /// General MIDI のドラムの番号（GM の打楽器の表のうち、ドラムセットのもの）
+    pub fn general_midi() -> Self {
+        use Articulation::*;
+        use Pad::*;
+        let mut p = Self::empty();
+        p.name = "General MIDI".to_owned();
+        for (note, pad, articulation, hh_open) in [
+            (35, Kick, Head, false),
+            (36, Kick, Head, false),
+            (37, Snare, CrossStick, false),
+            (38, Snare, Head, false),
+            (40, Snare, Rim, false),
+            (41, Tom4, Head, false),
+            (43, Tom3, Head, false),
+            (45, Tom2, Head, false),
+            (47, Tom2, Head, false),
+            (48, Tom1, Head, false),
+            (50, Tom1, Head, false),
+            (42, HiHat, Bow, false),
+            (46, HiHat, Bow, true),
+            (44, HiHatPedal, Head, false),
+            (49, Crash1, Bow, false),
+            (55, Crash1, Bow, false),
+            (57, Crash2, Bow, false),
+            (52, Crash2, Bow, false),
+            (51, Ride, Bow, false),
+            (59, Ride, Edge, false),
+            (53, Ride, Bell, false),
+        ] {
+            p.notes.insert(
+                note,
+                NoteMapping {
+                    pad,
+                    articulation,
+                    hh_open,
+                },
+            );
+        }
+        p
     }
 }
 
@@ -261,16 +505,38 @@ impl MidiProfile {
 }
 
 impl MidiProfile {
+    /// 設定で変えた割り当てを順に重ねる（`None` は外す）
+    pub fn apply_overrides(&mut self, overrides: &[(u8, Option<DrumLane>)]) {
+        for &(note, lane) in overrides {
+            match lane {
+                Some(lane) => self.apply_lanes(&[(note, lane)]),
+                None => self.unassign([note]),
+            }
+        }
+    }
+
+    /// ノートの割り当てを外す（叩いても何も起きなくなる）
+    pub fn unassign(&mut self, notes: impl IntoIterator<Item = u8>) {
+        for note in notes {
+            self.notes.remove(&note);
+        }
+    }
+
+    /// ノートのレーン（割り当てが無いか、レーンの無いパッドなら `None`）。ハイハットはノートの開閉で決める
+    pub fn note_lane(&self, note: u8) -> Option<DrumLane> {
+        let m = self.notes.get(&note)?;
+        match m.pad {
+            Pad::HiHat if m.hh_open => Some(DrumLane::HHO),
+            Pad::HiHat => Some(DrumLane::HH),
+            pad => pad_lane(pad),
+        }
+    }
+
     /// レーンごとのノート番号（設定の画面に出す）。ハイハットは「オープン」を表すノートを HHO にする
     pub fn lane_notes(&self) -> BTreeMap<DrumLane, Vec<u8>> {
         let mut out: BTreeMap<DrumLane, Vec<u8>> = BTreeMap::new();
-        for (&note, m) in &self.notes {
-            let lane = match m.pad {
-                Pad::HiHat if m.hh_open => Some(DrumLane::HHO),
-                Pad::HiHat => Some(DrumLane::HH),
-                pad => pad_lane(pad),
-            };
-            if let Some(lane) = lane {
+        for &note in self.notes.keys() {
+            if let Some(lane) = self.note_lane(note) {
                 out.entry(lane).or_default().push(note);
             }
         }
@@ -337,6 +603,9 @@ impl Normalizer {
 
     /// `host_us` は叩いた瞬間のホスト時刻（`clock::MidiTimestampMapper` で直したもの）
     pub fn feed(&mut self, msg: MidiMessage, host_us: i64) -> Option<InputEvent> {
+        if !self.accepts(&msg) {
+            return None;
+        }
         match msg {
             MidiMessage::ControlChange {
                 controller, value, ..
@@ -345,6 +614,9 @@ impl Normalizer {
                 Some(InputEvent::HiHatPedal { host_us, value })
             }
             MidiMessage::PolyAftertouch { note, pressure, .. } => {
+                if !self.profile.choke_by_aftertouch {
+                    return None;
+                }
                 let m = self.profile.notes.get(&note)?;
                 let is_cymbal = matches!(m.pad, Pad::Crash1 | Pad::Crash2 | Pad::Ride | Pad::HiHat);
                 (is_cymbal && pressure > 0).then_some(InputEvent::Choke {
@@ -377,6 +649,11 @@ impl Normalizer {
             }
             _ => None,
         }
+    }
+
+    /// この機器のチャンネルの絞り込みに合うか
+    pub fn accepts(&self, msg: &MidiMessage) -> bool {
+        self.profile.channel.is_none_or(|ch| ch == msg.channel())
     }
 
     fn lane_for(&self, m: NoteMapping) -> Option<DrumLane> {
@@ -557,6 +834,19 @@ mod tests {
     }
 
     #[test]
+    fn aftertouch_after_each_hit_is_not_a_choke() {
+        // FGDP は叩くたびにアフタータッチで減っていく圧を送る。GM ではチョークと読まない
+        let mut n = Normalizer::new(MidiProfile::general_midi());
+        let at = MidiMessage::PolyAftertouch {
+            channel: 9,
+            note: 49,
+            pressure: 120,
+        };
+        assert!(n.feed(on(49, 127), 0).is_some());
+        assert_eq!(n.feed(at, 20_000), None);
+    }
+
+    #[test]
     fn crosstalk_and_retrigger_filters() {
         let mut p = MidiProfile::roland_vdrums();
         p.min_velocity = 10;
@@ -569,6 +859,130 @@ mod tests {
         // 別のパッドは捨てない
         assert!(n.feed(on(36, 60), 11_000).is_some());
         assert!(n.feed(on(38, 60), 20_000).is_some());
+    }
+
+    #[test]
+    fn parse_all_reads_running_status_and_skips_clock() {
+        // ランニングステータスで 2 つ、間にクロック、最後にベロシティ 0（ノートオフ）
+        let bytes = [0x99, 36, 100, 0xF8, 38, 90, 0xF8, 0xF8, 0x89, 36, 0, 38, 0];
+        assert_eq!(
+            MidiMessage::parse_all(&bytes),
+            vec![
+                on(36, 100),
+                on(38, 90),
+                MidiMessage::NoteOff {
+                    channel: 9,
+                    note: 36
+                },
+                MidiMessage::NoteOff {
+                    channel: 9,
+                    note: 38
+                },
+            ]
+        );
+        // データのバイトの途中で次の状態のバイトが来たら、そこから読み直す
+        assert_eq!(
+            MidiMessage::parse_all(&[0x99, 36, 0x99, 38, 80]),
+            vec![on(38, 80)]
+        );
+        // システムエクスクルーシブは飛ばす。足りないメッセージは捨てる
+        assert_eq!(
+            MidiMessage::parse_all(&[0xF0, 0x41, 0x10, 0xF7, 0x99, 42, 70, 0x99, 44]),
+            vec![on(42, 70)]
+        );
+        // クロックだけなら何も無い
+        assert!(MidiMessage::parse_all(&[0xF8, 0xFE]).is_empty());
+    }
+
+    #[test]
+    fn channel_filter_is_per_profile() {
+        let mut p = MidiProfile::general_midi();
+        p.channel = Some(0);
+        let mut n = Normalizer::new(p);
+        // 10ch のノートは受けない、1ch は受ける
+        assert_eq!(n.feed(on(38, 100), 0), None);
+        let ch1 = MidiMessage::NoteOn {
+            channel: 0,
+            note: 38,
+            velocity: 100,
+        };
+        assert_eq!(hit_lane(n.feed(ch1, 1)), Some(DrumLane::SD));
+        // 絞らなければどのチャンネルでも受ける
+        let mut n = Normalizer::new(MidiProfile::general_midi());
+        assert_eq!(hit_lane(n.feed(ch1, 0)), Some(DrumLane::SD));
+        assert_eq!(hit_lane(n.feed(on(38, 100), 100_000)), Some(DrumLane::SD));
+    }
+
+    #[test]
+    fn presets_by_port_name() {
+        for name in [
+            "TD-27",
+            "Roland TD-17",
+            "V51",
+            "2- V71",
+            "V-Drums",
+            "VAD706",
+            "SPD-SX PRO",
+            "TD07",
+        ] {
+            assert_eq!(Preset::detect(name), Preset::Roland, "{name}");
+        }
+        for name in [
+            "Finger Drum Pad",
+            "DTX-PRO",
+            "Alesis Strike",
+            "USB MIDI Interface",
+            "V5 Port",
+        ] {
+            assert_eq!(Preset::detect(name), Preset::GeneralMidi, "{name}");
+        }
+        assert_eq!(Preset::Roland.next(), Preset::GeneralMidi);
+        assert_eq!(Preset::Empty.next(), Preset::Roland);
+        for p in Preset::ALL {
+            assert_eq!(Preset::from_name(p.name()), Some(p));
+        }
+        assert!(Preset::Empty.profile().notes.is_empty());
+    }
+
+    #[test]
+    fn general_midi_kit_lanes() {
+        let lanes = MidiProfile::general_midi().lane_notes();
+        assert_eq!(lanes[&DrumLane::BD], vec![35, 36]);
+        assert_eq!(lanes[&DrumLane::SD], vec![37, 38, 40]);
+        assert_eq!(lanes[&DrumLane::HH], vec![42]);
+        assert_eq!(lanes[&DrumLane::HHO], vec![46]);
+        assert_eq!(lanes[&DrumLane::LP], vec![44]);
+        assert_eq!(lanes[&DrumLane::HT], vec![48, 50]);
+        assert_eq!(lanes[&DrumLane::LT], vec![45, 47]);
+        assert_eq!(lanes[&DrumLane::FT], vec![41, 43]);
+        assert_eq!(lanes[&DrumLane::LC], vec![49, 55]);
+        assert_eq!(lanes[&DrumLane::CY], vec![52, 57]);
+        assert_eq!(lanes[&DrumLane::RD], vec![51, 53, 59]);
+    }
+
+    #[test]
+    fn overrides_apply_in_order() {
+        let mut p = MidiProfile::general_midi();
+        p.apply_overrides(&[
+            (3, Some(DrumLane::FT)),
+            (38, None),
+            (3, Some(DrumLane::LT)),
+            (40, None),
+            (40, Some(DrumLane::LP)),
+        ]);
+        assert_eq!(p.note_lane(3), Some(DrumLane::LT));
+        assert_eq!(p.note_lane(38), None);
+        assert_eq!(p.note_lane(40), Some(DrumLane::LP));
+    }
+
+    #[test]
+    fn unassign_removes_notes() {
+        let mut p = MidiProfile::roland_vdrums();
+        p.unassign([38, 40]);
+        assert_eq!(p.note_lane(38), None);
+        assert_eq!(p.note_lane(37), Some(DrumLane::SD));
+        let mut n = Normalizer::new(p);
+        assert_eq!(n.feed(on(38, 100), 0), None);
     }
 
     #[test]

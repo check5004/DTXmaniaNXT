@@ -56,17 +56,69 @@ pub struct Config {
     pub show_lag_time_color: u8,
     /// 結果の画面に早かった数と遅かった数を出す（上流 `ShowLagHitCount`）
     pub show_lag_hit_count: bool,
-    /// 設定の画面で変えたパッドの割り当て（Roland の既定より優先する）
+    /// 前の版（0.2 まで）の、機器を区別しないパッドの割り当て。まだ設定の無い MIDI の機器に重ね、
+    /// その機器の設定を作るときに写す（[`crate::inputs`]）
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub pad_notes: Vec<PadNote>,
+    /// MIDI の入力機器ごとの設定
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub midi_devices: Vec<MidiDevice>,
+    /// PC のキーボードの割り当てのうち、既定から変えたもの（順に重ねる）
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub keys: Vec<KeyBind>,
 }
 
 /// パッドの割り当て 1 つ（ノート番号 → レーン）
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PadNote {
     pub note: u8,
-    /// レーンの名前（HH、SD など）
+    /// レーンの名前（HH、SD など）。[`UNASSIGNED`] なら割り当てを外す
     pub lane: String,
+}
+
+/// 割り当てを外したことを表すレーンの名前
+pub const UNASSIGNED: &str = "-";
+
+/// MIDI の入力機器（ポート）1 つの設定。ポートの名前で探し、同じ名前が何台もあれば OS の ID で見分ける
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MidiDevice {
+    /// ポートの名前（同じ機種の 2 台目に OS が付ける印は除く。[`crate::midi::base_name`]）
+    pub name: String,
+    /// OS のポートの ID（Windows はデバイスのパス、macOS は CoreMIDI の番号、Linux は client:port）
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub id: String,
+    /// 割り当ての出発点（"roland"、"gm"、"empty"）
+    pub preset: String,
+    /// 受けるチャンネル（1〜16）。0 ならすべて
+    #[serde(skip_serializing_if = "is_zero")]
+    pub channel: u8,
+    /// これより弱い打撃は捨てる（隣のパッドにつられて鳴る弱い音を除く）。0 なら捨てない
+    #[serde(skip_serializing_if = "is_zero")]
+    pub min_velocity: u8,
+    /// 開かない（ほかのアプリに使わせるときなど）
+    #[serde(skip_serializing_if = "is_false")]
+    pub disabled: bool,
+    /// 出発点から変えた割り当て（順に重ねる）
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<PadNote>,
+}
+
+/// キーボードの割り当て 1 つ（キー → レーン）
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KeyBind {
+    /// キーの名前（winit の `KeyCode` の名前。KeyZ、Digit1 など）
+    pub key: String,
+    /// レーンの名前。[`UNASSIGNED`] なら割り当てを外す
+    pub lane: String,
+}
+
+fn is_zero(v: &u8) -> bool {
+    *v == 0
+}
+
+fn is_false(v: &bool) -> bool {
+    !*v
 }
 
 impl Default for Config {
@@ -91,6 +143,8 @@ impl Default for Config {
             show_lag_time_color: 0,
             show_lag_hit_count: false,
             pad_notes: Vec::new(),
+            midi_devices: Vec::new(),
+            keys: Vec::new(),
         }
     }
 }
@@ -270,21 +324,16 @@ impl Config {
         self.practice_pitch = p.pitch.name().to_owned();
     }
 
-    /// ノート番号をレーンに割り当てる（前の割り当ては消す）
-    pub fn assign_pad(&mut self, note: u8, lane: DrumLane) {
-        self.pad_notes.retain(|p| p.note != note);
-        self.pad_notes.push(PadNote {
-            note,
-            lane: lane.name().to_owned(),
-        });
+    /// 前の版の、機器を区別しないパッドの割り当て（読めないレーンの名前は飛ばす）
+    pub fn pad_overrides(&self) -> Vec<(u8, Option<DrumLane>)> {
+        note_overrides(&self.pad_notes)
     }
 
-    /// 変えたパッドの割り当て（読めないレーンの名前は飛ばす）
-    pub fn pad_overrides(&self) -> Vec<(u8, DrumLane)> {
-        self.pad_notes
-            .iter()
-            .filter_map(|p| Some((p.note, DrumLane::from_name(&p.lane)?)))
-            .collect()
+    /// 設定の画面で変えた割り当てがあるか
+    pub fn has_custom_assignments(&self) -> bool {
+        !self.pad_notes.is_empty()
+            || !self.keys.is_empty()
+            || self.midi_devices.iter().any(|d| !d.notes.is_empty())
     }
 
     /// 曲のフォルダを足す（同じものは足さない）。足したら true
@@ -295,6 +344,20 @@ impl Config {
         self.song_dirs.push(dir);
         true
     }
+}
+
+/// 割り当ての並び（ノート → レーン、`None` は外す）。読めないレーンの名前は飛ばす
+pub fn note_overrides(notes: &[PadNote]) -> Vec<(u8, Option<DrumLane>)> {
+    notes
+        .iter()
+        .filter_map(|p| {
+            if p.lane == UNASSIGNED {
+                Some((p.note, None))
+            } else {
+                Some((p.note, Some(DrumLane::from_name(&p.lane)?)))
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -351,19 +414,52 @@ mod tests {
     }
 
     #[test]
-    fn pad_notes_replace_the_same_note() {
-        let mut c = Config::default();
-        c.assign_pad(60, DrumLane::HT);
-        c.assign_pad(61, DrumLane::LT);
-        c.assign_pad(60, DrumLane::FT);
+    fn pad_notes_skip_unknown_lanes() {
+        let c: Config = toml::from_str(
+            "[[pad_notes]]\nnote = 1\nlane = \"XX\"\n[[pad_notes]]\nnote = 2\nlane = \"-\"\n",
+        )
+        .unwrap();
+        assert_eq!(c.pad_overrides(), vec![(2, None)]);
+    }
+
+    #[test]
+    fn devices_and_keys_are_saved() {
+        let text = "\
+[[midi_devices]]
+name = \"Finger Drum Pad\"
+id = \"usb-1\"
+preset = \"empty\"
+channel = 10
+
+[[midi_devices.notes]]
+note = 3
+lane = \"FT\"
+
+[[midi_devices]]
+name = \"V51\"
+preset = \"roland\"
+disabled = true
+
+[[keys]]
+key = \"KeyX\"
+lane = \"LP\"
+";
+        let c: Config = toml::from_str(text).unwrap();
+        assert_eq!(c.midi_devices.len(), 2);
+        assert_eq!(c.midi_devices[0].channel, 10);
         assert_eq!(
-            c.pad_overrides(),
-            vec![(61, DrumLane::LT), (60, DrumLane::FT)]
+            note_overrides(&c.midi_devices[0].notes),
+            vec![(3, Some(DrumLane::FT))]
         );
+        assert!(c.midi_devices[1].disabled);
+        assert!(c.midi_devices[1].id.is_empty());
+        assert!(c.has_custom_assignments());
         let back: Config = toml::from_str(&toml::to_string_pretty(&c).unwrap()).unwrap();
-        assert_eq!(back.pad_overrides(), c.pad_overrides());
-        let c: Config = toml::from_str("[[pad_notes]]\nnote = 1\nlane = \"XX\"\n").unwrap();
-        assert!(c.pad_overrides().is_empty());
+        assert_eq!(back, c);
+        // 書いていない項目は既定（すべてのチャンネル、使う）で、書き出しにも出さない
+        let out = toml::to_string_pretty(&c).unwrap();
+        assert_eq!(out.matches("channel").count(), 1);
+        assert_eq!(out.matches("disabled").count(), 1);
     }
 
     #[test]
@@ -381,7 +477,7 @@ mod tests {
         // 38 と 40 は Roland の既定と同じなので足さない。50 はここで変えたほうを残す。LBD は扱わない
         assert_eq!(
             c.pad_overrides(),
-            vec![(99, DrumLane::SD), (50, DrumLane::FT)]
+            vec![(99, Some(DrumLane::SD)), (50, Some(DrumLane::FT))]
         );
         assert!(!c.stage_failed());
         assert_eq!(c.show_lag_time, 2);
@@ -441,7 +537,19 @@ mod tests {
         c.show_lag_time = 2;
         c.show_lag_time_color = 1;
         c.show_lag_hit_count = true;
-        c.assign_pad(60, DrumLane::HT);
+        c.pad_notes.push(PadNote {
+            note: 60,
+            lane: "HT".to_owned(),
+        });
+        c.keys.push(KeyBind {
+            key: "KeyX".to_owned(),
+            lane: "LP".to_owned(),
+        });
+        c.midi_devices.push(MidiDevice {
+            name: "TD-27".to_owned(),
+            preset: "roland".to_owned(),
+            ..MidiDevice::default()
+        });
         let back: Config = toml::from_str(&toml::to_string_pretty(&c).unwrap()).unwrap();
         assert_eq!(back, c);
     }
