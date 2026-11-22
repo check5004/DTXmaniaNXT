@@ -17,6 +17,7 @@ use engine::judge::{Judgement, Tally};
 
 use crate::game::{Fx, GaugeRule, Play};
 use crate::gfx::{Canvas, Gfx, Glyphs, Opt, Src, Tex, fit_scale, src};
+use crate::lag_view::HitErrorBar;
 use crate::lane_layout::{Lane, Layout};
 use crate::text::Style;
 
@@ -316,6 +317,8 @@ pub struct PlayView {
     late: u32,
     lag_digits: LagDigits,
     looks: Looks,
+    /// スコアの下のずれのバー（出さない設定でも印は集めておく。一時停止で ON にしたらすぐ出す）
+    hit_error: HitErrorBar,
 }
 
 /// 判定のずれの数字の出し方（NX の `ShowLagTime` と `ShowLagTimeColor`）
@@ -436,6 +439,8 @@ pub struct Looks {
     pub min_combo: u32,
     /// 進み具合のバーを出す（Dark が FULL なら出さない）
     pub progress: bool,
+    /// スコアの下にずれのバーを出す
+    pub hit_error: bool,
     /// レーンの並び
     pub layout: Layout,
     pub hho: HhoLook,
@@ -482,6 +487,7 @@ impl Looks {
             combo: v.flag(s::COMBO_DISP),
             min_combo: v.number(s::MIN_COMBO) as u32,
             progress: !v.dark_full(),
+            hit_error: v.flag(s::HIT_ERROR_BAR),
             layout: Layout::from_settings(v),
             hho: match v.choice(s::HHO_GRAPHICS) {
                 1 => HhoLook::NoCircle,
@@ -606,7 +612,13 @@ impl PlayView {
             late: 0,
             lag_digits,
             looks,
+            hit_error: HitErrorBar::new(play.judge.windows()),
         }
+    }
+
+    /// ずれのバーを出すか（一時停止の板で変えたとき）
+    pub fn set_hit_error(&mut self, on: bool) {
+        self.looks.hit_error = on;
     }
 
     /// 演奏を終えたときの数字。`now_ms` は曲の時刻（ここまでの区間をたどり着いたことにする）
@@ -668,6 +680,9 @@ impl PlayView {
                         Some(o) if o > 0.0 => self.late += 1,
                         Some(_) => self.early += 1,
                         None => {}
+                    }
+                    if let Some(o) = offset_ms {
+                        self.hit_error.push(now, o, judgement);
                     }
                     self.judges[l.i()] = Some(JudgeShow {
                         judgement,
@@ -821,6 +836,9 @@ impl PlayView {
         self.draw_score(c, g, now, practice);
         self.draw_status(c, g, play, practice);
         self.draw_gauge(c, g, px_per_ms);
+        if self.looks.hit_error {
+            self.hit_error.draw(c, g, now, practice);
+        }
         self.draw_combo(c, g, play, now);
         self.draw_judges(c, g, now);
         self.draw_fire(c, g, now);

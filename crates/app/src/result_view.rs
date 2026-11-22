@@ -252,6 +252,7 @@ impl ResultView {
         self.draw_parameters(c, g, None);
         self.draw_rank(c, g, elapsed);
         crate::result_training::draw_weak(c, g, o);
+        crate::lag_view::draw_result(c, g, o);
         self.draw_page_hint(c, g, "→ 詳しい結果（苦手な小節、叩き方のくせ）");
     }
 

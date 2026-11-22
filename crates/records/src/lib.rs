@@ -131,6 +131,17 @@ const MIGRATIONS: &[&str] = &[
         imported_at INTEGER NOT NULL
     );
     ",
+    // 5: この曲の補正（入力の補正（全体）に足す）。同じ曲の譜面すべてに同じ値を書く
+    "
+    CREATE TABLE song_offsets (
+        -- 譜面のパス
+        path TEXT PRIMARY KEY,
+        -- 補正（ミリ秒、プラスは遅く叩いても合う向き）
+        offset_ms REAL NOT NULL,
+        -- 変えた時刻（UNIX 秒）
+        updated_at INTEGER NOT NULL
+    );
+    ",
 ];
 
 /// 譜面 1 つの見分け方
@@ -233,6 +244,20 @@ pub struct ClearedPlay {
     /// 達成率（0〜100）
     pub rate: f64,
     pub tally: Tally,
+}
+
+/// セッション 1 つぶんの、叩けた音符のずれ（等速以上の周だけ）
+#[derive(Debug, Clone, PartialEq)]
+pub struct SessionLag {
+    pub chart_path: String,
+    /// 始めた時刻（UNIX 秒）
+    pub started_at: i64,
+    /// 遊んだときの設定（JSON。そのときの補正が入っている）
+    pub settings: String,
+    /// 叩けた音符の数（PERFECT〜POOR）
+    pub hits: u32,
+    /// ずれの平均（ミリ秒、マイナスは早い。補正を引いたあとの値）
+    pub mean_ms: f64,
 }
 
 /// 練習でクリアした区間
@@ -495,6 +520,67 @@ impl Records {
                  AND chart_id = (SELECT id FROM charts WHERE path = ?1)",
             params![chart_path, first, last, at, before, after],
         )
+    }
+
+    /// この曲の補正（ミリ秒）。決めていなければ None
+    pub fn song_offset(&self, chart_path: &str) -> Result<Option<f64>> {
+        let mut q = self
+            .conn
+            .prepare_cached("SELECT offset_ms FROM song_offsets WHERE path = ?1")?;
+        let mut rows = q.query(params![chart_path])?;
+        match rows.next()? {
+            Some(row) => row.get(0).map(Some),
+            None => Ok(None),
+        }
+    }
+
+    /// この曲の補正を、曲の譜面 `chart_paths` すべてに書く。0 なら消す
+    pub fn set_song_offset(&mut self, chart_paths: &[&str], offset_ms: f64, at: i64) -> Result<()> {
+        let tx = self.conn.transaction()?;
+        for path in chart_paths {
+            if offset_ms == 0.0 {
+                tx.execute("DELETE FROM song_offsets WHERE path = ?1", params![path])?;
+            } else {
+                tx.execute(
+                    "INSERT INTO song_offsets (path, offset_ms, updated_at) VALUES (?1, ?2, ?3)
+                     ON CONFLICT(path) DO UPDATE SET
+                         offset_ms = excluded.offset_ms, updated_at = excluded.updated_at",
+                    params![path, offset_ms, at],
+                )?;
+            }
+        }
+        tx.commit()
+    }
+
+    /// 直近 `sessions` 回のプレイと練習の、叩けた音符のずれ（新しい順。すべての譜面）。
+    /// 等速より遅い周と、ずれの無いセッション（自動演奏だけ、引き継いだ記録）は入れない
+    pub fn recent_lags(&self, sessions: usize) -> Result<Vec<SessionLag>> {
+        let mut q = self.conn.prepare(
+            "SELECT c.path, s.started_at, s.settings,
+                 SUM(l.perfect + l.great + l.good + l.poor) AS n,
+                 SUM(l.offset_mean_ms * (l.perfect + l.great + l.good + l.poor))
+             FROM laps l
+             JOIN sessions s ON s.id = l.session_id
+             JOIN charts c ON c.id = s.chart_id
+             WHERE l.offset_mean_ms IS NOT NULL AND l.speed >= 1.0 - 1e-6
+                 AND s.kind IN ('play', 'practice')
+             GROUP BY s.id
+             HAVING n > 0
+             ORDER BY s.started_at DESC, s.id DESC
+             LIMIT ?1",
+        )?;
+        q.query_map(params![sessions as i64], |row| {
+            let hits: u32 = row.get(3)?;
+            let sum: f64 = row.get(4)?;
+            Ok(SessionLag {
+                chart_path: row.get(0)?,
+                started_at: row.get(1)?,
+                settings: row.get(2)?,
+                hits,
+                mean_ms: sum / f64::from(hits),
+            })
+        })?
+        .collect()
     }
 
     /// 等速（100%）で叩けた音符のずれと拍の中の位置。すべての譜面の、直近 `sessions` 回のプレイと練習から
@@ -1134,6 +1220,73 @@ mod tests {
         assert_eq!(b.rate, None);
         // スコアの無い練習やほかの譜面は数えない
         assert_eq!(r.best_score("other.dtx", None).unwrap().score, None);
+    }
+
+    #[test]
+    fn song_offsets_are_kept_per_chart() {
+        let mut r = Records::open_in_memory().unwrap();
+        assert_eq!(r.song_offset("a/bas.dtx").unwrap(), None);
+        r.set_song_offset(&["a/bas.dtx", "a/mas.dtx"], 12.0, 100)
+            .unwrap();
+        assert_eq!(r.song_offset("a/bas.dtx").unwrap(), Some(12.0));
+        assert_eq!(r.song_offset("a/mas.dtx").unwrap(), Some(12.0));
+        r.set_song_offset(&["a/bas.dtx", "a/mas.dtx"], -4.0, 200)
+            .unwrap();
+        assert_eq!(r.song_offset("a/mas.dtx").unwrap(), Some(-4.0));
+        // 0 にしたら消す（決めていないのと同じ）
+        r.set_song_offset(&["a/bas.dtx"], 0.0, 300).unwrap();
+        assert_eq!(r.song_offset("a/bas.dtx").unwrap(), None);
+        assert_eq!(r.song_offset("a/mas.dtx").unwrap(), Some(-4.0));
+    }
+
+    #[test]
+    fn recent_lags_weigh_laps_by_hits() {
+        let mut r = Records::open_in_memory().unwrap();
+        let lap = |speed: f64, perfect: u32, poor: u32, mean: Option<f64>| Lap {
+            speed,
+            completed: true,
+            passed: None,
+            tally: Tally {
+                perfect,
+                poor,
+                miss: 5,
+                ..Default::default()
+            },
+            offset_mean_ms: mean,
+            offset_sd_ms: None,
+            hits: vec![],
+            strays: vec![],
+        };
+        let mut a = play(100, 1.0, vec![]);
+        a.settings = "{\"input_offset_ms\":3}".into();
+        a.laps = vec![lap(1.0, 30, 0, Some(10.0))];
+        r.save(&chart(1), &a).unwrap();
+        // 練習: 等速の周を打った数で重みをつけ、遅い周は入れない
+        let mut b = play(200, 1.0, vec![]);
+        b.kind = SessionKind::Practice;
+        b.laps = vec![
+            lap(1.0, 10, 0, Some(0.0)),
+            lap(0.7, 10, 0, Some(50.0)),
+            lap(1.1, 20, 10, Some(20.0)),
+        ];
+        r.save(&chart(1), &b).unwrap();
+        // ずれの無いセッション（自動演奏だけ）と遅い周だけのセッションは入れない
+        let mut c = play(300, 1.0, vec![]);
+        c.laps = vec![lap(1.0, 0, 0, None)];
+        r.save(&chart(1), &c).unwrap();
+        let mut d = play(400, 1.0, vec![]);
+        d.laps = vec![lap(0.5, 10, 0, Some(5.0))];
+        r.save(&chart(1), &d).unwrap();
+        let lags = r.recent_lags(10).unwrap();
+        assert_eq!(lags.len(), 2);
+        assert_eq!(lags[0].started_at, 200);
+        assert_eq!(lags[0].hits, 40);
+        assert!((lags[0].mean_ms - 15.0).abs() < 1e-9);
+        assert_eq!(lags[1].hits, 30);
+        assert_eq!(lags[1].mean_ms, 10.0);
+        assert_eq!(lags[1].settings, "{\"input_offset_ms\":3}");
+        assert_eq!(lags[1].chart_path, "songs/a/master.dtx");
+        assert_eq!(r.recent_lags(1).unwrap().len(), 1);
     }
 
     #[test]
