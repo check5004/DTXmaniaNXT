@@ -543,10 +543,14 @@ impl Practice {
         self.run_up_next = false;
         let mut judged = Vec::new();
         self.next_slots.clear();
+        // 地図に入れるのは今のセットで叩く所の拍だけ（区切るときの着地は、苦手の所だけのセットでは
+        // 区間の中でも叩く所の外）
+        let section = self.set_section();
         for n in lap.notes(&self.chart_notes) {
             let note = &self.chart_notes[n.note];
             if n.judged {
-                self.next_slots.push((self.grid.slot(note), note.lane));
+                let slot = self.grid.slot(note).filter(|s| section.contains(s.measure));
+                self.next_slots.push((slot, note.lane));
                 judged.push(DrumNote {
                     ms: n.ms,
                     ..note.clone()
@@ -1482,6 +1486,44 @@ mod tests {
         assert_eq!(p.clear_speed(), Some(100));
         assert_eq!(p.clean_speeds(), vec![100]);
         assert_eq!(p.set_reports().len(), 3);
+    }
+
+    #[test]
+    fn a_missed_landing_does_not_hold_the_focus_set() {
+        // 毎回区切るときは、苦手の所だけの周も次の小節の頭（着地）まで判定する。着地は区間全体の中でも
+        // 苦手の所の外なので、落としても苦手に数えない（数えると苦手の所だけから抜けられない）
+        let mut p = practice_with(
+            LoopStyle::Restart,
+            SpeedPlan::Fixed(100),
+            Section::new(1, 2),
+            4,
+        );
+        let mut judge =
+            Judge::with_groups(Vec::new(), HitWindows::default(), LaneGroups::default());
+        for _ in 0..4 {
+            play_lap_missing(&mut p, &mut judge, 100, &[1]);
+        }
+        let focus = Section::new(1, 1);
+        assert_eq!(
+            p.choose(),
+            Some(Choice::Set {
+                kind: SetKind::Focus(focus),
+                speed: 100
+            })
+        );
+        for _ in 0..4 {
+            // 小節 1 の 4 音符はぴったり、5 番目（着地）だけ見逃す
+            play_lap_missing(&mut p, &mut judge, 100, &[4]);
+        }
+        let b = p.between.clone().expect("the focus set is over");
+        assert!(b.report.weak().is_empty());
+        assert_eq!(
+            b.choices.list[b.cursor],
+            Choice::Set {
+                kind: SetKind::Whole,
+                speed: 100
+            }
+        );
     }
 
     #[test]

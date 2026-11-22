@@ -2,7 +2,7 @@
 //! - 演奏中の「ずれのバー」: 左のスコアの下に、叩いた音符のずれを横の目盛りに印で出す（osu! の hit error bar と同じ形）。
 //!   レーンにはかぶせない。練習ではスコアの場所に練習の欄が出るので、左下（成績の板の下）に出す。
 //!   真ん中が ±0、左が早い、右が遅い。帯は判定の幅、印の色は判定の色で、少しずつ消える。▼ と数字は直近の平均
-//! - 結果の画面の「ずれ」の板: 今回のずれの散らばりと、この曲・全体のずれ、補正のおすすめ（BD で受ける）
+//! - 結果の画面の「ずれ」の板: 今回のずれの散らばりと、この曲・全体のずれ、補正のおすすめ（FT で受ける）
 
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -229,7 +229,7 @@ pub struct LagResult {
     /// この曲の譜面（難易度すべて。この曲の補正を書く先）
     pub charts: Vec<PathBuf>,
     pub advice: Advice,
-    /// おすすめにしたなら、その前の値（入力の補正（全体）、この曲の補正）。BD でもとに戻す
+    /// おすすめにしたなら、その前の値（入力の補正（全体）、この曲の補正）。もう一度 FT でもとに戻す
     pub applied: Option<(f64, f64)>,
 }
 
@@ -350,8 +350,8 @@ pub fn draw_result(c: &Canvas, g: &mut Gfx, o: &Outcome) {
         15.0,
         Color32::WHITE,
     );
-    // パッドの印（BD）と、キーボードの O
-    let hint = format!("BD / O：{hint}");
+    // パッドの印（FT）と、キーボードの O
+    let hint = format!("FT / O：{hint}");
     draw_text_right(c, g, &hint, bx + bw - 10.0, by + 11.0, 13.0, white);
 }
 
