@@ -6,21 +6,6 @@ use std::collections::HashMap;
 
 use dtx::{AutoChannel, Chart, DrumLane, LaneSound, TempoMap};
 
-use crate::audio::Bus;
-
-/// メトロノームの小節の頭と拍の音に使う番号（`#WAVzz` は 36 × 36 未満なので重ならない）
-pub const METRONOME_BAR: u16 = u16::MAX;
-pub const METRONOME_BEAT: u16 = u16::MAX - 1;
-
-/// 自動で鳴らす音 `wav` の系統（メトロノームはメトロノーム、ほかは曲の音。上流の AutoVolume は系統の音量でかける）
-pub fn auto_bus(wav: u16) -> Bus {
-    if matches!(wav, METRONOME_BAR | METRONOME_BEAT) {
-        Bus::Click
-    } else {
-        Bus::Song
-    }
-}
-
 /// 自動で鳴らす音の鳴らし方（上流の BGM Sound、BGMAdjust）
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AutoMix {
@@ -110,20 +95,6 @@ impl ChartSounds {
             .collect();
         sounds.auto.sort_by(|a, b| a.ms.total_cmp(&b.ms));
         sounds
-    }
-
-    /// メトロノーム（上流の Metronome）。小節の頭と拍（時刻、小節の頭か）で鳴らす。拍は小節の頭の 4 割の音量。
-    /// 音は [`METRONOME_BAR`] と [`METRONOME_BEAT`] の番号で用意しておく
-    pub fn add_metronome(&mut self, lines: impl IntoIterator<Item = (f64, bool)>) {
-        self.auto
-            .extend(lines.into_iter().map(|(ms, bar)| AutoVoice {
-                ms,
-                wav: if bar { METRONOME_BAR } else { METRONOME_BEAT },
-                gain: if bar { 1.0 } else { 0.4 },
-                pan: 0.0,
-                len_ms: None,
-            }));
-        self.auto.sort_by(|a, b| a.ms.total_cmp(&b.ms));
     }
 
     /// 自動で叩くレーンの音符（時刻、音）を、自動で鳴らす音に足す（音量と左右はその音のもの）
@@ -254,14 +225,6 @@ mod tests {
         let mut s = s;
         s.add_auto_notes([(2000.0, 4)]);
         assert_eq!(s.auto[0].gain, 1.0);
-        s.add_metronome([(0.0, true), (500.0, false)]);
-        assert_eq!(
-            (s.auto[0].wav, s.auto[0].gain, s.auto[1].wav, s.auto[1].gain),
-            (METRONOME_BAR, 1.0, METRONOME_BEAT, 0.4)
-        );
-        // メトロノームはメトロノームの系統、ほかは曲の音
-        assert_eq!(auto_bus(s.auto[0].wav), Bus::Click);
-        assert_eq!(auto_bus(4), Bus::Song);
     }
 
     #[test]

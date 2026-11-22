@@ -11,38 +11,46 @@ use dtx::DrumLane;
 use engine::judge::{BdGroup, CyGroup, FtGroup, HhGroup, HitWindows, LaneGroups};
 use serde::{Deserialize, Serialize};
 
-/// 分類（設定の画面を作り直すときの 8 つの分類。名前は [`Group::label`]）
+/// 分類（設定の画面の左の列。名前は [`Group::label`]）。
+/// 左の列は NX v2.0 と同じく「システム」と「ドラム」の 2 段に分ける（2026-11-22 ユーザーが見本から案 A を選んだ）。
+/// システムは NX の System ＞ Graphics・Audio・Gameplay と同じ小分け、ドラムは NX の Drums にあったもの
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Group {
-    /// 演奏（演奏の決まり、自動で叩く、叩き分け、判定）
-    Play,
-    /// 譜面の見た目（流れ方、見えにくくする、ずれの表示、画面の部品）
-    View,
-    /// タイミング（補正）
-    Timing,
-    /// 音（音量、鳴らすもの）
+    /// システム ＞ 画面（窓の出し方、垂直同期、譜面の動画。NX の System ＞ Graphics）
+    Display,
+    /// システム ＞ 音（音量、鳴らすもの。NX の System ＞ Audio）
     Sound,
-    /// 入力機器
-    Input,
-    /// 曲
+    /// システム ＞ ゲームプレイ（演奏の決まり、判定の幅、ずれの表示、記録。NX の System ＞ Gameplay と HAZARD・Tight）
+    Play,
+    /// システム ＞ 曲
     Songs,
+    /// システム ＞ アプリ
+    App,
+    /// ドラム ＞ 譜面（流れ方、見えにくくする、レーンとチップ、画面の部品）
+    View,
+    /// ドラム ＞ 自動・叩き分け（自動で叩く、叩き分け、共通にしたときの音、Muting LP）
+    Pads,
+    /// ドラム ＞ タイミング（補正）
+    Timing,
+    /// ドラム ＞ 入力（パッドとキーの割り当て、MIDI 機器）
+    Input,
     /// 練習
     Practice,
-    /// アプリ
-    App,
 }
 
 impl Group {
     pub fn label(self) -> &'static str {
         match self {
-            Self::Play => "演奏",
-            Self::View => "譜面の見た目",
-            Self::Timing => "タイミング",
+            Self::Display => "画面",
             Self::Sound => "音",
-            Self::Input => "入力機器",
+            Self::Play => "ゲームプレイ",
             Self::Songs => "曲",
-            Self::Practice => "練習",
             Self::App => "アプリ",
+            Self::View => "譜面",
+            Self::Pads => "自動・叩き分け",
+            Self::Timing => "タイミング",
+            Self::Input => "入力",
+            Self::Practice => "練習",
         }
     }
 }
@@ -102,7 +110,7 @@ pub struct Def {
 const fn auto_lane(key: &'static str, name: &'static str) -> Def {
     Def {
         key,
-        group: Group::Play,
+        group: Group::Pads,
         section: AUTO_SECTION,
         name,
         kind: Kind::Toggle { default: false },
@@ -261,7 +269,7 @@ const RD_POSITION_CHOICES: &[Choice] = choices![
 
 /// 上流 `eHHOGraphics.Drums`
 const HHO_GRAPHICS_CHOICES: &[Choice] = choices![
-    "a" => "A（NX の絵）",
+    "a" => "A（丸あり）",
     "b" => "B（丸なし）",
     "c" => "C（クローズと同じ）",
 ];
@@ -271,8 +279,8 @@ const HHO_GRAPHICS_CHOICES: &[Choice] = choices![
 const LBD_GRAPHICS_CHOICES: &[Choice] = choices![
     "bd_lane" => "BD のレーンに水色で",
     "own_lane" => "LP の右にレーンを足す（水色）",
-    "a" => "LP のレーンに同じ絵（NX の A）",
-    "b" => "LP のレーンに紫の絵（NX の B）",
+    "a" => "LP のレーンに同じ絵",
+    "b" => "LP のレーンに紫の絵",
 ];
 
 /// スネアのリムの音符の出し方（並びは [`crate::rim_look::RimLook`] と同じ）
@@ -286,7 +294,8 @@ const RIM_GRAPHICS_CHOICES: &[Choice] = choices![
 const VIEW_LANES: &str = "画面の部品";
 const VIEW_ORDER: &str = "レーンとチップ";
 const VIEW_HIDE: &str = "見えにくくする";
-const VIEW_MOVIE: &str = "動画";
+/// 画面の「動画」（NX v2.0 では System ＞ Graphics）
+const DISPLAY_MOVIE: &str = "動画";
 
 /// 0〜100 の数（判定ラインの高さ、シャッター）
 const fn percent(
@@ -362,7 +371,8 @@ pub const CY_PRIORITY: &str = "cy_priority";
 pub const MUTING_LP: &str = "muting_lp";
 
 const GROUP_SECTION: &str = "叩き分け";
-const HIT_SOUND_SECTION: &str = "叩いた音";
+/// 叩き分けを共通にしたとき鳴らす音（NX では Group の隣）
+const PRIORITY_SECTION: &str = "共通にしたときの音";
 
 /// 上流 `EHHGroup` の並び
 const HH_GROUP_CHOICES: &[Choice] = choices![
@@ -401,7 +411,7 @@ const fn group_choice(
 ) -> Def {
     Def {
         key,
-        group: Group::Play,
+        group: Group::Pads,
         section: GROUP_SECTION,
         name,
         kind: Kind::Choice {
@@ -417,8 +427,8 @@ const fn group_choice(
 const fn priority(key: &'static str, name: &'static str, desc: &'static str) -> Def {
     Def {
         key,
-        group: Group::Sound,
-        section: HIT_SOUND_SECTION,
+        group: Group::Pads,
+        section: PRIORITY_SECTION,
         name,
         kind: Kind::Choice {
             choices: PRIORITY_CHOICES,
@@ -547,7 +557,7 @@ const AUTO_LANE_DESC: &str = "ON にすると、このレーンの音符を自�
 pub const ALL: &[Def] = &[
     Def {
         key: AUTO_ALL,
-        group: Group::Play,
+        group: Group::Pads,
         section: AUTO_SECTION,
         name: "自動演奏（AutoPlay）",
         kind: Kind::All {
@@ -639,7 +649,7 @@ pub const ALL: &[Def] = &[
     ),
     Def {
         key: CYMBAL_FREE,
-        group: Group::Play,
+        group: Group::Pads,
         section: GROUP_SECTION,
         name: "シンバルフリー（CymbalFree）",
         kind: Kind::Toggle { default: false },
@@ -648,7 +658,7 @@ pub const ALL: &[Def] = &[
     },
     Def {
         key: SKIP_MS,
-        group: Group::App,
+        group: Group::Play,
         section: "演奏中のキー",
         name: "早送り・巻き戻しの幅（SkipTimeMs）",
         kind: Kind::Number {
@@ -664,8 +674,8 @@ pub const ALL: &[Def] = &[
     },
     Def {
         key: DISPLAY_MODE,
-        group: Group::App,
-        section: "画面",
+        group: Group::Display,
+        section: "",
         name: "画面の出し方（FullScreen）",
         kind: Kind::Choice {
             choices: DISPLAY_MODE_CHOICES,
@@ -676,8 +686,8 @@ pub const ALL: &[Def] = &[
     },
     Def {
         key: VSYNC,
-        group: Group::App,
-        section: "画面",
+        group: Group::Display,
+        section: "",
         name: "垂直同期（VSyncWait）",
         kind: Kind::Toggle { default: true },
         desc: "画面の書き換えをモニターに合わせます。OFF にすると絵が少し早く出ますが、横に裂けて見えることがあります。\n判定は MIDI の時刻と音で行うので、どちらでも変わりません。",
@@ -685,8 +695,8 @@ pub const ALL: &[Def] = &[
     },
     Def {
         key: AUTO_SAVE_RESULT,
-        group: Group::App,
-        section: "画面の保存",
+        group: Group::Play,
+        section: "記録",
         name: "記録を更新した結果を画像で残す（AutoSaveResult）",
         kind: Kind::Toggle { default: true },
         desc: "記録を更新したとき、結果の画面を譜面と同じフォルダに PNG で残します（譜面の名前.日時_DRUMS_ランク.png）。\nF12 ではいつでも画面を「ピクチャ」の DTXmaniaNXT に残せます。",
@@ -726,14 +736,14 @@ pub const ALL: &[Def] = &[
         VIEW_ORDER,
         "オープンハイハットの絵（HHOGraphics）",
         HHO_GRAPHICS_CHOICES,
-        "A は NX の絵、B は A のまわりの丸を消した絵、C はクローズのハイハットと同じ絵です。",
+        "A はまわりに丸のある絵、B は丸を消した絵、C はクローズのハイハットと同じ絵です。",
     ),
     view_choice(
         LBD_GRAPHICS,
         VIEW_ORDER,
         "左バスドラムの出し方（LBDGraphics）",
         LBD_GRAPHICS_CHOICES,
-        "左バスドラム（LBD）の音符を BD のレーンに水色で出すか、LP の右に足したレーン（実物のツインペダルと同じ並び）に出すか、NX と同じく LP のレーンに出すか。\n光・判定の文字・火花も、音符を出したレーンに出します。",
+        "左バスドラム（LBD）の音符を BD のレーンに水色で出すか、LP の右に足したレーン（実物のツインペダルと同じ並び）に出すか、LP のレーンに出すか。\n光・判定の文字・火花も、音符を出したレーンに出します。",
     ),
     view_choice(
         RIM_GRAPHICS,
@@ -802,7 +812,7 @@ pub const ALL: &[Def] = &[
     view_toggle(COMBO_DISP, "コンボ（Combo）", "コンボの数を出すかどうか。"),
     Def {
         key: HIT_ERROR_BAR,
-        group: Group::View,
+        group: Group::Play,
         section: "ずれの表示",
         name: "ずれのバー",
         kind: Kind::Toggle { default: true },
@@ -827,8 +837,8 @@ pub const ALL: &[Def] = &[
     },
     Def {
         key: AVI,
-        group: Group::View,
-        section: VIEW_MOVIE,
+        group: Group::Display,
+        section: DISPLAY_MOVIE,
         name: "動画（AVI）",
         kind: Kind::Toggle { default: true },
         desc: "譜面の動画（#AVI）をレーンの後ろに流します。\n今は Windows だけで、MP4 や AVI を Windows の機能で読みます。",
@@ -836,8 +846,8 @@ pub const ALL: &[Def] = &[
     },
     Def {
         key: MOVIE_ALPHA,
-        group: Group::View,
-        section: VIEW_MOVIE,
+        group: Group::Display,
+        section: DISPLAY_MOVIE,
         name: "レーンの透け具合（MovieAlpha）",
         kind: Kind::Number {
             min: 0,
@@ -867,8 +877,8 @@ pub const ALL: &[Def] = &[
     ),
     Def {
         key: MUTING_LP,
-        group: Group::Sound,
-        section: HIT_SOUND_SECTION,
+        group: Group::Pads,
+        section: "ペダル",
         name: "左ペダルでハイハットを止める（Muting LP）",
         kind: Kind::Toggle { default: true },
         desc: "左ペダルを踏むと、鳴っているハイハットの音（叩いた音）を止めます。",
@@ -878,7 +888,7 @@ pub const ALL: &[Def] = &[
         AUTO_VOLUME,
         "BGM の音量（AutoVolume）",
         80,
-        "曲の音の音量です。BGM のほか、譜面の効果音、自動で叩くレーンの音、選曲のプレビューも入ります（全体の音量にさらにかけます）。\nNX と同じく既定は 80 %。",
+        "曲の音の音量です。BGM のほか、譜面の効果音、自動で叩くレーンの音、選曲のプレビューも入ります（全体の音量にさらにかけます）。",
     ),
     volume(
         CHIP_VOLUME,
@@ -913,13 +923,13 @@ pub const ALL: &[Def] = &[
         section: "鳴らすもの",
         name: "メトロノーム（Metronome）",
         kind: Kind::Toggle { default: false },
-        desc: "小節の頭と拍でクリックを鳴らします（拍は小さめ）。区間の練習では、遅くした速さに合わせて鳴ります。",
-        in_play: false,
+        desc: "小節の頭と拍でクリックを鳴らします。演奏中も一時停止から切り替えられます。\n区間練習は、練習の決めごとのメトロノームで鳴らします。",
+        in_play: true,
     },
     Def {
         key: BGM_ADJUST,
         group: Group::Timing,
-        section: "補正",
+        section: "",
         name: "BGM のずらし（BGMAdjust）",
         kind: Kind::Number {
             min: -99,
