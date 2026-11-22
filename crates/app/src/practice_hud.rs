@@ -52,7 +52,7 @@ const BAR_H: f32 = 540.0;
 const LANES_X: f32 = 296.0;
 const LANES_W: f32 = 558.0;
 const LANES_CX: f32 = LANES_X + LANES_W / 2.0;
-/// 知らせの帯の上の端と高さ（クリアは大きく）
+/// 知らせの帯の上の端（Reverse では下の端から同じだけ離す）と高さ（クリアは大きく）
 const BANNER_Y: f32 = 96.0;
 const BANNER_H: f32 = 150.0;
 const CLEAR_H: f32 = 200.0;
@@ -60,7 +60,8 @@ const CLEAR_H: f32 = 200.0;
 const BANNER_FADE_IN_MS: f64 = 150.0;
 const BANNER_FADE_OUT_MS: f64 = 200.0;
 
-/// カウントの数字を出す場所（レーンの真ん中より下。上に知らせが出るので）と、1 打ごとに縮む時間
+/// カウントの数字を出す場所（レーンの真ん中より判定ラインの側。反対の側に知らせが出るので）と、
+/// 1 打ごとに縮む時間
 const COUNT_Y: f32 = 390.0;
 const COUNT_POP_MS: f64 = 180.0;
 
@@ -73,14 +74,32 @@ const DOWN_COLOR: Color32 = SECTION_COLOR;
 const GREY: Color32 = Color32::from_gray(200);
 
 /// 練習中の表示をすべて描く。`now` は表示の補正を足した実時間、`last_chip_ms` は曲の最後の音の時刻、
-/// `px_per_ms` は音符の落ちる速さ（判定の音符が知らせの帯に届く前に帯を消す）
-pub fn draw(c: &Canvas, g: &mut Gfx, p: &Practice, now: f64, last_chip_ms: f64, px_per_ms: f32) {
+/// `px_per_ms` は音符の落ちる速さ（判定の音符が知らせの帯に届く前に帯を消す）、`reverse` は下から上へ流すか
+/// （知らせとカウントを上下逆の側に出す）
+pub fn draw(
+    c: &Canvas,
+    g: &mut Gfx,
+    p: &Practice,
+    now: f64,
+    last_chip_ms: f64,
+    px_per_ms: f32,
+    reverse: bool,
+) {
     draw_progress(c, p, now, last_chip_ms);
     draw_lap_and_speed(c, g, p, now);
     draw_recent(c, g, p, now);
     draw_card(c, g, p, now);
-    draw_banner(c, g, p, now, px_per_ms);
-    draw_count_in(c, g, p, now);
+    draw_banner(c, g, p, now, px_per_ms, reverse);
+    draw_count_in(c, g, p, now, reverse);
+}
+
+/// 高さ `h` の知らせの帯の上の端（チップが出てくる側から `BANNER_Y` 離す）
+fn banner_top(h: f32, reverse: bool) -> f32 {
+    if reverse {
+        720.0 - BANNER_Y - h
+    } else {
+        BANNER_Y
+    }
 }
 
 // ---- 文字と形 ----
@@ -772,14 +791,15 @@ fn banner(p: &Practice, now: f64, px_per_ms: f32) -> Option<(&LapState, Cue, f32
 }
 
 /// 速度が変わる周とクリアのあとの助走で、レーンの真ん中に知らせる
-fn draw_banner(c: &Canvas, g: &mut Gfx, p: &Practice, now: f64, px_per_ms: f32) {
+fn draw_banner(c: &Canvas, g: &mut Gfx, p: &Practice, now: f64, px_per_ms: f32, reverse: bool) {
     let Some((lap, cue, alpha)) = banner(p, now, px_per_ms) else {
         return;
     };
+    let top = banner_top(BANNER_H, reverse);
     let speed = speed_percent(lap.plan.speed);
     let ladder = p.ladder();
     if cue == Cue::Clear {
-        draw_clear(c, g, speed, alpha);
+        draw_clear(c, g, speed, alpha, reverse);
         return;
     }
     let (head, color, from) = match cue {
@@ -804,15 +824,15 @@ fn draw_banner(c: &Canvas, g: &mut Gfx, p: &Practice, now: f64, px_per_ms: f32) 
     };
     c.fill(
         LANES_X,
-        BANNER_Y,
+        top,
         LANES_W,
         BANNER_H,
         Color32::from_black_alpha(175).gamma_multiply(alpha),
     );
-    c.fill(LANES_X, BANNER_Y, LANES_W, 3.0, color.gamma_multiply(alpha));
+    c.fill(LANES_X, top, LANES_W, 3.0, color.gamma_multiply(alpha));
     c.fill(
         LANES_X,
-        BANNER_Y + BANNER_H - 3.0,
+        top + BANNER_H - 3.0,
         LANES_W,
         3.0,
         color.gamma_multiply(alpha),
@@ -823,7 +843,7 @@ fn draw_banner(c: &Canvas, g: &mut Gfx, p: &Practice, now: f64, px_per_ms: f32) 
         head,
         &bold(30.0, color),
         LANES_CX,
-        BANNER_Y + 8.0,
+        top + 8.0,
         Align::Center,
         LANES_W - 20.0,
         alpha,
@@ -831,7 +851,7 @@ fn draw_banner(c: &Canvas, g: &mut Gfx, p: &Practice, now: f64, px_per_ms: f32) 
     // 80% → 85%（始めは速度だけ）
     let scale = 0.85;
     let to = format!("{speed}%");
-    let digits_y = BANNER_Y + 50.0;
+    let digits_y = top + 50.0;
     match from {
         Some(from) => {
             let from = format!("{from}%");
@@ -864,7 +884,7 @@ fn draw_banner(c: &Canvas, g: &mut Gfx, p: &Practice, now: f64, px_per_ms: f32) 
         &sub,
         &edged(16.0, Color32::WHITE),
         LANES_CX,
-        BANNER_Y + 110.0,
+        top + 110.0,
         Align::Center,
         LANES_W - 24.0,
         alpha,
@@ -872,29 +892,24 @@ fn draw_banner(c: &Canvas, g: &mut Gfx, p: &Practice, now: f64, px_per_ms: f32) 
 }
 
 /// クリアの知らせ（NX の Excellent の絵で）
-fn draw_clear(c: &Canvas, g: &mut Gfx, speed: u32, alpha: f32) {
+fn draw_clear(c: &Canvas, g: &mut Gfx, speed: u32, alpha: f32, reverse: bool) {
+    let top = banner_top(CLEAR_H, reverse);
     c.fill(
         LANES_X,
-        BANNER_Y,
+        top,
         LANES_W,
         CLEAR_H,
         Color32::from_black_alpha(180).gamma_multiply(alpha),
     );
+    c.fill(LANES_X, top, LANES_W, 3.0, PASS_COLOR.gamma_multiply(alpha));
     c.fill(
         LANES_X,
-        BANNER_Y,
+        top + CLEAR_H - 3.0,
         LANES_W,
         3.0,
         PASS_COLOR.gamma_multiply(alpha),
     );
-    c.fill(
-        LANES_X,
-        BANNER_Y + CLEAR_H - 3.0,
-        LANES_W,
-        3.0,
-        PASS_COLOR.gamma_multiply(alpha),
-    );
-    let mut ty = BANNER_Y + 10.0;
+    let mut ty = top + 10.0;
     if let Some(t) = g.skin.tex("Graphics/7_Excellent.png") {
         // バッジの部分だけ（1280×720 の絵の中の 480×177）
         let s = 0.55;
@@ -992,10 +1007,11 @@ fn count_in(p: &Practice, now: f64) -> Option<(usize, f64)> {
 }
 
 /// 助走のカウントを大きく。クリックが鳴るたびに大きく出て縮む
-fn draw_count_in(c: &Canvas, g: &mut Gfx, p: &Practice, now: f64) {
+fn draw_count_in(c: &Canvas, g: &mut Gfx, p: &Practice, now: f64, reverse: bool) {
     let Some((n, since)) = count_in(p, now) else {
         return;
     };
+    let cy = if reverse { 720.0 - COUNT_Y } else { COUNT_Y };
     let k = (since / COUNT_POP_MS).clamp(0.0, 1.0) as f32;
     let scale = 1.0 + 0.4 * (1.0 - k);
     let d = n.min(9) as u32;
@@ -1006,7 +1022,7 @@ fn draw_count_in(c: &Canvas, g: &mut Gfx, p: &Practice, now: f64) {
             c.draw_opt(
                 &t,
                 LANES_CX - w * scale / 2.0,
-                COUNT_Y - h * scale / 2.0,
+                cy - h * scale / 2.0,
                 Opt {
                     src: Some(src((d % 5) as f32 * w, (d / 5) as f32 * h, w, h)),
                     sx: scale,
@@ -1019,7 +1035,7 @@ fn draw_count_in(c: &Canvas, g: &mut Gfx, p: &Practice, now: f64) {
         None => {
             let style = Style::edged(96.0, Color32::WHITE, Color32::BLACK, 4.0);
             if let Some(t) = g.texts.get(&d.to_string(), &style) {
-                t.draw(c, LANES_CX - t.w / 2.0, COUNT_Y - t.h / 2.0, 1.0, 1.0);
+                t.draw(c, LANES_CX - t.w / 2.0, cy - t.h / 2.0, 1.0, 1.0);
             }
         }
     }
@@ -1028,6 +1044,14 @@ fn draw_count_in(c: &Canvas, g: &mut Gfx, p: &Practice, now: f64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reverse_puts_the_banner_on_the_other_side() {
+        assert_eq!(banner_top(BANNER_H, false), BANNER_Y);
+        // 下から上へ流すときは、下の端から同じだけ離す
+        assert_eq!(banner_top(BANNER_H, true) + BANNER_H, 720.0 - BANNER_Y);
+        assert_eq!(banner_top(CLEAR_H, true) + CLEAR_H, 720.0 - BANNER_Y);
+    }
 
     #[test]
     fn the_bar_runs_from_the_bottom() {
