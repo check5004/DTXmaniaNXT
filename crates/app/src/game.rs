@@ -167,8 +167,9 @@ pub struct Play {
     note_hits: Vec<Option<NoteHit>>,
     strays: Vec<StrayHit>,
     sounds: HashMap<u16, Sound>,
-    normalizer: Normalizer,
-    mappers: HashMap<String, MidiTimestampMapper>,
+    /// MIDI のポートごとの入力の読み手と、ポートの名前（[`crate::midi::MidiIn::ports`] と同じ並び）
+    inputs: Vec<(String, Normalizer)>,
+    mappers: HashMap<usize, MidiTimestampMapper>,
     /// 音が出ないときの時計の起点（ホスト時刻）。この時刻が時間軸の `start_ms`
     fallback_origin_us: i64,
     start_ms: f64,
@@ -176,9 +177,12 @@ pub struct Play {
 
 impl Play {
     /// 譜面を読んで始める。`input_offset_ms` と `drum_sounds` は設定から
-    /// 電子ドラムのノート番号の割り当てを変える（NX の Config.ini の割り当てを重ねたもの）
-    pub fn set_midi_profile(&mut self, profile: MidiProfile) {
-        self.normalizer = Normalizer::new(profile);
+    /// MIDI のポートごとの割り当て（ポートの名前と割り当て。[`crate::midi::MidiIn::ports`] と同じ並び）
+    pub fn set_inputs(&mut self, inputs: Vec<(String, MidiProfile)>) {
+        self.inputs = inputs
+            .into_iter()
+            .map(|(name, p)| (name, Normalizer::new(p)))
+            .collect();
     }
 
     pub fn load(path: &Path, input_offset_ms: f64, drum_sounds: bool) -> Result<Self> {
@@ -326,7 +330,7 @@ impl Play {
             note_hits: vec![None; note_count],
             strays: Vec::new(),
             sounds,
-            normalizer: Normalizer::new(MidiProfile::roland_vdrums()),
+            inputs: Vec::new(),
             mappers: HashMap::new(),
             fallback_origin_us: host_us(),
             start_ms,
@@ -446,35 +450,42 @@ impl Play {
         self.show(&misses);
     }
 
-    pub fn on_midi(&mut self, raw: RawMidi) {
-        let Some(msg) = MidiMessage::parse(&raw.bytes) else {
+    /// ポートから届いた MIDI（`msgs` は `raw.bytes` を読んだもの）
+    pub fn on_midi(&mut self, raw: &RawMidi, msgs: &[MidiMessage]) {
+        let Some((name, normalizer)) = self.inputs.get_mut(raw.port) else {
             return;
         };
-        let mapper = self.mappers.entry(raw.port.clone()).or_default();
+        let mapper = self.mappers.entry(raw.port).or_default();
         let at_us = mapper.map(Some(raw.device_us), raw.arrival_us);
-        match self.normalizer.feed(msg, at_us) {
-            Some(InputEvent::Hit {
-                host_us,
-                lane,
-                pad,
-                articulation,
-                velocity,
-                hh_pedal,
-            }) => {
-                self.last_input = Some(LastInput {
-                    source: raw.port,
-                    pad: Some(pad),
-                    articulation: Some(articulation),
+        let mut hits = Vec::new();
+        for &msg in msgs {
+            match normalizer.feed(msg, at_us) {
+                Some(InputEvent::Hit {
+                    host_us,
                     lane,
+                    pad,
+                    articulation,
                     velocity,
                     hh_pedal,
-                });
-                if let Some(lane) = lane {
-                    self.hit(lane, velocity, host_us, Some(articulation), hh_pedal);
+                }) => {
+                    self.last_input = Some(LastInput {
+                        source: name.clone(),
+                        pad: Some(pad),
+                        articulation: Some(articulation),
+                        lane,
+                        velocity,
+                        hh_pedal,
+                    });
+                    if let Some(lane) = lane {
+                        hits.push((lane, velocity, host_us, articulation, hh_pedal));
+                    }
                 }
+                Some(InputEvent::HiHatPedal { value, .. }) => self.hh_pedal = Some(value),
+                Some(InputEvent::Choke { .. }) | None => {}
             }
-            Some(InputEvent::HiHatPedal { value, .. }) => self.hh_pedal = Some(value),
-            Some(InputEvent::Choke { .. }) | None => {}
+        }
+        for (lane, velocity, host_us, articulation, hh_pedal) in hits {
+            self.hit(lane, velocity, host_us, Some(articulation), hh_pedal);
         }
     }
 

@@ -21,6 +21,7 @@ mod fonts;
 mod game;
 mod gfx;
 mod history;
+mod inputs;
 mod loading;
 mod logging;
 mod midi;
@@ -51,6 +52,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use dtx::DrumLane;
 use engine::input::{InputEvent, MidiMessage, MidiProfile, Normalizer};
+use inputs::MidiMonitor;
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
@@ -234,7 +236,8 @@ impl Gpu {
 struct LoadSettings {
     input_offset_ms: f64,
     drum_sounds: bool,
-    profile: MidiProfile,
+    /// MIDI のポートごとの名前と割り当て（[`MidiIn::ports`] と同じ並び）
+    inputs: Vec<(String, MidiProfile)>,
 }
 
 impl LoadSettings {
@@ -245,7 +248,7 @@ impl LoadSettings {
             Some(o) => Play::load_practice(path, self.input_offset_ms, self.drum_sounds, o)?,
             None => Play::load(path, self.input_offset_ms, self.drum_sounds)?,
         };
-        p.set_midi_profile(self.profile);
+        p.set_inputs(self.inputs);
         // 「叩いても音が出ない」と言われたとき、ログで分かるように
         log::info!(
             "loaded in {:.0}ms (hit sounds {})",
@@ -288,8 +291,14 @@ struct App {
     /// 起動の引数で渡された譜面（ウィンドウができてから始める）
     pending: Option<PathBuf>,
     message: Option<String>,
-    /// 選曲や結果の画面で、電子ドラムで操作するための入力
-    menu_input: Normalizer,
+    /// 選曲や結果の画面で、電子ドラムで操作するための入力（MIDI のポートごと）
+    menu_inputs: Vec<Normalizer>,
+    /// キーボードの割り当て（設定から作る）
+    keys: Vec<(KeyCode, DrumLane)>,
+    /// 届いた MIDI の見張り（設定の画面に出す最後の打撃と、ログ）
+    monitor: MidiMonitor,
+    /// MIDI の機器がつながったか外れたかを最後に調べた時刻
+    ports_checked: Instant,
     /// 選曲の画面で最後に HH を叩いた時刻（2 回で難易度を変える）
     last_hh_us: Option<i64>,
     gfx: Gfx,
@@ -367,56 +376,26 @@ const CONFIG_LEAVE_OPEN_DELAY: Duration = Duration::from_millis(150);
 /// 読み込みを Esc でやめてから閉じ始めるまで（v2：10 フレーム）
 const LOADING_CANCEL_CLOSE_DELAY: Duration = Duration::from_millis(167);
 
-/// 電子ドラムのノート番号の割り当て。Roland の既定に、設定の画面で変えた割り当てを重ねる
-fn midi_profile(config: &Config) -> MidiProfile {
-    let mut p = MidiProfile::roland_vdrums();
-    p.apply_lanes(&config.pad_overrides());
-    p
+/// MIDI の機器を開く（使わない設定にした機器は開かない）
+fn open_midi(config: &Config) -> Option<MidiIn> {
+    MidiIn::open(|ports| inputs::ports_to_open(config, ports))
+        .map_err(|e| log::warn!("MIDI is off: {e:#}"))
+        .ok()
 }
 
-/// キーボードの割り当て（DTX Web Editor と同じ並び。Q は HH オープン）
-const KEYBOARD: [(KeyCode, DrumLane); 11] = [
-    (KeyCode::KeyA, DrumLane::LC),
-    (KeyCode::KeyS, DrumLane::HH),
-    (KeyCode::KeyQ, DrumLane::HHO),
-    (KeyCode::KeyZ, DrumLane::LP),
-    (KeyCode::KeyD, DrumLane::SD),
-    (KeyCode::KeyG, DrumLane::HT),
-    (KeyCode::KeyF, DrumLane::BD),
-    (KeyCode::KeyH, DrumLane::LT),
-    (KeyCode::KeyJ, DrumLane::FT),
-    (KeyCode::KeyK, DrumLane::CY),
-    (KeyCode::KeyL, DrumLane::RD),
-];
-
-fn key_lane(code: KeyCode) -> Option<DrumLane> {
-    KEYBOARD.iter().find(|(k, _)| *k == code).map(|(_, l)| *l)
-}
-
-/// レーンを叩くキーボードのキー（設定の画面の説明に出す）
-fn keyboard_key(lane: DrumLane) -> Option<String> {
-    KEYBOARD
-        .iter()
-        .find(|(_, l)| *l == lane)
-        .map(|(k, _)| format!("{k:?}").trim_start_matches("Key").to_owned())
-}
+/// MIDI の機器がつながったか外れたかを調べる間
+const PORT_CHECK_EVERY: Duration = Duration::from_secs(2);
 
 /// 2 回叩きと見なす間（上流と同じ 0.5 秒）
 const DOUBLE_HIT_US: i64 = 500_000;
 
 impl App {
     fn new(arg: Option<PathBuf>) -> Self {
-        let midi = match MidiIn::open_all() {
-            Ok(m) => Some(m),
-            Err(e) => {
-                log::warn!("MIDI is off: {e:#}");
-                None
-            }
-        };
         let mut config = Config::load();
         if config.take_over_nx() {
             config.save();
         }
+        let midi = open_midi(&config);
         // 最初の音（タイトルの音）から設定の音量で鳴らす
         audio::set_master_volume(config.master_volume());
         let mut pending = None;
@@ -438,7 +417,9 @@ impl App {
         let gfx = Gfx::new(&egui_ctx);
         let mut sfx = Sfx::new();
         sfx.load();
-        let menu_input = Normalizer::new(midi_profile(&config));
+        let ports = midi.as_ref().map_or(&[][..], |m| m.ports.as_slice());
+        let menu_inputs = inputs::normalizers(&config, ports);
+        let keys = inputs::keyboard_map(&config);
         let history = History::open();
         songs.set_stats(history.chart_stats());
         let updater = update::Updater::start(config.auto_update);
@@ -454,7 +435,10 @@ impl App {
             history,
             pending,
             message: None,
-            menu_input,
+            menu_inputs,
+            keys,
+            monitor: MidiMonitor::default(),
+            ports_checked: Instant::now(),
             last_hh_us: None,
             gfx,
             view: SelectView::new(),
@@ -527,9 +511,52 @@ impl App {
         self.screen = Screen::End(Ending::new(wait));
     }
 
-    /// パッドの割り当てが変わったので、メニューの操作に使う割り当ても作り直す
+    /// 割り当てが変わったので、メニューの操作に使う割り当てとキーボードの割り当てを作り直す
     fn refresh_pads(&mut self) {
-        self.menu_input = Normalizer::new(midi_profile(&self.config));
+        self.menu_inputs = inputs::normalizers(&self.config, self.ports());
+        self.keys = inputs::keyboard_map(&self.config);
+    }
+
+    /// MIDI のポート（開いていないものも）
+    fn ports(&self) -> &[midi::PortInfo] {
+        self.midi.as_ref().map_or(&[][..], |m| m.ports.as_slice())
+    }
+
+    /// MIDI の機器を開き直す（つないだ機器や、使う設定を変えた機器を反映する）
+    fn reopen_midi(&mut self) {
+        // 先に閉じてから開き直す（同じポートを二重に開かない）
+        self.midi = None;
+        self.midi = open_midi(&self.config);
+        self.monitor.reset();
+        self.refresh_pads();
+        if let Screen::Config(view, _) = &mut self.screen {
+            view.devices_changed();
+        }
+    }
+
+    /// 曲を遊んでいないときに、MIDI の機器がつながったか外れたかを時々調べ、変わっていれば開き直す。
+    /// MIDI そのものが使えないとき（OS の MIDI を開けなかった）は調べない。設定の「Rescan Devices」で開き直せる
+    fn check_ports(&mut self) {
+        if self.midi.is_none()
+            || self.ports_checked.elapsed() < PORT_CHECK_EVERY
+            || !matches!(
+                self.screen,
+                Screen::Title | Screen::Config(..) | Screen::Select | Screen::Result(..)
+            )
+        {
+            return;
+        }
+        self.ports_checked = Instant::now();
+        let now = midi::list_ports();
+        if self.midi.as_ref().is_some_and(|m| m.changed(&now)) {
+            log::info!("MIDI devices changed");
+            self.reopen_midi();
+        }
+    }
+
+    /// レーンを叩くキー
+    fn key_lane(&self, code: KeyCode) -> Option<DrumLane> {
+        self.keys.iter().find(|(k, _)| *k == code).map(|(_, l)| *l)
     }
 
     /// カーソルを動かす
@@ -568,7 +595,12 @@ impl App {
         LoadSettings {
             input_offset_ms: self.config.input_offset_ms,
             drum_sounds: self.config.drum_sounds,
-            profile: midi_profile(&self.config),
+            inputs: self
+                .ports()
+                .iter()
+                .map(|p| p.name.clone())
+                .zip(inputs::profiles(&self.config, self.ports()))
+                .collect(),
         }
     }
 
@@ -802,50 +834,69 @@ impl App {
     /// 届いた MIDI をすべて処理し、時間を進める
     fn pump(&mut self) {
         self.songs.poll();
+        self.check_ports();
         let mut assigned = None;
         let closing = self.after_close.is_some();
-        match (&self.midi, &mut self.screen) {
+        // 届いた MIDI を読み、見張りに見せてから、いまの画面へ渡す
+        let received: Vec<(midi::RawMidi, Vec<MidiMessage>)> = match &self.midi {
+            Some(midi) => midi
+                .drain()
+                .map(|raw| {
+                    let msgs = MidiMessage::parse_all(&raw.bytes);
+                    for m in &msgs {
+                        self.monitor.observe(
+                            raw.port,
+                            midi.name(raw.port),
+                            m,
+                            self.menu_inputs.get(raw.port).map(Normalizer::profile),
+                        );
+                    }
+                    (raw, msgs)
+                })
+                .collect(),
+            None => Vec::new(),
+        };
+        match &mut self.screen {
             // シャッターを閉じているあいだは叩いても何もしない（演奏をやめたあとの音符も数えない）
-            (Some(midi), _) if closing => drop(midi.drain()),
-            (Some(midi), Screen::Play(play, _)) => {
-                for raw in midi.drain() {
-                    play.on_midi(raw);
+            _ if closing => {}
+            Screen::Play(play, _) => {
+                for (raw, msgs) in &received {
+                    play.on_midi(raw, msgs);
                 }
             }
-            (Some(midi), Screen::Config(view, _)) if view.waiting_pad() => {
-                // パッドの割り当て：次に叩いたノートをそのまま使う
-                let note = midi
-                    .drain()
-                    .filter_map(|raw| match MidiMessage::parse(&raw.bytes)? {
-                        MidiMessage::NoteOn { note, .. } => Some(note),
+            Screen::Config(view, _) if view.waiting_pad() => {
+                // パッドの割り当て：次に叩いたノートを、叩いた機器の割り当てにする
+                let hit = received.iter().find_map(|(raw, msgs)| {
+                    msgs.iter().find_map(|m| match *m {
+                        MidiMessage::NoteOn { note, .. } => Some((raw.port, note)),
                         _ => None,
                     })
-                    .next();
-                if let Some(note) = note {
-                    assigned = Some(view.pad_hit(note));
+                });
+                if let Some((port, note)) = hit {
+                    assigned = Some(view.pad_hit(port, note));
                 }
             }
-            (Some(midi), _) => {
-                let input = &mut self.menu_input;
-                let hits: Vec<(DrumLane, i64)> = midi
-                    .drain()
-                    .filter_map(|raw| {
-                        let msg = MidiMessage::parse(&raw.bytes)?;
-                        match input.feed(msg, raw.arrival_us)? {
-                            InputEvent::Hit {
-                                lane: Some(lane),
-                                host_us,
-                                ..
-                            } => Some((lane, host_us)),
-                            _ => None,
+            _ => {
+                let mut hits: Vec<(DrumLane, i64)> = Vec::new();
+                for (raw, msgs) in &received {
+                    let Some(input) = self.menu_inputs.get_mut(raw.port) else {
+                        continue;
+                    };
+                    for &m in msgs {
+                        if let Some(InputEvent::Hit {
+                            lane: Some(lane),
+                            host_us,
+                            ..
+                        }) = input.feed(m, raw.arrival_us)
+                        {
+                            hits.push((lane, host_us));
                         }
-                    })
-                    .collect();
+                    }
+                }
                 for (lane, at) in hits {
                     self.on_menu_pad(lane, at);
                 }
             }
-            _ => {}
         }
         if let Some(r) = assigned {
             self.config_response(r);
@@ -974,7 +1025,7 @@ impl App {
         let Screen::Config(view, _) = &mut self.screen else {
             return;
         };
-        let info = config_info(&self.config, &self.midi, &self.songs);
+        let info = config_info(&self.config, &self.midi, &self.monitor, &self.songs);
         let items = config_view::items(view.list(), &info);
         let r = view.input(input, &items);
         self.config_response(r);
@@ -1008,13 +1059,7 @@ impl App {
                     self.songs.rescan(self.config.song_dirs.clone());
                 }
             }
-            ConfigAction::ReconnectMidi => {
-                // 先に閉じてから開き直す（同じポートを二重に開かない）
-                self.midi = None;
-                self.midi = MidiIn::open_all()
-                    .map_err(|e| log::warn!("MIDI is off: {e:#}"))
-                    .ok();
-            }
+            ConfigAction::ReconnectMidi => self.reopen_midi(),
             ConfigAction::Nudge(s, d) => {
                 let c = &mut self.config;
                 let r = config_view::OFFSET_RANGE;
@@ -1056,13 +1101,73 @@ impl App {
                 }
                 c.save();
             }
-            ConfigAction::AssignPad(lane, note) => {
-                self.config.assign_pad(note, lane);
+            ConfigAction::AssignPad(lane, port, note) => {
+                let ports = self.ports().to_vec();
+                inputs::assign_note(&mut self.config, &ports, port, note, lane);
+                log::info!(
+                    "assigned note {note} of {} to {}",
+                    self.midi.as_ref().map_or("MIDI", |m| m.name(port)),
+                    lane.name()
+                );
+                self.config.save();
+                self.refresh_pads();
+            }
+            ConfigAction::AssignKey(lane, code) => {
+                inputs::set_key(&mut self.config, code, Some(lane));
+                self.config.save();
+                self.refresh_pads();
+            }
+            ConfigAction::ClearLane(lane) => {
+                let ports = self.ports().to_vec();
+                inputs::clear_lane(&mut self.config, &ports, lane);
                 self.config.save();
                 self.refresh_pads();
             }
             ConfigAction::ResetPads => {
-                self.config.pad_notes.clear();
+                inputs::reset_all(&mut self.config);
+                self.config.save();
+                self.refresh_pads();
+            }
+            ConfigAction::ToggleDevice(port) => {
+                let ports = self.ports().to_vec();
+                if let Some(d) = inputs::device_mut(&mut self.config, &ports, port) {
+                    d.disabled = !d.disabled;
+                    self.config.save();
+                    self.reopen_midi();
+                }
+            }
+            ConfigAction::NextPreset(port) => {
+                let ports = self.ports().to_vec();
+                let preset = inputs::preset_for(
+                    inputs::device(&self.config, &ports, port),
+                    ports.get(port).map_or("", |p| p.name.as_str()),
+                );
+                if let Some(d) = inputs::device_mut(&mut self.config, &ports, port) {
+                    d.preset = preset.next().name().to_owned();
+                    self.config.save();
+                    self.refresh_pads();
+                }
+            }
+            ConfigAction::NudgeChannel(port, d) => {
+                let ports = self.ports().to_vec();
+                if let Some(dev) = inputs::device_mut(&mut self.config, &ports, port) {
+                    // すべて（0）→ 1 → … → 16 → すべて
+                    dev.channel = (i32::from(dev.channel.min(16)) + d).rem_euclid(17) as u8;
+                    self.config.save();
+                    self.refresh_pads();
+                }
+            }
+            ConfigAction::NudgeMinVelocity(port, d) => {
+                let ports = self.ports().to_vec();
+                if let Some(dev) = inputs::device_mut(&mut self.config, &ports, port) {
+                    dev.min_velocity = (i32::from(dev.min_velocity) + d).clamp(0, 127) as u8;
+                    self.config.save();
+                    self.refresh_pads();
+                }
+            }
+            ConfigAction::ResetDevice(port) => {
+                let ports = self.ports().to_vec();
+                inputs::reset_device(&mut self.config, &ports, port);
                 self.config.save();
                 self.refresh_pads();
             }
@@ -1083,9 +1188,14 @@ impl App {
             return;
         }
         let at = host_us();
+        let lane = self.key_lane(code);
         match &mut self.screen {
             Screen::Title => self.on_title_key(code),
-            Screen::Config(..) => {
+            Screen::Config(view, _) => {
+                if let Some(r) = view.key_hit(code) {
+                    self.config_response(r);
+                    return;
+                }
                 let input = match code {
                     KeyCode::ArrowUp => ConfigInput::Up,
                     KeyCode::ArrowDown => ConfigInput::Down,
@@ -1104,7 +1214,7 @@ impl App {
                 }
             }
             Screen::Play(play, _) => {
-                if let Some(lane) = key_lane(code) {
+                if let Some(lane) = lane {
                     play.on_key(lane, at);
                     return;
                 }
@@ -1531,7 +1641,7 @@ impl App {
         let ports = self
             .midi
             .as_ref()
-            .map(|m| m.ports.clone())
+            .map(MidiIn::open_names)
             .unwrap_or_default();
         let mut mouse = SelectMouse::default();
         let mut result_actions = Vec::new();
@@ -1597,7 +1707,7 @@ impl App {
                 let painter = ctx.layer_painter(egui::LayerId::background());
                 let c = Canvas::new(&painter, ctx.content_rect());
                 self.gfx.begin(&c, ctx.pixels_per_point());
-                let info = config_info(&self.config, &self.midi, &self.songs);
+                let info = config_info(&self.config, &self.midi, &self.monitor, &self.songs);
                 let items = config_view::items(view.list(), &info);
                 view.draw(&c, &mut self.gfx, &items, scanning);
                 if let Some(m) = &self.message {
@@ -1665,7 +1775,7 @@ impl App {
                     Page::Summary => view.draw_summary(&c, &mut self.gfx, o),
                     Page::Analysis => {
                         view.draw_analysis_hint(&c, &mut self.gfx);
-                        *result_actions = ui::draw_result(ui, o, &self.config);
+                        *result_actions = ui::draw_result(ui, &mut self.gfx, o, &self.config);
                     }
                 }
                 // フェードは egui の窓より上に
@@ -1682,13 +1792,35 @@ impl App {
 /// 設定の画面の項目を作るのに要るもの
 fn config_info<'a>(
     config: &'a Config,
-    midi: &'a Option<MidiIn>,
+    midi: &Option<MidiIn>,
+    monitor: &MidiMonitor,
     songs: &SongList,
 ) -> ConfigInfo<'a> {
+    let ports = midi.as_ref().map_or(&[][..], |m| m.ports.as_slice());
+    let profiles = inputs::profiles(config, ports);
+    let devices = ports
+        .iter()
+        .enumerate()
+        .map(|(i, p)| {
+            let d = inputs::device(config, ports, i);
+            config_view::DeviceRow {
+                name: p.name.clone(),
+                id: p.id.clone(),
+                open: p.open,
+                error: p.error.clone(),
+                disabled: d.is_some_and(|d| d.disabled),
+                preset: inputs::preset_for(d, &p.name),
+                channel: profiles[i].channel.map_or(0, |c| c + 1),
+                min_velocity: profiles[i].min_velocity,
+                changes: d.map_or(config.pad_notes.len(), |d| d.notes.len()),
+                last: monitor.last(i).map(str::to_owned),
+            }
+        })
+        .collect();
     ConfigInfo {
         config,
-        lanes: midi_profile(config).lane_notes(),
-        midi_ports: midi.as_ref().map_or(&[], |m| m.ports.as_slice()),
+        lanes: inputs::lane_sources(config, ports),
+        devices,
         scanning: songs.scanning(),
         song_count: songs.library.songs,
     }
