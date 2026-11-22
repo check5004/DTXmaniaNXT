@@ -7,7 +7,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::mpsc;
 
-use crate::audio::{FADE_SECONDS, Sound, envelope, pan_gains};
+use crate::audio::{FADE_SECONDS, MAX_OVERLAP, Sound, envelope, pan_gains};
 use crate::chart_sound::AutoVoice;
 
 /// 遅くするときの音程
@@ -37,7 +37,8 @@ impl Pitch {
 }
 
 /// 自動で鳴らす音（BGM・効果音など）を、曲の時刻 `[from_ms, to_ms)` の 1 本の音（ステレオ、`rate` Hz）にまとめる。
-/// 音ごとの音量・左右・止める時刻も入れる。範囲より前から鳴っている音は途中から入れ、範囲の終わりで切る
+/// 音ごとの音量・左右・止める時刻も入れる。範囲より前から鳴っている音は途中から入れ、範囲の終わりで切る。
+/// 出力と同じく、同じ音の重なりは [`MAX_OVERLAP`] まで（超えたら一番古いものを止める）
 pub fn mix_bgm(
     voices: &[AutoVoice],
     sounds: &HashMap<u16, Sound>,
@@ -49,20 +50,51 @@ pub fn mix_bgm(
     let frames = ((to_ms - from_ms) * per_ms).round().max(0.0) as usize;
     let fade = (f64::from(rate) * FADE_SECONDS) as u64;
     let mut out = vec![0.0f32; frames * 2];
-    for v in voices {
-        let Some(s) = sounds.get(&v.wav) else {
+    // 音ごとの鳴らし始め（フレーム）、長さ、終わりで切るか
+    let mut plan: Vec<Option<(i64, u64, bool)>> = voices
+        .iter()
+        .map(|v| {
+            let s = sounds.get(&v.wav)?;
+            let start = ((v.ms - from_ms) * per_ms).round() as i64;
+            let mut len = s.frames() as u64;
+            let mut cut = false;
+            if let Some(ms) = v.len_ms {
+                let l = (ms * per_ms).round().max(0.0) as u64;
+                if l < len {
+                    len = l;
+                    cut = true;
+                }
+            }
+            Some((start, len, cut))
+        })
+        .collect();
+    let mut order: Vec<usize> = (0..voices.len()).filter(|&i| plan[i].is_some()).collect();
+    order.sort_by_key(|&i| plan[i].map(|p| p.0));
+    // 音ごとの、まだ鳴っている音（`voices` の添え字、鳴らし始めの順）
+    let mut ringing: HashMap<u16, Vec<usize>> = HashMap::new();
+    for i in order {
+        let Some((start, _, _)) = plan[i] else {
             continue;
         };
-        let start = ((v.ms - from_ms) * per_ms).round() as i64;
-        let mut len = s.frames() as u64;
-        let mut cut = false;
-        if let Some(ms) = v.len_ms {
-            let l = (ms * per_ms).round().max(0.0) as u64;
-            if l < len {
-                len = l;
-                cut = true;
+        let list = ringing.entry(voices[i].wav).or_default();
+        list.retain(|&j| plan[j].is_some_and(|(s, l, _)| s + l as i64 > start));
+        if list.len() >= MAX_OVERLAP {
+            for j in list.drain(..=list.len() - MAX_OVERLAP) {
+                if let Some((s, len, cut)) = plan[j].as_mut() {
+                    let l = (start - *s).max(0) as u64 + fade;
+                    if l < *len {
+                        *len = l;
+                        *cut = true;
+                    }
+                }
             }
         }
+        list.push(i);
+    }
+    for (v, p) in voices.iter().zip(&plan) {
+        let (Some(s), Some((start, len, cut))) = (sounds.get(&v.wav), *p) else {
+            continue;
+        };
         let from = start.max(0);
         let to = (start + len as i64).min(frames as i64);
         if from >= to {
@@ -251,6 +283,7 @@ mod tests {
             gain: 1.0,
             pan: 0.0,
             len_ms: None,
+            hat: None,
         };
         // 音 1 は 2ms から、音 2 は区間より前の -5ms から鳴っている
         let out = mix_bgm(
@@ -278,6 +311,7 @@ mod tests {
             gain: 0.5,
             pan: 0.5,
             len_ms: Some(10.0),
+            hat: None,
         };
         let out = mix_bgm(&[voice], &sounds, 1000, 0.0, 20.0);
         let left: Vec<f32> = out.iter().step_by(2).copied().collect();
@@ -289,6 +323,34 @@ mod tests {
         assert!(right[7] < 0.5 && right[7] > 0.0);
         assert_eq!(right[9], 0.0);
         assert!(right[10..].iter().all(|&v| v == 0.0));
+    }
+
+    #[test]
+    fn the_same_chip_overlaps_at_most_four_times() {
+        // 1000 Hz で 1 フレーム 1ms。フェードは 5 フレーム。同じ音 1 を 0〜4ms に 5 回
+        let mut sounds = HashMap::new();
+        sounds.insert(1, sound(&[1.0; 100]));
+        sounds.insert(2, sound(&[1.0; 100]));
+        let v = |ms: f64, wav: u16| AutoVoice {
+            ms,
+            wav,
+            gain: 1.0,
+            pan: 0.0,
+            len_ms: None,
+            hat: None,
+        };
+        let five: Vec<AutoVoice> = (0..5).map(|i| v(f64::from(i), 1)).collect();
+        let out = mix_bgm(&five, &sounds, 1000, 0.0, 30.0);
+        let left: Vec<f32> = out.iter().step_by(2).copied().collect();
+        // 5 回目（4ms）で一番古い音をフェードで止めるので、そのあとは 4 つぶん
+        assert_eq!(left[3], 4.0);
+        assert!(left[6] > 4.0 && left[6] < 5.0);
+        assert_eq!(left[20], 4.0);
+        // 別の音は数に入れない
+        let mut mixed = five[..4].to_vec();
+        mixed.push(v(4.0, 2));
+        let out = mix_bgm(&mixed, &sounds, 1000, 0.0, 30.0);
+        assert_eq!(out[20 * 2], 5.0);
     }
 
     /// 440Hz のサイン波（ステレオ、48kHz）
