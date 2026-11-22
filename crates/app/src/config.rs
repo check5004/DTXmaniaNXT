@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::practice::PracticePrefs;
 use crate::settings::{DisplayMode, Values};
 use crate::stretch::Pitch;
+use crate::update::UpdateMode;
 
 /// 設定の画面で全体の音量を 1 回で変える幅（%）
 pub const MASTER_VOLUME_STEP: u8 = 5;
@@ -71,8 +72,15 @@ pub struct Config {
     /// PC のキーボードの割り当てのうち、既定から変えたもの（順に重ねる）
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub keys: Vec<KeyBind>,
-    /// 起動したときに GitHub のリリースから新しい版を落とし、終えるときに入れ替える（Setup.exe で入れたときだけ）
-    pub auto_update: bool,
+    /// 0.5.0 までの自動更新の ON/OFF。読むだけで書かない（OFF にしていたら `update` を「確かめない」にする）
+    #[serde(skip_serializing)]
+    pub auto_update: Option<bool>,
+    /// 新しい版の扱い（"notify"、"auto"、"off"。[`crate::update::UpdateMode`]）。書いていなければ知らせる
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub update: String,
+    /// 最後に起動した版（更新のあとに「新しい版になりました」を出す）
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub last_version: String,
     /// 最後に使った全画面の出し方（"borderless" か "fullscreen"）。Alt+Enter と F11 でウィンドウから戻る先
     #[serde(skip_serializing_if = "String::is_empty")]
     pub last_full_mode: String,
@@ -160,7 +168,9 @@ impl Default for Config {
             pad_notes: Vec::new(),
             midi_devices: Vec::new(),
             keys: Vec::new(),
-            auto_update: true,
+            auto_update: None,
+            update: String::new(),
+            last_version: String::new(),
             last_full_mode: String::new(),
             settings: Values::default(),
         }
@@ -273,6 +283,7 @@ impl Config {
         match std::fs::read_to_string(&path) {
             Ok(text) => match toml::from_str::<Self>(&text) {
                 Ok(mut c) => {
+                    c.upgrade_update();
                     // 前の版のキーを写したら書き直す
                     if c.settings.upgrade() {
                         c.save();
@@ -305,6 +316,46 @@ impl Config {
         if let Err(e) = result {
             log::warn!("cannot save {}: {e:#}", path.display());
         }
+    }
+
+    /// 0.5.0 までの自動更新を OFF にしていたら、新しい版の扱いを「確かめない」にする（次に書くときに残る）
+    fn upgrade_update(&mut self) {
+        if self.update.is_empty() && self.auto_update == Some(false) {
+            self.update = UpdateMode::Off.name().to_owned();
+        }
+    }
+
+    /// 新しい版の扱い（読めない値なら既定の「知らせる」）
+    pub fn update_mode(&self) -> UpdateMode {
+        UpdateMode::from_name(&self.update).unwrap_or_default()
+    }
+
+    pub fn set_update_mode(&mut self, mode: UpdateMode) {
+        mode.name().clone_into(&mut self.update);
+    }
+
+    /// 起動した版を覚える。前と違う版なら、前の版（分かれば）を返す（呼ぶ側が知らせて保存する）。
+    /// 初めての起動なら何も返さない。0.5.0 までの設定（前の版を覚えていない）なら空の文字を返す
+    pub fn remember_version(&mut self, current: &str) -> Option<String> {
+        if self.last_version == current {
+            return None;
+        }
+        let previous = std::mem::replace(&mut self.last_version, current.to_owned());
+        (!previous.is_empty() || self.auto_update.is_some()).then_some(previous)
+    }
+
+    /// 書いてあるファイルが読める（または無い）ときだけ保存する。起動しただけで書くときに使い、
+    /// 読めないファイルを既定の値で上書きしない
+    pub fn save_unless_broken(&self) {
+        let Some(path) = Self::path() else {
+            return;
+        };
+        if let Ok(text) = std::fs::read_to_string(&path)
+            && toml::from_str::<Self>(&text).is_err()
+        {
+            return;
+        }
+        self.save();
     }
 
     /// 練習の周のつなぎ方（読めない値なら既定）
@@ -618,7 +669,40 @@ lane = \"LP\"
             preset: "roland".to_owned(),
             ..MidiDevice::default()
         });
+        c.set_update_mode(UpdateMode::Auto);
+        c.last_version = "0.5.0".to_owned();
         let back: Config = toml::from_str(&toml::to_string_pretty(&c).unwrap()).unwrap();
         assert_eq!(back, c);
+    }
+
+    #[test]
+    fn auto_update_off_becomes_no_checks() {
+        let mut c: Config = toml::from_str("auto_update = false").unwrap();
+        c.upgrade_update();
+        assert_eq!(c.update_mode(), UpdateMode::Off);
+        // 書くのは新しいキーだけ
+        let text = toml::to_string_pretty(&c).unwrap();
+        assert!(text.contains("update = \"off\""), "{text}");
+        assert!(!text.contains("auto_update"), "{text}");
+        // ON のままだった人は、勝手に入れ替えない「知らせる」になる
+        let mut c: Config = toml::from_str("auto_update = true").unwrap();
+        c.upgrade_update();
+        assert_eq!(c.update_mode(), UpdateMode::Notify);
+        // 読めない値は既定
+        let c: Config = toml::from_str("update = \"later\"").unwrap();
+        assert_eq!(c.update_mode(), UpdateMode::Notify);
+    }
+
+    #[test]
+    fn a_new_version_is_noticed_once() {
+        // 初めての起動
+        let mut c = Config::default();
+        assert_eq!(c.remember_version("0.5.1"), None);
+        assert_eq!(c.remember_version("0.5.1"), None);
+        assert_eq!(c.remember_version("0.5.2"), Some("0.5.1".to_owned()));
+        assert_eq!(c.last_version, "0.5.2");
+        // 0.5.0 までの設定（自動更新のキーはあるが、前の版を覚えていない）
+        let mut c: Config = toml::from_str("auto_update = true").unwrap();
+        assert_eq!(c.remember_version("0.5.1"), Some(String::new()));
     }
 }
