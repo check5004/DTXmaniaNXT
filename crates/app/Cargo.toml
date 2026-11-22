@@ -44,5 +44,9 @@ rust-embed = "8"
 # インストールと、GitHub のリリースからの自動更新（Setup.exe と差分の更新を作る vpk と組で使う）
 velopack = "1.2"
 
+[build-dependencies]
+# Windows の exe にアプリのアイコンと版の情報を埋め込む（build.rs。Windows SDK の rc.exe を使う）
+winresource = { version = "0.1", default-features = false }
+
 [lints]
 workspace = true
