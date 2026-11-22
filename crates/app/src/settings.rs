@@ -884,8 +884,8 @@ pub const ALL: &[Def] = &[
         section: "鳴らすもの",
         name: "メトロノーム（Metronome）",
         kind: Kind::Toggle { default: false },
-        desc: "小節の頭と拍でクリックを鳴らします（拍は小さめ）。区間の練習では、遅くした速さに合わせて鳴ります。",
-        in_play: false,
+        desc: "小節の頭と拍でクリックを鳴らします（拍は小さめ）。演奏中も一時停止から切り替えられ、すぐに効きます。\n区間練習のメトロノームは、練習の決めごとの「メトロノーム」で決めます。",
+        in_play: true,
     },
     Def {
         key: BGM_ADJUST,

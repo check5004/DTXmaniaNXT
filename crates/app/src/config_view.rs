@@ -631,8 +631,12 @@ pub fn set_drill(d: Drill, c: &mut Config, v: i64) {
 
 /// 練習の決めごとの行
 fn drill_row(d: Drill, c: &Config) -> Row {
+    drill_row_at(d, c, get_drill(d, c))
+}
+
+/// 練習の決めごとの行。値は [`get_drill`] の形の `at`（一時停止の板では、この練習の値）
+fn drill_row_at(d: Drill, c: &Config, at: i64) -> Row {
     let id = ItemId::Practice(d);
-    let at = get_drill(d, c);
     let def = Some(get_drill(d, &Config::default()));
     let pick = |name: &str, labels: &[&'static str], desc: &str| {
         choice(id, name, labels, at as usize, def.map(|v| v as usize), desc)
@@ -690,7 +694,7 @@ fn drill_row(d: Drill, c: &Config) -> Row {
         Drill::Metronome => pick(
             "メトロノーム",
             &["オン", "オフ"],
-            "オン: 区間のあいだ拍ごとに小さくクリックを鳴らします（小節の頭は強く）。\n段の頭の 4 拍のカウントは、オフでも鳴ります。",
+            "オン: 区間のあいだ拍ごとに小さくクリックを鳴らします（小節の頭は強く）。練習中も一時停止から切り替えられ、すぐに効きます。\n段の頭の 4 拍のカウントは、オフでも鳴ります。",
         ),
     }
 }
@@ -912,6 +916,8 @@ pub struct PlayPos {
     pub at_ms: f64,
     /// 曲の終わり（ミリ秒）
     pub end_ms: f64,
+    /// メトロノームを鳴らしている（練習なら練習の決めごとのメトロノーム）
+    pub metronome: bool,
 }
 
 /// 順に叩いて割り当てるレーン（上流 `tSetupItemList_KeyAssignDrums` の並び）。左バスドラムは別のパッドを
@@ -1066,10 +1072,15 @@ pub fn rows(page: Page, info: &ConfigInfo<'_>) -> Vec<Row> {
                 r.push(value_row(x, c));
             }
             r.push(mixer_row(c));
+            // メトロノームは、練習なら練習の決めごとの（この練習で鳴らしているかを出す）
+            r.push(match info.play {
+                Some(p) if p.practice => drill_row_at(Drill::Metronome, c, i64::from(!p.metronome)),
+                _ => table_row(settings::def(settings::METRONOME), v),
+            });
             r.push(value_row(Setting::ShowLagTime, c));
             for d in settings::ALL
                 .iter()
-                .filter(|d| d.in_play && d.key != settings::SKIP_MS)
+                .filter(|d| d.in_play && d.key != settings::SKIP_MS && d.key != settings::METRONOME)
             {
                 r.push(table_row(d, v));
             }
@@ -1358,6 +1369,7 @@ fn favorites(c: &Config) -> Vec<Row> {
     .map(|x| value_row(x, c))
     .collect();
     r.push(mixer_row(c));
+    r.push(table_row(settings::def(settings::METRONOME), &c.settings));
     r.extend([Setting::ShowLagTime, Setting::StageFailed].map(|x| value_row(x, c)));
     r.push(table_row(settings::def(settings::AUTO_ALL), &c.settings));
     r.push(table_row(settings::def(settings::HID_SUD), &c.settings));
@@ -3763,6 +3775,7 @@ mod tests {
             practice: false,
             at_ms: 0.0,
             end_ms: 1000.0,
+            metronome: false,
         });
         // 全体の音量の 1 行の代わりに「音量」の 1 行
         for page in [Page::Cat(Cat::Fav), Page::Quick, Page::Pause] {
@@ -3865,6 +3878,53 @@ mod tests {
     }
 
     #[test]
+    fn the_metronome_switches_from_quick_and_pause() {
+        let config = Config::default();
+        let mut info = info(&config);
+        // 選曲の簡易設定と、よく使うは設定のメトロノーム（音量の次）
+        for page in [Page::Cat(Cat::Fav), Page::Quick] {
+            let list = rows(page, &info);
+            let at = find(&list, ItemId::Table(settings::METRONOME));
+            assert_eq!(list[at - 1].id, Some(ItemId::Mixer), "{page:?}");
+            assert_eq!(list[at].value, "OFF");
+        }
+        // 演奏の一時停止も設定のメトロノーム（1 行だけ）
+        info.play = Some(PlayPos {
+            practice: false,
+            at_ms: 0.0,
+            end_ms: 1000.0,
+            metronome: false,
+        });
+        let list = rows(Page::Pause, &info);
+        let all = ids(&list);
+        let metronome = ItemId::Table(settings::METRONOME);
+        assert_eq!(all.iter().filter(|&&i| i == metronome).count(), 1);
+        assert!(!all.contains(&ItemId::Practice(Drill::Metronome)));
+        let mut v = ConfigView::panel(Page::Pause);
+        *v.cursor_mut() = find(&list, metronome);
+        // ON / OFF は左が ON
+        assert_eq!(
+            v.input(ConfigInput::Left, &list).action,
+            Some(ConfigAction::Set(metronome, 1))
+        );
+        // 練習の一時停止は、練習の決めごとのメトロノーム。この練習で鳴らしているかを出す
+        info.play = Some(PlayPos {
+            practice: true,
+            at_ms: 0.0,
+            end_ms: 1000.0,
+            metronome: false,
+        });
+        let list = rows(Page::Pause, &info);
+        let all = ids(&list);
+        assert!(!all.contains(&metronome));
+        let row = &list[find(&list, ItemId::Practice(Drill::Metronome))];
+        assert_eq!(
+            (row.name.as_str(), row.value.as_str()),
+            ("メトロノーム", "オフ")
+        );
+    }
+
+    #[test]
     fn pause_starts_on_resume_and_seeks_with_left_and_right() {
         let config = Config::default();
         let mut info = info(&config);
@@ -3872,6 +3932,7 @@ mod tests {
             practice: false,
             at_ms: 83_400.0,
             end_ms: 200_000.0,
+            metronome: false,
         });
         let list = rows(Page::Pause, &info);
         let all = ids(&list);
@@ -3903,6 +3964,7 @@ mod tests {
             practice: true,
             at_ms: 0.0,
             end_ms: 1000.0,
+            metronome: false,
         });
         let list = rows(Page::Pause, &info);
         assert!(!ids(&list).contains(&ItemId::Seek));
