@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 
 use egui::Color32;
 use engine::judge::Tally;
+use i18n::{t, tf};
 use records::{BestScore, PROGRESS_SECTIONS};
 
 use crate::game::Outcome;
@@ -250,7 +251,14 @@ impl ResultView {
         self.draw_rank(c, g, elapsed);
         crate::result_training::draw_weak(c, g, o);
         crate::lag_view::draw_result(c, g, o);
-        self.draw_page_hint(c, g, "→ 詳しい結果（苦手な小節、叩き方のくせ）");
+        self.draw_page_hint(
+            c,
+            g,
+            t(
+                "→ Details (weak spots, timing habits)",
+                "→ 詳しい結果（苦手な小節、叩き方のくせ）",
+            ),
+        );
     }
 
     /// 練習の結果の 2 ページ目（周ごとの成績の表）
@@ -263,7 +271,7 @@ impl ResultView {
 
     /// 2 ページ目の上に出す、ページの切り替えの案内
     pub fn draw_analysis_hint(&self, c: &Canvas, g: &mut Gfx) {
-        self.draw_page_hint(c, g, "← スコアとランク");
+        self.draw_page_hint(c, g, t("← Score and rank", "← スコアとランク"));
     }
 
     /// 入ってきたときのフェード。いちばん上に描く
@@ -436,7 +444,7 @@ impl ResultView {
 
 /// 練習の結果のスコアの場所：クリアしたか、どこまでのぼったか
 fn draw_passed(c: &Canvas, g: &mut Gfx, p: &crate::game::PracticeOutcome) {
-    g.heading(c, 30.0, 28.0, "練習の結果");
+    g.heading(c, 30.0, 28.0, t("Practice Result", "練習の結果"));
     let top = p
         .attempts
         .iter()
@@ -444,15 +452,24 @@ fn draw_passed(c: &Canvas, g: &mut Gfx, p: &crate::game::PracticeOutcome) {
         .map(|a| a.speed)
         .max();
     let (text, color) = if p.cleared {
-        ("クリア".to_owned(), Color32::from_rgb(0x70, 0xE0, 0x90))
+        (
+            t("CLEAR", "クリア").to_owned(),
+            Color32::from_rgb(0x70, 0xE0, 0x90),
+        )
     } else if let Some(s) = top {
-        (format!("{s}% まで OK"), Color32::from_rgb(0xFF, 0xB8, 0x40))
+        (
+            tf!("OK up to {s}%", "{s}% まで OK"),
+            Color32::from_rgb(0xFF, 0xB8, 0x40),
+        )
     } else {
         let speed = p
             .attempts
             .last()
             .map_or(p.options.speed.first_speed(), |a| a.speed);
-        (format!("{speed}% で練習"), Color32::WHITE)
+        (
+            tf!("Practiced at {speed}%", "{speed}% で練習"),
+            Color32::WHITE,
+        )
     };
     let style = Style {
         bold: true,

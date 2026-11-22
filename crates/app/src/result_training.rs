@@ -7,6 +7,7 @@
 use egui::{Color32, Stroke, StrokeKind};
 use engine::practice::{BeatSlot, Section, SpeedPlan, SpotTally, speed_percent};
 use engine::stroke::StrokeTally;
+use i18n::{Tr, count, t, tf, tr};
 
 use crate::band::{Band, BandData, CLEARED_COLOR};
 use crate::game::{Outcome, PracticeOutcome};
@@ -65,8 +66,13 @@ fn section_text(s: Section) -> String {
 
 fn plan_text(p: SpeedPlan) -> String {
     match p {
-        SpeedPlan::Fixed(s) => format!("固定 {s}%"),
-        SpeedPlan::Ladder { start, target } => format!("段階アップ {start}% → {target}%"),
+        SpeedPlan::Fixed(s) => tf!("Fixed {s}%", "固定 {s}%"),
+        SpeedPlan::Ladder { start, target } => {
+            tf!(
+                "Step Up {start}% → {target}%",
+                "段階アップ {start}% → {target}%"
+            )
+        }
     }
 }
 
@@ -91,21 +97,25 @@ fn paragraph(
 
 /// 空打ちが一つのパッドの弱い打に偏っているときの知らせ
 fn stray_note(h: &StrayHint) -> String {
-    format!(
-        "空打ちが {}で {} 回（うち弱い打 {} 回、強さ {WEAK_VELOCITY} 未満）。パッドの拾いすぎかも。設定の「MIDI 機器」で最小ベロシティを上げると減ります。",
-        lane_label(h.lane),
-        h.count,
-        h.weak
+    let (lane, n, weak) = (lane_label(h.lane), h.count, h.weak);
+    tf!(
+        "{n} stray hits on the {lane} ({weak} of them soft, velocity under {WEAK_VELOCITY}). The pad may be picking up too much. Raising Minimum Velocity under MIDI Devices in Settings cuts these down.",
+        "空打ちが {lane}で {n} 回（うち弱い打 {weak} 回、強さ {WEAK_VELOCITY} 未満）。パッドの拾いすぎかも。設定の「MIDI 機器」で最小ベロシティを上げると減ります。"
     )
 }
 
 /// ずれが一つの向きに偏っているときの知らせ
 fn offset_note((mean, hits): (f64, usize)) -> Option<String> {
     (hits >= OFFSET_NOTE_HITS && mean.abs() >= OFFSET_NOTE_MS).then(|| {
-        format!(
+        tf!(
+            "You hit {:.0} ms {} on average. If that's usual for you, set the input offset with - / = during play.",
             "叩くのが平均 {:.0}ms {}。いつもなら、演奏中に - / = で入力の補正を合わせると楽になります。",
             mean.abs(),
-            if mean < 0.0 { "早め" } else { "遅め" }
+            if mean < 0.0 {
+                t("early", "早め")
+            } else {
+                t("late", "遅め")
+            }
         )
     })
 }
@@ -309,7 +319,8 @@ pub fn draw_practice(c: &Canvas, g: &mut Gfx, p: &PracticeOutcome) {
     panel(c, PRACTICE);
     let left = x + 20.0;
     let o = p.options;
-    let head = format!(
+    let head = tf!(
+        "{}   Target {}%   {}",
         "{}　目標 {}%　{}",
         section_text(o.section),
         o.speed.goal(),
@@ -337,7 +348,7 @@ pub fn draw_practice(c: &Canvas, g: &mut Gfx, p: &PracticeOutcome) {
     text(
         c,
         g,
-        "もう一度",
+        t("Again", "もう一度"),
         left + 44.0 + w1,
         legend_y,
         13.0,
@@ -346,9 +357,12 @@ pub fn draw_practice(c: &Canvas, g: &mut Gfx, p: &PracticeOutcome) {
     let done: Vec<&LapSummary> = p.laps.iter().filter(|l| l.completed).collect();
     let clean = done.iter().filter(|l| l.passed == Some(true)).count();
     let nums = [
-        (duration_text(p.elapsed_ms), "練習した時間"),
-        (done.len().to_string(), "叩いた周"),
-        (clean.to_string(), "ノーミスの周"),
+        (
+            duration_text(p.elapsed_ms),
+            t("Practice time", "練習した時間"),
+        ),
+        (done.len().to_string(), t("Loops played", "叩いた周")),
+        (clean.to_string(), t("Clean loops", "ノーミスの周")),
     ];
     for (i, (v, k)) in nums.iter().enumerate() {
         let ny = y + 56.0 + i as f32 * 74.0;
@@ -372,7 +386,7 @@ pub fn draw_practice(c: &Canvas, g: &mut Gfx, p: &PracticeOutcome) {
     text(
         c,
         g,
-        "ミスした所（全部の周）",
+        t("Misses (all loops)", "ミスした所（全部の周）"),
         left,
         map_y,
         15.0,
@@ -386,26 +400,43 @@ pub fn draw_practice(c: &Canvas, g: &mut Gfx, p: &PracticeOutcome) {
             text(
                 c,
                 g,
-                "いちばんミスした所",
+                t("Most missed", "いちばんミスした所"),
                 wx,
                 map_y + 30.0,
                 14.0,
                 Color32::from_gray(200),
             );
-            let name = format!("{} 小節目の {} 拍目", b.measure, b.beat + 1);
+            let name = tf!(
+                "Measure {}, beat {}",
+                "{} 小節目の {} 拍目",
+                b.measure,
+                b.beat + 1
+            );
             text(c, g, &name, wx, map_y + 54.0, 22.0, WEAK_COLOR);
             let lanes: Vec<&str> = spot.lanes.iter().map(|l| l.name()).collect();
-            let line = format!("{}　{} 回", lanes.join("・"), spot.laps);
+            let misses = count(spot.laps, "miss", "misses", "回");
+            let line = tf!("{}   {misses}", "{}　{misses}", lanes.join(t("/", "・")));
             text(c, g, &line, wx, map_y + 86.0, 18.0, Color32::WHITE);
         }
         None if !done.is_empty() => {
-            text(c, g, "ミスなし", wx, map_y + 54.0, 22.0, PASS_COLOR);
+            text(
+                c,
+                g,
+                t("No misses", "ミスなし"),
+                wx,
+                map_y + 54.0,
+                22.0,
+                PASS_COLOR,
+            );
         }
         None => {
             text(
                 c,
                 g,
-                "最後まで叩いた周はありません",
+                t(
+                    "No loops were played to the end",
+                    "最後まで叩いた周はありません",
+                ),
                 wx,
                 map_y + 54.0,
                 16.0,
@@ -426,7 +457,10 @@ pub fn draw_practice(c: &Canvas, g: &mut Gfx, p: &PracticeOutcome) {
         ny = paragraph(c, g, &n, wx, ny, 13.0, NOTE_COLOR, x + w - 20.0 - wx);
     }
     // 操作の案内
-    let keys = "R：もう一度　　P：区間を選び直す　　→：周ごとの表　　Enter：選曲へ";
+    let keys = t(
+        "R: Again    P: Change Section    →: Loop Table    Enter: Song Select",
+        "R：もう一度　　P：区間を選び直す　　→：周ごとの表　　Enter：選曲へ",
+    );
     let style = Style::edged(15.0, Color32::from_gray(220), Color32::BLACK, 1.5);
     if let Some(t) = g.texts.get(keys, &style) {
         t.draw_fit(c, x + ((w - t.w) / 2.0).max(10.0), y + h - 30.0, w - 20.0);
@@ -438,9 +472,14 @@ pub fn draw_practice_laps(c: &Canvas, g: &mut Gfx, p: &PracticeOutcome) {
     let (x, y, w, h) = PRACTICE;
     panel(c, PRACTICE);
     let left = x + 20.0;
-    let heading_w = g.heading(c, left, y + 10.0, "周ごとの成績");
+    let heading_w = g.heading(c, left, y + 10.0, t("Loop Results", "周ごとの成績"));
     let o = p.options;
-    let head = format!("{}　{}", section_text(o.section), plan_text(o.speed));
+    let head = tf!(
+        "{}   {}",
+        "{}　{}",
+        section_text(o.section),
+        plan_text(o.speed)
+    );
     text(
         c,
         g,
@@ -456,7 +495,10 @@ pub fn draw_practice_laps(c: &Canvas, g: &mut Gfx, p: &PracticeOutcome) {
         text(
             c,
             g,
-            "途中でやめた周は入れていません（記録にも残しません）。",
+            t(
+                "Loops you stopped partway are left out (and not recorded).",
+                "途中でやめた周は入れていません（記録にも残しません）。",
+            ),
             left,
             ty,
             14.0,
@@ -468,7 +510,10 @@ pub fn draw_practice_laps(c: &Canvas, g: &mut Gfx, p: &PracticeOutcome) {
         text(
             c,
             g,
-            "最後まで叩いた周はありません。",
+            t(
+                "No loops were played to the end.",
+                "最後まで叩いた周はありません。",
+            ),
             left,
             ty,
             18.0,
@@ -477,7 +522,10 @@ pub fn draw_practice_laps(c: &Canvas, g: &mut Gfx, p: &PracticeOutcome) {
     } else {
         lap_table(c, g, &done, left, ty, y + h - 44.0);
     }
-    let keys = "←：練習の結果　　R：もう一度　　P：区間を選び直す　　Enter：選曲へ";
+    let keys = t(
+        "←: Practice Result    R: Again    P: Change Section    Enter: Song Select",
+        "←：練習の結果　　R：もう一度　　P：区間を選び直す　　Enter：選曲へ",
+    );
     let style = Style::edged(15.0, Color32::from_gray(220), Color32::BLACK, 1.5);
     if let Some(t) = g.texts.get(keys, &style) {
         t.draw_fit(c, x + ((w - t.w) / 2.0).max(10.0), y + h - 30.0, w - 20.0);
@@ -485,17 +533,17 @@ pub fn draw_practice_laps(c: &Canvas, g: &mut Gfx, p: &PracticeOutcome) {
 }
 
 /// 表の列（見出し、左の端からの位置）
-const COLUMNS: [(&str, f32); 10] = [
-    ("周", 0.0),
-    ("速度", 44.0),
-    ("PERFECT", 116.0),
-    ("GREAT", 240.0),
-    ("GOOD", 312.0),
-    ("POOR", 378.0),
-    ("MISS", 440.0),
-    ("空打ち", 500.0),
-    ("ずれ", 566.0),
-    ("", 672.0),
+const COLUMNS: [(Tr, f32); 10] = [
+    (tr("Loop", "周"), 0.0),
+    (tr("Speed", "速度"), 44.0),
+    (tr("PERFECT", "PERFECT"), 116.0),
+    (tr("GREAT", "GREAT"), 240.0),
+    (tr("GOOD", "GOOD"), 312.0),
+    (tr("POOR", "POOR"), 378.0),
+    (tr("MISS", "MISS"), 440.0),
+    (tr("Stray", "空打ち"), 500.0),
+    (tr("Timing", "ずれ"), 566.0),
+    (i18n::EMPTY, 672.0),
 ];
 
 /// 周ごとの成績の表。入りきらないときは新しい周を出す
@@ -506,6 +554,7 @@ fn lap_table(c: &Canvas, g: &mut Gfx, laps: &[&LapSummary], x: f32, y: f32, bott
         ..Style::edged(15.0, Color32::from_rgb(190, 225, 255), Color32::BLACK, 1.5)
     };
     for (name, dx) in COLUMNS {
+        let name = name.get();
         if let Some(t) = g.texts.get(name, &head).filter(|_| !name.is_empty()) {
             t.draw(c, x + dx, y + 4.0, 1.0, 1.0);
         }
@@ -518,7 +567,7 @@ fn lap_table(c: &Canvas, g: &mut Gfx, laps: &[&LapSummary], x: f32, y: f32, bott
         text(
             c,
             g,
-            &format!("（古い {n} 周は省きました）"),
+            &tf!("({n} older loops not shown)", "（古い {n} 周は省きました）"),
             x,
             ty,
             14.0,
@@ -575,9 +624,9 @@ fn rows_of(c: &Canvas, g: &mut Gfx, laps: &[&LapSummary], x: f32, mut y: f32) {
             text(c, g, s, x + dx, y, 17.0, Color32::WHITE);
         }
         let (verdict, color) = match l.passed {
-            Some(true) => ("ノーミス", PASS_COLOR),
-            Some(false) => ("ミス", SLIP_COLOR),
-            None => ("途中", Color32::from_gray(150)),
+            Some(true) => (i18n::t("Clean", "ノーミス"), PASS_COLOR),
+            Some(false) => (i18n::t("Missed", "ミス"), SLIP_COLOR),
+            None => (i18n::t("Stopped", "途中"), Color32::from_gray(150)),
         };
         text(c, g, verdict, x + COLUMNS[9].1, y, 17.0, color);
         y += ROW_H;
@@ -591,12 +640,25 @@ pub fn draw_weak(c: &Canvas, g: &mut Gfx, o: &Outcome) {
     };
     let (x, y, pw, ph) = WEAK;
     panel(c, WEAK);
-    g.heading(c, x + 12.0, y + 8.0, "苦手な小節");
+    g.heading(c, x + 12.0, y + 8.0, t("Weak Measures", "苦手な小節"));
     let source = match (w.plays, w.practice_laps) {
-        (0, 0) => "記録なし".to_owned(),
-        (p, 0) => format!("直近のプレイ {p} 回から"),
-        (0, l) => format!("直近の練習 {l} 周から"),
-        (p, l) => format!("直近のプレイ {p} 回と練習 {l} 周から"),
+        (0, 0) => t("No records", "記録なし").to_owned(),
+        (p, 0) => {
+            let p = count(p, "play", "plays", "回");
+            tf!("From your last {p}", "直近のプレイ {p}から")
+        }
+        (0, l) => {
+            let l = count(l, "practice loop", "practice loops", "周");
+            tf!("From your last {l}", "直近の練習 {l}から")
+        }
+        (p, l) => {
+            let p = count(p, "play", "plays", "回");
+            let l = count(l, "practice loop", "practice loops", "周");
+            tf!(
+                "From your last {p} and {l}",
+                "直近のプレイ {p}と練習 {l}から"
+            )
+        }
     };
     let small = Style::edged(13.0, Color32::from_gray(200), Color32::BLACK, 1.0);
     if let Some(t) = g.texts.get(&source, &small) {
@@ -624,7 +686,8 @@ pub fn draw_weak(c: &Canvas, g: &mut Gfx, o: &Outcome) {
         if ty + 18.0 > limit {
             break;
         }
-        let line = format!(
+        let line = tf!(
+            "{}. {}   weakness {:.0}%",
             "{}. {}　苦手度 {:.0}%",
             i + 1,
             section_text(Section::new(p.first, p.last)),
@@ -637,7 +700,7 @@ pub fn draw_weak(c: &Canvas, g: &mut Gfx, o: &Outcome) {
         text(
             c,
             g,
-            "苦手なフレーズはありません",
+            t("No weak phrases", "苦手なフレーズはありません"),
             x + 14.0,
             ty,
             15.0,
@@ -651,12 +714,18 @@ pub fn draw_weak(c: &Canvas, g: &mut Gfx, o: &Outcome) {
         }
         let (line, color) = if ch.overcome {
             (
-                format!("克服！ {}（練習 {}%）", section_text(ch.section), ch.speed),
+                tf!(
+                    "Conquered! {} (practiced at {}%)",
+                    "克服！ {}（練習 {}%）",
+                    section_text(ch.section),
+                    ch.speed
+                ),
                 CLEARED_COLOR,
             )
         } else {
             (
-                format!(
+                tf!(
+                    "{} still needs work (practiced at {}%)",
                     "{} はまだ崩れました（練習 {}%）",
                     section_text(ch.section),
                     ch.speed
@@ -671,9 +740,9 @@ pub fn draw_weak(c: &Canvas, g: &mut Gfx, o: &Outcome) {
         draw_strokes(c, g, t, x, ty, pw, limit);
     }
     let hint = if w.phrases.is_empty() {
-        "P：区間を練習"
+        t("P: Practice a Section", "P：区間を練習")
     } else {
-        "P：苦手なフレーズを練習"
+        t("P: Practice Weak Phrases", "P：苦手なフレーズを練習")
     };
     let style = Style::edged(14.0, Color32::from_gray(210), Color32::BLACK, 1.0);
     if let Some(t) = g.texts.get(hint, &style) {
@@ -692,9 +761,13 @@ fn draw_strokes(c: &Canvas, g: &mut Gfx, t: &StrokeTally, x: f32, ty: f32, pw: f
     let top = limit - STROKES_H;
     if ty > top {
         if ty + 18.0 <= limit {
-            let line = format!(
+            let line = tf!(
+                "Snare strokes   Rim {} / {}   Head {} / {}",
                 "スネアの打ち分け　リム {} / {}　ヘッド {} / {}",
-                t.rim_ok, t.rim_hit, t.head_ok, t.head_hit
+                t.rim_ok,
+                t.rim_hit,
+                t.head_ok,
+                t.head_hit
             );
             text(c, g, &line, x + 14.0, ty, 15.0, Color32::from_gray(230));
         }
@@ -704,15 +777,20 @@ fn draw_strokes(c: &Canvas, g: &mut Gfx, t: &StrokeTally, x: f32, ty: f32, pw: f
     text(
         c,
         g,
-        "スネアの打ち分け",
+        i18n::t("Snare Strokes", "スネアの打ち分け"),
         x + 14.0,
         top + 8.0,
         17.0,
         Color32::WHITE,
     );
     let rows = [
-        ("リム", t.rim_ok, t.rim_hit, RIM_COLOR),
-        ("ヘッド", t.head_ok, t.head_hit, Color32::from_gray(235)),
+        (i18n::t("Rim", "リム"), t.rim_ok, t.rim_hit, RIM_COLOR),
+        (
+            i18n::t("Head", "ヘッド"),
+            t.head_ok,
+            t.head_hit,
+            Color32::from_gray(235),
+        ),
     ];
     let (bx, bw) = (x + 84.0, pw - 190.0);
     for (i, (label, ok, n, color)) in rows.into_iter().enumerate() {
@@ -730,10 +808,18 @@ fn draw_strokes(c: &Canvas, g: &mut Gfx, t: &StrokeTally, x: f32, ty: f32, pw: f
         text(c, g, &count, bx + bw + 12.0, y, 15.0, Color32::WHITE);
     }
     if !t.rim_missed_measures.is_empty() {
-        let line = format!(
-            "リムで叩けなかった所: {} 小節",
-            measures_text(&t.rim_missed_measures, 6)
-        );
+        let list = measures_text(&t.rim_missed_measures, 6);
+        let line = if t.rim_missed_measures.len() == 1 {
+            tf!(
+                "Rim missed in measure {list}",
+                "リムで叩けなかった所: {list} 小節"
+            )
+        } else {
+            tf!(
+                "Rim missed in measures {list}",
+                "リムで叩けなかった所: {list} 小節"
+            )
+        };
         text(c, g, &line, x + 14.0, top + 80.0, 14.0, WEAK_COLOR);
     }
 }
@@ -741,9 +827,9 @@ fn draw_strokes(c: &Canvas, g: &mut Gfx, t: &StrokeTally, x: f32, ty: f32, pw: f
 /// 小節の番号を「12・28・29」のように。`max` を超えたら「ほか n」を足す
 fn measures_text(measures: &[u32], max: usize) -> String {
     let shown: Vec<String> = measures.iter().take(max).map(u32::to_string).collect();
-    let mut s = shown.join("・");
+    let mut s = shown.join(t(", ", "・"));
     if measures.len() > max {
-        s += &format!(" ほか {}", measures.len() - max);
+        s += &tf!(" +{} more", " ほか {}", measures.len() - max);
     }
     s
 }
@@ -754,6 +840,7 @@ mod tests {
 
     #[test]
     fn measures_are_listed_with_the_rest_counted() {
+        let _ja = i18n::scoped(i18n::Lang::Ja);
         assert_eq!(measures_text(&[12, 28, 29], 6), "12・28・29");
         assert_eq!(measures_text(&[1, 2, 3, 4], 2), "1・2 ほか 2");
     }
