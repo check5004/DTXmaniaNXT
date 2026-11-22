@@ -821,6 +821,7 @@ dependencies = [
  "ttf-parser",
  "velopack",
  "video",
+ "webbrowser",
  "wgpu",
  "winit",
  "winresource",

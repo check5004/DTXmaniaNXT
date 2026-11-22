@@ -257,6 +257,10 @@ pub enum Icon {
     Folder,
     Loop,
     Gear,
+    /// 画面（モニター）
+    Monitor,
+    /// ゲームプレイ（旗）
+    Flag,
 }
 
 /// 分類の絵を (x, y) を左上に、`size` の四角に描く（線で描く。24 の升目で考えた形）
@@ -361,6 +365,24 @@ pub fn icon(c: &Canvas, kind: Icon, x: f32, y: f32, size: f32, color: Color32) {
                 PathStroke::new(w, color),
             ));
         }
+        Icon::Monitor => {
+            poly(&[(3.0, 4.5), (21.0, 4.5), (21.0, 16.5), (3.0, 16.5)]);
+            line((12.0, 16.5), (12.0, 20.5), w);
+            line((8.0, 20.5), (16.0, 20.5), w);
+        }
+        Icon::Flag => {
+            line((5.0, 3.0), (5.0, 21.0), w);
+            painter.add(PathShape::line(
+                vec![
+                    p(5.0, 4.0),
+                    p(19.0, 4.0),
+                    p(16.0, 8.0),
+                    p(19.0, 12.0),
+                    p(5.0, 12.0),
+                ],
+                PathStroke::new(w, color),
+            ));
+        }
         Icon::Gear => {
             painter.circle_stroke(p(12.0, 12.0), 3.0 * k * c.scale(), stroke);
             for (a, b) in [
@@ -443,15 +465,20 @@ pub fn lane_color(lane: DrumLane) -> Color32 {
 /// 画面の下の案内 1 つ（叩くパッドと、することの名前）
 pub type Hint<'a> = (&'a [Pad], &'a str);
 
-/// 画面の下に、パッドの役目を並べる（y = 690 から 30 の高さ）
+/// 画面の下の案内の帯の上端と高さ
+pub const LEGEND_Y: f32 = 690.0;
+pub const LEGEND_H: f32 = 30.0;
+
+/// 画面の下に、パッドの役目を並べる（[`LEGEND_Y`] から [`LEGEND_H`] の高さ）。
+/// パッドの無い案内（キーボードだけの操作）は、名前だけを出す
 pub fn legend(c: &Canvas, g: &mut Gfx, hints: &[Hint<'_>]) {
-    const Y: f32 = 690.0;
+    const Y: f32 = LEGEND_Y;
     hgrad(
         c,
         0.0,
         Y,
         1280.0,
-        30.0,
+        LEGEND_H,
         Color32::from_black_alpha(217),
         Color32::from_black_alpha(140),
     );
