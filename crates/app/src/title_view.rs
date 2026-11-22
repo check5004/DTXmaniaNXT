@@ -4,6 +4,7 @@
 //! 曲を探しているあいだは左上に「曲を探しています」の画像を明滅させる（上流 `CActEnumSongs`）。
 //! 新しい版があるときだけ、メニューの下に「更新」の行を足す（このアプリだけ。見本の案 A、2026-11-22）。
 //! 落としている間は左上の版の下に進み具合を出し、更新して起動し直したら左下に知らせる。
+//! 画面の下には、設定の画面と同じ操作の案内の帯（どのパッドとキーで何ができるか）を出す（2026-11-22 ユーザー依頼）。
 
 use std::f64::consts::PI;
 use std::time::{Duration, Instant};
@@ -11,7 +12,7 @@ use std::time::{Duration, Instant};
 use egui::Color32;
 
 use crate::gfx::{Canvas, Gfx, Opt, src};
-use crate::settings_ui as ui;
+use crate::settings_ui::{self as ui, Pad};
 use crate::text::Style;
 use crate::update::Status;
 use crate::update_view::{self, Corner};
@@ -25,11 +26,14 @@ const MENU_Y: f32 = 513.0;
 /// 白いフェードの長さ（上流 `CActFIFOWhite`：0〜100 を 5 ミリ秒ずつ）
 const FADE: Duration = Duration::from_millis(500);
 
-/// 「更新」の行（メニューの板の下に足す。見本の案 A）の左上と大きさ
+/// 「更新」の行（メニューの板の下に足す。見本の案 A）の左上と大きさ。
+/// メニューの板（下の端が 640 ほど）と、画面の下の案内の帯（690 から）のあいだに、上下を少し空けて置く
 const UPDATE_X: f32 = 471.0;
-const UPDATE_Y: f32 = 646.0;
+const UPDATE_Y: f32 = 645.0;
 const UPDATE_W: f32 = 300.0;
-const UPDATE_H: f32 = 44.0;
+const UPDATE_H: f32 = 40.0;
+// 「更新」の行は画面の下の案内の帯にかからない
+const _: () = assert!(UPDATE_Y + UPDATE_H < ui::LEGEND_Y);
 
 /// 更新のあとの知らせを出しておく時間（秒）と、消えていく時間
 const UPDATED_FOR: f32 = 10.0;
@@ -247,6 +251,7 @@ impl TitleView {
         if self.len() > 3 {
             self.draw_update_label(c, g);
         }
+        ui::legend(c, g, &self.hints());
         if scanning {
             draw_scanning(c, g, self.entered);
         }
@@ -279,6 +284,29 @@ impl TitleView {
 }
 
 impl TitleView {
+    /// 画面の下の操作の案内（設定の画面と同じ帯）。決定ですることは、選んでいる行で変える。
+    /// LC（戻る）はこの画面では使わない（叩き間違えで終わらないように。キーボードの Esc だけ）
+    fn hints(&self) -> Vec<ui::Hint<'static>> {
+        let mut v: Vec<ui::Hint<'static>> = vec![(&[Pad::HT], "上"), (&[Pad::LT], "下")];
+        let decide = match self.selected() {
+            TitleItem::GameStart => Some("はじめる（Enter）"),
+            TitleItem::Config => Some("設定を開く（Enter）"),
+            TitleItem::Exit => Some("終わる（Enter）"),
+            TitleItem::Update => match &self.update {
+                Status::Available(_) => Some("更新する（Enter）"),
+                Status::Failed(_) => Some("もう一度落とす（Enter）"),
+                Status::Ready(_) => Some("再起動して入れ替える（Enter）"),
+                // 落としている間は、決めても何もしない
+                Status::Downloading { .. } | Status::Idle => None,
+            },
+        };
+        if let Some(d) = decide {
+            v.push((&[Pad::CY, Pad::RD], d));
+        }
+        v.push((&[], "終わる（Esc）"));
+        v
+    }
+
     /// 「更新」の行の地（カーソルより下に描く）
     fn draw_update_row(&self, c: &Canvas) {
         let (x, y, w, h) = (UPDATE_X, UPDATE_Y, UPDATE_W, UPDATE_H);
@@ -463,6 +491,35 @@ mod tests {
         assert_eq!(row_y(1) - row_y(0), MENU_H);
         // 「更新」の行は板の下に離れている
         assert!(row_y(3) > row_y(2) + MENU_H);
+    }
+
+    #[test]
+    fn the_help_bar_names_what_the_selected_row_does() {
+        let names =
+            |v: &TitleView| -> Vec<&'static str> { v.hints().iter().map(|h| h.1).collect() };
+        let mut v = TitleView::new();
+        v.entered -= FADE;
+        assert_eq!(
+            names(&v),
+            ["上", "下", "はじめる（Enter）", "終わる（Esc）"]
+        );
+        v.move_by(1);
+        assert_eq!(names(&v)[2], "設定を開く（Enter）");
+        v.move_by(1);
+        assert_eq!(names(&v)[2], "終わる（Enter）");
+        v.set_update(&Status::Available("9.9.9".to_owned()));
+        v.move_by(1);
+        assert_eq!(names(&v)[2], "更新する（Enter）");
+        // 落としている間は決めても何もしないので、決定は出さない
+        v.set_update(&Status::Downloading {
+            version: "9.9.9".to_owned(),
+            percent: 40,
+        });
+        assert_eq!(names(&v), ["上", "下", "終わる（Esc）"]);
+        // 足のパッドと LC は使わない（決定は CY と RD）
+        for (pads, _) in v.hints() {
+            assert!(!pads.iter().any(|p| matches!(p, Pad::BD | Pad::LC)));
+        }
     }
 
     #[test]

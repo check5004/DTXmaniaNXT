@@ -20,6 +20,7 @@ mod capture;
 mod chart_sound;
 mod config;
 mod config_view;
+mod editor;
 mod fonts;
 mod frames;
 mod game;
@@ -533,6 +534,7 @@ const DOUBLE_HIT_US: i64 = 500_000;
 impl App {
     fn new(arg: Option<PathBuf>) -> Self {
         let mut config = Config::load();
+        i18n::set_lang(config.ui_lang());
         if config.take_over_nx() {
             config.save();
         }
@@ -1695,6 +1697,11 @@ impl App {
                 match s {
                     Setting::MasterVolume => apply_volumes(&self.config),
                     Setting::Update => self.updater.set_mode(self.config.update_mode()),
+                    Setting::Language => {
+                        i18n::set_lang(self.config.ui_lang());
+                        // BOX の名前（並べ替えで作るもの）を今の言語で作り直す
+                        self.songs.relabel();
+                    }
                     _ => {}
                 }
                 self.config.save();
@@ -1778,6 +1785,20 @@ impl App {
                 }
             }
             ItemId::ReconnectMidi => self.reopen_midi(),
+            ItemId::OpenEditor => match editor::open() {
+                Ok(editor::Opened::Opened) => {
+                    log::info!("opened the chart editor: {}", editor::URL);
+                    self.config_toast("ブラウザで譜面エディタを開きました".to_owned());
+                }
+                Ok(editor::Opened::Recently) => {}
+                Err(e) => {
+                    log::warn!("could not open the chart editor: {e}");
+                    self.config_toast(format!(
+                        "ブラウザを開けませんでした。{} を開いてください",
+                        editor::URL
+                    ));
+                }
+            },
             ItemId::ApplyAdvice => {
                 if let Some(a) = self.timing.as_ref().map(|t| t.advice)
                     && a.changes()

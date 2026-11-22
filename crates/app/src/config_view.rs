@@ -38,6 +38,7 @@ use crate::stretch::Pitch;
 use crate::text::Style;
 use crate::title_view::draw_scanning;
 use crate::update::UpdateMode;
+use i18n::{Lang, t};
 
 /// 補正の値の範囲（ミリ秒）
 pub const OFFSET_RANGE: f64 = 200.0;
@@ -127,7 +128,7 @@ impl Cat {
             Cat::Display => "窓の出し方と、画面の描き方、譜面の動画。",
             Cat::Sound => "音量と、鳴らすもの。",
             Cat::Play => "ゲームの決まり（STAGE FAILED、ゲージ）、判定の幅、ずれの表示、記録。",
-            Cat::Songs => "曲のフォルダと、曲の探し直し。",
+            Cat::Songs => "曲のフォルダと、曲の探し直し、譜面エディタ。",
             Cat::App => "更新など、アプリ全体のこと。",
             Cat::View => "譜面の速さと流れ方、見えにくくする、レーンとチップ、画面の部品。",
             Cat::Pads => "自動演奏、叩き分け、共通にしたときに鳴らす音。",
@@ -185,6 +186,8 @@ pub enum Setting {
     ShowLagTimeColor,
     ShowLagHitCount,
     Update,
+    /// 画面の言語
+    Language,
 }
 
 /// 練習の決めごと（練習のポップアップと同じ項目。区間のほか）
@@ -232,6 +235,8 @@ pub enum ItemId {
     DeviceReset(usize),
     /// MIDI の機器を探し直す
     ReconnectMidi,
+    /// 譜面エディタ（Web アプリ）をブラウザで開く
+    OpenEditor,
     /// 簡易設定から、選んでいる曲の区間練習へ
     PracticeSong,
     /// 簡易設定から、設定の画面へ
@@ -508,6 +513,7 @@ pub fn get(s: Setting, c: &Config) -> i64 {
             .iter()
             .position(|&m| m == c.update_mode())
             .unwrap_or(0) as i64,
+        Setting::Language => Lang::ALL.iter().position(|&l| l == c.lang()).unwrap_or(0) as i64,
     }
 }
 
@@ -527,6 +533,7 @@ pub fn set(s: Setting, c: &mut Config, v: i64) {
         Setting::Update => c.set_update_mode(
             UpdateMode::ALL[v.clamp(0, UpdateMode::ALL.len() as i64 - 1) as usize],
         ),
+        Setting::Language => c.set_lang(Lang::ALL[v.clamp(0, Lang::ALL.len() as i64 - 1) as usize]),
     }
 }
 
@@ -617,6 +624,17 @@ fn value_row(s: Setting, c: &Config) -> Row {
             at as usize,
             Some(def as usize),
             "新しい版の扱いです。Setup.exe で入れたときだけ働きます。\n知らせる: 起動したときに確かめ、あればタイトルのメニューの下に出します。更新するかは自分で選びます。\n自動: 起動したときに落とし、終了したときに入れ替えます。\n確かめない: 新しい版を確かめません。",
+        ),        Setting::Language => choice(
+            id,
+            // 読めない言語にしてしまっても見つけられるように、日本語の画面でも英語の名前を添える
+            t("Language", "言語（Language）"),
+            &Lang::ALL.map(Lang::native_name),
+            at as usize,
+            None,
+            t(
+                "The language of menus and messages. Song titles and text drawn in the skin's artwork stay as they are.",
+                "メニューや知らせの文の言語です。曲名や、スキンの絵に描かれた文字は変わりません。",
+            ),
         ),
     }
 }
@@ -1237,6 +1255,16 @@ pub fn rows(page: Page, info: &ConfigInfo<'_>) -> Vec<Row> {
                 "曲のフォルダを探し直して、曲の一覧を作り直します。".to_owned(),
                 None,
             ));
+            s.at("譜面エディタ").push(action(
+                ItemId::OpenEditor,
+                "譜面エディタを開く",
+                "ブラウザ".to_owned(),
+                format!(
+                    "DTX Web Editor をブラウザで開きます。原曲を聴きながら譜面を作って直せる、無料のエディタです（Chrome か Edge がおすすめ）。\nGoogle Drive で、何台かの PC の曲のフォルダを同期することもできます。\n直した譜面や足した曲は「曲を探し直す」で一覧に出ます。\n{}",
+                    crate::editor::URL
+                ),
+                None,
+            ));
             s.table(Group::Songs, v);
         }
         Page::Cat(Cat::Practice) => {
@@ -1256,6 +1284,9 @@ pub fn rows(page: Page, info: &ConfigInfo<'_>) -> Vec<Row> {
             s.table(Group::Practice, v);
         }
         Page::Cat(Cat::App) => {
+            if crate::config::LANGUAGE_READY {
+                s.at("").push(value_row(Setting::Language, c));
+            }
             s.at("").push(value_row(Setting::Update, c));
             s.table(Group::App, v);
         }
@@ -3795,6 +3826,21 @@ mod tests {
         *v.cursor_mut() = find(&songs, ItemId::SongDir(0));
         assert_eq!(v.input(ConfigInput::Decide, &songs).action, None);
         assert!(v.confirm.as_ref().unwrap().text.contains("songs"));
+    }
+
+    #[test]
+    fn the_editor_opens_from_the_songs_page() {
+        // 曲のフォルダが無くても出す（エディタで曲を作ってから足す人もいる）
+        let c = Config::default();
+        let songs = rows(Page::Cat(Cat::Songs), &info(&c));
+        let i = find(&songs, ItemId::OpenEditor);
+        assert!(songs[i].desc.contains(crate::editor::URL));
+        let mut v = at(Page::Cat(Cat::Songs), &songs, ItemId::OpenEditor);
+        // 取り消せない操作ではないので確かめない
+        assert_eq!(
+            v.input(ConfigInput::Decide, &songs).action,
+            Some(ConfigAction::Run(ItemId::OpenEditor))
+        );
     }
 
     #[test]

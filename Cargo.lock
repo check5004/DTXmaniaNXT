@@ -804,6 +804,7 @@ dependencies = [
  "egui-winit",
  "engine",
  "env_logger",
+ "i18n",
  "image",
  "library",
  "log",
@@ -821,6 +822,7 @@ dependencies = [
  "ttf-parser",
  "velopack",
  "video",
+ "webbrowser",
  "wgpu",
  "winit",
  "winresource",
@@ -1366,6 +1368,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "i18n"
+version = "0.8.0"
+
+[[package]]
 name = "iana-time-zone"
 version = "0.1.65"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1768,6 +1774,7 @@ name = "library"
 version = "0.8.0"
 dependencies = [
  "dtx",
+ "i18n",
 ]
 
 [[package]]

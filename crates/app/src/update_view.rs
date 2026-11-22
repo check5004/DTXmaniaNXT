@@ -129,7 +129,7 @@ pub fn applying(c: &Canvas, g: &mut Gfx, from: &str, to: &str, since: Instant) {
     }
 }
 
-/// 更新して起動し直したときの知らせ（左下）。`previous` は前の版（分からなければ空）
+/// 更新して起動し直したときの知らせ（左下、操作の案内の帯の上）。`previous` は前の版（分からなければ空）
 pub fn updated(c: &Canvas, g: &mut Gfx, current: &str, previous: &str, alpha: f32) {
     if alpha <= 0.0 {
         return;
@@ -144,7 +144,7 @@ pub fn updated(c: &Canvas, g: &mut Gfx, current: &str, previous: &str, alpha: f3
         .as_deref()
         .map_or(0.0, |s| 10.0 + ui::text_width(g, s, &sub_style));
     let (w, h) = (18.0 + mw + sw + 14.0, 38.0);
-    let (x, y) = (16.0, 720.0 - 16.0 - h);
+    let (x, y) = (16.0, ui::LEGEND_Y - 12.0 - h);
     ui::round_fill(c, x, y, w, h, 4.0, a(CHIP_BG));
     ui::round_frame(c, x, y, w, h, 4.0, 1.0, a(CHIP_LINE));
     c.fill(x, y, 4.0, h, a(OK));
