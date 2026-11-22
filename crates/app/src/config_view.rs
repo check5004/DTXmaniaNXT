@@ -37,6 +37,7 @@ use crate::sfx::Se;
 use crate::stretch::Pitch;
 use crate::text::Style;
 use crate::title_view::draw_scanning;
+use crate::update::UpdateMode;
 
 /// 補正の値の範囲（ミリ秒）
 pub const OFFSET_RANGE: f64 = 200.0;
@@ -155,7 +156,7 @@ pub enum Setting {
     ShowLagTime,
     ShowLagTimeColor,
     ShowLagHitCount,
-    AutoUpdate,
+    Update,
 }
 
 /// 練習の決めごと（練習のポップアップと同じ項目。区間のほか）
@@ -468,7 +469,10 @@ pub fn get(s: Setting, c: &Config) -> i64 {
         Setting::ShowLagTime => i64::from(c.show_lag_time.min(2)),
         Setting::ShowLagTimeColor => i64::from(c.show_lag_time_color.min(1)),
         Setting::ShowLagHitCount => i64::from(c.show_lag_hit_count),
-        Setting::AutoUpdate => i64::from(c.auto_update),
+        Setting::Update => UpdateMode::ALL
+            .iter()
+            .position(|&m| m == c.update_mode())
+            .unwrap_or(0) as i64,
     }
 }
 
@@ -485,7 +489,9 @@ pub fn set(s: Setting, c: &mut Config, v: i64) {
         Setting::ShowLagTime => c.show_lag_time = v.clamp(0, 2) as u8,
         Setting::ShowLagTimeColor => c.show_lag_time_color = v.clamp(0, 1) as u8,
         Setting::ShowLagHitCount => c.show_lag_hit_count = v != 0,
-        Setting::AutoUpdate => c.auto_update = v != 0,
+        Setting::Update => c.set_update_mode(
+            UpdateMode::ALL[v.clamp(0, UpdateMode::ALL.len() as i64 - 1) as usize],
+        ),
     }
 }
 
@@ -569,9 +575,13 @@ fn value_row(s: Setting, c: &Config) -> Row {
             "早い・遅いの数",
             "ON にすると、結果の画面に早かった数と遅かった数を出します。",
         ),
-        Setting::AutoUpdate => flag(
-            "自動更新",
-            "ON にすると、起動したときに新しい版を GitHub から落とし、終了したときに入れ替えます。\nSetup.exe で入れたときだけ働きます。切り替えは次の起動から効きます。",
+        Setting::Update => choice(
+            id,
+            "更新",
+            &UpdateMode::ALL.map(UpdateMode::label),
+            at as usize,
+            Some(def as usize),
+            "新しい版の扱いです。Setup.exe で入れたときだけ働きます。\n知らせる: 起動したときに確かめ、あればタイトルのメニューの下に出します。更新するかは自分で選びます。\n自動: 起動したときに落とし、終了したときに入れ替えます。\n確かめない: 新しい版を確かめません。",
         ),
     }
 }
@@ -1081,7 +1091,7 @@ pub fn rows(page: Page, info: &ConfigInfo<'_>) -> Vec<Row> {
             s.table(Group::Practice, v);
         }
         Page::Cat(Cat::App) => {
-            s.at("").push(value_row(Setting::AutoUpdate, c));
+            s.at("").push(value_row(Setting::Update, c));
             s.table(Group::App, v);
         }
         Page::Lanes => {
@@ -3123,7 +3133,8 @@ mod tests {
             (Setting::StageFailed, 0),
             (Setting::HitSound, 1),
             (Setting::ShowLagHitCount, 1),
-            (Setting::AutoUpdate, 0),
+            (Setting::Update, 2),
+            (Setting::Update, 1),
         ] {
             set(s, &mut c, v);
             assert_eq!(get(s, &c), v, "{s:?}");

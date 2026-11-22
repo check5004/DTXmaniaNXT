@@ -51,6 +51,7 @@ mod time;
 mod title_view;
 mod ui;
 mod update;
+mod update_view;
 mod window_mode;
 mod xa;
 
@@ -90,6 +91,7 @@ use crate::shutter::Shutter;
 use crate::songs::SongList;
 use crate::time::host_us;
 use crate::title_view::{Ending, TitleItem, TitleView};
+use crate::update_view::Corner;
 
 struct Gpu {
     surface: wgpu::Surface<'static>,
@@ -414,8 +416,12 @@ struct App {
     toast: Option<(String, Instant)>,
     /// 音符をすべて自動で叩く（開発用。`DTXMANIANXT_AUTOPLAY=1`。設定の自動演奏より優先）
     autoplay: bool,
-    /// 新しい版を探して落とし、終えるときに入れ替える
+    /// 新しい版を確かめ、頼まれたら落とし、終えるときか再起動で入れ替える
     updater: update::Updater,
+    /// 「再起動して入れ替える」を選んだ（入れ替える版と時刻）。「更新しています」を出してから閉じる
+    applying: Option<(String, Instant)>,
+    /// 更新の印の回る輪の起点
+    update_since: Instant,
     /// フレームの時間（F9 で出す）
     frames: frames::FrameStats,
     /// 押している Alt などのキー（Alt+Enter で全画面）
@@ -482,6 +488,9 @@ fn open_midi(config: &Config) -> Option<MidiIn> {
         .ok()
 }
 
+/// 「再起動して入れ替える」を選んでから閉じるまで、「更新しています」を出しておく時間
+const APPLY_SHOW: Duration = Duration::from_millis(1500);
+
 /// MIDI の機器がつながったか外れたかを調べる間
 const PORT_CHECK_EVERY: Duration = Duration::from_secs(2);
 
@@ -521,7 +530,13 @@ impl App {
         let keys = inputs::keyboard_map(&config);
         let history = History::open();
         songs.set_stats(history.chart_stats());
-        let updater = update::Updater::start(config.auto_update);
+        let updater = update::Updater::start(config.update_mode());
+        let mut title = TitleView::new();
+        // 前と違う版で起動したら（更新したら）、タイトルで知らせる
+        if let Some(previous) = config.remember_version(update::current_version()) {
+            config.save_unless_broken();
+            title.set_updated(update::current_version(), previous);
+        }
         Self {
             window: None,
             gpu: None,
@@ -542,7 +557,7 @@ impl App {
             gfx,
             view: SelectView::new(),
             sfx,
-            title: TitleView::new(),
+            title,
             quit: false,
             startup_error: None,
             shutter: Shutter::new(),
@@ -555,6 +570,8 @@ impl App {
             toast: None,
             autoplay: std::env::var_os("DTXMANIANXT_AUTOPLAY").is_some_and(|v| v == "1"),
             updater,
+            applying: None,
+            update_since: Instant::now(),
             frames: frames::FrameStats::default(),
             modifiers: winit::keyboard::ModifiersState::empty(),
             applied_window: None,
@@ -1233,7 +1250,36 @@ impl App {
                 self.sfx.play(Se::Decide);
                 self.begin_end();
             }
+            Some(TitleItem::Update) => self.title_update(),
             None => {}
+        }
+    }
+
+    /// タイトルの「更新」の行を決めた（落とし始める、もう一度落とす、再起動して入れ替える）
+    fn title_update(&mut self) {
+        if self.updater.download() {
+            self.sfx.play(Se::Decide);
+        } else if let Some(v) = self.updater.request_restart() {
+            self.sfx.play(Se::Decide);
+            self.sfx.stop_title();
+            self.applying = Some((v, Instant::now()));
+        }
+    }
+
+    /// 別のスレッドからの更新の知らせを受け取り、落とし終えたら知らせる（タイトルと演奏中は、タイトルの行だけで知らせる）
+    fn poll_update(&mut self) {
+        let Some(event) = self.updater.poll() else {
+            return;
+        };
+        let text = match event {
+            update::Event::Ready(v) => format!("v{v} を落としました。終了すると入れ替わります"),
+            update::Event::Failed(v) => format!("v{v} を落とせませんでした"),
+        };
+        match self.screen {
+            // タイトルは「更新」の行が変わるので知らせない（知らせはその行と重なる）
+            Screen::Title | Screen::Play(..) | Screen::Loading(_) => {}
+            Screen::Config(..) => self.config_toast(text),
+            _ => self.toast(text),
         }
     }
 
@@ -1516,8 +1562,10 @@ impl App {
         match id {
             ItemId::Value(s) => {
                 config_view::set(s, &mut self.config, v);
-                if s == Setting::MasterVolume {
-                    audio::set_master_volume(self.config.master_volume());
+                match s {
+                    Setting::MasterVolume => audio::set_master_volume(self.config.master_volume()),
+                    Setting::Update => self.updater.set_mode(self.config.update_mode()),
+                    _ => {}
                 }
                 self.config.save();
             }
@@ -1608,7 +1656,7 @@ impl App {
     }
 
     fn on_key(&mut self, code: KeyCode) {
-        if self.after_close.is_some() {
+        if self.after_close.is_some() || self.applying.is_some() {
             return;
         }
         let at = host_us();
@@ -1897,7 +1945,7 @@ impl App {
     /// 選曲と結果の画面での電子ドラムの操作（上流と同じ割り当て）。
     /// HT で上、LT で下、CY か RD で決定、LC で戻る、HH を 2 回で難易度
     fn on_menu_pad(&mut self, lane: DrumLane, at_us: i64) {
-        if self.after_close.is_some() {
+        if self.after_close.is_some() || self.applying.is_some() {
             return;
         }
         if self.quick.is_some() && matches!(self.screen, Screen::Select | Screen::Play(..)) {
@@ -2155,7 +2203,16 @@ impl App {
             .filter(|(_, until)| Instant::now() < *until)
             .map(|(t, _)| t.clone());
         let scanning = self.songs.scanning().is_some();
-        self.title.set_update(self.updater.ready());
+        self.poll_update();
+        self.title.set_update(self.updater.status());
+        // 「更新しています」を少し見せてから閉じる（閉じたあと入れ替えて起動し直す）
+        if self
+            .applying
+            .as_ref()
+            .is_some_and(|(_, at)| at.elapsed() >= APPLY_SHOW)
+        {
+            self.quit = true;
+        }
         self.shutter.update(Instant::now());
         let egui_ctx = self.egui_ctx.clone();
         let output = egui_ctx.run_ui(input, |ui| {
@@ -2172,6 +2229,14 @@ impl App {
                     t,
                 );
             }
+            // 更新のようす（落としている間の隅の印、「更新しています」）
+            self.draw_update(&Canvas::overlay(
+                &ctx.layer_painter(egui::LayerId::new(
+                    egui::Order::Foreground,
+                    egui::Id::unique("update"),
+                )),
+                ctx.content_rect(),
+            ));
             // シャッターはどの画面のどの窓よりも上に
             let top = ctx.layer_painter(egui::LayerId::new(
                 egui::Order::Debug,
@@ -2200,6 +2265,41 @@ impl App {
         self.select_mouse(mouse);
         for a in result_actions {
             self.result_action(a);
+        }
+    }
+
+    /// 更新のようすを画面に重ねる。落としている間は隅に小さな印（タイトルは版の下に自分で描く。演奏中は出さない）、
+    /// 終わる画面では入れ替えることを、「再起動して入れ替える」を選んだら「更新しています」を出す
+    fn draw_update(&mut self, c: &Canvas) {
+        let since = self.update_since;
+        if let Some((v, at)) = &self.applying {
+            update_view::applying(c, &mut self.gfx, update::current_version(), v, *at);
+            return;
+        }
+        if let Screen::End(_) = self.screen {
+            if let Some(v) = self.updater.pending_on_exit() {
+                let text = format!("終わったあと v{v} に入れ替えます");
+                update_view::chip(
+                    c,
+                    &mut self.gfx,
+                    &text,
+                    None,
+                    Corner::BottomRight(1264.0, 704.0),
+                    since,
+                );
+            }
+            return;
+        }
+        let corner = match self.screen {
+            // 設定と選曲は右下の帯の端、結果は右下に案内があるので右上
+            Screen::Config(..) | Screen::Select => Corner::BottomRight(1264.0, 717.0),
+            Screen::Result(..) => Corner::TopRight(1264.0, 16.0),
+            _ => return,
+        };
+        if let update::Status::Downloading { version, percent } = self.updater.status() {
+            let text = format!("v{version} を落としています {percent}%");
+            let p = f32::from(*percent) / 100.0;
+            update_view::chip(c, &mut self.gfx, &text, Some(p), corner, since);
         }
     }
 
@@ -2594,7 +2694,7 @@ fn run() -> Result<()> {
     event_loop.set_control_flow(ControlFlow::Poll);
     let mut app = App::new(arg);
     event_loop.run_app(&mut app)?;
-    app.updater.apply_on_exit(app.config.auto_update);
+    app.updater.apply_on_exit();
     match app.startup_error.take() {
         Some(e) => Err(e),
         None => Ok(()),

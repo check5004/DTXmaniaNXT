@@ -142,6 +142,18 @@ pub fn hgrad(c: &Canvas, x: f32, y: f32, w: f32, h: f32, left: Color32, right: C
     c.painter().add(mesh);
 }
 
+/// 上から下へのグラデーションで塗る
+pub fn vgrad(c: &Canvas, x: f32, y: f32, w: f32, h: f32, top: Color32, bottom: Color32) {
+    let mut mesh = Mesh::default();
+    mesh.colored_vertex(c.pos(x, y), top);
+    mesh.colored_vertex(c.pos(x + w, y), top);
+    mesh.colored_vertex(c.pos(x + w, y + h), bottom);
+    mesh.colored_vertex(c.pos(x, y + h), bottom);
+    mesh.add_triangle(0, 1, 2);
+    mesh.add_triangle(0, 2, 3);
+    c.painter().add(mesh);
+}
+
 /// 板（上の縁に v2 の帯と同じ紫と橙の線）
 pub fn panel(c: &Canvas, x: f32, y: f32, w: f32, h: f32) {
     panel_with(c, x, y, w, h, PANEL_BG);
