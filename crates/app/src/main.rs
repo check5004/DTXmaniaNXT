@@ -1199,6 +1199,8 @@ impl App {
         let mut finished = false;
         // セットの合間で「やめる」を選んだ（その時刻）
         let mut quit_at = None;
+        // 練習で 1 周叩かなかった（一時停止の板を出す）
+        let mut rested = false;
         if let Screen::Play(play, view) = &mut self.screen
             && !closing
         {
@@ -1214,6 +1216,7 @@ impl App {
                         game::PracticeEvent::StepUp => self.sfx.play(Se::Decide),
                         game::PracticeEvent::Cleared => self.sfx.play(Se::StageClear),
                         game::PracticeEvent::Finished { at_ms } => quit_at = Some(at_ms),
+                        game::PracticeEvent::Rest => rested = true,
                     }
                 }
                 view.feed(play);
@@ -1236,6 +1239,13 @@ impl App {
         } else if let Some(at_ms) = quit_at {
             // 一時停止の板の「演奏をやめる」と同じく、シャッターを閉じてから結果へ
             self.close_then(AfterClose::Result { at_ms }, Duration::ZERO);
+        } else if rested && self.quick.is_none() && self.after_close.is_none() {
+            // ドラムだけで止められるように、叩くのをやめたら一時停止する（叩かなかった周は数えない）
+            self.open_pause();
+            self.toast_for(
+                "叩いていないので止めました\nこの周は数えません".to_owned(),
+                Duration::from_secs(4),
+            );
         }
         if self.shutter.is_closed()
             && let Some(next) = self.after_close.take()
@@ -1638,6 +1648,16 @@ impl App {
                     let at_ms = play.now_ms();
                     self.quick = None;
                     self.close_then(AfterClose::Result { at_ms }, Duration::ZERO);
+                }
+            }
+            ConfigAction::Run(ItemId::Reselect) => {
+                if let Screen::Play(play, _) = &self.screen
+                    && let Some(options) = play.practice.as_ref().map(|p| p.restart_options())
+                {
+                    // ここまでの周は記録に残し（open_setup）、今の決めごとを選んだ板を開く
+                    let path = play.path.clone();
+                    self.quick = None;
+                    self.close_then(AfterClose::Setup(path, Some(options)), Duration::ZERO);
                 }
             }
             ConfigAction::Run(ItemId::PracticeSong) => {
@@ -2086,6 +2106,7 @@ impl App {
 
     /// メニューの画面での電子ドラムの操作（上流の割り当てがもと）。
     /// HT で上、LT で下、CY か RD で決定、LC で戻る。選曲は HH を 2 回で難易度、RD で簡易設定（決定は CY だけ）。
+    /// 結果は SD でもう一度、RD で区間練習、CY か LC で選曲へ。
     /// 足で踏むパッド（BD・LP・LBD）は演奏の合間に踏んでしまうので、メニューの操作には使わない
     fn on_menu_pad(&mut self, lane: DrumLane, at_us: i64) {
         if self.after_close.is_some() || self.applying.is_some() {
@@ -2128,9 +2149,12 @@ impl App {
             Screen::End(_) => {}
             Screen::Select => {
                 if self.popup.is_some() {
+                    // 設定の画面と同じパッドの役目（SD・FT で値をその場で変える）
                     let input = match lane {
                         DrumLane::HT => PopupInput::Up,
                         DrumLane::LT => PopupInput::Down,
+                        DrumLane::SD => PopupInput::Left,
+                        DrumLane::FT => PopupInput::Right,
                         DrumLane::CY | DrumLane::RD => PopupInput::Decide,
                         DrumLane::LC => PopupInput::Cancel,
                         _ => return,
@@ -2160,10 +2184,13 @@ impl App {
                     _ => {}
                 }
             }
+            // 画面の下の帯に出す役目（`ResultView::hints`）
             Screen::Result(..) => match lane {
-                DrumLane::CY | DrumLane::RD | DrumLane::LC => {
-                    self.result_action(ui::ResultAction::Back);
-                }
+                DrumLane::CY | DrumLane::LC => self.result_action(ui::ResultAction::Back),
+                // もう一度（練習なら同じ決めごとで。キーボードは R）
+                DrumLane::SD => self.result_action(ui::ResultAction::Retry),
+                // 区間練習の板（練習なら今の決めごとを選んでおく。キーボードは P）
+                DrumLane::RD => self.result_action(ui::ResultAction::Practice(None)),
                 // 「ずれ」の板のおすすめ（キーボードは O）
                 DrumLane::FT => self.toggle_result_advice(),
                 // 選曲と同じく HT と LT で動かす
@@ -2379,6 +2406,7 @@ impl App {
             .filter(|(_, until)| Instant::now() < *until)
             .map(|(t, _)| t.clone());
         let scanning = self.songs.scanning().is_some();
+        let paused_panel = self.quick.is_some() && matches!(self.screen, Screen::Play(..));
         self.poll_update();
         self.title.set_update(self.updater.status());
         // 「更新しています」を少し見せてから閉じる（閉じたあと入れ替えて起動し直す）
@@ -2396,6 +2424,12 @@ impl App {
             // 短い知らせはどの画面でも（F12 で画面を残したときなど）
             let ctx = ui.ctx().clone();
             if let Some(t) = &toast {
+                // 一時停止の板を開いているときは、板と下の帯にかからないよう、レーンの見えている所に
+                let at = if paused_panel {
+                    (468.0, 300.0)
+                } else {
+                    (574.0, 676.0)
+                };
                 ui::play_toast(
                     &ctx,
                     &Canvas::overlay(
@@ -2403,6 +2437,7 @@ impl App {
                         ctx.content_rect(),
                     ),
                     t,
+                    at,
                 );
             }
             // 更新のようす（落としている間の隅の印、「更新しています」）
@@ -2585,12 +2620,10 @@ impl App {
                     Page::Summary => view.draw_summary(&c, &mut self.gfx, o),
                     Page::Analysis => match &o.practice {
                         Some(p) => view.draw_practice_laps(&c, &mut self.gfx, p),
-                        None => {
-                            view.draw_analysis_hint(&c, &mut self.gfx);
-                            *result_actions = ui::draw_result(ui, &mut self.gfx, o);
-                        }
+                        None => *result_actions = ui::draw_result(ui, &mut self.gfx, o),
                     },
                 }
+                view.draw_legend(&c, &mut self.gfx, o);
                 // フェードは egui の窓より上に
                 let top = ctx.layer_painter(egui::LayerId::new(
                     egui::Order::Tooltip,

@@ -278,6 +278,8 @@ pub struct LapState {
     pub cue: Option<Cue>,
     /// 音符をすべて判定し終えた実時間（周の終わりを少しのあいだ見せる）
     pub settled_at_ms: Option<f64>,
+    /// 叩かずに休んだ周（成績にも記録にも入れない）
+    pub rest: bool,
     /// 何回目の段の挑戦の周か（0 から）と、その挑戦の何周目か（1 から。手で速度を変えたらそこから数え直す）
     pub attempt: usize,
     pub in_attempt: usize,
@@ -363,6 +365,9 @@ pub struct Withdrawn {
 /// クリアしてから結果の画面へ進むまで（ミリ秒）。クリアを見せる間
 pub const CLEAR_HOLD_MS: f64 = 3000.0;
 
+/// 1 周（助走を入れて）叩かなければ休みとする。1 周がこれより短くても、これだけは待つ（ミリ秒）
+pub const REST_MIN_MS: f64 = 4000.0;
+
 /// 練習 1 回の周の並びと集計
 pub struct Practice {
     pub options: PracticeOptions,
@@ -403,6 +408,13 @@ pub struct Practice {
     pub grid: BeatGrid,
     /// 次に並べる周の、判定の音符ごとの拍とレーン（`next_lap` が作り、`push_lap` が周に移す）
     next_slots: Vec<(Option<BeatSlot>, DrumLane)>,
+    /// 叩くのをやめたら休みにするか（区間の音符がすべて自動で叩くレーンなら見ない）
+    rest_watch: bool,
+    /// 最後にパッドを叩いた実時間と、叩かない時間を数え始めた実時間（休みのあと）
+    last_hit_ms: f64,
+    listen_from_ms: f64,
+    /// 休んでいる（並べた周を叩き終えるまで次の周を並べず、終えたら助走からその段を数え直す）
+    resting: bool,
 }
 
 /// 取り下げるには、周の音が鳴り始めるまでこれだけ余裕が要る（ミリ秒。音の出力の遅れのぶん）
@@ -434,6 +446,10 @@ impl Practice {
             band: Vec::new(),
             grid: BeatGrid::new(tempo, options.section),
             next_slots: Vec::new(),
+            rest_watch: true,
+            last_hit_ms: f64::NEG_INFINITY,
+            listen_from_ms: f64::NEG_INFINITY,
+            resting: false,
         }
     }
 
@@ -485,7 +501,7 @@ impl Practice {
     /// つなぐときは次の周の音が `ahead_ms` 先に迫ったら、区切るときは前の周の音符をすべて判定したら並べる。
     /// 段の周を並べ終えたら（同じ拍のミスが重なったら、その周で）、挑戦が終わるまで並べない。クリアしたら並べない
     pub fn wants_lap(&self, now_ms: f64, ahead_ms: f64) -> bool {
-        if self.cleared_at_ms.is_some() {
+        if self.cleared_at_ms.is_some() || self.resting {
             return false;
         }
         if self.laps.is_empty() {
@@ -547,6 +563,14 @@ impl Practice {
             }
             self.laps[self.settled].settled_at_ms = Some(now_ms);
             self.settled += 1;
+        }
+        // 休みの前に並べた周を叩き終えたら、助走からその段を数え直す
+        if self.resting && self.settled == self.laps.len() {
+            self.resting = false;
+            self.resume_pending = true;
+            self.run_up_next = true;
+            self.next_cue = Some(Cue::Start);
+            self.listen_from_ms = now_ms;
         }
         let laid = self.laps.len() - self.attempt_start.min(self.laps.len());
         if self.cleared_at_ms.is_none()
@@ -658,7 +682,7 @@ impl Practice {
             self.next_cue = self.next_cue.or(lap.cue);
             self.run_up_next |= lap.plan.has_run_up();
         }
-        if index == self.attempt_start && matches!(lap.cue, Some(Cue::Step { .. })) {
+        if index == self.attempt_start && matches!(lap.cue, Some(Cue::Step { .. } | Cue::Start)) {
             self.resume_pending = true;
         }
         log::info!(
@@ -671,6 +695,73 @@ impl Practice {
             notes_from: lap.notes.start,
             audio_from_ms: lap.plan.audio.at_ms,
         })
+    }
+
+    /// 区間の音符がすべて自動で叩くレーンなら、叩くのをやめても休みにしない（`auto` は自動で叩くレーン）
+    pub fn set_auto_lanes(&mut self, auto: &[DrumLane]) {
+        let s = self.options.section;
+        self.rest_watch = self
+            .chart_notes
+            .iter()
+            .any(|n| n.at.measure >= s.first && n.at.measure <= s.last && !auto.contains(&n.lane));
+    }
+
+    /// パッドを叩いた（判定に関わらず。`at_ms` は実時間）
+    pub fn on_hit(&mut self, at_ms: f64) {
+        self.last_hit_ms = self.last_hit_ms.max(at_ms);
+    }
+
+    /// 1 周（助走を入れて。[`REST_MIN_MS`] より短ければそれだけ）叩いていなければ休みにする。
+    /// 叩かなかった周は成績にも記録にも入れず、今の段の挑戦は取りやめる（もう一度にも数えない）。
+    /// 並べた周を叩き終えたら、同じ段を助走から数え直す。休みにしたら true（呼んだ側は一時停止の板を出す）
+    pub fn check_rest(&mut self, now_ms: f64) -> bool {
+        if !self.rest_watch || self.resting || self.cleared_at_ms.is_some() {
+            return false;
+        }
+        let (Some(first), Some(last)) = (self.laps.first(), self.laps.last()) else {
+            return false;
+        };
+        // 1 周目の助走のあいだは数えない
+        let since = self
+            .last_hit_ms
+            .max(self.listen_from_ms)
+            .max(first.plan.start_ms);
+        let lap_ms = (last.plan.end_ms - last.plan.audio.at_ms).max(0.0);
+        if now_ms - since < lap_ms.max(REST_MIN_MS) {
+            return false;
+        }
+        let last_hit = self.last_hit_ms;
+        for l in &mut self.laps {
+            if !l.complete() || l.plan.start_ms > last_hit {
+                l.rest = true;
+            }
+        }
+        self.resting = true;
+        self.decided = false;
+        self.attempt_start = self.laps.len();
+        log::info!(
+            "resting: no hits for {:.0}ms (attempt {} at {}%)",
+            now_ms - since,
+            self.attempt + 1,
+            self.speed
+        );
+        true
+    }
+
+    /// 結果に出す判定の数と音符の数から、休んだ周のぶんを除く（`total` と `notes` は判定ぜんぶ）
+    pub fn without_rest(&self, total: &Tally, notes: usize) -> (Tally, usize) {
+        let mut t = total.clone();
+        let mut n = notes;
+        for l in self.laps.iter().filter(|l| l.rest) {
+            t.perfect = t.perfect.saturating_sub(l.tally.perfect);
+            t.great = t.great.saturating_sub(l.tally.great);
+            t.good = t.good.saturating_sub(l.tally.good);
+            t.poor = t.poor.saturating_sub(l.tally.poor);
+            t.miss = t.miss.saturating_sub(l.tally.miss);
+            t.stray = t.stray.saturating_sub(l.tally.stray);
+            n = n.saturating_sub(l.notes.len());
+        }
+        (t, n)
     }
 
     /// 手で速度を `steps` 刻み動かす（次に並べる周から、助走のあと）。段階アップなら 1 段ずつ、固定なら 5% ずつ。
@@ -830,6 +921,7 @@ impl Practice {
             judged: 0,
             cue,
             settled_at_ms: None,
+            rest: false,
             attempt: self.attempt,
             in_attempt: index - self.attempt_start.min(index) + 1,
         });
@@ -903,6 +995,7 @@ impl Practice {
     pub fn summaries(&self, now_ms: f64) -> Vec<LapSummary> {
         self.laps
             .iter()
+            .filter(|l| !l.rest)
             .filter(|l| l.judged > 0 || !l.strays.is_empty() || l.plan.start_ms <= now_ms)
             .map(LapState::summary)
             .collect()
@@ -953,7 +1046,7 @@ impl Practice {
         let all: Vec<f64> = self
             .laps
             .iter()
-            .filter(|l| l.complete())
+            .filter(|l| l.complete() && !l.rest)
             .flat_map(|l| l.offsets.iter().copied())
             .collect();
         let (mean, _) = mean_and_sd(&all);
@@ -1292,6 +1385,7 @@ mod tests {
             let ev = if miss.contains(&k) {
                 judge.advance(ms + 200.0)
             } else {
+                p.on_hit(ms);
                 judge.hit(engine::judge::Hit {
                     ms,
                     lane,
@@ -1315,6 +1409,50 @@ mod tests {
         start: 70,
         target: 100,
     };
+
+    #[test]
+    fn not_hitting_for_a_lap_rests_and_counts_the_step_again() {
+        let mut p = practice_with(LoopStyle::Connect, LADDER, Section::new(1, 2), 4);
+        let mut judge = judge();
+        play_lap(&mut p, &mut judge, 70, true);
+        let end = p.laps[0].plan.end_ms;
+        assert!(!p.check_rest(end));
+        // 2 周目は何も叩かない。1 周ぶん叩かずに過ぎたら休み
+        let i = play_lap(&mut p, &mut judge, 70, false);
+        let end = p.laps[i].plan.end_ms;
+        assert!(!p.check_rest(end - 3000.0));
+        assert!(p.check_rest(end + 10.0));
+        // 叩かなかった周は数えず、もう一度にもしない。休みのあいだは周を並べない
+        assert!(p.laps[i].rest && !p.laps[0].rest);
+        assert!(!p.wants_lap(end, 1e12));
+        assert!(!p.check_rest(end + 5000.0));
+        assert_eq!(p.summaries(end).len(), 1);
+        let (t, n) = p.without_rest(judge.tally(), judge.notes().len());
+        assert_eq!((t.miss, n), (0, p.laps[0].notes.len()));
+        assert!(p.done.is_empty());
+        assert_eq!(p.again_in_row(), 0);
+        // 並べた周を叩き終えたら、同じ段を助走から数え直す
+        p.settle(end + 20.0);
+        assert!(p.wants_lap(end + 20.0, 0.0));
+        let j = play_lap(&mut p, &mut judge, 70, true);
+        assert_eq!(p.laps[j].cue, Some(Cue::Start));
+        assert!(p.laps[j].plan.has_run_up());
+        assert_eq!(p.laps[j].in_attempt, 1);
+        assert_eq!(p.speed(), 70);
+        // 数え直したあとは、そこから 1 周ぶん待つ
+        assert!(!p.check_rest(end + 1000.0));
+    }
+
+    #[test]
+    fn all_auto_lanes_never_rest() {
+        let mut p = practice_with(LoopStyle::Connect, LADDER, Section::new(1, 2), 4);
+        p.set_auto_lanes(&[DrumLane::SD]);
+        let mut judge = judge();
+        let i = play_lap(&mut p, &mut judge, 70, false);
+        assert!(!p.check_rest(p.laps[i].plan.end_ms + 60_000.0));
+        p.set_auto_lanes(&[DrumLane::BD]);
+        assert!(p.check_rest(p.laps[i].plan.end_ms + 60_000.0));
+    }
 
     #[test]
     fn a_step_goes_up_after_its_laps_without_stopping_to_ask() {

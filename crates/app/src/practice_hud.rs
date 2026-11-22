@@ -782,6 +782,16 @@ fn draw_banner(
                 top + 160.0,
                 alpha,
             );
+            // ドラムだけで止める方法（キーボードなら Esc）
+            line(
+                c,
+                g,
+                ln,
+                "止めるときは、叩くのをやめる（1 周で一時停止）",
+                &edged(14.0, GREY),
+                top + 190.0,
+                alpha,
+            );
         }
         Cue::Step { next, from } => match next {
             Next::Up(to) => {

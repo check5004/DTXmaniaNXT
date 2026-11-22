@@ -216,6 +216,8 @@ pub enum ItemId {
     Retry,
     /// 演奏をやめて結果へ
     Quit,
+    /// 練習をやめて、区間と速度を選ぶ板へ（今の決めごとを選んでおく）
+    Reselect,
     /// 曲の位置（秒。◀▶ で早送り・巻き戻し）
     Seek,
     /// この曲の補正（ミリ秒。入力の補正（全体）に足す）
@@ -1008,17 +1010,21 @@ pub fn rows(page: Page, info: &ConfigInfo<'_>) -> Vec<Row> {
         Page::Cat(Cat::Fav) => s.at("").extend(favorites(c)),
         Page::Quick => {
             let r = s.at("");
-            r.extend(favorites(c));
-            r.push(heading(" "));
+            // 区間練習は一番上（ドラムなら RD で開いて CY で決めるだけ）
             if info.song {
-                r.push(action(
+                let mut practice = action(
                     ItemId::PracticeSong,
                     "この曲を区間練習",
                     String::new(),
-                    "選んでいる曲の、区間練習の決めごとを開きます（キーボードなら P）。".to_owned(),
+                    "選んでいる曲の、区間と速度を選ぶ板を開きます（キーボードなら P）。".to_owned(),
                     None,
-                ));
+                );
+                practice.tone = Tone::Strong;
+                r.push(practice);
+                r.push(heading(" "));
             }
+            r.extend(favorites(c));
+            r.push(heading(" "));
             r.push(action(
                 ItemId::AllSettings,
                 "すべての設定へ",
@@ -1059,6 +1065,18 @@ pub fn rows(page: Page, info: &ConfigInfo<'_>) -> Vec<Row> {
                 .to_owned(),
                 None,
             ));
+            // 練習は自分でやめるまで終わらないので、やめる行も上に置く（ドラムなら LT 数回で届く）
+            if practice {
+                r.push(action(
+                    ItemId::Reselect,
+                    "区間・速度を選び直す",
+                    String::new(),
+                    "練習をやめて、区間と速度を選ぶ板を開きます。ここまでの周は記録に残します。"
+                        .to_owned(),
+                    None,
+                ));
+                r.push(quit_row(practice));
+            }
             let r = s.at("演奏中に変えられる設定");
             if let Some(p) = info.play.filter(|p| !p.practice) {
                 r.push(seek_row(p, v.number(settings::SKIP_MS)));
@@ -1084,25 +1102,9 @@ pub fn rows(page: Page, info: &ConfigInfo<'_>) -> Vec<Row> {
             {
                 r.push(table_row(d, v));
             }
-            let r = s.at(" ");
-            let mut quit = action(
-                ItemId::Quit,
-                if practice {
-                    "練習をやめる"
-                } else {
-                    "演奏をやめる"
-                },
-                String::new(),
-                if practice {
-                    "練習をやめて、結果の画面へ。"
-                } else {
-                    "演奏をやめて、結果の画面へ（ここまでの記録になります）。"
-                }
-                .to_owned(),
-                None,
-            );
-            quit.tone = Tone::Danger;
-            r.push(quit);
+            if !practice {
+                s.at(" ").push(quit_row(practice));
+            }
         }
         Page::Cat(Cat::Play) => {
             s.at("演奏の決まり")
@@ -1359,6 +1361,28 @@ pub fn rows(page: Page, info: &ConfigInfo<'_>) -> Vec<Row> {
 }
 
 /// よく使う項目（設定の画面の「よく使う」と、選曲の簡易設定）
+/// 一時停止の「演奏をやめる」「練習をやめる」の行
+fn quit_row(practice: bool) -> Row {
+    let mut quit = action(
+        ItemId::Quit,
+        if practice {
+            "練習をやめる"
+        } else {
+            "演奏をやめる"
+        },
+        String::new(),
+        if practice {
+            "練習をやめて、結果の画面へ。"
+        } else {
+            "演奏をやめて、結果の画面へ（ここまでの記録になります）。"
+        }
+        .to_owned(),
+        None,
+    );
+    quit.tone = Tone::Danger;
+    quit
+}
+
 fn favorites(c: &Config) -> Vec<Row> {
     let mut r: Vec<Row> = [
         Setting::ScrollSpeed,
@@ -2100,7 +2124,7 @@ fn hints_for(view: &ConfigView, row: Option<&Row>) -> Vec<ui::Hint<'static>> {
     }
     v.push((&[Pad::CY, Pad::RD], decide));
     let back = match (view.panel && view.stack.len() == 1, view.page()) {
-        (true, Page::Pause) => "演奏に戻る（Esc）",
+        (true, Page::Pause) => "続ける（Esc）",
         (true, _) => "閉じる（Esc）",
         _ => "戻る（Esc）",
     };
@@ -3843,19 +3867,25 @@ mod tests {
     }
 
     #[test]
-    fn quick_settings_are_the_favorites_then_practice_and_all_settings() {
+    fn quick_settings_are_practice_then_the_favorites_and_all_settings() {
         let config = Config::default();
         let mut info = info(&config);
         let fav = ids(&rows(Page::Cat(Cat::Fav), &info));
         let quick = ids(&rows(Page::Quick, &info));
-        assert_eq!(quick[..fav.len()], fav[..]);
+        // 区間練習が一番上（開いたときに選んでいる）
+        assert_eq!(quick[0], ItemId::PracticeSong);
+        assert_eq!(quick[1..=fav.len()], fav[..]);
+        assert_eq!(quick[fav.len() + 1..], [ItemId::AllSettings]);
+        let list = rows(Page::Quick, &info);
+        let mut v = ConfigView::panel(Page::Quick);
         assert_eq!(
-            quick[fav.len()..],
-            [ItemId::PracticeSong, ItemId::AllSettings]
+            v.input(ConfigInput::Decide, &list),
+            Response::action(Se::Decide, ConfigAction::Run(ItemId::PracticeSong))
         );
         // BOX を選んでいるときは区間練習が無い
         info.song = false;
         let quick = ids(&rows(Page::Quick, &info));
+        assert_eq!(quick[..fav.len()], fav[..]);
         assert_eq!(quick[fav.len()..], [ItemId::AllSettings]);
         // 値の行は設定の画面と同じに動く（◀▶ でその場で変える）
         let list = rows(Page::Quick, &info);
@@ -3969,6 +3999,17 @@ mod tests {
         let list = rows(Page::Pause, &info);
         assert!(!ids(&list).contains(&ItemId::Seek));
         assert_eq!(list[0].name, "練習に戻る");
+        // 練習は、選び直す・やめるも上に（ドラムで LT 3 回まで）
+        assert_eq!(
+            ids(&list)[..4],
+            [
+                ItemId::Resume,
+                ItemId::Retry,
+                ItemId::Reselect,
+                ItemId::Quit
+            ]
+        );
+        assert_eq!(ids(&list).iter().filter(|&&i| i == ItemId::Quit).count(), 1);
     }
 
     #[test]

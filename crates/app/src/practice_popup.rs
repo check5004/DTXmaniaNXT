@@ -8,8 +8,9 @@
 //! NX v2.0 の選曲画面は後ろの絵が細かく、半透明の板の文字が読みにくいので、開いているあいだは後ろを暗くする。
 //! v2 の背景の絵は下の端に案内の吹き出しがあるので、選んでいる行の説明はその下に板を敷いて出す。
 //!
-//! 操作は上流のポップアップと同じ。↑↓（HT / LT）で選び、Enter（CY / RD）で決め、Esc（LC）で閉じる。
-//! 数の項目は Enter で値を変える状態になり、↑↓ で変えて Enter で戻る。
+//! 操作は設定の画面と同じ（ドラムだけで操作できるように）。HT・LT（↑↓）で行を選び、SD・FT（←→）で
+//! その場で値を変え、CY・RD（Enter）で決め、LC（Esc）で閉じる。画面の下にパッドの役目の帯を出す。
+//! 「練習を始める」は一番上の行で、開いたときに選んでおく（そのまま決めればすぐ始まる）。
 
 use egui::{Color32, Pos2};
 use engine::practice::{LoopStyle, STEP_SPEED, Section, SpeedPlan};
@@ -17,6 +18,7 @@ use engine::practice::{LoopStyle, STEP_SPEED, Section, SpeedPlan};
 use crate::band::{Band, BandData};
 use crate::gfx::{Canvas, Gfx, src};
 use crate::practice::{PracticeOptions, PracticeSetup, pass_line, section_label, style_label};
+use crate::settings_ui::{self as ui, Pad};
 use crate::sfx::Se;
 use crate::stretch::Pitch;
 use crate::text::Style;
@@ -33,9 +35,11 @@ const DIM: u8 = 150;
 /// 説明の行の高さと、出す行の数の上限
 const HELP_LINE_H: f32 = 17.0;
 const HELP_LINES: usize = 4;
+/// 値の列の左の端（ポップアップの左から）
+const VALUE_X: f32 = 200.0;
 
 /// 難易度パネル（`5_status panel.png`）の場所と大きさ。小節の帯をここに重ねる
-const PANEL: (f32, f32, f32, f32) = (130.0, 350.0, 561.0, 342.0);
+const PANEL: (f32, f32, f32, f32) = (130.0, 350.0, 561.0, 334.0);
 /// 小節の帯（難易度パネルの中）
 const BAND: Band = Band {
     x: PANEL.0 + 16.0,
@@ -63,7 +67,10 @@ pub enum Row {
     Back,
 }
 
+/// 「練習を始める」は一番上に置き、開いたときに選んでおく（ドラムなら決めるだけで始まり、
+/// よく変える区間の行もすぐ下にある）
 const ROWS: [Row; 11] = [
+    Row::Start,
     Row::Section,
     Row::Length,
     Row::Weak,
@@ -73,17 +80,13 @@ const ROWS: [Row; 11] = [
     Row::Target,
     Row::Pitch,
     Row::Metronome,
-    Row::Start,
     Row::Back,
 ];
 
 impl Row {
-    /// Enter で値を変える状態になる行
-    fn editable(self) -> bool {
-        matches!(
-            self,
-            Row::Section | Row::Length | Row::SpeedValue | Row::Target
-        )
+    /// SD・FT（←→）で値を変える行
+    fn adjustable(self) -> bool {
+        !matches!(self, Row::Start | Row::Back)
     }
 }
 
@@ -92,9 +95,9 @@ impl Row {
 pub enum PopupInput {
     Up,
     Down,
-    /// 区間を 1 小節前へ（どの行でも）
+    /// 値を 1 つ前へ（区間なら 1 小節前へ）
     Left,
-    /// 区間を 1 小節後へ（どの行でも）
+    /// 値を 1 つ後へ（区間なら 1 小節後へ）
     Right,
     Decide,
     Cancel,
@@ -137,7 +140,6 @@ pub struct PopupMouse {
 pub struct PracticePopup {
     pub setup: PracticeSetup,
     cursor: usize,
-    editing: bool,
     /// 帯でドラッグを始めた小節
     drag: Option<u32>,
     /// 帯で指している小節
@@ -149,7 +151,6 @@ impl PracticePopup {
         Self {
             setup,
             cursor: 0,
-            editing: false,
             drag: None,
             hover: None,
         }
@@ -171,46 +172,34 @@ impl PracticePopup {
 
     pub fn input(&mut self, input: PopupInput) -> Response {
         let row = self.row();
-        let weak = self.weak_index();
-        let s = &mut self.setup;
         match input {
-            PopupInput::Left | PopupInput::Right => {
-                s.shift(if input == PopupInput::Left { -1 } else { 1 });
-                return Response::se(Se::Move);
-            }
-            PopupInput::Up | PopupInput::Down if self.editing => {
-                // 上流と同じく ↑ で値を増やす
-                let d = if input == PopupInput::Up { 1 } else { -1 };
-                match row {
-                    Row::Section => s.shift(d),
-                    Row::Length => s.resize(d),
-                    Row::SpeedValue => s.nudge_speed(d),
-                    Row::Target => {
-                        if let SpeedPlan::Ladder { target, .. } = s.speed {
-                            let t = SpeedPlan::TARGETS;
-                            let i = t.iter().position(|&x| x == target).unwrap_or(0) as i64;
-                            let next = (i + d).clamp(0, t.len() as i64 - 1) as usize;
-                            s.set_target(t[next]);
-                        }
-                    }
-                    _ => {}
-                }
-                return Response::se(Se::Move);
-            }
             PopupInput::Up | PopupInput::Down => {
-                let n = ROWS.len();
-                self.cursor = if input == PopupInput::Up {
-                    (self.cursor + n - 1) % n
+                // 設定の画面と同じく、一覧は端で止まる
+                let next = if input == PopupInput::Up {
+                    self.cursor.checked_sub(1)
                 } else {
-                    (self.cursor + 1) % n
+                    Some(self.cursor + 1).filter(|&i| i < ROWS.len())
                 };
-                return Response::se(Se::Move);
+                return match next {
+                    Some(i) => {
+                        self.cursor = i;
+                        Response::se(Se::Move)
+                    }
+                    None => Response::default(),
+                };
+            }
+            PopupInput::Left | PopupInput::Right => {
+                if !row.adjustable() {
+                    return Response::default();
+                }
+                let d = if input == PopupInput::Left { -1 } else { 1 };
+                return if self.adjust(row, d) {
+                    Response::se(Se::Move)
+                } else {
+                    Response::se(Se::Cancel)
+                };
             }
             PopupInput::Cancel => {
-                if self.editing {
-                    self.editing = false;
-                    return Response::se(Se::Cancel);
-                }
                 return Response {
                     se: Some(Se::Cancel),
                     done: Some(Done::Close),
@@ -218,28 +207,44 @@ impl PracticePopup {
             }
             PopupInput::Decide => {}
         }
-        if self.editing {
-            self.editing = false;
-            return Response::se(Se::Decide);
-        }
-        if row.editable() {
-            // 段階アップでないときは目標が無い
-            if row == Row::Target && !matches!(self.setup.speed, SpeedPlan::Ladder { .. }) {
-                return Response::se(Se::Cancel);
-            }
-            self.editing = true;
-            return Response::se(Se::Decide);
-        }
-        let s = &mut self.setup;
         match row {
+            Row::Start => match self.setup.options() {
+                Some(o) => Response {
+                    se: Some(Se::Decide),
+                    done: Some(Done::Start(o)),
+                },
+                None => Response::se(Se::Cancel),
+            },
+            Row::Back => Response {
+                se: Some(Se::Cancel),
+                done: Some(Done::Close),
+            },
+            // 値の行で決めたら、値を 1 つ後へ（切り替えの行はそれで切り替わる）
+            _ if self.adjust(row, 1) => Response::se(Se::Change),
+            _ => Response::se(Se::Cancel),
+        }
+    }
+
+    /// 行 `row` の値を `d`（-1 か 1）動かす。動かせなければ false
+    fn adjust(&mut self, row: Row, d: i64) -> bool {
+        let weak = self.weak_index();
+        let s = &mut self.setup;
+        let before = (s.section, s.style, s.speed, s.pitch, s.metronome);
+        match row {
+            Row::Section => s.shift(d),
+            Row::Length => s.resize(d),
             Row::Weak => {
-                // 苦手なフレーズを順に選ぶ
-                let phrases = &s.weak.phrases;
-                if phrases.is_empty() {
-                    return Response::se(Se::Cancel);
+                // 苦手なフレーズを、苦手な順に選ぶ（端からは反対の端へ）
+                let n = s.weak.phrases.len() as i64;
+                if n == 0 {
+                    return false;
                 }
-                let next = weak.map_or(0, |i| (i + 1) % phrases.len());
-                let p = &phrases[next];
+                let next = match weak {
+                    Some(i) => (i as i64 + d).rem_euclid(n),
+                    None if d > 0 => 0,
+                    None => n - 1,
+                } as usize;
+                let p = &s.weak.phrases[next];
                 s.section = Some(Section::new(p.first, p.last));
             }
             Row::Loop => {
@@ -249,30 +254,26 @@ impl PracticePopup {
                 };
             }
             Row::Speed => s.toggle_ladder(),
+            Row::SpeedValue => s.nudge_speed(d),
+            Row::Target => {
+                // 段階アップでないときは目標が無い
+                let SpeedPlan::Ladder { target, .. } = s.speed else {
+                    return false;
+                };
+                let t = SpeedPlan::TARGETS;
+                let i = t.iter().position(|&x| x == target).unwrap_or(0) as i64;
+                let next = (i + d).clamp(0, t.len() as i64 - 1) as usize;
+                s.set_target(t[next]);
+            }
             Row::Pitch => {
                 let all = Pitch::ALL;
-                let i = all.iter().position(|&p| p == s.pitch).unwrap_or(0);
-                s.pitch = all[(i + 1) % all.len()];
+                let i = all.iter().position(|&p| p == s.pitch).unwrap_or(0) as i64;
+                s.pitch = all[(i + d).rem_euclid(all.len() as i64) as usize];
             }
             Row::Metronome => s.metronome = !s.metronome,
-            Row::Start => {
-                return match s.options() {
-                    Some(o) => Response {
-                        se: Some(Se::Decide),
-                        done: Some(Done::Start(o)),
-                    },
-                    None => Response::se(Se::Cancel),
-                };
-            }
-            Row::Back => {
-                return Response {
-                    se: Some(Se::Cancel),
-                    done: Some(Done::Close),
-                };
-            }
-            Row::Section | Row::Length | Row::SpeedValue | Row::Target => {}
+            Row::Start | Row::Back => return false,
         }
-        Response::se(Se::Change)
+        before != (s.section, s.style, s.speed, s.pitch, s.metronome)
     }
 
     /// マウス：行を押すとその行を決め、帯を押すかドラッグすると区間を選ぶ
@@ -281,7 +282,6 @@ impl PracticePopup {
         self.hover = m.hover.and_then(|p| BAND.measure_at(n, p));
         if let Some(p) = m.pressed {
             if let Some(i) = row_at(p) {
-                self.editing = false;
                 self.cursor = i;
                 return self.input(PopupInput::Decide);
             }
@@ -363,15 +363,15 @@ impl PracticePopup {
         let s = &self.setup;
         match row {
             Row::Section => {
-                "練習する区間。Enter のあと ↑↓ で 1 小節ずつ動かします（←→ でも）。帯を押すかドラッグしても選べます。"
+                "練習する小節。1 小節ずつ前後に動きます。マウスなら左の帯を押すかドラッグしても選べます。"
                     .to_owned()
             }
-            Row::Length => "区間の長さ（小節）。Enter のあと ↑↓ で変えます。".to_owned(),
+            Row::Length => "区間の長さ。1 小節ずつ増やしたり減らしたりします。".to_owned(),
             Row::Weak => {
                 if s.weak.phrases.is_empty() {
                     "苦手なフレーズはまだありません（遊んだ記録から出します）。".to_owned()
                 } else {
-                    "Enter で苦手なフレーズを、苦手な順に選びます。".to_owned()
+                    "遊んだ記録から見つけた苦手な所。苦手な順に選ぶと、区間がそこに変わります。".to_owned()
                 }
             }
             Row::Loop => match s.style {
@@ -390,8 +390,14 @@ impl PracticePopup {
                 ),
                 SpeedPlan::Fixed(_) => format!("固定: この速度の 1 段だけです。{}", step_rule(s)),
             },
-            Row::SpeedValue => "はじめの段の速度。Enter のあと ↑↓ で 5% ずつ変えます。".to_owned(),
-            Row::Target => "いちばん上の段の速度。ここを越えたらクリア。Enter のあと ↑↓ で選びます。".to_owned(),
+            Row::SpeedValue => match s.speed {
+                SpeedPlan::Ladder { .. } => "はじめの段の速度。5% ずつ変わります。".to_owned(),
+                SpeedPlan::Fixed(_) => "練習する速度。5% ずつ変わります。".to_owned(),
+            },
+            Row::Target => match s.speed {
+                SpeedPlan::Ladder { .. } => "いちばん上の段の速度。ここを越えたらクリアです。".to_owned(),
+                SpeedPlan::Fixed(_) => "速度を固定にしているので、目標はありません。".to_owned(),
+            },
             Row::Pitch => match s.pitch {
                 Pitch::Keep => "保つ: 音程を保ったまま遅くします。",
                 Pitch::Tape => "一緒に下げる: 音程ごと遅くします（テープと同じ）。",
@@ -403,7 +409,8 @@ impl PracticePopup {
             }
             Row::Start => match s.section {
                 Some(sec) if s.notes_in(sec) == 0 => "この区間には音符がありません。".to_owned(),
-                _ => "この決めごとで練習を始めます。".to_owned(),
+                _ => "この決めごとで練習を始めます。止めるときは叩くのをやめると、1 周のあとで一時停止します。"
+                    .to_owned(),
             },
             Row::Back => "選曲に戻ります。".to_owned(),
         }
@@ -462,18 +469,18 @@ impl PracticePopup {
         for (i, &row) in ROWS.iter().enumerate() {
             let y = Y + 40.0 + ROW_H * i as f32;
             let selected = i == self.cursor;
-            label(
-                c,
-                g,
-                X + 18.0,
-                y,
-                self.name(row),
-                selected && !self.editing,
-                176.0,
-            );
+            label(c, g, X + 18.0, y, self.name(row), selected, 166.0);
             let v = self.value(row);
             if !v.is_empty() {
-                label(c, g, X + 200.0, y, &v, selected, W - 214.0);
+                label(c, g, X + VALUE_X, y, &v, selected, W - VALUE_X - 30.0);
+            }
+            // 選んでいる値の行は、設定の画面と同じく ◀▶ を添えて、その場で変えられることを見せる
+            if selected && row.adjustable() {
+                let cy = y + 3.0 + ROW_H / 2.0;
+                // カーソルの橙の上でも見えるよう、濃い色で
+                let color = Color32::from_rgb(60, 28, 0);
+                ui::triangle(c, X + VALUE_X - 12.0, cy, 10.0, -1, color);
+                ui::triangle(c, X + W - 22.0, cy, 10.0, 1, color);
             }
         }
         // のぼる段と、1 段の決まり（行の下）
@@ -526,6 +533,24 @@ impl PracticePopup {
                 }
             }
         }
+        ui::legend(c, g, &self.hints());
+    }
+
+    /// 画面の下に出す、パッドの役目（設定の画面と同じ帯）
+    fn hints(&self) -> Vec<ui::Hint<'static>> {
+        let row = self.row();
+        let mut v: Vec<ui::Hint<'static>> = vec![(&[Pad::HT], "上"), (&[Pad::LT], "下")];
+        if row.adjustable() {
+            v.push((&[Pad::SD, Pad::FT], "←→ 値を変える"));
+        }
+        let decide = match row {
+            Row::Start => "練習を始める（Enter）",
+            Row::Back => "閉じる（Enter）",
+            _ => "次の値（Enter）",
+        };
+        v.push((&[Pad::CY, Pad::RD], decide));
+        v.push((&[Pad::LC], "閉じる（Esc）"));
+        v
     }
 
     /// 難易度パネルの場所に、小節の帯と苦手なフレーズを出す
@@ -715,34 +740,80 @@ mod tests {
         })
     }
 
+    fn cursor_at(p: &mut PracticePopup, row: Row) {
+        p.cursor = ROWS.iter().position(|&r| r == row).unwrap();
+    }
+
     #[test]
-    fn editing_changes_values_with_up_and_down() {
+    fn opens_on_start_so_deciding_starts_right_away() {
         let mut p = popup(16);
-        // Section を値を変える状態にして ↑ で 1 小節後へ
-        p.input(PopupInput::Decide);
-        p.input(PopupInput::Up);
+        assert_eq!(p.row(), Row::Start);
+        assert!(matches!(
+            p.input(PopupInput::Decide).done,
+            Some(Done::Start(o)) if o.section == Section::new(0, 3)
+        ));
+    }
+
+    #[test]
+    fn left_and_right_change_the_value_in_place() {
+        let mut p = popup(16);
+        // 区間の行で ▶ なら 1 小節後へ（値を変える状態に入らなくてよい）
+        p.input(PopupInput::Down);
+        assert_eq!(p.row(), Row::Section);
+        p.input(PopupInput::Right);
         assert_eq!(p.setup.section, Some(Section::new(1, 4)));
-        // Enter で戻って Length へ
-        p.input(PopupInput::Decide);
+        // 長さの行で ◀ なら 1 小節縮める
         p.input(PopupInput::Down);
         assert_eq!(p.row(), Row::Length);
-        p.input(PopupInput::Decide);
-        p.input(PopupInput::Down);
+        p.input(PopupInput::Left);
         assert_eq!(p.setup.section, Some(Section::new(1, 3)));
-        // Esc は値の変更をやめるだけ
-        assert_eq!(p.input(PopupInput::Cancel).done, None);
+        // 速度の行は 5% ずつ
+        cursor_at(&mut p, Row::SpeedValue);
+        let before = p.setup.speed.first_speed();
+        p.input(PopupInput::Right);
+        assert_eq!(p.setup.speed.first_speed(), before + 5);
+        // 切り替えの行は ◀▶ でも決定でも切り替わる
+        cursor_at(&mut p, Row::Metronome);
+        p.input(PopupInput::Right);
+        assert!(!p.setup.metronome);
+        p.input(PopupInput::Decide);
+        assert!(p.setup.metronome);
+        // 始める・戻るの行では ◀▶ は何もしない
+        cursor_at(&mut p, Row::Start);
+        let section = p.setup.section;
+        assert_eq!(p.input(PopupInput::Right), Response::default());
+        assert_eq!(p.setup.section, section);
+        // Esc（LC）は閉じる
         assert_eq!(p.input(PopupInput::Cancel).done, Some(Done::Close));
+    }
+
+    #[test]
+    fn the_list_stops_at_the_ends() {
+        let mut p = popup(16);
+        assert_eq!(p.input(PopupInput::Up), Response::default());
+        assert_eq!(p.row(), Row::Start);
+        for _ in 0..ROWS.len() + 3 {
+            p.input(PopupInput::Down);
+        }
+        assert_eq!(p.row(), Row::Back);
+        assert_eq!(p.input(PopupInput::Decide).done, Some(Done::Close));
     }
 
     #[test]
     fn weak_phrases_are_picked_in_order() {
         let mut p = popup(16);
-        p.cursor = ROWS.iter().position(|&r| r == Row::Weak).unwrap();
-        p.input(PopupInput::Decide);
+        cursor_at(&mut p, Row::Weak);
+        p.input(PopupInput::Right);
         assert_eq!(p.setup.section, Some(Section::new(4, 5)));
         assert_eq!(p.value(Row::Weak), "1/2");
-        p.input(PopupInput::Decide);
+        p.input(PopupInput::Right);
         assert_eq!(p.setup.section, Some(Section::new(9, 9)));
+        p.input(PopupInput::Right);
+        assert_eq!(p.setup.section, Some(Section::new(4, 5)));
+        // ◀ なら逆の順
+        p.input(PopupInput::Left);
+        assert_eq!(p.setup.section, Some(Section::new(9, 9)));
+        // 決定でも次へ
         p.input(PopupInput::Decide);
         assert_eq!(p.setup.section, Some(Section::new(4, 5)));
     }
@@ -750,7 +821,7 @@ mod tests {
     #[test]
     fn start_needs_notes() {
         let mut p = popup(8);
-        p.cursor = ROWS.iter().position(|&r| r == Row::Start).unwrap();
+        cursor_at(&mut p, Row::Start);
         assert!(matches!(
             p.input(PopupInput::Decide).done,
             Some(Done::Start(o)) if o.section == Section::new(0, 3)
@@ -762,27 +833,38 @@ mod tests {
     #[test]
     fn target_only_with_the_ladder() {
         let mut p = popup(8);
-        p.cursor = ROWS.iter().position(|&r| r == Row::Target).unwrap();
+        cursor_at(&mut p, Row::Target);
         p.setup.speed = SpeedPlan::Fixed(80);
-        p.input(PopupInput::Decide);
-        assert!(!p.editing);
+        assert_eq!(p.input(PopupInput::Right).se, Some(Se::Cancel));
+        assert_eq!(p.setup.speed, SpeedPlan::Fixed(80));
         p.setup.speed = SpeedPlan::Ladder {
             start: 70,
             target: 100,
         };
-        p.input(PopupInput::Decide);
-        p.input(PopupInput::Up);
+        p.input(PopupInput::Right);
         assert!(matches!(
             p.setup.speed,
             SpeedPlan::Ladder { target: 105, .. }
         ));
         // 一番下より下げない
-        p.input(PopupInput::Down);
-        p.input(PopupInput::Down);
+        p.input(PopupInput::Left);
+        p.input(PopupInput::Left);
         assert!(matches!(
             p.setup.speed,
             SpeedPlan::Ladder { target: 100, .. }
         ));
+    }
+
+    #[test]
+    fn the_legend_follows_the_row() {
+        let mut p = popup(8);
+        let names = |p: &PracticePopup| p.hints().iter().map(|h| h.1).collect::<Vec<_>>();
+        assert!(names(&p).contains(&"練習を始める（Enter）"));
+        assert!(!names(&p).contains(&"←→ 値を変える"));
+        cursor_at(&mut p, Row::Section);
+        assert!(names(&p).contains(&"←→ 値を変える"));
+        // 足のパッドは使わない
+        assert!(p.hints().iter().all(|h| !h.0.contains(&Pad::BD)));
     }
 
     #[test]

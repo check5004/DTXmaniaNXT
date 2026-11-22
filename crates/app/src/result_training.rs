@@ -103,7 +103,7 @@ fn stray_note(h: &StrayHint) -> String {
 fn offset_note((mean, hits): (f64, usize)) -> Option<String> {
     (hits >= OFFSET_NOTE_HITS && mean.abs() >= OFFSET_NOTE_MS).then(|| {
         format!(
-            "叩くのが平均 {:.0}ms {}。いつもなら、演奏中に - / = で入力の補正を合わせると楽になります。",
+            "叩くのが平均 {:.0}ms {}。選曲の簡易設定（RD）の「入力の補正」を合わせると楽になります。",
             mean.abs(),
             if mean < 0.0 { "早め" } else { "遅め" }
         )
@@ -305,7 +305,7 @@ fn draw_map(
 
 /// 練習の結果。段と挑戦の印、時間と周の数、ミスした所の地図、いちばんミスした所、気づいたこと
 pub fn draw_practice(c: &Canvas, g: &mut Gfx, p: &PracticeOutcome) {
-    let (x, y, w, h) = PRACTICE;
+    let (x, y, w, _) = PRACTICE;
     panel(c, PRACTICE);
     let left = x + 20.0;
     let o = p.options;
@@ -425,17 +425,12 @@ pub fn draw_practice(c: &Canvas, g: &mut Gfx, p: &PracticeOutcome) {
     for n in notes {
         ny = paragraph(c, g, &n, wx, ny, 13.0, NOTE_COLOR, x + w - 20.0 - wx);
     }
-    // 操作の案内
-    let keys = "R：もう一度　　P：区間を選び直す　　→：周ごとの表　　Enter：選曲へ";
-    let style = Style::edged(15.0, Color32::from_gray(220), Color32::BLACK, 1.5);
-    if let Some(t) = g.texts.get(keys, &style) {
-        t.draw_fit(c, x + ((w - t.w) / 2.0).max(10.0), y + h - 30.0, w - 20.0);
-    }
+    // 操作の案内は画面の下の帯（`ResultView::hints`）
 }
 
 /// 練習の結果の 2 ページ目：周ごとの成績の表
 pub fn draw_practice_laps(c: &Canvas, g: &mut Gfx, p: &PracticeOutcome) {
-    let (x, y, w, h) = PRACTICE;
+    let (x, y, _, h) = PRACTICE;
     panel(c, PRACTICE);
     let left = x + 20.0;
     let heading_w = g.heading(c, left, y + 10.0, "周ごとの成績");
@@ -476,11 +471,6 @@ pub fn draw_practice_laps(c: &Canvas, g: &mut Gfx, p: &PracticeOutcome) {
         );
     } else {
         lap_table(c, g, &done, left, ty, y + h - 44.0);
-    }
-    let keys = "←：練習の結果　　R：もう一度　　P：区間を選び直す　　Enter：選曲へ";
-    let style = Style::edged(15.0, Color32::from_gray(220), Color32::BLACK, 1.5);
-    if let Some(t) = g.texts.get(keys, &style) {
-        t.draw_fit(c, x + ((w - t.w) / 2.0).max(10.0), y + h - 30.0, w - 20.0);
     }
 }
 
@@ -670,10 +660,11 @@ pub fn draw_weak(c: &Canvas, g: &mut Gfx, o: &Outcome) {
     if let Some(t) = &o.strokes {
         draw_strokes(c, g, t, x, ty, pw, limit);
     }
+    // パッドの印（RD）と、キーボードの P（ずれの板の「FT / O」と同じ形）
     let hint = if w.phrases.is_empty() {
-        "P：区間を練習"
+        "RD / P：区間を練習"
     } else {
-        "P：苦手なフレーズを練習"
+        "RD / P：苦手なフレーズを練習"
     };
     let style = Style::edged(14.0, Color32::from_gray(210), Color32::BLACK, 1.0);
     if let Some(t) = g.texts.get(hint, &style) {
