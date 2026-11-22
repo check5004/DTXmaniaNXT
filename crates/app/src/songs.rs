@@ -314,6 +314,16 @@ impl SongList {
         s.charts[level].as_ref().map(|c| c.path.clone())
     }
 
+    /// 譜面 `path` の曲の、難易度すべての譜面（`path` を含む）。一覧に無ければ `path` だけ
+    pub fn song_charts(&self, path: &Path) -> Vec<PathBuf> {
+        self.library
+            .all_songs()
+            .into_iter()
+            .find(|s| s.charts.iter().flatten().any(|c| c.path == path))
+            .map(|s| s.charts.iter().flatten().map(|c| c.path.clone()).collect())
+            .unwrap_or_else(|| vec![path.to_owned()])
+    }
+
     /// 譜面の難易度の名前（set.def の `#L1LABEL` など）。一覧に無いか名前が無ければ空
     pub fn chart_label(&self, path: &Path) -> String {
         self.library

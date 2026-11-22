@@ -156,6 +156,8 @@ pub const LANE_TYPE: &str = "lane_type";
 pub const RD_POSITION: &str = "rd_position";
 pub const HHO_GRAPHICS: &str = "hho_graphics";
 pub const LBD_GRAPHICS: &str = "lbd_graphics";
+/// ずれのバー（叩いた音符のずれを、判定の線の時刻を真ん中にした横の目盛りに印で出す）
+pub const HIT_ERROR_BAR: &str = "hit_error_bar";
 
 /// 選択肢の表を `[key, label]` の並びから作る
 macro_rules! choices {
@@ -730,6 +732,15 @@ pub const ALL: &[Def] = &[
         "PERFECT などの文字を、レーンの上か、判定ラインの下に出します。出さないこともできます。",
     ),
     view_toggle(COMBO_DISP, "コンボ（Combo）", "コンボの数を出すかどうか。"),
+    Def {
+        key: HIT_ERROR_BAR,
+        group: Group::View,
+        section: "ずれの表示",
+        name: "ずれのバー",
+        kind: Kind::Toggle { default: true },
+        desc: "ゲージの下に、叩いたずれを印で出します。真ん中が ±0 で、左が早く、右が遅いです。\n印の色は判定の色で、少しずつ消えます。▼ と数字は直近 20 打の平均です。",
+        in_play: true,
+    },
     Def {
         key: MIN_COMBO,
         group: Group::View,

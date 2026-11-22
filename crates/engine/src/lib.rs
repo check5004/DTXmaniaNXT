@@ -4,12 +4,14 @@
 //! - [`clock`] は音の再生位置と MIDI の受信時刻を、同じ「曲の時刻」にそろえる
 //! - [`input`] は電子ドラムの MIDI を、レーンと叩き方にそろえる（Roland の既定値つき）
 //! - [`analysis`] は記録から苦手な小節とフレーズを出す
+//! - [`lag`] は記録のずれから補正の値をすすめる
 //! - [`practice`] は練習の区間を周回ぶん並べ、周の合格を決める
 
 pub mod analysis;
 pub mod clock;
 pub mod input;
 pub mod judge;
+pub mod lag;
 pub mod practice;
 
 pub use dtx::DrumLane;

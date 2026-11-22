@@ -162,6 +162,11 @@ pub struct Outcome {
     /// 叩けた音符のずれ（ミリ秒、マイナスは早い）の平均と標準偏差
     pub offset_mean_ms: Option<f64>,
     pub offset_sd_ms: Option<f64>,
+    /// 叩けた音符のずれ（結果の画面の散らばりに使う）と、判定の幅（ペダル以外）
+    pub offsets: Vec<f64>,
+    pub windows: HitWindows,
+    /// 結果の画面の「ずれ」の板（普通のプレイだけ。記録を読んでから入れる）
+    pub lag: Option<crate::lag_view::LagResult>,
     /// 最後まで遊んだ（途中でやめたら false）
     pub cleared: bool,
     /// 小節ごとの音符の数（長さが譜面の小節の数）
@@ -213,8 +218,10 @@ pub struct Play {
     pub judge: Judge,
     pub audio: Option<AudioOut>,
     pub end_ms: f64,
-    /// 入力の遅れの補正。叩いた時刻からこの分を引く
+    /// 入力の遅れの補正（全体）。叩いた時刻からこの分を引く
     pub input_offset_ms: f64,
+    /// この曲の補正。判定と譜面の流れを一緒にこの分だけ遅らせる（譜面と BGM が合っていない曲など）
+    pub song_offset_ms: f64,
     /// 叩いたときに譜面の音を鳴らすか（モジュールの音を使うなら切る）
     pub drum_sounds: bool,
     /// 画面の効果（演奏画面が取り出す）
@@ -419,6 +426,7 @@ impl Play {
             audio,
             end_ms,
             input_offset_ms,
+            song_offset_ms: 0.0,
             drum_sounds,
             fx: Vec::new(),
             lines,
@@ -602,6 +610,16 @@ impl Play {
         self.song_ms_at(host_us())
     }
 
+    /// 曲の時刻 `song_ms` を判定の時刻にする（入力の補正とこの曲の補正を引く）
+    fn judge_ms(&self, song_ms: f64) -> f64 {
+        song_ms - self.input_offset_ms - self.song_offset_ms
+    }
+
+    /// 譜面を描く時刻。`visual_offset_ms` は表示の補正。この曲の補正のぶん譜面を遅らせる
+    pub fn view_ms(&self, visual_offset_ms: f64) -> f64 {
+        self.now_ms() + visual_offset_ms - self.song_offset_ms
+    }
+
     /// 曲が終わった（練習は自分でやめるまで終わらない）
     pub fn finished(&self) -> bool {
         self.practice.is_none() && self.now_ms() > self.end_ms
@@ -659,7 +677,7 @@ impl Play {
         if self.paused_ms.is_some() {
             self.paused_ms = Some(to);
         }
-        self.judge.jump_to(to);
+        self.judge.jump_to(self.judge_ms(to));
         // 飛んだ先でまだ鳴っているはずの自動の音（長い BGM など）は途中から鳴らし直し、その先は `lay_auto` に任せる
         self.auto_next = self.chart_sounds.auto.partition_point(|v| v.ms < to);
         if let Some(a) = self.audio.as_mut() {
@@ -688,7 +706,8 @@ impl Play {
         let now = self.now_ms();
         self.lay_laps(now);
         self.lay_auto(now);
-        let events = self.judge.advance(now);
+        // 見逃しは判定の時刻で決める（遅めに叩いても POOR の幅の中なら、見逃しより先に届いた打撃で取れるように）
+        let events = self.judge.advance(self.judge_ms(now));
         // 自動で叩いた音符は、叩いたときと同じくレーンを光らせる（音は時刻を決めて鳴らしてある）
         for e in &events {
             let lane = self.judge.notes()[e.note].lane;
@@ -773,7 +792,7 @@ impl Play {
         if self.paused() {
             return;
         }
-        let ms = self.song_ms_at(at_us) - self.input_offset_ms;
+        let ms = self.judge_ms(self.song_ms_at(at_us));
         self.push_fx(Fx::Hit { lane, velocity });
         let events = self.judge.hit(Hit { ms, lane, velocity });
         // 自動で叩くレーンを叩いても空打ちには数えない
@@ -910,6 +929,9 @@ impl Play {
             tally: self.judge.tally().clone(),
             offset_mean_ms: mean,
             offset_sd_ms: sd,
+            offsets: self.hit_offsets.clone(),
+            windows: self.judge.windows(),
+            lag: None,
             cleared: self.finished(),
             notes_per_measure: self.notes_per_measure.clone(),
             results: self
@@ -980,6 +1002,9 @@ impl Play {
             "{{\"input_offset_ms\":{},\"windows_ms\":[{},{},{},{}],\"drum_sounds\":{}",
             self.input_offset_ms, w.perfect, w.great, w.good, w.poor, self.drum_sounds
         );
+        if self.song_offset_ms != 0.0 {
+            settings += &format!(",\"song_offset_ms\":{}", self.song_offset_ms);
+        }
         let pw = self.judge.pedal_windows();
         if pw != w {
             settings += &format!(
@@ -1236,6 +1261,15 @@ mod tests {
         assert_eq!(pad_first.hit_wav(DrumLane::HHO, &hh, 4000.0), 1);
         // 同じレーンなら譜面の音のまま
         assert_eq!(pad_first.hit_wav(DrumLane::HH, &hh, 4000.0), 1);
+    }
+
+    #[test]
+    fn the_song_offset_adds_to_the_input_offset() {
+        let mut p = load_text("song-offset", "#BPM 60\n#00111: 01\n", &Rules::default());
+        p.input_offset_ms = 3.0;
+        p.song_offset_ms = 10.0;
+        // 合わせて 13 ms 遅く叩くのがちょうど
+        assert_eq!(p.judge_ms(4013.0), 4000.0);
     }
 
     #[test]

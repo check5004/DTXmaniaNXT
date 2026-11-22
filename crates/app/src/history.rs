@@ -8,9 +8,10 @@ use engine::analysis::{
     HISTORY_PLAYS, NoteResult, Tendency, measure_weakness, overcome, play_section_score,
     section_weakness, tendencies, weak_phrases,
 };
+use engine::lag::{Advice, LagSample, advise};
 use engine::practice::Section;
 use library::Stats;
-use records::{BestScore, ChartKey, ClearRecord, PlayScore, Records, SessionKind};
+use records::{BestScore, ChartKey, ClearRecord, PlayScore, Records, SessionKind, SessionLag};
 
 use crate::game::{Play, WeakMap};
 use crate::result_view::Rank;
@@ -26,6 +27,41 @@ pub const TENDENCY_SESSIONS: usize = 200;
 
 /// 叩き方のくせを出すのに要る打数（レーンと拍の中の位置の組ごと）
 pub const TENDENCY_MIN_HITS: usize = 20;
+
+/// 補正のおすすめに読む、すべての曲の直近のセッションの数
+const LAG_SESSIONS: usize = 300;
+
+/// おすすめを出すときの、この曲の名前（ほかの曲はフォルダの名前で見分ける）
+const THIS_SONG: &str = "\0this";
+
+/// 記録のセッションのずれを、補正を足し戻した生のずれにする。`charts` はこの曲の譜面
+fn lag_sample(l: SessionLag, charts: &[PathBuf]) -> LagSample {
+    let path = Path::new(&l.chart_path);
+    // 同じ曲の難易度は同じフォルダに置くので、ほかの曲はフォルダで見分ける
+    let song = if charts.iter().any(|c| c == path) {
+        THIS_SONG.to_owned()
+    } else {
+        path.parent().map_or_else(
+            || l.chart_path.clone(),
+            |d| d.to_string_lossy().into_owned(),
+        )
+    };
+    let applied = json_number(&l.settings, "input_offset_ms").unwrap_or(0.0)
+        + json_number(&l.settings, "song_offset_ms").unwrap_or(0.0);
+    LagSample {
+        song,
+        hits: l.hits,
+        raw_ms: l.mean_ms + applied,
+    }
+}
+
+/// 記録の設定（[`Play::session`] が書く平たい JSON）から数を 1 つ読む
+fn json_number(json: &str, key: &str) -> Option<f64> {
+    let at = json.find(&format!("\"{key}\":"))? + key.len() + 3;
+    let rest = &json[at..];
+    let end = rest.find([',', '}']).unwrap_or(rest.len());
+    rest[..end].trim().parse().ok()
+}
 
 /// 練習でクリアした区間を、普通のプレイで確かめた結果
 #[derive(Debug, Clone, PartialEq)]
@@ -154,6 +190,58 @@ impl History {
             log::info!("imported NX scores of {count} charts");
         }
         count
+    }
+
+    /// この曲の補正（ミリ秒）。決めていないか、記録が読めなければ 0
+    pub fn song_offset(&self, path: &Path) -> f64 {
+        let Some(records) = self.records.as_ref() else {
+            return 0.0;
+        };
+        records
+            .song_offset(&path.to_string_lossy())
+            .map_err(|e| log::warn!("cannot read the records: {e}"))
+            .ok()
+            .flatten()
+            .unwrap_or(0.0)
+    }
+
+    /// この曲の補正を、曲の譜面 `charts` すべてに残す
+    pub fn set_song_offset(&mut self, charts: &[PathBuf], offset_ms: f64) {
+        let Some(records) = self.records.as_mut() else {
+            log::warn!("records are off: the song offset is not kept");
+            return;
+        };
+        let paths: Vec<String> = charts
+            .iter()
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect();
+        let refs: Vec<&str> = paths.iter().map(String::as_str).collect();
+        if let Err(e) = records.set_song_offset(&refs, offset_ms, unix_now()) {
+            log::warn!("cannot save the song offset: {e}");
+        }
+    }
+
+    /// 補正のおすすめ。`charts` はこの曲の譜面（難易度すべて）、`global_now` と `song_now` は今の補正。
+    /// 記録が読めなければ、記録の無いときと同じ（何もすすめない）
+    pub fn lag_advice(&self, charts: &[PathBuf], global_now: f64, song_now: f64) -> Advice {
+        let samples = self
+            .records
+            .as_ref()
+            .and_then(|r| {
+                r.recent_lags(LAG_SESSIONS)
+                    .map_err(|e| log::warn!("cannot read the records: {e}"))
+                    .ok()
+            })
+            .unwrap_or_default()
+            .into_iter()
+            .map(|l| lag_sample(l, charts))
+            .collect::<Vec<_>>();
+        advise(
+            &samples,
+            THIS_SONG,
+            global_now.round() as i64,
+            song_now.round() as i64,
+        )
     }
 
     /// 譜面のこれまでのベスト。`before`（セッションの番号）があれば、それより前のプレイだけから。
@@ -343,4 +431,46 @@ fn unix_now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs() as i64)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reads_numbers_from_the_session_settings() {
+        let s = "{\"input_offset_ms\":-31,\"windows_ms\":[34,67,84,117],\"drum_sounds\":true,\"song_offset_ms\":12.5}";
+        assert_eq!(json_number(s, "input_offset_ms"), Some(-31.0));
+        assert_eq!(json_number(s, "song_offset_ms"), Some(12.5));
+        assert_eq!(json_number(s, "missing"), None);
+        assert_eq!(json_number("{}", "input_offset_ms"), None);
+    }
+
+    #[test]
+    fn lag_samples_add_back_the_offsets() {
+        let lag = |path: &str, settings: &str| SessionLag {
+            chart_path: path.into(),
+            started_at: 0,
+            settings: settings.into(),
+            hits: 100,
+            mean_ms: 4.0,
+        };
+        let charts = [
+            PathBuf::from("songs/a/bas.dtx"),
+            PathBuf::from("songs/a/mas.dtx"),
+        ];
+        let s = lag_sample(
+            lag(
+                "songs/a/mas.dtx",
+                "{\"input_offset_ms\":3,\"song_offset_ms\":6}",
+            ),
+            &charts,
+        );
+        assert_eq!(s.song, THIS_SONG);
+        assert_eq!(s.raw_ms, 13.0);
+        // ほかの曲はフォルダで見分ける。前の版の記録（この曲の補正が無い）は 0
+        let s = lag_sample(lag("songs/b/ext.dtx", "{\"input_offset_ms\":-2}"), &charts);
+        assert_eq!(s.song, Path::new("songs/b").to_string_lossy());
+        assert_eq!(s.raw_ms, 2.0);
+    }
 }

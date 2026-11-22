@@ -43,20 +43,11 @@ pub enum ResultAction {
     Back,
     /// もう一度（練習なら同じ区間を）
     Retry,
-    SetInputOffset(f64),
     /// 区間を選ぶ画面へ。`Some` ならその区間を選んでおく
     Practice(Option<Section>),
 }
 
-/// 補正に反映してよいだけの数（これより少ないと平均がぶれる）
-const MIN_HITS_FOR_OFFSET: u32 = 20;
-
-pub fn draw_result(
-    ui: &mut egui::Ui,
-    g: &mut Gfx,
-    o: &Outcome,
-    config: &Config,
-) -> Vec<ResultAction> {
+pub fn draw_result(ui: &mut egui::Ui, g: &mut Gfx, o: &Outcome) -> Vec<ResultAction> {
     let mut actions = Vec::new();
     result_page(ui, g, |ui| {
         egui::ScrollArea::vertical().show(ui, |ui| {
@@ -95,7 +86,6 @@ pub fn draw_result(
                 );
                 ui.label(format!("空打ち {}", t.stray));
                 ui.add_space(16.0);
-                let hits = t.perfect + t.great + t.good + t.poor;
                 if let Some(mean) = o.offset_mean_ms {
                     let lean = if mean > 2.0 {
                         "遅め"
@@ -108,21 +98,13 @@ pub fn draw_result(
                         .offset_sd_ms
                         .map_or(String::new(), |s| format!("、ばらつき ±{s:.1}ms"));
                     ui.label(format!("ずれの平均 {mean:+.1}ms（{lean}）{sd}"));
-                    if hits >= MIN_HITS_FOR_OFFSET && mean.abs() >= 3.0 {
-                        let next = (config.input_offset_ms + mean).round();
+                    if o.lag.is_some() {
                         ui.label(
-                            RichText::new("いつも同じ向きにずれるなら、機材の遅れかもしれません。")
-                                .weak(),
+                            RichText::new(
+                                "補正のおすすめは、1 ページ目の「ずれ」の板に出します（直近のプレイから）。",
+                            )
+                            .weak(),
                         );
-                        if ui
-                            .button(format!(
-                                "入力の補正を {:+.0}ms → {next:+.0}ms にする",
-                                config.input_offset_ms
-                            ))
-                            .clicked()
-                        {
-                            actions.push(ResultAction::SetInputOffset(next));
-                        }
                     }
                 }
                 if !o.overcome.is_empty() {
