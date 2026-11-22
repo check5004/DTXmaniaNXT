@@ -96,6 +96,7 @@ use crate::songs::SongList;
 use crate::time::host_us;
 use crate::title_view::{Ending, TitleItem, TitleView};
 use crate::update_view::Corner;
+use crate::window_mode::MonitorPick;
 
 struct Gpu {
     surface: wgpu::Surface<'static>,
@@ -451,10 +452,15 @@ struct App {
     frames: frames::FrameStats,
     /// 押している Alt などのキー（Alt+Enter で全画面）
     modifiers: winit::keyboard::ModifiersState,
-    /// 窓に当てた全画面と垂直同期の設定（変わったら当て直す）
-    applied_window: Option<(DisplayMode, bool)>,
+    /// 窓に当てた画面の出し方・垂直同期・出すモニター（変わったら当て直す）
+    applied_window: Option<(DisplayMode, bool, Option<MonitorPick>)>,
     /// ウィンドウのときの位置と大きさ（全画面やボーダーレスから戻るときに使う）
     window_placement: Option<window_mode::Placement>,
+    /// ボーダーレスの窓をモニターに合わせ直す（DPI の違うモニターへ移ると、winit が窓の大きさを変えるので）
+    refit_window: bool,
+    /// つながっているモニター（設定の画面の「出すモニター」の選択肢。設定の画面にいるあいだ時々調べ直す）
+    monitor_list: Vec<window_mode::MonitorInfo>,
+    monitors_checked: Instant,
 }
 
 /// 演奏の画面が数えたスコアを、記録に残す形にする
@@ -518,6 +524,9 @@ const APPLY_SHOW: Duration = Duration::from_millis(1500);
 
 /// MIDI の機器がつながったか外れたかを調べる間
 const PORT_CHECK_EVERY: Duration = Duration::from_secs(2);
+
+/// 設定の画面にいるあいだ、モニターがつながったか外れたかを調べる間
+const MONITOR_CHECK_EVERY: Duration = Duration::from_secs(2);
 
 /// 設定の音量（全体と、ミキサーの系統ごと）を出力に渡す。鳴っている音にもすぐ効く
 fn apply_volumes(config: &Config) {
@@ -609,30 +618,60 @@ impl App {
             modifiers: winit::keyboard::ModifiersState::empty(),
             applied_window: None,
             window_placement: None,
+            refit_window: false,
+            monitor_list: Vec::new(),
+            monitors_checked: Instant::now(),
         }
     }
 
-    /// 画面の出し方と垂直同期を設定に合わせる（設定の画面で変えたときも、ここで当てる）
+    /// 画面の出し方・垂直同期・出すモニターを設定に合わせる（設定の画面で変えたときも、ここで当てる）
     fn apply_window_settings(&mut self) {
         let v = &self.config.settings;
-        let want = (v.display_mode(), v.flag(settings::VSYNC));
-        if self.applied_window == Some(want) {
+        let want = (
+            v.display_mode(),
+            v.flag(settings::VSYNC),
+            self.config.monitor.clone(),
+        );
+        if self.applied_window.as_ref() == Some(&want) && !self.refit_window {
             return;
         }
         if let Some(w) = &self.window {
-            window_mode::apply(
-                w,
-                self.applied_window.map(|a| a.0),
-                want.0,
-                &mut self.window_placement,
-            );
+            let target = window_mode::target(w, want.2.as_ref());
+            match &self.applied_window {
+                // 出し方は同じで、モニターが変わったか、DPI が変わって合わせ直す
+                Some((mode, _, monitor)) if *mode == want.0 => {
+                    if *monitor != want.2 || self.refit_window {
+                        window_mode::move_to(w, want.0, target.as_ref());
+                    }
+                }
+                applied => window_mode::apply(
+                    w,
+                    applied.as_ref().map(|a| a.0),
+                    want.0,
+                    &mut self.window_placement,
+                    target.as_ref(),
+                ),
+            }
         }
+        self.refit_window = false;
         if let Some(gpu) = &mut self.gpu {
             gpu.set_vsync(want.1);
         }
+        let mode = want.0;
         self.applied_window = Some(want);
-        if self.config.remember_full_mode(want.0) {
+        if self.config.remember_full_mode(mode) {
             self.config.save();
+        }
+    }
+
+    /// つながっているモニターを調べ直す（設定の画面の選択肢。`now` でなければ間をあける）
+    fn refresh_monitors(&mut self, now: bool) {
+        if !now && self.monitors_checked.elapsed() < MONITOR_CHECK_EVERY {
+            return;
+        }
+        self.monitors_checked = Instant::now();
+        if let Some(w) = &self.window {
+            self.monitor_list = window_mode::monitors(w);
         }
     }
 
@@ -696,6 +735,7 @@ impl App {
             None
         };
         self.load_timing(chart.as_deref());
+        self.refresh_monitors(true);
         self.screen = Screen::Config(Box::default(), from_select);
         self.shutter.open(CONFIG_OPEN_DELAY);
     }
@@ -1350,7 +1390,13 @@ impl App {
         let Screen::Config(view, _) = &mut self.screen else {
             return;
         };
-        let mut info = config_info(&self.config, &self.midi, &self.monitor, &self.songs);
+        let mut info = config_info(
+            &self.config,
+            &self.midi,
+            &self.monitor,
+            &self.songs,
+            &self.monitor_list,
+        );
         info.timing = self.timing.as_ref().map(SongTiming::info);
         let rows = config_view::rows(view.page(), &info);
         let r = view.input(input, &rows);
@@ -1458,7 +1504,13 @@ impl App {
 
     /// 簡易設定の板の項目を作るのに要るもの（選んでいる曲、演奏中なら曲の位置）
     fn quick_info(&self) -> ConfigInfo<'_> {
-        let mut info = config_info(&self.config, &self.midi, &self.monitor, &self.songs);
+        let mut info = config_info(
+            &self.config,
+            &self.midi,
+            &self.monitor,
+            &self.songs,
+            &self.monitor_list,
+        );
         info.song = self.songs.selected_chart().is_some();
         info.timing = self.timing.as_ref().map(SongTiming::info);
         if let Screen::Play(p, _) = &self.screen {
@@ -1710,6 +1762,12 @@ impl App {
             ItemId::Practice(d) => {
                 config_view::set_drill(d, &mut self.config, v);
                 self.config.save();
+            }
+            ItemId::Monitor => {
+                // 窓はこのあとのフレームで移す（apply_window_settings）
+                if config_view::set_monitor(&mut self.config, &self.monitor_list, v) {
+                    self.config.save();
+                }
             }
             ItemId::DeviceUse(port) => {
                 let ports = self.ports().to_vec();
@@ -2355,6 +2413,9 @@ impl App {
     }
 
     fn redraw(&mut self) {
+        if matches!(self.screen, Screen::Config(..)) {
+            self.refresh_monitors(false);
+        }
         let (Some(window), Some(state)) = (self.window.clone(), &mut self.egui_state) else {
             return;
         };
@@ -2495,7 +2556,13 @@ impl App {
                 let painter = ctx.layer_painter(egui::LayerId::background());
                 let c = Canvas::new(&painter, ctx.content_rect());
                 self.gfx.begin(&c, ctx.pixels_per_point());
-                let mut info = config_info(&self.config, &self.midi, &self.monitor, &self.songs);
+                let mut info = config_info(
+                    &self.config,
+                    &self.midi,
+                    &self.monitor,
+                    &self.songs,
+                    &self.monitor_list,
+                );
                 info.timing = self.timing.as_ref().map(SongTiming::info);
                 let rows = config_view::rows(view.page(), &info);
                 view.draw(&c, &mut self.gfx, &rows, &info);
@@ -2522,8 +2589,13 @@ impl App {
                     p.draw(&c, &mut self.gfx);
                 }
                 if let Some(q) = &mut self.quick {
-                    let mut info =
-                        config_info(&self.config, &self.midi, &self.monitor, &self.songs);
+                    let mut info = config_info(
+                        &self.config,
+                        &self.midi,
+                        &self.monitor,
+                        &self.songs,
+                        &self.monitor_list,
+                    );
                     info.song = self.songs.selected_chart().is_some();
                     info.timing = self.timing.as_ref().map(SongTiming::info);
                     let rows = config_view::rows(q.page(), &info);
@@ -2561,8 +2633,13 @@ impl App {
                     },
                 );
                 if let Some(q) = &mut self.quick {
-                    let mut info =
-                        config_info(&self.config, &self.midi, &self.monitor, &self.songs);
+                    let mut info = config_info(
+                        &self.config,
+                        &self.midi,
+                        &self.monitor,
+                        &self.songs,
+                        &self.monitor_list,
+                    );
                     info.play = Some(PlayPos {
                         practice: play.practice.is_some(),
                         at_ms: play.now_ms(),
@@ -2606,6 +2683,7 @@ fn config_info<'a>(
     midi: &Option<MidiIn>,
     monitor: &MidiMonitor,
     songs: &SongList,
+    monitors: &'a [window_mode::MonitorInfo],
 ) -> ConfigInfo<'a> {
     let ports = midi.as_ref().map_or(&[][..], |m| m.ports.as_slice());
     let profiles = inputs::profiles(config, ports);
@@ -2638,6 +2716,7 @@ fn config_info<'a>(
         song: false,
         play: None,
         timing: None,
+        monitors,
     }
 }
 
@@ -2647,15 +2726,27 @@ impl ApplicationHandler for App {
             return;
         }
         let mode = self.config.settings.display_mode();
+        // 選んだモニター（無ければ、外れていれば OS が決める）
+        let target = window_mode::target_in(
+            event_loop.available_monitors(),
+            event_loop.primary_monitor(),
+            self.config.monitor.as_ref(),
+        );
         // ボーダーレスは普通の窓で開いてから広げる（Windows では広げるまで隠しておく）
         let hide = mode == DisplayMode::Borderless && cfg!(windows);
-        let attrs = Window::default_attributes()
+        let mut attrs = Window::default_attributes()
             .with_title("DTXmaniaNXT")
             .with_inner_size(winit::dpi::LogicalSize::new(1280.0, 720.0))
             .with_visible(!hide)
             .with_fullscreen(
-                (mode == DisplayMode::Fullscreen).then_some(Fullscreen::Borderless(None)),
+                (mode == DisplayMode::Fullscreen).then(|| Fullscreen::Borderless(target.clone())),
             );
+        // ウィンドウとボーダーレスは、選んだモニターの真ん中に開く
+        if mode != DisplayMode::Fullscreen
+            && let Some(t) = &target
+        {
+            attrs = attrs.with_position(window_mode::centered(t));
+        }
         let window = match event_loop.create_window(attrs) {
             Ok(w) => Arc::new(w),
             Err(e) => {
@@ -2669,7 +2760,13 @@ impl ApplicationHandler for App {
             DisplayMode::Fullscreen => DisplayMode::Fullscreen,
             _ => DisplayMode::Window,
         };
-        window_mode::apply(&window, Some(opened), mode, &mut self.window_placement);
+        window_mode::apply(
+            &window,
+            Some(opened),
+            mode,
+            &mut self.window_placement,
+            target.as_ref(),
+        );
         if hide {
             window.set_visible(true);
         }
@@ -2697,7 +2794,7 @@ impl ApplicationHandler for App {
         ));
         window.request_redraw();
         self.window = Some(window);
-        self.applied_window = Some((mode, vsync));
+        self.applied_window = Some((mode, vsync, self.config.monitor.clone()));
         if let Some(path) = self.pending.take() {
             self.start(path);
         }
@@ -2716,6 +2813,14 @@ impl ApplicationHandler for App {
                 if let Some(gpu) = &mut self.gpu {
                     gpu.resize(size.width, size.height);
                 }
+            }
+            // ボーダーレスのまま DPI の違うモニターへ移ると、winit が窓の大きさを DPI に合わせて変えてしまうので、
+            // 次のフレームでモニターに合わせ直す
+            WindowEvent::ScaleFactorChanged { .. }
+                if cfg!(windows)
+                    && self.config.settings.display_mode() == DisplayMode::Borderless =>
+            {
+                self.refit_window = true;
             }
             WindowEvent::DroppedFile(path) => self.on_drop(path),
             WindowEvent::ModifiersChanged(m) => self.modifiers = m.state(),

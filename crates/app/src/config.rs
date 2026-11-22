@@ -12,6 +12,7 @@ use crate::practice::PracticePrefs;
 use crate::settings::{DisplayMode, Values};
 use crate::stretch::Pitch;
 use crate::update::UpdateMode;
+use crate::window_mode::MonitorPick;
 
 /// 設定の画面で全体の音量を 1 回で変える幅（%）
 pub const MASTER_VOLUME_STEP: u8 = 5;
@@ -84,6 +85,9 @@ pub struct Config {
     /// 最後に使った全画面の出し方（"borderless" か "fullscreen"）。Alt+Enter と F11 でウィンドウから戻る先
     #[serde(skip_serializing_if = "String::is_empty")]
     pub last_full_mode: String,
+    /// 全画面とボーダーレスを出すモニター（`None` なら窓のあるモニター）。ウィンドウのときは、起動したときにこの真ん中に開く
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub monitor: Option<MonitorPick>,
     /// 設定の表（[`crate::settings`]）の項目の値（config.toml の `[settings]`）。書いていないものは既定
     #[serde(skip_serializing_if = "Values::is_empty")]
     pub settings: Values,
@@ -172,6 +176,7 @@ impl Default for Config {
             update: String::new(),
             last_version: String::new(),
             last_full_mode: String::new(),
+            monitor: None,
             settings: Values::default(),
         }
     }
@@ -644,6 +649,23 @@ lane = \"LP\"
         // 読めない名前やウィンドウは全画面に
         c.last_full_mode = "window".into();
         assert_eq!(c.full_mode(), DisplayMode::Fullscreen);
+    }
+
+    #[test]
+    fn picked_monitor_round_trips() {
+        let mut c = Config::default();
+        assert!(!toml::to_string(&c).unwrap().contains("monitor"));
+        c.monitor = Some(MonitorPick {
+            name: r"\\.\DISPLAY2".into(),
+            x: 2560,
+            y: -120,
+        });
+        // 表（[settings]）と並んでも読み書きできる
+        c.settings.set_display_mode(DisplayMode::Borderless);
+        let text = toml::to_string(&c).unwrap();
+        let back: Config = toml::from_str(&text).unwrap();
+        assert_eq!(back.monitor, c.monitor, "{text}");
+        assert_eq!(back.settings.display_mode(), DisplayMode::Borderless);
     }
 
     #[test]
