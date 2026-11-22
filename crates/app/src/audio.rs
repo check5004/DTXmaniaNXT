@@ -290,7 +290,7 @@ enum Command {
         bus: Bus,
         timing: Option<HitTiming>,
     },
-    /// `tag` の音を短いフェードで止める（選曲のプレビューの音）
+    /// `tag` の音を短いフェードで止める（選曲のプレビューの音）。鳴らす予定でまだ鳴り始めていない音は取りやめる
     Stop(u8),
     /// このフレームより後から鳴らす予定の音を取りやめる（練習で並べ直す周の音）
     CancelFrom(u64),
@@ -494,6 +494,8 @@ impl AudioOut {
                             }
                         }
                         Command::Stop(tag) => {
+                            // まだ鳴り始めていない音は捨て、鳴っている音はフェードで止める
+                            voices.retain(|v| v.tag != tag || v.start < frames_done);
                             for v in voices.iter_mut().filter(|v| v.tag == tag) {
                                 let played = frames_done.saturating_sub(v.start);
                                 v.len = v.len.min(played + fade);
@@ -618,10 +620,16 @@ impl AudioOut {
 
     /// 曲の時刻 `song_ms` に鳴らす
     pub fn play_at(&mut self, sound: &Sound, song_ms: f64, gain: f32, bus: Bus) {
+        self.play_at_tagged(sound, song_ms, gain, 0, bus);
+    }
+
+    /// 曲の時刻 `song_ms` に鳴らし、止めるときの目印 `tag`（0 は止めない）を付ける。
+    /// `stop` で、まだ鳴り始めていなければ取りやめ、鳴っていれば止める（メトロノーム）
+    pub fn play_at_tagged(&mut self, sound: &Sound, song_ms: f64, gain: f32, tag: u8, bus: Bus) {
         let frame = self.frame_at(song_ms).max(0.0) as u64;
-        let _ = self
-            .tx
-            .push(Command::At(Voice::whole(sound.clone(), frame, gain, bus)));
+        let mut v = Voice::whole(sound.clone(), frame, gain, bus);
+        v.tag = tag;
+        let _ = self.tx.push(Command::At(v));
     }
 
     /// 音の一部を、置いたとおりに鳴らす（練習の周の BGM）。途中から始めるときと途中で切るときは短いフェードをかける
@@ -731,7 +739,7 @@ impl AudioOut {
         self.play_now_panned(sound, (gain, 0.0), tag, bus);
     }
 
-    /// `tag` を付けて鳴らした音を止める
+    /// `tag` を付けて鳴らした音を止める（鳴らす予定でまだ鳴り始めていない音は取りやめる）
     pub fn stop(&mut self, tag: u8) {
         let _ = self.tx.push(Command::Stop(tag));
     }
