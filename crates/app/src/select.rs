@@ -4,16 +4,21 @@
 //!
 //! v2 との違い：背景の動画（5_background.mp4）は同梱せず、止まった絵（5_background.jpg）を出す。
 //! v2 の 20260121 では中身の無い密度のグラフに、レーンごとの音符の混み具合を描く。
+//!
+//! 帯の並びの動きは v2 と同じく、送ると帯が動き、次の帯が半分を過ぎたところで選んでいる曲が変わる。
+//! v2 は 1 フレームに 10 ピクセルまでしか動かない（1 秒に 7 本ほど）ので、それより速く送ると送りを捨てる。
+//! ここでは送った分だけ速く動くばねにして、速く送っても位置が飛ばず、送りも捨てないようにしている。
+//! 曲名の文字とジャケットは別のスレッドで作り、見えている帯と向かう先の帯から先に用意する。
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::{Duration, Instant};
 
 use egui::{Color32, Pos2};
 use library::{LEVELS, Node, Song, SongChart, SortKind};
 
 use crate::gfx::{Canvas, Gfx, Glyphs, Opt, Tex, src};
+use crate::jobs::Jobs;
 use crate::songs::{Entry, SongList};
 use crate::text::{Style, Text};
 
@@ -24,8 +29,10 @@ const SPACING: f32 = 85.0;
 /// 選んでいる帯に近いほど左へ出す（離れが `OFFSET_RANGE` より近ければ、最大 `OFFSET_DISTANCE`）
 const OFFSET_RANGE: f32 = 90.0;
 const OFFSET_DISTANCE: f32 = 25.0;
-/// 選んでいる帯より上と下に描く帯の数
+/// 選んでいる帯より上と下に描く帯の数（帯のずれは半本分までなので、これで画面の上から下まで埋まる）
 const ROWS_AROUND: i64 = 5;
+/// 描く帯の外で、文字と画像を前もって用意しておく帯の数（向かう先はさらに送った分だけ）
+const ROWS_AHEAD: i64 = 2;
 /// 曲名とアーティストの幅の上限（長ければ切り、選んでいる帯では流す）
 const TEXT_MAX_W: f32 = 460.0;
 /// 長い文字を流す速さ（ピクセル毎秒）と、流れる文字のつなぎ目の間
@@ -57,9 +64,16 @@ const GRAPH_TOP: f32 = GRAPH_Y + 15.0;
 const GRAPH_H: f32 = 270.0;
 /// グラフを縦に分ける数（1 つ 3 ピクセル）
 const BINS: usize = 90;
-/// 動きの速さ（v2：残りの 10 倍毎秒で近づき、1 フレーム（60 分の 1 秒）に 10 ピクセルまで）
+/// 並べ替えメニューの動きの速さ（v2：残りの 10 倍毎秒で近づき、1 フレーム（60 分の 1 秒）に 10 ピクセルまで）
 const SPEED: f32 = 10.0;
 const MAX_SPEED: f32 = 600.0;
+/// 帯の並びのばねの強さ（毎秒）。1 本の送りは 0.07 秒ほどで半分を過ぎ（v2 とほぼ同じ）、0.25 秒ほどで止まる。
+/// 続けて送ると、送る速さの 1/12 秒分ほど遅れてついていく（1 秒に 30 本なら 2.4 本後ろ）
+const SPRING: f32 = 25.0;
+/// 先に送っておける帯の数。これより多い送りは捨てる（1 度に 10 本送る PageDown などはその本数まで）
+const MAX_AHEAD: usize = 8;
+/// これだけのフレームのあいだ頼み直されなかった譜面の読み込みは捨てる（速く送って通り過ぎた曲）
+const STALE_FRAMES: u64 = 20;
 /// 選んでからプレビューの音を鳴らすまで（上流の既定 1000 ミリ秒）
 pub const PREVIEW_WAIT: Duration = Duration::from_millis(1000);
 
@@ -150,19 +164,26 @@ type SelectionKey = (SortKind, usize, usize, usize);
 
 /// 選曲画面の動き（スクロールや並べ替えメニューのアニメ）
 pub struct SelectView {
-    /// 帯の並びの、目標の位置までの残り（ピクセル。下が正）
-    pending: f32,
+    /// 帯の並びの、止まる位置からのずれ（ピクセル。下が正）。選んでいる帯は `LIST_Y + scroll` に描く。
+    /// 半本分を超えたらカーソルを動かして 1 本分戻すので、いつも ±半本分の中
+    scroll: f32,
+    /// `scroll` の速さ（ピクセル毎秒）
+    velocity: f32,
+    /// `scroll` の向かう先。送ると 1 本分ずつ増減し、カーソルが動くと 1 本分戻る（止まると 0）
+    target: f32,
     /// 並べ替えメニューの、目標の位置までの残り（ピクセル。右が正）
     sort_pending: f32,
     tick: Instant,
+    /// 描いたフレームの数（別のスレッドに頼んだ仕事が要らなくなったかを見るのに使う）
+    frame: u64,
     /// 選んでいるものが変わった時刻（プレビューの音と、長い曲名を流すのに使う）
     changed: Instant,
     selected_key: Option<SelectionKey>,
     /// 曲のフォルダの中のファイル名（大文字・小文字を区別しない OS のため）
     found: HashMap<(PathBuf, String), Option<PathBuf>>,
+    /// 読み終えた譜面の混み具合（読めなかったものは None）
     details: HashMap<PathBuf, Option<Details>>,
-    details_tx: Sender<PathBuf>,
-    details_rx: Receiver<(PathBuf, Option<Details>)>,
+    details_jobs: Jobs<PathBuf, Option<Details>>,
 }
 
 impl Default for SelectView {
@@ -173,78 +194,123 @@ impl Default for SelectView {
 
 impl SelectView {
     pub fn new() -> Self {
-        let (details_tx, job_rx) = channel::<PathBuf>();
-        let (done_tx, details_rx) = channel();
-        std::thread::spawn(move || {
-            for path in job_rx {
-                let d = read_details(&path);
-                if done_tx.send((path, d)).is_err() {
-                    break;
-                }
-            }
-        });
         let now = Instant::now();
         Self {
-            pending: 0.0,
+            scroll: 0.0,
+            velocity: 0.0,
+            target: 0.0,
             sort_pending: 0.0,
             tick: now,
+            frame: 0,
             changed: now,
             selected_key: None,
             found: HashMap::new(),
             details: HashMap::new(),
-            details_tx,
-            details_rx,
+            details_jobs: Jobs::new("chart details", 1, |path: &PathBuf| read_details(path)),
         }
     }
 
     /// 画面に入り直す（v2 と同じく、出入りはシャッターなのでこの画面ではフェードしない）
     pub fn enter(&mut self) {
-        self.pending = 0.0;
+        self.stop();
         self.sort_pending = 0.0;
         self.tick = Instant::now();
         self.selected_key = None;
     }
 
-    /// カーソルを `delta` 行動かした（`SongList::move_by` の後に呼ぶ）。
-    /// v2 と同じく、先へ進めるのは 2 本分まで
-    pub fn moved(&mut self, delta: isize) {
-        self.pending = (self.pending + delta as f32 * SPACING).clamp(-2.0 * SPACING, 2.0 * SPACING);
+    /// 帯の並びを止まった形にする
+    fn stop(&mut self) {
+        self.scroll = 0.0;
+        self.velocity = 0.0;
+        self.target = 0.0;
+    }
+
+    /// カーソルを `delta` 本動かすよう頼む。帯が動いて、次の帯が半分を過ぎたところでカーソルが動く
+    /// （[`SelectView::update`]。v2 と同じ）。先に送っておけるのは [`MAX_AHEAD`] 本まで。送りを受けたら true
+    pub fn push(&mut self, delta: isize) -> bool {
+        let limit = MAX_AHEAD.max(delta.unsigned_abs()) as f32 * SPACING;
+        let before = self.target;
+        self.target = (self.target - delta as f32 * SPACING).clamp(-limit, limit);
+        self.target != before
+    }
+
+    /// 今選んでいる帯から `delta` 本先の帯へ動かす（帯を押したとき。送ってあった分は取り消す）
+    pub fn push_to(&mut self, delta: isize) {
+        self.target = -(delta as f32) * SPACING;
     }
 
     /// BOX の出入りなどで一覧が変わった（スクロールせずに切り替える）
     pub fn jumped(&mut self) {
-        self.pending = 0.0;
+        self.stop();
     }
 
     /// 並べ替えを `delta` 個となりへ変えた（`SongList::set_sort` の後に呼ぶ）
     pub fn sorted(&mut self, delta: isize) {
-        self.pending = 0.0;
+        self.stop();
         self.sort_pending = (self.sort_pending + delta as f32 * SORT_SPACING)
             .clamp(-2.0 * SORT_SPACING, 2.0 * SORT_SPACING);
     }
 
     /// スクロールが止まっていて、選んでから `wait` 経った
     pub fn settled_for(&self, songs: &SongList, wait: Duration) -> bool {
-        self.pending == 0.0
+        self.scroll == 0.0
+            && self.target == 0.0
             && self.selected_key == Some(selection_key(songs))
             && self.changed.elapsed() >= wait
     }
 
-    /// 時間を進める
-    pub fn update(&mut self, songs: &SongList) {
+    /// 時間を進める。帯が半分を過ぎたらカーソルを動かす。描く前に毎フレーム 1 回呼ぶ
+    pub fn update(&mut self, songs: &mut SongList) {
         let now = Instant::now();
         let dt = now.duration_since(self.tick).as_secs_f32().min(0.1);
         self.tick = now;
-        approach(&mut self.pending, dt);
+        self.frame += 1;
+        if songs.len() == 0 {
+            self.stop();
+        } else {
+            let rows = self.advance(dt);
+            if rows != 0 {
+                songs.move_by(rows);
+            }
+        }
         approach(&mut self.sort_pending, dt);
-        for (path, d) in self.details_rx.try_iter() {
+        let stale = self.frame.saturating_sub(STALE_FRAMES);
+        for (path, d) in self.details_jobs.poll(stale) {
+            if self.details.len() > 500 {
+                self.details.clear();
+            }
             self.details.insert(path, d);
         }
+        // 動きがなめらかかを確かめるための記録（RUST_LOG=scroll_trace=trace で出す。時刻、カーソル、ずれ）
+        log::trace!(
+            target: "scroll_trace",
+            "{} {} {:.2}",
+            crate::time::host_us(),
+            songs.cursor,
+            self.scroll
+        );
         let key = selection_key(songs);
         if self.selected_key != Some(key) {
             self.selected_key = Some(key);
             self.changed = now;
         }
+    }
+
+    /// 帯の並びを `dt` 秒動かす。帯が半分を過ぎた本数（次の曲の向きが正）を返す。その分カーソルを動かす
+    fn advance(&mut self, dt: f32) -> isize {
+        spring(&mut self.scroll, &mut self.velocity, self.target, dt);
+        let mut rows = 0;
+        while self.scroll <= -SPACING / 2.0 {
+            rows += 1;
+            self.scroll += SPACING;
+            self.target += SPACING;
+        }
+        while self.scroll >= SPACING / 2.0 {
+            rows -= 1;
+            self.scroll -= SPACING;
+            self.target -= SPACING;
+        }
+        rows
     }
 
     /// 選んでいる曲のプレビューの音（`#PREVIEW`）
@@ -278,15 +344,12 @@ impl SelectView {
         p
     }
 
+    /// 譜面の混み具合。まだ読んでいなければ別のスレッドで読むよう頼む（要るあいだは毎フレーム呼ぶ）
     fn details(&mut self, path: &Path) -> Option<Details> {
         match self.details.get(path) {
             Some(d) => d.clone(),
             None => {
-                if self.details.len() > 500 {
-                    self.details.clear();
-                }
-                self.details.insert(path.to_owned(), None);
-                let _ = self.details_tx.send(path.to_owned());
+                self.details_jobs.request(&path.to_owned(), self.frame);
                 None
             }
         }
@@ -372,8 +435,8 @@ impl SelectView {
         }
     }
 
+    /// 描く（先に [`SelectView::update`] を呼んでおく）
     pub fn draw(&mut self, c: &Canvas, g: &mut Gfx, songs: &SongList) {
-        self.update(songs);
         // 背景（v2 は上に動画を重ねる）
         if let Some(t) = g.skin.tex("Graphics/5_background.jpg") {
             c.draw(&t, 0.0, 0.0);
@@ -422,20 +485,34 @@ impl SelectView {
             }
             return;
         }
+        let row_of = |view: &mut Self, k: i64| {
+            let i = (songs.cursor as i64 + k).rem_euclid(n as i64) as usize;
+            songs.entry(i).map(|e| view.row(songs, e))
+        };
+        // 文字と画像を別のスレッドに頼む。後で頼んだものほど先にできるので、遠い帯から頼み、
+        // 選んでいる帯を最後にする。描く帯の外も、上下に少しと、送ってある向きにはその分まで
+        let ahead = (-self.target / SPACING).round() as i64;
+        let lo = -ROWS_AROUND - ROWS_AHEAD + ahead.min(0);
+        let hi = ROWS_AROUND + ROWS_AHEAD + ahead.max(0);
+        let mut order: Vec<i64> = (lo..=hi).collect();
+        order.sort_by_key(|k| std::cmp::Reverse(k.abs()));
+        for k in order {
+            if let Some(row) = row_of(self, k) {
+                request_row(g, &row);
+            }
+        }
         // 下の帯から描く（上の帯が手前）
         for k in (-ROWS_AROUND..=ROWS_AROUND).rev() {
-            let rel = k as f32 * SPACING + self.pending;
+            let rel = k as f32 * SPACING + self.scroll;
             let y = LIST_Y + rel;
             if y > 720.0 || y + SPACING < 0.0 {
                 continue;
             }
             let t = (OFFSET_RANGE - rel.abs()).clamp(0.0, OFFSET_RANGE) / OFFSET_RANGE;
             let x = LIST_X - t * OFFSET_DISTANCE;
-            let i = (songs.cursor as i64 + k).rem_euclid(n as i64) as usize;
-            let Some(entry) = songs.entry(i) else {
+            let Some(row) = row_of(self, k) else {
                 continue;
             };
-            let row = self.row(songs, entry);
             self.draw_row(c, g, &row, x, y, k == 0);
         }
     }
@@ -483,12 +560,11 @@ impl SelectView {
             if let Some(t) = g.skin.tex("Graphics/5_skillbar.png") {
                 c.draw(&t, x + 82.0, y + 15.0 - t.h / 2.0);
             }
-            let style = Style::edged(16.0, Color32::WHITE, Color32::from_black_alpha(160), 1.0);
-            if let Some(t) = g.texts.get(&format!("{skill:.2}"), &style) {
+            if let Some(t) = g.texts.ready(&skill_text(skill), &SKILL_STYLE) {
                 t.draw(c, x + 105.0, y + 16.0 - t.h / 2.0, 1.0, 1.0);
             }
         }
-        if let Some(t) = self.thumbnail(g, &row.preimage) {
+        if let Some(t) = thumbnail(g, &row.preimage, false) {
             c.draw_opt(
                 &t,
                 x + 40.0 - 32.5,
@@ -501,13 +577,11 @@ impl SelectView {
             );
         }
         let scroll = selected.then(|| self.changed.elapsed().as_secs_f32() * SCROLL_SPEED);
-        let title = Style::edged(24.0, Color32::BLACK, Color32::WHITE, 2.0);
-        if let Some(t) = g.texts.get(&row.title, &title) {
+        if let Some(t) = g.texts.ready(&row.title, &TITLE_STYLE) {
             draw_clipped(c, &t, x + 78.0, y + 38.0 - t.h / 2.0, scroll);
         }
-        let sub = Style::edged(16.0, Color32::BLACK, Color32::WHITE, 1.5);
         if !row.sub.trim().is_empty()
-            && let Some(t) = g.texts.get(&row.sub, &sub)
+            && let Some(t) = g.texts.ready(&row.sub, &SUB_STYLE)
         {
             draw_clipped(c, &t, x + 80.0, y + 60.0 - t.h / 2.0, scroll);
         }
@@ -518,23 +592,12 @@ impl SelectView {
         }
     }
 
-    fn thumbnail(&mut self, g: &mut Gfx, p: &Preimage) -> Option<Tex> {
-        match p {
-            Preimage::File(path) => match g.images.get(path) {
-                Some(t) => Some(t),
-                None if g.images.failed(path) => g.skin.tex("Graphics/5_preimage default.png"),
-                None => None,
-            },
-            Preimage::Skin(rel) => g.skin.tex(rel),
-        }
-    }
-
     /// 画面の点（NX の座標）にある曲の帯が、選んでいる帯から何本先か（上は負）
-    pub fn row_at(p: Pos2) -> Option<isize> {
+    pub fn row_at(&self, p: Pos2) -> Option<isize> {
         if p.x < LIST_X - 40.0 || !(36.0..720.0).contains(&p.y) || Self::sort_at(p).is_some() {
             return None;
         }
-        Some(((p.y - LIST_Y) / SPACING).floor() as isize)
+        Some(((p.y - LIST_Y - self.scroll) / SPACING).floor() as isize)
     }
 
     /// 画面の点（NX の座標）にある並べ替えのアイコンが、選んでいるものから何個先か（左は負）
@@ -552,7 +615,7 @@ impl SelectView {
             return;
         };
         let row = self.row(songs, entry);
-        if let Some(t) = self.thumbnail(g, &row.preimage) {
+        if let Some(t) = thumbnail(g, &row.preimage, true) {
             c.draw_opt(
                 &t,
                 ART_X,
@@ -691,6 +754,85 @@ impl SelectView {
             }
         }
     }
+}
+
+/// 曲名、下の小さい文字、スキルの数の見た目
+const TITLE_STYLE: Style = Style {
+    px: 24.0,
+    color: Color32::BLACK,
+    bold: false,
+    shadow: None,
+    edge: Some((Color32::WHITE, 2.0)),
+    gradient: None,
+};
+const SUB_STYLE: Style = Style {
+    px: 16.0,
+    color: Color32::BLACK,
+    bold: false,
+    shadow: None,
+    edge: Some((Color32::WHITE, 1.5)),
+    gradient: None,
+};
+const SKILL_STYLE: Style = Style {
+    px: 16.0,
+    color: Color32::WHITE,
+    bold: false,
+    shadow: None,
+    edge: Some((Color32::from_black_alpha(160), 1.0)),
+    gradient: None,
+};
+
+fn skill_text(skill: f64) -> String {
+    format!("{skill:.2}")
+}
+
+/// 帯 1 本の文字と画像を、別のスレッドで用意するよう頼む
+fn request_row(g: &mut Gfx, row: &Row) {
+    if let Preimage::File(path) = &row.preimage {
+        g.images.get(path);
+    }
+    if let Some((skill, _)) = row.skill {
+        g.texts.request(&skill_text(skill), &SKILL_STYLE);
+    }
+    if !row.sub.trim().is_empty() {
+        g.texts.request(&row.sub, &SUB_STYLE);
+    }
+    g.texts.request(&row.title, &TITLE_STYLE);
+}
+
+/// 帯の小さいジャケットか大きなジャケットの画像。`request` なら、まだ読んでいなければ読むよう頼む
+/// （帯の分は [`request_row`] で頼んである）
+fn thumbnail(g: &mut Gfx, p: &Preimage, request: bool) -> Option<Tex> {
+    match p {
+        Preimage::File(path) => {
+            let t = if request {
+                g.images.get(path)
+            } else {
+                g.images.ready(path)
+            };
+            match t {
+                Some(t) => Some(t),
+                None if g.images.failed(path) => g.skin.tex("Graphics/5_preimage default.png"),
+                None => None,
+            }
+        }
+        Preimage::Skin(rel) => g.skin.tex(rel),
+    }
+}
+
+/// 臨界減衰のばねで `x`（速さ `v`）を `target` へ寄せる。行き過ぎず、速さが途切れないので、
+/// 続けて送っても動きがなめらか。式で解くので、フレームの長さによらず同じ動きになる
+fn spring(x: &mut f32, v: &mut f32, target: f32, dt: f32) {
+    let e = *x - target;
+    if e.abs() < 0.5 && v.abs() < 20.0 {
+        *x = target;
+        *v = 0.0;
+        return;
+    }
+    let c = *v + SPRING * e;
+    let k = (-SPRING * dt).exp();
+    *x = target + (e + c * dt) * k;
+    *v = (*v - SPRING * c * dt) * k;
 }
 
 /// 残りを 0 へ近づける（v2：残りの `SPEED` 倍毎秒、1 秒に `MAX_SPEED` ピクセルまで）
@@ -869,17 +1011,115 @@ mod tests {
 
     #[test]
     fn row_at_finds_the_bar_under_the_pointer() {
+        let mut v = SelectView::new();
         // 選んでいる帯は 320 から 85
-        assert_eq!(SelectView::row_at(pos2(900.0, 330.0)), Some(0));
-        assert_eq!(SelectView::row_at(pos2(900.0, 404.0)), Some(0));
-        assert_eq!(SelectView::row_at(pos2(900.0, 300.0)), Some(-1));
-        assert_eq!(SelectView::row_at(pos2(900.0, 410.0)), Some(1));
-        assert_eq!(SelectView::row_at(pos2(900.0, 700.0)), Some(4));
-        assert_eq!(SelectView::row_at(pos2(900.0, 200.0)), Some(-2));
+        assert_eq!(v.row_at(pos2(900.0, 330.0)), Some(0));
+        assert_eq!(v.row_at(pos2(900.0, 404.0)), Some(0));
+        assert_eq!(v.row_at(pos2(900.0, 300.0)), Some(-1));
+        assert_eq!(v.row_at(pos2(900.0, 410.0)), Some(1));
+        assert_eq!(v.row_at(pos2(900.0, 700.0)), Some(4));
+        assert_eq!(v.row_at(pos2(900.0, 200.0)), Some(-2));
         // 帯の外、上の帯、並べ替えメニュー
-        assert_eq!(SelectView::row_at(pos2(400.0, 330.0)), None);
-        assert_eq!(SelectView::row_at(pos2(900.0, 20.0)), None);
-        assert_eq!(SelectView::row_at(pos2(900.0, 80.0)), None);
+        assert_eq!(v.row_at(pos2(400.0, 330.0)), None);
+        assert_eq!(v.row_at(pos2(900.0, 20.0)), None);
+        assert_eq!(v.row_at(pos2(900.0, 80.0)), None);
+        // 動いている途中は、ずれた位置の帯
+        v.scroll = 30.0;
+        assert_eq!(v.row_at(pos2(900.0, 330.0)), Some(-1));
+        assert_eq!(v.row_at(pos2(900.0, 360.0)), Some(0));
+    }
+
+    /// `fps` で `secs` 秒動かし、フレームごとの (時刻, 並びの位置（ピクセル。次の曲の向きが正）) を返す。
+    /// `presses` は送る時刻（秒）と本数
+    fn simulate(fps: f32, secs: f32, presses: &[(f32, isize)]) -> (SelectView, Vec<(f32, f32)>) {
+        let mut v = SelectView::new();
+        let mut cursor = 0isize;
+        let mut out = Vec::new();
+        let dt = 1.0 / fps;
+        let mut next = 0;
+        for i in 0..(secs * fps).round() as usize {
+            let t = i as f32 * dt;
+            while next < presses.len() && presses[next].0 <= t {
+                v.push(presses[next].1);
+                next += 1;
+            }
+            cursor += v.advance(dt);
+            out.push((t + dt, cursor as f32 * SPACING - v.scroll));
+        }
+        (v, out)
+    }
+
+    #[test]
+    fn one_press_moves_one_bar_without_overshoot() {
+        let (v, pos) = simulate(60.0, 1.0, &[(0.0, 1)]);
+        // 0.3 秒ほどで止まり、1 本分ちょうど
+        assert_eq!(v.scroll, 0.0);
+        assert_eq!(v.target, 0.0);
+        assert_eq!(pos.last().unwrap().1, SPACING);
+        let settled = pos.iter().position(|&(_, p)| p == SPACING).unwrap();
+        assert!(pos[settled].0 < 0.4, "{}", pos[settled].0);
+        // 行き過ぎず、戻らない
+        assert!(pos.windows(2).all(|w| w[1].1 >= w[0].1));
+        assert!(pos.iter().all(|&(_, p)| p <= SPACING));
+        // カーソルは帯が半分を過ぎたところで動く（v2 と同じく 0.1 秒以内）
+        let half = pos.iter().position(|&(_, p)| p >= SPACING / 2.0).unwrap();
+        assert!(pos[half].0 < 0.1, "{}", pos[half].0);
+    }
+
+    #[test]
+    fn fast_presses_move_smoothly_without_jumps() {
+        // 1 秒に 30 本（キーの押しっぱなしやホイール）を 1 秒
+        let presses: Vec<(f32, isize)> = (0..30).map(|i| (i as f32 / 30.0, 1)).collect();
+        for fps in [60.0, 144.0] {
+            let (v, pos) = simulate(fps, 2.0, &presses);
+            assert_eq!(v.target, 0.0);
+            assert_eq!(pos.last().unwrap().1, 30.0 * SPACING);
+            let steps: Vec<f32> = pos.windows(2).map(|w| w[1].1 - w[0].1).collect();
+            // 戻らない
+            assert!(steps.iter().all(|&d| d >= 0.0), "{fps}");
+            // 速さが急に変わらない（となりのフレームとの差が、1 秒に 30 本の 1 フレーム分の半分まで）
+            let per_frame = 30.0 * SPACING / fps;
+            for w in steps.windows(2) {
+                assert!((w[1] - w[0]).abs() < per_frame * 0.5, "{fps}: {w:?}");
+            }
+            // 遅れは 4 本まで
+            let lag = pos
+                .iter()
+                .map(|&(t, p)| (t * 30.0).ceil().min(30.0) * SPACING - p)
+                .fold(0.0, f32::max);
+            assert!(lag < 4.0 * SPACING, "{fps}: {lag}");
+        }
+    }
+
+    #[test]
+    fn motion_does_not_depend_on_the_frame_rate() {
+        let presses = [(0.0, 1), (0.05, 1), (0.1, 3), (0.4, -2)];
+        let (_, a) = simulate(60.0, 1.0, &presses);
+        let (_, b) = simulate(240.0, 1.0, &presses);
+        for &(t, p) in &a {
+            // 押した時刻がフレームに丸められる分だけ違ってよい
+            let q = b.iter().find(|&&(u, _)| (u - t).abs() < 1e-3).unwrap().1;
+            assert!((p - q).abs() < 15.0, "t {t}: {p} vs {q}");
+        }
+    }
+
+    #[test]
+    fn presses_beyond_the_limit_are_dropped() {
+        let mut v = SelectView::new();
+        for _ in 0..MAX_AHEAD {
+            assert!(v.push(1));
+        }
+        assert!(!v.push(1));
+        assert_eq!(v.target, -(MAX_AHEAD as f32) * SPACING);
+        // 逆へはすぐ受ける
+        assert!(v.push(-1));
+        // 1 度に 10 本（PageDown）は 10 本まで
+        let mut v = SelectView::new();
+        assert!(v.push(10));
+        assert_eq!(v.target, -10.0 * SPACING);
+        // 押した帯へは、送ってあった分を取り消して動く
+        v.push_to(-2);
+        assert_eq!(v.target, 2.0 * SPACING);
     }
 
     #[test]

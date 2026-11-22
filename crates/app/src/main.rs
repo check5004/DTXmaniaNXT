@@ -19,10 +19,12 @@ mod chart_sound;
 mod config;
 mod config_view;
 mod fonts;
+mod frames;
 mod game;
 mod gfx;
 mod history;
 mod inputs;
+mod jobs;
 mod loading;
 mod logging;
 mod midi;
@@ -87,6 +89,8 @@ struct Gpu {
     egui_renderer: egui_wgpu::Renderer,
     /// 描く画像を続けて受け取れなかった回数
     timeouts: u32,
+    /// 前のフレームで、描く画像（画面の空き）を待った時間
+    waited: Duration,
 }
 
 /// 描く画像をこの回数続けて受け取れなければ、画面への出力を作り直す
@@ -136,6 +140,7 @@ impl Gpu {
             config,
             egui_renderer,
             timeouts: 0,
+            waited: Duration::ZERO,
         })
     }
 
@@ -165,7 +170,10 @@ impl Gpu {
     }
 
     fn draw(&mut self, ctx: &egui::Context, shapes: Vec<egui::epaint::ClippedShape>, ppp: f32) {
-        let frame = match self.surface.get_current_texture() {
+        let asked = Instant::now();
+        let got = self.surface.get_current_texture();
+        self.waited = asked.elapsed();
+        let frame = match got {
             wgpu::CurrentSurfaceTexture::Success(frame) => frame,
             wgpu::CurrentSurfaceTexture::Suboptimal(frame) => {
                 self.surface.configure(&self.device, &self.config);
@@ -334,6 +342,8 @@ struct App {
     autoplay: bool,
     /// 新しい版を探して落とし、終えるときに入れ替える
     updater: update::Updater,
+    /// フレームの時間（F9 で出す）
+    frames: frames::FrameStats,
 }
 
 /// 演奏の画面が数えたスコアを、記録に残す形にする
@@ -359,6 +369,9 @@ const HIT_SOUND_NOTICE_FOR: Duration = Duration::from_secs(4);
 const HIT_SOUND_KEY: KeyCode = KeyCode::F2;
 /// [`HIT_SOUND_KEY`] の表示の名前
 const HIT_SOUND_KEY_NAME: &str = "F2";
+
+/// フレームの時間を画面の右上に出し入れするキー（どの画面でも）
+const FRAME_STATS_KEY: KeyCode = KeyCode::F9;
 
 /// シャッターを閉じ終えたら移る先
 enum AfterClose {
@@ -460,6 +473,7 @@ impl App {
             toast: None,
             autoplay: std::env::var_os("DTXMANIANXT_AUTOPLAY").is_some_and(|v| v == "1"),
             updater,
+            frames: frames::FrameStats::default(),
         }
     }
 
@@ -565,14 +579,14 @@ impl App {
         self.keys.iter().find(|(k, _)| *k == code).map(|(_, l)| *l)
     }
 
-    /// カーソルを動かす
+    /// カーソルを動かす（帯が動いて、半分を過ぎたところでカーソルが動く。音は送ったときに鳴らす）
     fn move_cursor(&mut self, delta: isize) {
         if self.songs.len() == 0 {
             return;
         }
-        self.songs.move_by(delta);
-        self.view.moved(delta);
-        self.sfx.play(Se::Move);
+        if self.view.push(delta) {
+            self.sfx.play(Se::Move);
+        }
     }
 
     /// 曲を始める。読み込みの画面から
@@ -1355,8 +1369,11 @@ impl App {
         }
         match mouse.clicked_row {
             Some(0) => self.select_action(ui::SelectAction::Enter),
-            Some(d) => self.move_cursor(d),
-            None => {}
+            Some(d) if self.songs.len() > 0 => {
+                self.view.push_to(d);
+                self.sfx.play(Se::Move);
+            }
+            _ => {}
         }
         if let Some(d) = mouse.clicked_sort {
             self.change_sort(d);
@@ -1654,6 +1671,7 @@ impl App {
         let (Some(window), Some(state)) = (self.window.clone(), &mut self.egui_state) else {
             return;
         };
+        self.frames.begin();
         let input = state.take_egui_input(&window);
         let ports = self
             .midi
@@ -1688,12 +1706,15 @@ impl App {
             ));
             self.shutter
                 .draw(&Canvas::overlay(&top, ctx.content_rect()), &mut self.gfx);
+            self.frames.draw(&top, ctx.content_rect());
         });
+        self.frames.built();
         if let Some(state) = &mut self.egui_state {
             state.handle_platform_output(&window, output.platform_output.clone());
         }
         if let Some(gpu) = &mut self.gpu {
             gpu.render(&self.egui_ctx, output);
+            self.frames.end(gpu.waited);
         }
         self.select_mouse(mouse);
         for a in result_actions {
@@ -1743,6 +1764,7 @@ impl App {
                 let painter = ctx.layer_painter(egui::LayerId::background());
                 let c = Canvas::new(&painter, ctx.content_rect());
                 self.gfx.begin(&c, ctx.pixels_per_point());
+                self.view.update(&mut self.songs);
                 self.view.draw(&c, &mut self.gfx, &self.songs);
                 if let Some(p) = &self.popup {
                     p.draw(&c, &mut self.gfx);
@@ -1750,7 +1772,7 @@ impl App {
                 if let Some(m) = &self.message {
                     ui::message_overlay(&ctx, m);
                 }
-                *mouse = SelectMouse::read(&ctx, &c);
+                *mouse = SelectMouse::read(&ctx, &c, &self.view);
             }
             Screen::Loading(l) => {
                 let ctx = ui.ctx().clone();
@@ -1906,8 +1928,16 @@ impl ApplicationHandler for App {
                 if event.state == ElementState::Pressed
                     && let PhysicalKey::Code(code) = event.physical_key
                 {
-                    // 押し続けたときの繰り返しは、設定の画面の ↑↓ だけ（上流のキーの反復と同じ）
-                    let repeat_ok = matches!(self.screen, Screen::Config(..))
+                    if code == FRAME_STATS_KEY {
+                        if !event.repeat {
+                            self.frames.toggle();
+                        }
+                        return;
+                    }
+                    // 押し続けたときの繰り返しは、設定の画面と選曲の画面の ↑↓ だけ（上流のキーの反復と同じ。
+                    // 選曲は v2 と同じく、練習のポップアップを開いていないとき）
+                    let repeat_ok = (matches!(self.screen, Screen::Config(..))
+                        || matches!(self.screen, Screen::Select) && self.popup.is_none())
                         && matches!(code, KeyCode::ArrowUp | KeyCode::ArrowDown);
                     if !event.repeat || repeat_ok {
                         self.on_key(code);
@@ -1956,7 +1986,7 @@ struct SelectMouse {
 }
 
 impl SelectMouse {
-    fn read(ctx: &egui::Context, c: &Canvas) -> Self {
+    fn read(ctx: &egui::Context, c: &Canvas, view: &SelectView) -> Self {
         ctx.input(|i| {
             let wheel = i
                 .events
@@ -1976,7 +2006,7 @@ impl SelectMouse {
                 .then(|| i.pointer.interact_pos())
                 .flatten()
                 .map(|p| c.to_nx(p));
-            let clicked_row = clicked.and_then(SelectView::row_at);
+            let clicked_row = clicked.and_then(|p| view.row_at(p));
             let clicked_sort = clicked.and_then(SelectView::sort_at);
             let popup = PopupMouse {
                 pressed: i
