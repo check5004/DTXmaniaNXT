@@ -359,11 +359,6 @@ impl Skin {
         self.tex(rel)
     }
 
-    /// 真っ黒を透明にして読む画像
-    pub fn tex_keyed(&self, rel: &str) -> Option<Tex> {
-        self.tex_with(rel, true)
-    }
-
     fn tex_with(&self, rel: &str, black_key: bool) -> Option<Tex> {
         let key = (rel.to_owned(), black_key);
         if let Some(t) = self.cache.borrow().get(&key) {

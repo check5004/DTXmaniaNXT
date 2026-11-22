@@ -6,6 +6,8 @@ use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::Duration;
 
+use library::SortKind;
+
 use crate::audio::{AudioOut, Sound, load_sound, load_sound_bytes};
 
 /// 効果音の種類（上流 `CSkin` のシステムサウンド）
@@ -37,10 +39,17 @@ pub enum Se {
     GameStart,
     /// 終わるとき
     GameEnd,
+    /// 難易度を BASIC・ADVANCED・EXTREME・MASTER に変えた（v2 の HH 2 回。DTX は `Change`）
+    Basic,
+    Advanced,
+    Extreme,
+    Master,
+    /// 並べ替えを変えた（v2 の `Graphics/Sorting/*.wav`）
+    Sort(SortKind),
 }
 
 impl Se {
-    pub const ALL: [Se; 13] = [
+    pub const ALL: [Se; 26] = [
         Se::Move,
         Se::Decide,
         Se::Cancel,
@@ -54,7 +63,31 @@ impl Se {
         Se::Title,
         Se::GameStart,
         Se::GameEnd,
+        Se::Basic,
+        Se::Advanced,
+        Se::Extreme,
+        Se::Master,
+        Se::Sort(SortKind::ALL[0]),
+        Se::Sort(SortKind::ALL[1]),
+        Se::Sort(SortKind::ALL[2]),
+        Se::Sort(SortKind::ALL[3]),
+        Se::Sort(SortKind::ALL[4]),
+        Se::Sort(SortKind::ALL[5]),
+        Se::Sort(SortKind::ALL[6]),
+        Se::Sort(SortKind::ALL[7]),
+        Se::Sort(SortKind::ALL[8]),
     ];
+
+    /// 難易度（0〜4）を変えたときの音
+    pub fn level(level: usize) -> Se {
+        match level {
+            0 => Se::Basic,
+            1 => Se::Advanced,
+            2 => Se::Extreme,
+            3 => Se::Master,
+            _ => Se::Change,
+        }
+    }
 
     pub fn file(self) -> &'static str {
         match self {
@@ -71,6 +104,28 @@ impl Se {
             Se::Title => "Sounds/Title.ogg",
             Se::GameStart => "Sounds/Game start.ogg",
             Se::GameEnd => "Sounds/Game end.ogg",
+            Se::Basic => "Sounds/Basic.ogg",
+            Se::Advanced => "Sounds/Advanced.ogg",
+            Se::Extreme => "Sounds/Extreme.ogg",
+            Se::Master => "Sounds/Master.ogg",
+            Se::Sort(k) => match k.icon() {
+                "allmusic" => "Graphics/Sorting/allmusic.wav",
+                "artist" => "Graphics/Sorting/artist.wav",
+                "difficulty" => "Graphics/Sorting/difficulty.wav",
+                "level" => "Graphics/Sorting/level.wav",
+                "player" => "Graphics/Sorting/player.wav",
+                "skill" => "Graphics/Sorting/skill.wav",
+                "title" => "Graphics/Sorting/title.wav",
+                _ => "Graphics/Sorting/recommended.wav",
+            },
+        }
+    }
+
+    /// 鳴らす大きさ（上流 v2 の並べ替えの音は 80）
+    fn volume(self) -> f32 {
+        match self {
+            Se::Sort(_) => 0.8,
+            _ => 1.0,
         }
     }
 }
@@ -131,7 +186,8 @@ impl Sfx {
             let Some(bytes) = crate::skin::read(se.file()) else {
                 continue;
             };
-            match load_sound_bytes(bytes, Some("ogg"), rate) {
+            let ext = se.file().rsplit('.').next();
+            match load_sound_bytes(bytes, ext, rate) {
                 Ok(s) => {
                     self.sounds.insert(se, s);
                 }
@@ -147,7 +203,7 @@ impl Sfx {
 
     pub fn play(&mut self, se: Se) {
         if let (Some(out), Some(s)) = (&mut self.out, self.sounds.get(&se)) {
-            out.play_now(s, 1.0);
+            out.play_now(s, se.volume());
         }
     }
 
