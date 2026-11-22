@@ -116,10 +116,10 @@ impl SongList {
         self.scanning.as_ref().map(|s| s.progress)
     }
 
-    /// 探した結果を受け取る
-    pub fn poll(&mut self) {
+    /// 探した結果を受け取る。探し終えて一覧が新しくなったら true
+    pub fn poll(&mut self) -> bool {
         let Some(s) = &mut self.scanning else {
-            return;
+            return false;
         };
         let mut done = None;
         for msg in s.rx.try_iter() {
@@ -128,14 +128,16 @@ impl SongList {
                 ScanMsg::Done(lib) => done = Some(lib),
             }
         }
-        if let Some(lib) = done {
-            self.scanning = None;
-            if lib.stopped {
-                return;
-            }
-            self.library = lib;
-            self.rebuild();
+        let Some(lib) = done else {
+            return false;
+        };
+        self.scanning = None;
+        if lib.stopped {
+            return false;
         }
+        self.library = lib;
+        self.rebuild();
+        true
     }
 
     /// 並べ替えの木を作り直し、前の場所がまだあればそこに、無ければ一番上にする

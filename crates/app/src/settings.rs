@@ -115,6 +115,10 @@ const AUTO_SECTION: &str = "自動で叩く";
 
 /// 早送り・巻き戻しの幅（ミリ秒）
 pub const SKIP_MS: &str = "skip_ms";
+/// 窓と画面の保存（上流の FullScreen、VSyncWait、AutoSaveResult）
+pub const FULLSCREEN: &str = "fullscreen";
+pub const VSYNC: &str = "vsync";
+pub const AUTO_SAVE_RESULT: &str = "auto_save_result";
 
 /// ゲージの減り方（MISS の減りにかける数を選ぶ）
 pub const DAMAGE_LEVEL: &str = "damage_level";
@@ -564,6 +568,33 @@ pub const ALL: &[Def] = &[
         },
         desc: "演奏中に → で先へ、← で前へ、この幅だけ飛びます（練習では区間をずらします）。\n飛んだプレイは記録に残しません。Space か Pause で一時停止します。",
         in_play: true,
+    },
+    Def {
+        key: FULLSCREEN,
+        group: Group::App,
+        section: "画面",
+        name: "全画面（FullScreen）",
+        kind: Kind::Toggle { default: false },
+        desc: "画面いっぱいに出します。どの画面でも Alt+Enter か F11 で切り替えられます。",
+        in_play: true,
+    },
+    Def {
+        key: VSYNC,
+        group: Group::App,
+        section: "画面",
+        name: "垂直同期（VSyncWait）",
+        kind: Kind::Toggle { default: true },
+        desc: "画面の書き換えをモニターに合わせます。OFF にすると絵が少し早く出ますが、横に裂けて見えることがあります。\n判定は MIDI の時刻と音で行うので、どちらでも変わりません。",
+        in_play: true,
+    },
+    Def {
+        key: AUTO_SAVE_RESULT,
+        group: Group::App,
+        section: "画面の保存",
+        name: "記録を更新した結果を画像で残す（AutoSaveResult）",
+        kind: Kind::Toggle { default: true },
+        desc: "記録を更新したとき、結果の画面を譜面と同じフォルダに PNG で残します（譜面の名前.日時_DRUMS_ランク.png）。\nF12 ではいつでも画面を「ピクチャ」の DTXmaniaNXT に残せます。",
+        in_play: false,
     },
     percent(
         JUDGE_LINE_POS,

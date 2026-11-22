@@ -29,6 +29,8 @@ winit = "0.30"
 serde = { version = "1", features = ["derive"] }
 toml = "1"
 dirs = "7"
+# 画面を残すファイルの名前に、この PC の日時を使う
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 rfd = "0.17"
 # 練習で BGM を音程を保ったまま遅くする（Rust だけで書かれていて、ビルドに C++ や LLVM が要らない）
 timestretch = { version = "0.16", default-features = false }
