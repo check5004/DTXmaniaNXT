@@ -125,7 +125,7 @@ impl Cat {
         match self {
             Cat::Fav => "よく変える項目です。選曲で RD を叩いて開く簡易設定と同じ並びです。",
             Cat::Display => {
-                "窓の出し方と、画面の描き方。\nNX の System ＞ Graphics にあったものです。"
+                "窓の出し方と、画面の描き方、譜面の動画。\nNX の System ＞ Graphics にあったものです。"
             }
             Cat::Sound => "音量と、鳴らすもの。\nNX の System ＞ Audio にあったものです。",
             Cat::Play => {
