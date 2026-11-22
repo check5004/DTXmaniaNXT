@@ -60,8 +60,6 @@ const BINS: usize = 90;
 /// 動きの速さ（v2：残りの 10 倍毎秒で近づき、1 フレーム（60 分の 1 秒）に 10 ピクセルまで）
 const SPEED: f32 = 10.0;
 const MAX_SPEED: f32 = 600.0;
-/// フェードの長さ
-const FADE: Duration = Duration::from_millis(500);
 /// 選んでからプレビューの音を鳴らすまで（上流の既定 1000 ミリ秒）
 pub const PREVIEW_WAIT: Duration = Duration::from_millis(1000);
 
@@ -147,13 +145,6 @@ fn details_of(notes: &[dtx::DrumNote]) -> Details {
     }
 }
 
-/// フェード
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Fade {
-    In,
-    Out,
-}
-
 /// 選んでいるものを見分ける（並べ替え、BOX の深さ、行、難易度）
 type SelectionKey = (SortKind, usize, usize, usize);
 
@@ -167,7 +158,6 @@ pub struct SelectView {
     /// 選んでいるものが変わった時刻（プレビューの音と、長い曲名を流すのに使う）
     changed: Instant,
     selected_key: Option<SelectionKey>,
-    fade: Option<(Fade, Instant)>,
     /// 曲のフォルダの中のファイル名（大文字・小文字を区別しない OS のため）
     found: HashMap<(PathBuf, String), Option<PathBuf>>,
     details: HashMap<PathBuf, Option<Details>>,
@@ -200,7 +190,6 @@ impl SelectView {
             tick: now,
             changed: now,
             selected_key: None,
-            fade: Some((Fade::In, now)),
             found: HashMap::new(),
             details: HashMap::new(),
             details_tx,
@@ -208,13 +197,11 @@ impl SelectView {
         }
     }
 
-    /// 画面に入り直す（フェードから）
+    /// 画面に入り直す（v2 と同じく、出入りはシャッターなのでこの画面ではフェードしない）
     pub fn enter(&mut self) {
-        let now = Instant::now();
         self.pending = 0.0;
         self.sort_pending = 0.0;
-        self.tick = now;
-        self.fade = Some((Fade::In, now));
+        self.tick = Instant::now();
         self.selected_key = None;
     }
 
@@ -234,22 +221,6 @@ impl SelectView {
         self.pending = 0.0;
         self.sort_pending = (self.sort_pending + delta as f32 * SORT_SPACING)
             .clamp(-2.0 * SORT_SPACING, 2.0 * SORT_SPACING);
-    }
-
-    /// 決めたので暗くする
-    pub fn fade_out(&mut self) {
-        if !matches!(self.fade, Some((Fade::Out, _))) {
-            self.fade = Some((Fade::Out, Instant::now()));
-        }
-    }
-
-    pub fn fading_out(&self) -> bool {
-        matches!(self.fade, Some((Fade::Out, _)))
-    }
-
-    /// 暗くし終えた
-    pub fn faded_out(&self) -> bool {
-        matches!(self.fade, Some((Fade::Out, t)) if t.elapsed() >= FADE)
     }
 
     /// スクロールが止まっていて、選んでから `wait` 経った
@@ -273,9 +244,6 @@ impl SelectView {
         if self.selected_key != Some(key) {
             self.selected_key = Some(key);
             self.changed = now;
-        }
-        if matches!(self.fade, Some((Fade::In, t)) if t.elapsed() >= FADE) {
-            self.fade = None;
         }
     }
 
@@ -435,14 +403,6 @@ impl SelectView {
                     ..Default::default()
                 },
             );
-        }
-        if let Some((kind, t)) = self.fade {
-            let p = (t.elapsed().as_secs_f32() / FADE.as_secs_f32()).min(1.0);
-            let a = match kind {
-                Fade::In => 1.0 - p,
-                Fade::Out => p,
-            };
-            c.cover(Color32::from_black_alpha((a * 255.0) as u8));
         }
     }
 

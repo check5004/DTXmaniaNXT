@@ -22,6 +22,7 @@ DTX 形式の譜面で遊べる、ドラムのゲーム兼練習アプリです�
 
 1. 起動すると NX と同じタイトルの画面になります（GAME START / CONFIGURATION / EXIT。曲を探しているあいだは左上に印が出ます）。初めは CONFIGURATION の System にある「Add Song Folder」で曲のフォルダを選びます。曲のフォルダをウィンドウにドロップしても足せます（DTXManiaNX の曲を使うなら、NX のフォルダか、その中の曲のフォルダを選びます）。
    - 0.1 で「NX Folder」を選んでいた場合は、0.2 を初めて起動したときに、その NX のパッドの割り当てと表示の設定（StageFailed、ShowLagTime など）を一度だけ引き継ぎます。0.1 が設定のフォルダの `nx` に写した NX のスキンは、もう使わないので消します。
+   - 画面の切り替えは NX v2.0 と同じく、黒い板が回りながら閉じて開くシャッターです（タイトルから先へ、設定の出入り、読み込みや演奏をやめたとき、結果から選曲へ）。
    - 設定の画面は NX と同じ配置です（左のメニュー、右の項目、説明のパネル）。↑↓ で選び、Enter で決め、Esc で戻ります。数の項目は Enter で値を変える状態になり、↑↓ で変えて Enter で戻ります。電子ドラムでは HT / LT で選び、CY か RD で決め、LC で戻ります。選曲の画面から F1 でも開けます。
    - System：曲のフォルダ（Add Song Folder で足し、各フォルダは Enter で一覧から外す）、曲の探し直し、MasterVolume（全体の音量。0〜100 で、初めは 50）、StageFailed（ON / OFF）、ShowLagTime（判定のずれの数字。OFF / ON / GREAT- は PERFECT 以外だけ）、ShowLagTimeColor（ずれの数字の色）、ShowLagHitCount（結果の画面に早かった数と遅かった数）、MIDI の入力のつなぎ直し。
    - Drums：スクロールの速さ、入力の補正、表示の補正、叩いたときの譜面の音、Drums Keys（パッドの割り当て）。Drums Keys でパッドを選んで Enter を押し、そのパッドを叩くと、そのノート番号がそのパッドに割り当たります（`config.toml` の `pad_notes` に残し、Roland の既定より優先します。Reset Keys で消せます）。
@@ -81,7 +82,7 @@ cargo test --all
 | `crates/library` | 曲のフォルダの探し方（set.def・box.def・DTXFiles.*）と、選曲の並べ替え（`sort.rs`） |
 | `crates/nx` | DTXManiaNX のフォルダの読み方（0.1 の設定の引き継ぎに使う Config.ini、大文字・小文字を区別しないファイル探し） |
 | `crates/records` | 遊んだ記録（SQLite）の読み書き |
-| `crates/app` | アプリ本体（winit + wgpu + egui、cpal、midir）。NX のスキンの画像を上流と同じ座標で描く（スキンの読み込み `skin.rs`、`gfx.rs`、タイトル `title_view.rs`、設定 `config_view.rs`、選曲 `select.rs`（並べ替えは `crates/library` の `sort.rs`）、読み込み `loading.rs`、演奏 `play_view.rs`、結果 `result_view.rs`） |
+| `crates/app` | アプリ本体（winit + wgpu + egui、cpal、midir）。NX のスキンの画像を上流と同じ座標で描く（スキンの読み込み `skin.rs`、`gfx.rs`、タイトル `title_view.rs`、設定 `config_view.rs`、選曲 `select.rs`（並べ替えは `crates/library` の `sort.rs`）、読み込み `loading.rs`、演奏 `play_view.rs`、結果 `result_view.rs`、画面の切り替えのシャッター `shutter.rs`） |
 | `assets/skin` | DTXManiaNX v2.0（BocuD 版）のスキン（画像と効果音）。リリースのビルドでは exe に埋め込み、開発中のビルドはこのフォルダから読みます。出どころと扱いは [`assets/README.md`](assets/README.md) |
 | `testdata/charts` | テスト譜面と手計算の正解。DTX Web Editor と共有する予定 |
 
