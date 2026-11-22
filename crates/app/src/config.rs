@@ -45,6 +45,8 @@ pub struct Config {
     /// 設定の画面で変えたパッドの割り当て（Roland の既定と NX の割り当てより優先する）
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub pad_notes: Vec<PadNote>,
+    /// 起動したときに GitHub のリリースから新しい版を落とし、終えるときに入れ替える（Setup.exe で入れたときだけ）
+    pub auto_update: bool,
 }
 
 /// パッドの割り当て 1 つ（ノート番号 → レーン）
@@ -73,6 +75,7 @@ impl Default for Config {
             practice_pitch: Pitch::default().name().to_owned(),
             stage_failed: None,
             pad_notes: Vec::new(),
+            auto_update: true,
         }
     }
 }

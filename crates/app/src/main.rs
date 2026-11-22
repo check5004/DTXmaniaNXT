@@ -7,6 +7,7 @@
 //! - 設定（曲のフォルダ・補正値など）は config.toml に残す
 //! - 画面は DTXManiaNX と同じ画像と配置で描く。画像と音はユーザーの PC にある NX のフォルダから読む
 //! - 起動するとタイトル。そこから選曲と設定へ進む
+//! - Setup.exe で入れたときは、起動したときに GitHub のリリースから新しい版を落とし、終えるときに入れ替える
 
 mod audio;
 mod band;
@@ -32,6 +33,7 @@ mod text;
 mod time;
 mod title_view;
 mod ui;
+mod update;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -301,6 +303,8 @@ struct App {
     toast: Option<(String, Instant)>,
     /// 音符を自動で叩く（開発用。`DTXMANIANXT_AUTOPLAY=1`）
     autoplay: bool,
+    /// 新しい版を探して落とし、終えるときに入れ替える
+    updater: update::Updater,
 }
 
 /// 演奏の画面が数えたスコアを、記録に残す形にする
@@ -450,6 +454,7 @@ impl App {
         let mut sfx = Sfx::new();
         sfx.load(&gfx.skin);
         let menu_input = Normalizer::new(midi_profile(nx.as_ref(), &config));
+        let updater = update::Updater::start(config.auto_update);
         Self {
             window: None,
             gpu: None,
@@ -476,6 +481,7 @@ impl App {
             show_play_info: false,
             toast: None,
             autoplay: std::env::var_os("DTXMANIANXT_AUTOPLAY").is_some_and(|v| v == "1"),
+            updater,
         }
     }
 
@@ -1034,7 +1040,7 @@ impl App {
                         let steps = (f64::from(c.scroll_px_per_ms) * 20.0).round() + d;
                         c.scroll_px_per_ms = (steps / 20.0).clamp(0.1, 3.0) as f32;
                     }
-                    Setting::StageFailed | Setting::HitSound => return,
+                    Setting::StageFailed | Setting::HitSound | Setting::AutoUpdate => return,
                 }
                 c.save();
             }
@@ -1050,6 +1056,7 @@ impl App {
                         };
                     }
                     Setting::HitSound => c.drum_sounds = !c.drum_sounds,
+                    Setting::AutoUpdate => c.auto_update = !c.auto_update,
                     _ => return,
                 }
                 c.save();
@@ -1506,12 +1513,14 @@ impl App {
             .filter(|(_, at)| at.elapsed() < TOAST_FOR)
             .map(|(t, _)| t.clone());
         let scanning = self.songs.scanning().is_some();
+        let update = self.updater.ready().map(str::to_owned);
         let output = self.egui_ctx.run_ui(input, |ui| match &mut self.screen {
             Screen::Title => {
                 let ctx = ui.ctx().clone();
                 let painter = ctx.layer_painter(egui::LayerId::background());
                 let c = Canvas::new(&painter, ctx.content_rect());
                 self.gfx.begin(&c, ctx.pixels_per_point());
+                self.title.set_update(update.as_deref());
                 self.title.draw(&c, &mut self.gfx, scanning);
             }
             Screen::Config(view, _) => {
@@ -1781,11 +1790,14 @@ impl SelectMouse {
 
 fn main() -> Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    // インストールなどで Velopack から呼ばれたときは、ここで仕事をして終わる
+    update::run_hooks();
     let _ = host_us();
     let arg = std::env::args_os().nth(1).map(PathBuf::from);
     let event_loop = EventLoop::new()?;
     event_loop.set_control_flow(ControlFlow::Poll);
     let mut app = App::new(arg);
     event_loop.run_app(&mut app)?;
+    app.updater.apply_on_exit(app.config.auto_update);
     Ok(())
 }

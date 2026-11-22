@@ -68,6 +68,7 @@ pub enum Setting {
     ScrollSpeed,
     StageFailed,
     HitSound,
+    AutoUpdate,
 }
 
 /// 一覧の項目
@@ -270,6 +271,13 @@ pub fn items(list: List, info: &ConfigInfo<'_>) -> Vec<Item> {
                         info.midi_ports.join("、")
                     }
                 ),
+            ));
+            v.push(item(
+                ItemId::Value(Setting::AutoUpdate),
+                "AutoUpdate",
+                on_off(c.auto_update),
+                "ON にすると、起動したときに新しい版を GitHub から落とし、終了したときに入れ替えます。\nSetup.exe で入れたときだけ働きます。切り替えは次の起動から効きます。"
+                    .to_owned(),
             ));
         }
         List::Drums => {

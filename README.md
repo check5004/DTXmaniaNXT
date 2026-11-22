@@ -12,10 +12,12 @@ DTX 形式の譜面で遊べる、ドラムのゲーム兼練習アプリです�
 
 ### ダウンロード
 
-[リリース](https://github.com/check5004/DTXmaniaNXT/releases/latest)から、Windows は [DTXmaniaNXT.exe](https://github.com/check5004/DTXmaniaNXT/releases/latest/download/DTXmaniaNXT.exe)（いつも最新の版）をダウンロードし、好きなフォルダに置いて起動します。Windows はこの exe 1 つだけで、インストールは要りません。macOS（Apple シリコン）と Linux（x86_64）の版も同じページにあります。
+[リリース](https://github.com/check5004/DTXmaniaNXT/releases/latest)から、Windows は [DTXmaniaNXT-Setup.exe](https://github.com/check5004/DTXmaniaNXT/releases/latest/download/DTXmaniaNXT-Setup.exe)（いつも最新の版）をダウンロードして実行します。管理者の権限なしで `%LocalAppData%\DTXmaniaNXT` にインストールして起動し、スタートメニューとデスクトップに DTXmaniaNXT が入ります。macOS（Apple シリコン）と Linux（x86_64）の版も同じページにあります。
 
 - 署名をしていないので、Windows で「Windows によって PC が保護されました」と出たら「詳細情報」→「実行」を押します。
-- 新しい版は exe を置き換えるだけです。設定と記録は別のフォルダ（下の `%APPDATA%\DTXmaniaNXT`）にあるので引き継がれます。
+- 新しい版は、起動したときに GitHub のリリースから自動で落とし、終了したときに入れ替わります（次に起動すると新しい版）。落とし終えるとタイトルの画面の左下に知らせが出ます。設定の System の AutoUpdate を OFF にすると止まります。
+- 設定と記録は別のフォルダ（下の `%APPDATA%\DTXmaniaNXT`）にあるので、更新しても、入れ直しても引き継がれます。exe 単体で使っていた人も、Setup.exe で一度入れ直せばそのまま使えます（古い exe は消してかまいません）。
+- アンインストールは Windows の設定の「アプリ」から行います。設定と記録は残ります。
 - まだリリースしていない変更を試すときは、[Actions](https://github.com/check5004/DTXmaniaNXT/actions) で成功した CI の実行を開き、下の Artifacts から `dtxmanianxt-Windows`（macOS は `dtxmanianxt-macOS`）をダウンロードします。
 
 ### 遊び方
@@ -23,7 +25,7 @@ DTX 形式の譜面で遊べる、ドラムのゲーム兼練習アプリです�
 1. 起動すると NX と同じタイトルの画面になります（GAME START / CONFIGURATION / EXIT。曲を探しているあいだは左上に印が出ます）。初めは CONFIGURATION の System にある「NX Folder」で、いま使っている DTXManiaNX のフォルダ（`DTXManiaNX.exe` のあるフォルダ）を選びます。フォルダをウィンドウにドロップしても選べます。NX の画像と効果音（スキン）、NX に登録してある曲のフォルダ、パッドの割り当て（`Config.ini` の `[DrumsKeyAssign]`）を読み、NX と同じ見た目になります。DTXManiaNX のフォルダに置いて起動したときは、それを使います。
    - NX の画像と音は、このアプリには入っていません（NX のフォルダから読むだけです）。NX が無くても、簡単な見た目で遊べます。
    - 設定の画面は NX と同じ配置です（左のメニュー、右の項目、説明のパネル）。↑↓ で選び、Enter で決め、Esc で戻ります。数の項目は Enter で値を変える状態になり、↑↓ で変えて Enter で戻ります。電子ドラムでは HT / LT で選び、CY か RD で決め、LC で戻ります。選曲の画面から F1 でも開けます。
-   - System：NX のフォルダ、曲のフォルダ（Add Song Folder で足し、各フォルダは Enter で一覧から外す）、曲の探し直し、STAGE FAILED（ON / OFF / NX の設定に従う）、MIDI の入力のつなぎ直し。
+   - System：NX のフォルダ、曲のフォルダ（Add Song Folder で足し、各フォルダは Enter で一覧から外す）、曲の探し直し、STAGE FAILED（ON / OFF / NX の設定に従う）、MIDI の入力のつなぎ直し、AutoUpdate（自動更新。Setup.exe で入れたときだけ働く）。
    - Drums：スクロールの速さ、入力の補正、表示の補正、叩いたときの譜面の音、Drums Keys（パッドの割り当て）。Drums Keys でパッドを選んで Enter を押し、そのパッドを叩くと、そのノート番号がそのパッドに割り当たります（`config.toml` の `pad_notes` に残し、NX の割り当てより優先します。Reset Keys で消せます）。
 2. GAME START で選曲の画面になります。↑↓ で曲を選び、←→ で難易度、Enter で始めます。BOX は Enter で入り、Backspace か Esc で出ます（一番上で Esc を押すとタイトルに戻ります。タイトルで Esc か EXIT を選ぶと終わります）。マウスのホイールでも動かせ、曲バーを押すとそこへ動きます（選んでいる曲を押すと始めます）。始めると NX と同じ読み込みの画面が「Now loading」の音が鳴り終わるまで出て、演奏の画面になります（読み込みの画面で Esc を押すと選曲に戻ります）。
 3. 電子ドラムは、つないでおけば起動したときに見つけます。無ければキーボードで叩けます（A S Z D G F H J K L、Q で HH オープン）。
@@ -83,10 +85,12 @@ cargo test --all
 ## リリースの出し方
 
 1. `Cargo.toml` の `[workspace.package]` の `version` を上げる PR を出して `main` に入れる（[SemVer](https://semver.org/lang/ja/)。1.0 までは、遊び方や記録が変わるときに 0.x の x を、直しだけなら最後の数を上げる）。
-2. `main` に入ると [Release](.github/workflows/release.yml) のワークフローが、タグ `v<version>`（例: `v0.2.0`）と GitHub のリリースを作り、Windows の exe（1 つだけ）、macOS と Linux の tar.gz、`THIRD-PARTY-LICENSES.html`、`SHA256SUMS.txt` を載せます。リリースの説明は `.github/release/notes.md` と、前のリリースから入った PR の一覧です。
+2. `main` に入ると [Release](.github/workflows/release.yml) のワークフローが、タグ `v<version>`（例: `v0.2.0`）と GitHub のリリースを作り、Windows のインストーラー `DTXmaniaNXT-Setup.exe`（落とすのはこれ 1 つだけ）と自動更新の材料（その版の `.nupkg` と `releases.win.json`）、macOS と Linux の tar.gz、`THIRD-PARTY-LICENSES.html`、`SHA256SUMS.txt` を載せます。リリースの説明は `.github/release/notes.md` と、前のリリースから入った PR の一覧です。
 3. macOS か Linux のビルドだけ落ちたときは、Windows の分だけでリリースします。あとで Actions の画面から Release を Run workflow で動かすと、そのタグのコミットから作り直してファイルを差し替えます。
 
 ビルドと詰め方は `.github/release/` のスクリプトにあります。Windows の exe は C のランタイムを入れて作るので（`.cargo/config.toml` の `crt-static`）、VC++ の再頒布パッケージが無い PC でも起動します。ライセンスの表記（`THIRD-PARTY-LICENSES.html`）は [cargo-about](https://github.com/EmbarkStudios/cargo-about) で作ります。
+
+Windows のインストーラーと自動更新は [Velopack](https://velopack.io) で作ります（`.github/release/velopack.sh`。アプリの側は `crates/app/src/update.rs`）。前のリリースの材料を落としてきて、前の版との差分の `.nupkg` も作るので、更新で落とすのは変わったところだけです。インストールしたアプリは、GitHub の新しい 10 個のリリースにある `releases.win.json` を読んで新しい版を探します。
 
 ## 上流について
 

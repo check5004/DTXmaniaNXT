@@ -1,6 +1,7 @@
 //! タイトルの画面（上流 `CStageTitle`）と、終わるときの画面（上流 `CStageEnd`）。
 //! スキンの 2_ の画像で、背景とメニュー（GAME START / CONFIGURATION / EXIT）を出す。
 //! 曲を探しているあいだは左上に「曲を探しています」の画像を明滅させる（上流 `CActEnumSongs`）。
+//! 新しい版を落とし終えたら左下に知らせる（このアプリだけ。版の表示と同じ白い縁取りの文字）。
 
 use std::f64::consts::PI;
 use std::time::{Duration, Instant};
@@ -46,6 +47,8 @@ pub struct TitleView {
     sounded: bool,
     /// 決めた項目と、白へのフェードの始まり
     chosen: Option<(TitleItem, Instant)>,
+    /// 落とし終えた新しい版（終えると入れ替わる）
+    update: Option<String>,
 }
 
 impl TitleView {
@@ -58,6 +61,7 @@ impl TitleView {
             entered: now,
             sounded: false,
             chosen: None,
+            update: None,
         }
     }
 
@@ -132,6 +136,13 @@ impl TitleView {
         })
     }
 
+    /// 落とし終えた新しい版を知らせる
+    pub fn set_update(&mut self, version: Option<&str>) {
+        if self.update.as_deref() != version {
+            self.update = version.map(str::to_owned);
+        }
+    }
+
     pub fn draw(&mut self, c: &Canvas, g: &mut Gfx, scanning: bool) {
         match g.skin.tex("Graphics/2_background.jpg") {
             Some(t) => c.draw(&t, 0.0, 0.0),
@@ -183,6 +194,13 @@ impl TitleView {
         }
         if scanning {
             draw_scanning(c, g, self.entered);
+        }
+        if let Some(v) = &self.update {
+            let text = format!("新しい版 v{v} を用意しました。終了すると入れ替わります");
+            let style = Style::edged(16.0, Color32::WHITE, Color32::BLACK, 1.0);
+            if let Some(t) = g.texts.get(&text, &style) {
+                t.draw(c, 4.0, 720.0 - t.h - 4.0, 1.0, 1.0);
+            }
         }
         if !g.skin.is_loaded() {
             draw_no_skin(c, g);
