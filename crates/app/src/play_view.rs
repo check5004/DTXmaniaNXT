@@ -22,6 +22,8 @@ use crate::text::Style;
 
 /// 判定の線の y（上流 `nJudgeLinePosY.Drums` の既定）
 pub const JUDGE_LINE_Y: f32 = 561.0;
+/// 下から上へ流すときの判定の線の y（上流の Reverse）
+const REVERSE_JUDGE_LINE_Y: f32 = 159.0;
 /// 判定の線より上のどこまでチップを描くか（上流は判定の線から 600 ドットを超えたら打ち切る）
 const DRAW_AHEAD_PX: f32 = 600.0;
 /// 画面に入ってから暗いところから明るくなるまで
@@ -413,8 +415,10 @@ pub enum LbdLook {
 /// 譜面の見た目の設定（設定の表の「譜面の見た目」から）
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Looks {
-    /// 判定ラインを下から上げるドット（上流 `nJudgeLine`）
+    /// 判定ラインを下から上げるドット（上流 `nJudgeLine`。Reverse では上から下げる）
     pub judge_line_up: f32,
+    /// 下から上へ流す（上流 `bReverse.Drums`）
+    pub reverse: bool,
     pub hid_sud: HidSud,
     /// シャッター（0〜100。100 で画面の高さ全部）
     pub shutter_in: f32,
@@ -450,6 +454,7 @@ impl Looks {
         let lane_disp = v.choice(s::LANE_DISP);
         Self {
             judge_line_up: v.number(s::JUDGE_LINE_POS) as f32,
+            reverse: v.flag(s::REVERSE),
             hid_sud: match v.choice(s::HID_SUD) {
                 1 => HidSud::Hidden,
                 2 => HidSud::Sudden,
@@ -490,9 +495,36 @@ impl Looks {
         }
     }
 
-    /// 判定ラインの y
+    /// 判定ラインの y（上流 `nJudgeLinePosY.Drums`）
     fn judge_y(&self) -> f32 {
-        JUDGE_LINE_Y - self.judge_line_up
+        if self.reverse {
+            REVERSE_JUDGE_LINE_Y + self.judge_line_up
+        } else {
+            JUDGE_LINE_Y - self.judge_line_up
+        }
+    }
+
+    /// 判定ラインから `ahead` ドット先（まだ来ていない側）の y
+    fn ahead_y(&self, ahead: f32) -> f32 {
+        if self.reverse {
+            self.judge_y() + ahead
+        } else {
+            self.judge_y() - ahead
+        }
+    }
+
+    /// 画面の y が、チップが出てくる側の端より先か（そこから先は描かない）
+    fn beyond_edge(&self, y: f32) -> bool {
+        if self.reverse {
+            y > 720.0 + 64.0
+        } else {
+            y < -64.0
+        }
+    }
+
+    /// 火花・星・飛び散るチップの基準の y（上流 `actChipFireD.iPosY`）
+    fn fire_y(&self) -> f32 {
+        self.judge_y() - if self.reverse { 183.0 } else { 186.0 }
     }
 
     /// 判定ラインから `distance` ドット上にあるチップの濃さ（上流の Sudden・Hidden・ステルスの処理）。
@@ -687,7 +719,7 @@ impl PlayView {
         if attack == AttackEffect::AllOff {
             return;
         }
-        let up = self.looks.judge_line_up;
+        let fire_y = self.looks.fire_y();
         self.fires[l.i()] = Some(now);
         let cx = self.looks.layout.fire[l.i()] + 320.0;
         if matches!(attack, AttackEffect::AllOn | AttackEffect::ChipOff) && self.stars.len() < 240 {
@@ -699,7 +731,7 @@ impl PlayView {
                     start: now,
                     steps: 0,
                     x: cx,
-                    y: 555.0 - up,
+                    y: fire_y + 180.0,
                     ax: 0.9 * cos,
                     ay: 0.9 * sin - 0.1,
                     radius: 0.3 + self.rng.below(30) as f32 / 100.0,
@@ -721,7 +753,7 @@ impl PlayView {
                 steps: 0,
                 xl: x + shift,
                 xr: x,
-                y: 564.0 - up,
+                y: fire_y + 189.0,
                 ax: 0.91 * deg.cos() + 0.3,
                 ay: 0.91 * (deg.sin() - 0.8),
             });
@@ -793,7 +825,15 @@ impl PlayView {
         self.draw_judges(c, g, now);
         self.draw_fire(c, g, now);
         if let Some(p) = &play.practice {
-            crate::practice_hud::draw(c, g, p, now_ms, play.last_chip_ms, px_per_ms);
+            crate::practice_hud::draw(
+                c,
+                g,
+                p,
+                now_ms,
+                play.last_chip_ms,
+                px_per_ms,
+                self.looks.reverse,
+            );
         }
         self.draw_failed(c, g, now);
         // 入ってきたときのフェード
@@ -875,7 +915,7 @@ impl PlayView {
                 );
             }
         }
-        let flush = self.looks.lane_flush;
+        let (flush, reverse) = (self.looks.lane_flush, self.looks.reverse);
         for (i, slot) in self.flush.iter_mut().enumerate() {
             let Some((at, velocity)) = *slot else {
                 continue;
@@ -884,7 +924,7 @@ impl PlayView {
                 *slot = None;
                 continue;
             }
-            // 強く叩くほど下から始まる（上流：(1 - 強さ) × 55 から 90 まで 3 ミリ秒ごと）
+            // 強く叩くほど判定ラインの側から始まる（上流：(1 - 強さ) × 55 から 90 まで 3 ミリ秒ごと）
             let from = ((1.0 - f64::from(velocity) / 127.0) * 55.0).floor();
             let v = from + count(at, now, 3.0);
             if v >= 90.0 {
@@ -893,14 +933,20 @@ impl PlayView {
             }
             let x = self.looks.layout.flush[i];
             let (w, name) = FLUSH[i];
-            let Some(t) = g
-                .skin
-                .tex(&format!("Graphics/ScreenPlayDrums lane flush {name}.png"))
-            else {
+            let rev = if reverse { " reverse" } else { "" };
+            let Some(t) = g.skin.tex(&format!(
+                "Graphics/ScreenPlayDrums lane flush {name}{rev}.png"
+            )) else {
                 continue;
             };
-            let y = 700.0 - (v as i32 * 740 / 100) as f32;
-            let alpha = (y / 255.0).min(1.0);
+            let step = (v as i32 * 740 / 100) as f32;
+            // 下から上へ流すときは上から下りてくる絵で、薄くしない（上流と同じ）
+            let (y, alpha) = if reverse {
+                (32.0 + step, 1.0)
+            } else {
+                let y = 700.0 - step;
+                (y, (y / 255.0).min(1.0))
+            };
             for k in 0..3 {
                 let mut n = 0.0;
                 while n < w {
@@ -925,9 +971,9 @@ impl PlayView {
         let Some(t) = g.skin.tex("Graphics/7_chips_drums.png") else {
             return;
         };
-        let judge_y = self.looks.judge_y();
-        let y_of = |ms: f64| judge_y - ((ms - now_ms) as f32) * px_per_ms;
-        let bar_lines = self.looks.bar_lines;
+        let looks = self.looks;
+        let y_of = |ms: f64| looks.ahead_y(((ms - now_ms) as f32) * px_per_ms);
+        let bar_lines = looks.bar_lines;
         let draw = |ms: f64, bar: bool| {
             let y = y_of(ms);
             if bar_lines && (-4.0..724.0).contains(&y) {
@@ -953,7 +999,13 @@ impl PlayView {
                     }
                     // 周の頭に何周目かを出す
                     let y = y_of(lap.plan.start_ms);
-                    if (0.0..judge_y).contains(&y)
+                    let judge_y = looks.judge_y();
+                    let ahead = if looks.reverse {
+                        (judge_y..720.0).contains(&y)
+                    } else {
+                        (0.0..judge_y).contains(&y)
+                    };
+                    if ahead
                         && let Some(text) = g.texts.get(
                             &format!("{} 周目", lap.plan.index + 1),
                             &Style {
@@ -987,34 +1039,35 @@ impl PlayView {
             return;
         };
         let looks = self.looks;
-        let judge_y = looks.judge_y();
-        let y_of = |ms: f64| judge_y - ((ms - now_ms) as f32) * px_per_ms;
-        let visible = |y: f32| y > -64.0 && y < 720.0 + 64.0 && y > judge_y - DRAW_AHEAD_PX - 64.0;
+        let ahead = |ms: f64| ((ms - now_ms) as f32) * px_per_ms;
+        let visible = |ms: f64| {
+            let y = looks.ahead_y(ahead(ms));
+            y > -64.0 && y < 720.0 + 64.0 && ahead(ms) < DRAW_AHEAD_PX + 64.0
+        };
         // 模様は 70 ミリ秒ごとに 8 コマ
         let frame = count(self.entered, now, 70.0) as u32 % 8;
         let notes = play.judge.notes();
         let from = notes.partition_point(|n| n.ms < now_ms - 1000.0);
         let mut shown: Vec<(DrumLane, f32, f32)> = Vec::new();
         for (i, n) in notes.iter().enumerate().skip(from) {
-            let y = y_of(n.ms);
-            if y < -64.0 {
+            let y = looks.ahead_y(ahead(n.ms));
+            if looks.beyond_edge(y) {
                 break;
             }
-            if play.judge.is_done(i) || !visible(y) {
+            if play.judge.is_done(i) || !visible(n.ms) {
                 continue;
             }
-            if let Some(alpha) = looks.chip_alpha(judge_y - y) {
+            if let Some(alpha) = looks.chip_alpha(ahead(n.ms)) {
                 shown.push((n.lane, y, alpha));
             }
         }
         // 練習の助走など、判定しない音符は薄く
         if let Some(p) = &play.practice {
             for &(ms, lane) in &p.faint {
-                let y = y_of(ms);
-                if visible(y)
-                    && let Some(alpha) = looks.chip_alpha(judge_y - y)
+                if visible(ms)
+                    && let Some(alpha) = looks.chip_alpha(ahead(ms))
                 {
-                    shown.push((lane, y, 0.35 * alpha));
+                    shown.push((lane, looks.ahead_y(ahead(ms)), 0.35 * alpha));
                 }
             }
         }
@@ -1051,7 +1104,12 @@ impl PlayView {
 
     /// シャッター（上流の ShutterInPos・ShutterOutPos。7_shutter.png を上と下から 7.2 ドット × 値だけ出す）
     fn draw_shutters(&self, c: &Canvas, g: &Gfx) {
-        let (top, bottom) = (self.looks.shutter_in, self.looks.shutter_out);
+        // 出てくる側が ShutterIn（Reverse では下）
+        let (top, bottom) = if self.looks.reverse {
+            (self.looks.shutter_out, self.looks.shutter_in)
+        } else {
+            (self.looks.shutter_in, self.looks.shutter_out)
+        };
         if top <= 0.0 && bottom <= 0.0 {
             return;
         }
@@ -1131,7 +1189,7 @@ impl PlayView {
             let x = self.looks.layout.pad[l.i()];
             let (sx, sy) = PADS[l.i()];
             let st = self.pads[l.i()];
-            let y = 570.0 + st.dip as f32;
+            let y = if self.looks.reverse { 70.0 } else { 570.0 } + st.dip as f32;
             let s = src(sx, sy, 96.0, 96.0);
             if let Some(t) = &pads {
                 c.part(t, x, y, s);
@@ -1205,13 +1263,14 @@ impl PlayView {
         );
     }
 
-    /// ゲージ（上流 `CActPerfDrumsGauge`）
+    /// ゲージ（上流 `CActPerfDrumsGauge`。Reverse では上の端）
     fn draw_gauge(&self, c: &Canvas, g: &Gfx, px_per_ms: f32) {
         const X: f32 = 294.0;
+        let top = if self.looks.reverse { 28.0 } else { 626.0 };
         let Some(frame) = g.skin.tex("Graphics/7_Gauge.png") else {
             return;
         };
-        c.part(&frame, X, 626.0, src(0.0, 0.0, frame.w, 47.0));
+        c.part(&frame, X, top, src(0.0, 0.0, frame.w, 47.0));
         // 落ちる速さのアイコン（上流の速さの段 n は 0.089375 × (n + 1) ドット/ミリ秒）
         if let Some(t) = g.skin.tex("Graphics/7_panel_icons.jpg") {
             // 段は 21 まで。NX v2.0 の絵は 16 段しか無いので、絵にある一番下の段で止める
@@ -1222,7 +1281,7 @@ impl PlayView {
             c.draw_opt(
                 &t,
                 -37.0 + X + frame.w,
-                634.0,
+                top + if self.looks.reverse { 7.0 } else { 8.0 },
                 Opt {
                     src: Some(src(0.0, n * 48.0, 42.0, 48.0)),
                     sx: 0.761_904_8,
@@ -1235,12 +1294,12 @@ impl PlayView {
         if self.gauge.value >= 1.0
             && let Some(t) = g.skin.tex("Graphics/7_gauge_bar.jpg")
         {
-            c.part(&t, X + 20.0, 635.0, bar);
+            c.part(&t, X + 20.0, top + 9.0, bar);
         } else if let Some(t) = g.skin.tex("Graphics/7_gauge_bar.png") {
             c.draw_opt(
                 &t,
                 X + 20.0,
-                635.0,
+                top + 9.0,
                 Opt {
                     src: Some(bar),
                     sx: self.gauge.value.max(0.0) as f32,
@@ -1248,7 +1307,7 @@ impl PlayView {
                 },
             );
         }
-        c.part(&frame, X, 626.0, src(0.0, 47.0, frame.w, 47.0));
+        c.part(&frame, X, top, src(0.0, 47.0, frame.w, 47.0));
     }
 
     /// コンボ（上流 `CActPerfCommonCombo.tDrawCombo_Drums` を右上 (1245, 60) に。10 コンボから出す）
@@ -1338,11 +1397,15 @@ impl PlayView {
 
     /// 判定の文字とずれ（上流 `CActPerfDrumsJudgementString` のコマ送り：24 コマを 14 ミリ秒ごと）
     fn draw_judges(&mut self, c: &Canvas, g: &Gfx, now: Instant) {
-        // 上流 `JudgementStringPosition`：レーンの上は 348、判定ラインの下は 583 を基準に、レーンごとの段をずらす
-        let base = match self.looks.judge_position {
-            JudgePosition::Lane => 348,
-            JudgePosition::Below => 583,
-            JudgePosition::Off => {
+        // 上流 `JudgementStringPosition`：レーンの上は 348、判定ラインの下は 583（Reverse では上の 80）を基準に、
+        // レーンごとの段をずらす。Reverse のレーンの上は段を逆に
+        let reverse = self.looks.reverse;
+        let (base, step) = match (self.looks.judge_position, reverse) {
+            (JudgePosition::Lane, false) => (348, 32),
+            (JudgePosition::Lane, true) => (348, -32),
+            (JudgePosition::Below, false) => (583, 32),
+            (JudgePosition::Below, true) => (80, 32),
+            (JudgePosition::Off, _) => {
                 self.judges = [None; 10];
                 return;
             }
@@ -1361,7 +1424,7 @@ impl PlayView {
             let row = JUDGE_ROW[i];
             let xc = lx + lw / 2;
             let x = (xc - 122) as f32;
-            let y = (base + row * 32 - 87) as f32;
+            let y = (base + row * step - 87) as f32;
             if let Some(t) = &strings {
                 c.part(
                     t,
@@ -1491,7 +1554,7 @@ impl PlayView {
                 ..Default::default()
             };
             let x = self.looks.layout.fire[i] + 320.0;
-            let y = self.looks.judge_y() + 4.0;
+            let y = self.looks.fire_y() + 190.0;
             c.draw_rot(&t, x, y, 0.0, o);
             c.draw_rot(&t, x, y, 0.0, o);
         }
@@ -1941,6 +2004,25 @@ mod tests {
         v.set_raw(s::LANE_DISP, 2);
         let line_off = Looks::from_settings(&v);
         assert!(!line_off.bar_lines && !line_off.dark_lanes);
+    }
+
+    #[test]
+    fn reverse_puts_the_judge_line_on_top() {
+        use crate::settings as s;
+        let mut v = s::Values::default();
+        let normal = Looks::from_settings(&v);
+        assert!(!normal.reverse);
+        assert_eq!(normal.ahead_y(100.0), JUDGE_LINE_Y - 100.0);
+        assert_eq!(normal.fire_y() + 190.0, JUDGE_LINE_Y + 4.0);
+        assert!(normal.beyond_edge(-70.0) && !normal.beyond_edge(790.0));
+        v.set_raw(s::REVERSE, 1);
+        v.set_raw(s::JUDGE_LINE_POS, 20);
+        let rev = Looks::from_settings(&v);
+        // 上流：判定ラインは 159 + JudgeLinePos、チップは判定ラインより下、火花は判定ライン - 183 が基準
+        assert_eq!(rev.judge_y(), 179.0);
+        assert_eq!(rev.ahead_y(100.0), 279.0);
+        assert_eq!(rev.fire_y(), 179.0 - 183.0);
+        assert!(rev.beyond_edge(790.0) && !rev.beyond_edge(-70.0));
     }
 
     #[test]

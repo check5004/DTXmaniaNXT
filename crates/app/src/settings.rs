@@ -140,6 +140,7 @@ pub const PEDAL_HIT_KEYS: [&str; 4] = [
 
 /// 譜面の見た目（上流のドラムの設定）
 pub const JUDGE_LINE_POS: &str = "judge_line_pos";
+pub const REVERSE: &str = "reverse";
 pub const HID_SUD: &str = "hid_sud";
 pub const SHUTTER_IN: &str = "shutter_in";
 pub const SHUTTER_OUT: &str = "shutter_out";
@@ -634,6 +635,15 @@ pub const ALL: &[Def] = &[
         "判定ラインの高さ（JudgeLinePos）",
         "判定ラインを下から何ドット上げるか（0〜100）。チップと小節線、火花も一緒に動きます。",
     ),
+    Def {
+        key: REVERSE,
+        group: Group::View,
+        section: "流れ方",
+        name: "下から上へ流す（Reverse）",
+        kind: Kind::Toggle { default: false },
+        desc: "判定ラインを上に置き、チップを下から上へ流します。判定ラインの高さは下げる向きに。\nシャッターは、チップが出てくる側（下）が「上のシャッター」の値になります。",
+        in_play: false,
+    },
     view_choice(
         LANE_TYPE,
         VIEW_ORDER,
