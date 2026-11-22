@@ -456,12 +456,13 @@ fn play_info(ui: &mut egui::Ui, o: &PlayOverlay<'_>, s: f32) {
         o.config.scroll_px_per_ms
     )));
     ui.label(small(format!(
-        "譜面の音 {}（M）",
+        "譜面の音 {}（{}）",
         if play.drum_sounds {
             "鳴らす"
         } else {
             "鳴らさない"
-        }
+        },
+        crate::HIT_SOUND_KEY_NAME
     )));
     ui.label(small(if play.practice.is_some() {
         "←→ 区間を 1 小節ずらす、, . 速度 ±5%、R 最初から、Esc 結果へ".to_owned()
