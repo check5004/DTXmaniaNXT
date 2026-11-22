@@ -431,8 +431,6 @@ struct App {
     quick: Option<Box<ConfigView>>,
     /// 補正の行に出す、この曲の補正とおすすめ
     timing: Option<SongTiming>,
-    /// 選曲の画面で最後に BD を叩いた時刻（2 回で簡易設定）
-    last_bd_us: Option<i64>,
     /// 選曲画面のマウスホイールの、まだ 1 行に満たない分
     wheel: f32,
     /// 演奏中に設定と入力の情報を出す（I で切り替え）
@@ -590,7 +588,6 @@ impl App {
             popup: None,
             quick: None,
             timing: None,
-            last_bd_us: None,
             wheel: 0.0,
             show_play_info: false,
             toast: None,
@@ -1466,7 +1463,7 @@ impl App {
         info
     }
 
-    /// 選曲の簡易設定（BD 2 回）を開く
+    /// 選曲の簡易設定（パッドは RD、キーボードは F2）を開く
     fn open_quick(&mut self) {
         if self.quick.is_some() || self.popup.is_some() {
             return;
@@ -2004,7 +2001,7 @@ impl App {
             self.on_popup_key(code);
             return;
         }
-        // 簡易設定（パッドなら BD を 2 回）
+        // 簡易設定（パッドなら RD）
         if code == KeyCode::F2 {
             self.open_quick();
             return;
@@ -2080,8 +2077,9 @@ impl App {
         self.popup_input(input);
     }
 
-    /// 選曲と結果の画面での電子ドラムの操作（上流と同じ割り当て）。
-    /// HT で上、LT で下、CY か RD で決定、LC で戻る、HH を 2 回で難易度
+    /// メニューの画面での電子ドラムの操作（上流の割り当てがもと）。
+    /// HT で上、LT で下、CY か RD で決定、LC で戻る。選曲は HH を 2 回で難易度、RD で簡易設定（決定は CY だけ）。
+    /// 足で踏むパッド（BD・LP・LBD）は演奏の合間に踏んでしまうので、メニューの操作には使わない
     fn on_menu_pad(&mut self, lane: DrumLane, at_us: i64) {
         if self.after_close.is_some() || self.applying.is_some() {
             return;
@@ -2139,7 +2137,9 @@ impl App {
                     // v2 と同じく SD と FT で並べ替え
                     DrumLane::SD => self.change_sort(-1),
                     DrumLane::FT => self.change_sort(1),
-                    DrumLane::CY | DrumLane::RD => self.select_action(ui::SelectAction::Enter),
+                    DrumLane::CY => self.select_action(ui::SelectAction::Enter),
+                    // 簡易設定（v2 は BD 2 回だが、足は演奏の合間に踏んでしまうので手で叩く RD にした）
+                    DrumLane::RD => self.open_quick(),
                     // v2 と同じく LC は Esc と同じ（BOX の中なら出て、一番上ならタイトルへ）
                     DrumLane::LC => self.select_cancel(),
                     DrumLane::HH | DrumLane::HHO => {
@@ -2150,15 +2150,6 @@ impl App {
                             self.last_hh_us = Some(at_us);
                         }
                     }
-                    // BD を 2 回で簡易設定
-                    DrumLane::BD => {
-                        if self.last_bd_us.is_some_and(|t| at_us - t <= DOUBLE_HIT_US) {
-                            self.last_bd_us = None;
-                            self.open_quick();
-                        } else {
-                            self.last_bd_us = Some(at_us);
-                        }
-                    }
                     _ => {}
                 }
             }
@@ -2166,7 +2157,8 @@ impl App {
                 DrumLane::CY | DrumLane::RD | DrumLane::LC => {
                     self.result_action(ui::ResultAction::Back);
                 }
-                DrumLane::BD => self.toggle_result_advice(),
+                // 「ずれ」の板のおすすめ（キーボードは O）
+                DrumLane::FT => self.toggle_result_advice(),
                 // 選曲と同じく HT と LT で動かす
                 DrumLane::HT | DrumLane::LT => self.turn_result_page(),
                 _ => {}
