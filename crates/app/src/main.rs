@@ -34,6 +34,7 @@ mod result_training;
 mod result_view;
 mod select;
 mod settings;
+mod settings_ui;
 mod sfx;
 mod shutter;
 mod skin;
@@ -62,7 +63,7 @@ use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowId};
 
 use crate::config::Config;
-use crate::config_view::{ConfigAction, ConfigInfo, ConfigInput, ConfigView, Setting};
+use crate::config_view::{ConfigAction, ConfigInfo, ConfigInput, ConfigView, ItemId, Setting};
 use crate::game::{GaugeRule, HitSoundRule, Outcome, Play, Rules};
 use crate::gfx::{Canvas, Gfx};
 use crate::history::History;
@@ -482,7 +483,7 @@ impl App {
     /// 設定の画面を開く。`from_select` なら出たら選曲へ戻る。v2 と同じくシャッターを開いて入る
     fn open_config(&mut self, from_select: bool) {
         self.sfx.preview(None);
-        self.screen = Screen::Config(Box::new(ConfigView::new()), from_select);
+        self.screen = Screen::Config(Box::default(), from_select);
         self.shutter.open(CONFIG_OPEN_DELAY);
     }
 
@@ -903,8 +904,8 @@ impl App {
                     play.on_midi(raw, msgs);
                 }
             }
-            Screen::Config(view, _) if view.waiting_pad() => {
-                // パッドの割り当て：次に叩いたノートを、叩いた機器の割り当てにする
+            Screen::Config(view, _) if view.wants_raw() => {
+                // パッドの割り当て：叩いたノートを、叩いた機器の割り当てにする
                 let hit = received.iter().find_map(|(raw, msgs)| {
                     msgs.iter().find_map(|m| match *m {
                         MidiMessage::NoteOn { note, .. } => Some((raw.port, note)),
@@ -936,6 +937,12 @@ impl App {
                     self.on_menu_pad(lane, at);
                 }
             }
+        }
+        if let Screen::Config(view, _) = &mut self.screen
+            && !closing
+            && let Some(r) = view.tick()
+        {
+            assigned.get_or_insert(r);
         }
         if let Some(r) = assigned {
             self.config_response(r);
@@ -1063,8 +1070,8 @@ impl App {
             return;
         };
         let info = config_info(&self.config, &self.midi, &self.monitor, &self.songs);
-        let items = config_view::items(view.list(), &info);
-        let r = view.input(input, &items);
+        let rows = config_view::rows(view.page(), &info);
+        let r = view.input(input, &rows);
         self.config_response(r);
     }
 
@@ -1079,68 +1086,46 @@ impl App {
 
     fn config_action(&mut self, action: ConfigAction) {
         match action {
-            ConfigAction::AddSongDir => {
-                if let Some(dir) = ui::pick_folder("曲のフォルダを選ぶ") {
-                    self.add_song_dir(dir);
-                }
-            }
-            ConfigAction::RemoveSongDir(i) => {
-                if i < self.config.song_dirs.len() {
-                    self.config.song_dirs.remove(i);
-                    self.config.save();
-                    self.songs.rescan(self.config.song_dirs.clone());
-                }
-            }
-            ConfigAction::Rescan => {
-                if !self.config.song_dirs.is_empty() {
-                    self.songs.rescan(self.config.song_dirs.clone());
-                }
-            }
-            ConfigAction::ReconnectMidi => self.reopen_midi(),
-            ConfigAction::Nudge(s, d) => {
-                let c = &mut self.config;
-                let r = config_view::OFFSET_RANGE;
-                let steps = d;
-                let d = f64::from(d);
-                match s {
-                    Setting::MasterVolume => {
-                        c.nudge_master_volume(steps);
-                        audio::set_master_volume(c.master_volume());
-                    }
-                    Setting::InputAdjust => {
-                        c.input_offset_ms = (c.input_offset_ms.round() + d).clamp(-r, r);
-                    }
-                    Setting::VisualAdjust => {
-                        c.visual_offset_ms = (c.visual_offset_ms.round() + d).clamp(-r, r);
-                    }
-                    Setting::ScrollSpeed => {
-                        // 演奏中の ↑↓ と同じ 0.05 刻み
-                        let steps = (f64::from(c.scroll_px_per_ms) * 20.0).round() + d;
-                        c.scroll_px_per_ms = (steps / 20.0).clamp(0.1, 3.0) as f32;
-                    }
-                    _ => return,
-                }
-                c.save();
-            }
-            ConfigAction::Toggle(s) => {
-                let c = &mut self.config;
-                match s {
-                    Setting::StageFailed => c.stage_failed = Some(!c.stage_failed()),
-                    Setting::HitSound => c.drum_sounds = !c.drum_sounds,
-                    // OFF → ON → GREAT- → OFF（上流と同じ並び）
-                    Setting::ShowLagTime => c.show_lag_time = (c.show_lag_time + 1) % 3,
-                    Setting::ShowLagTimeColor => {
-                        c.show_lag_time_color = 1 - c.show_lag_time_color.min(1)
-                    }
-                    Setting::ShowLagHitCount => c.show_lag_hit_count = !c.show_lag_hit_count,
-                    Setting::AutoUpdate => c.auto_update = !c.auto_update,
-                    _ => return,
-                }
-                c.save();
-            }
-            ConfigAction::Change(key, delta) => {
-                self.config.settings.change(key, delta);
+            ConfigAction::Set(id, v) => self.config_set(id, v),
+            ConfigAction::Run(id) => self.config_run(id),
+            ConfigAction::TogglePad(lane, port, note) => {
+                let ports = self.ports().to_vec();
+                let added = inputs::toggle_note(&mut self.config, &ports, port, note, lane);
+                let device = self
+                    .midi
+                    .as_ref()
+                    .map_or("MIDI", |m| m.name(port))
+                    .to_owned();
+                log::info!(
+                    "{} note {note} of {device} {} {}",
+                    if added { "assigned" } else { "removed" },
+                    if added { "to" } else { "from" },
+                    lane.name()
+                );
                 self.config.save();
+                self.refresh_pads();
+                self.config_toast(if added {
+                    format!(
+                        "ノート {note} を{}に足しました（{device}）",
+                        inputs::lane_label(lane)
+                    )
+                } else {
+                    format!(
+                        "ノート {note} を{}から外しました（{device}）",
+                        inputs::lane_label(lane)
+                    )
+                });
+            }
+            ConfigAction::ToggleKey(lane, code) => {
+                let added = inputs::toggle_key(&mut self.config, code, lane);
+                self.config.save();
+                self.refresh_pads();
+                let key = inputs::key_label(code);
+                self.config_toast(if added {
+                    format!("キー {key} を{}に足しました", inputs::lane_label(lane))
+                } else {
+                    format!("キー {key} を{}から外しました", inputs::lane_label(lane))
+                });
             }
             ConfigAction::AssignPad(lane, port, note) => {
                 let ports = self.ports().to_vec();
@@ -1163,54 +1148,10 @@ impl App {
                 inputs::clear_lane(&mut self.config, &ports, lane);
                 self.config.save();
                 self.refresh_pads();
-            }
-            ConfigAction::ResetPads => {
-                inputs::reset_all(&mut self.config);
-                self.config.save();
-                self.refresh_pads();
-            }
-            ConfigAction::ToggleDevice(port) => {
-                let ports = self.ports().to_vec();
-                if let Some(d) = inputs::device_mut(&mut self.config, &ports, port) {
-                    d.disabled = !d.disabled;
-                    self.config.save();
-                    self.reopen_midi();
-                }
-            }
-            ConfigAction::NextPreset(port) => {
-                let ports = self.ports().to_vec();
-                let preset = inputs::preset_for(
-                    inputs::device(&self.config, &ports, port),
-                    ports.get(port).map_or("", |p| p.name.as_str()),
-                );
-                if let Some(d) = inputs::device_mut(&mut self.config, &ports, port) {
-                    d.preset = preset.next().name().to_owned();
-                    self.config.save();
-                    self.refresh_pads();
-                }
-            }
-            ConfigAction::NudgeChannel(port, d) => {
-                let ports = self.ports().to_vec();
-                if let Some(dev) = inputs::device_mut(&mut self.config, &ports, port) {
-                    // すべて（0）→ 1 → … → 16 → すべて
-                    dev.channel = (i32::from(dev.channel.min(16)) + d).rem_euclid(17) as u8;
-                    self.config.save();
-                    self.refresh_pads();
-                }
-            }
-            ConfigAction::NudgeMinVelocity(port, d) => {
-                let ports = self.ports().to_vec();
-                if let Some(dev) = inputs::device_mut(&mut self.config, &ports, port) {
-                    dev.min_velocity = (i32::from(dev.min_velocity) + d).clamp(0, 127) as u8;
-                    self.config.save();
-                    self.refresh_pads();
-                }
-            }
-            ConfigAction::ResetDevice(port) => {
-                let ports = self.ports().to_vec();
-                inputs::reset_device(&mut self.config, &ports, port);
-                self.config.save();
-                self.refresh_pads();
+                self.config_toast(format!(
+                    "{}の割り当てを全部外しました",
+                    inputs::lane_label(lane)
+                ));
             }
             ConfigAction::Leave => {
                 self.message = None;
@@ -1221,6 +1162,109 @@ impl App {
                 };
                 self.close_then(next, Duration::ZERO);
             }
+        }
+    }
+
+    /// 設定の画面の下に短い知らせを出す
+    fn config_toast(&mut self, text: String) {
+        if let Screen::Config(view, _) = &mut self.screen {
+            view.toast(text);
+        }
+    }
+
+    /// 設定の画面で値を決めた（ON / OFF は 1 と 0、選択肢は何番目か）
+    fn config_set(&mut self, id: ItemId, v: i64) {
+        match id {
+            ItemId::Value(s) => {
+                config_view::set(s, &mut self.config, v);
+                if s == Setting::MasterVolume {
+                    audio::set_master_volume(self.config.master_volume());
+                }
+                self.config.save();
+            }
+            ItemId::Table(key) => {
+                self.config.settings.set_raw(key, v);
+                self.config.save();
+            }
+            ItemId::Practice(d) => {
+                config_view::set_drill(d, &mut self.config, v);
+                self.config.save();
+            }
+            ItemId::DeviceUse(port) => {
+                let ports = self.ports().to_vec();
+                if let Some(d) = inputs::device_mut(&mut self.config, &ports, port) {
+                    d.disabled = v == 0;
+                    self.config.save();
+                    self.reopen_midi();
+                }
+            }
+            ItemId::DevicePreset(port) => {
+                let ports = self.ports().to_vec();
+                let preset = engine::input::Preset::ALL
+                    [v.clamp(0, engine::input::Preset::ALL.len() as i64 - 1) as usize];
+                if let Some(d) = inputs::device_mut(&mut self.config, &ports, port) {
+                    d.preset = preset.name().to_owned();
+                    self.config.save();
+                    self.refresh_pads();
+                }
+            }
+            ItemId::DeviceChannel(port) => {
+                let ports = self.ports().to_vec();
+                if let Some(d) = inputs::device_mut(&mut self.config, &ports, port) {
+                    // 0 はすべて、1〜16
+                    d.channel = v.clamp(0, 16) as u8;
+                    self.config.save();
+                    self.refresh_pads();
+                }
+            }
+            ItemId::DeviceMinVelocity(port) => {
+                let ports = self.ports().to_vec();
+                if let Some(d) = inputs::device_mut(&mut self.config, &ports, port) {
+                    d.min_velocity = v.clamp(0, 127) as u8;
+                    self.config.save();
+                    self.refresh_pads();
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// 設定の画面の動かす項目
+    fn config_run(&mut self, id: ItemId) {
+        match id {
+            ItemId::AddSongDir => {
+                if let Some(dir) = ui::pick_folder("曲のフォルダを選ぶ") {
+                    self.add_song_dir(dir);
+                }
+            }
+            ItemId::SongDir(i) => {
+                if i < self.config.song_dirs.len() {
+                    self.config.song_dirs.remove(i);
+                    self.config.save();
+                    self.songs.rescan(self.config.song_dirs.clone());
+                    self.config_toast("曲のフォルダを一覧から外しました".to_owned());
+                }
+            }
+            ItemId::Rescan => {
+                if !self.config.song_dirs.is_empty() {
+                    self.songs.rescan(self.config.song_dirs.clone());
+                }
+            }
+            ItemId::ReconnectMidi => self.reopen_midi(),
+            ItemId::ResetPads => {
+                inputs::reset_all(&mut self.config);
+                self.config.save();
+                self.refresh_pads();
+                self.config_toast("割り当てを既定に戻しました".to_owned());
+            }
+            ItemId::DeviceReset(port) => {
+                let ports = self.ports().to_vec();
+                inputs::reset_device(&mut self.config, &ports, port);
+                self.config.save();
+                self.refresh_pads();
+                self.config_toast("この機器の割り当てをプリセットに戻しました".to_owned());
+            }
+            _ => {}
         }
     }
 
@@ -1240,6 +1284,8 @@ impl App {
                 let input = match code {
                     KeyCode::ArrowUp => ConfigInput::Up,
                     KeyCode::ArrowDown => ConfigInput::Down,
+                    KeyCode::ArrowLeft => ConfigInput::Left,
+                    KeyCode::ArrowRight => ConfigInput::Right,
                     KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space => ConfigInput::Decide,
                     KeyCode::Escape | KeyCode::Backspace => ConfigInput::Cancel,
                     _ => return,
@@ -1496,9 +1542,12 @@ impl App {
                 _ => {}
             },
             Screen::Config(..) => {
+                // パッドの役目は設定の画面の下に出す（HT 上、LT 下、SD 左、FT 右、CY・RD 決定、LC 戻る）
                 let input = match lane {
                     DrumLane::HT => ConfigInput::Up,
                     DrumLane::LT => ConfigInput::Down,
+                    DrumLane::SD => ConfigInput::Left,
+                    DrumLane::FT => ConfigInput::Right,
                     DrumLane::CY | DrumLane::RD => ConfigInput::Decide,
                     DrumLane::LC => ConfigInput::Cancel,
                     _ => return,
@@ -1771,8 +1820,8 @@ impl App {
                 let c = Canvas::new(&painter, ctx.content_rect());
                 self.gfx.begin(&c, ctx.pixels_per_point());
                 let info = config_info(&self.config, &self.midi, &self.monitor, &self.songs);
-                let items = config_view::items(view.list(), &info);
-                view.draw(&c, &mut self.gfx, &items, scanning);
+                let rows = config_view::rows(view.page(), &info);
+                view.draw(&c, &mut self.gfx, &rows, &info);
                 if let Some(m) = &self.message {
                     ui::message_overlay(&ctx, m);
                 }
@@ -1876,6 +1925,7 @@ fn config_info<'a>(
                 error: p.error.clone(),
                 disabled: d.is_some_and(|d| d.disabled),
                 preset: inputs::preset_for(d, &p.name),
+                default_preset: engine::input::Preset::detect(midi::base_name(&p.name)),
                 channel: profiles[i].channel.map_or(0, |c| c + 1),
                 min_velocity: profiles[i].min_velocity,
                 changes: d.map_or(config.pad_notes.len(), |d| d.notes.len()),
@@ -1955,9 +2005,15 @@ impl ApplicationHandler for App {
                 if event.state == ElementState::Pressed
                     && let PhysicalKey::Code(code) = event.physical_key
                 {
-                    // 押し続けたときの繰り返しは、設定の画面の ↑↓ だけ（上流のキーの反復と同じ）
+                    // 押し続けたときの繰り返しは、設定の画面の矢印だけ（上流のキーの反復と同じ。左右は値を続けて変える）
                     let repeat_ok = matches!(self.screen, Screen::Config(..))
-                        && matches!(code, KeyCode::ArrowUp | KeyCode::ArrowDown);
+                        && matches!(
+                            code,
+                            KeyCode::ArrowUp
+                                | KeyCode::ArrowDown
+                                | KeyCode::ArrowLeft
+                                | KeyCode::ArrowRight
+                        );
                     if !event.repeat || repeat_ok {
                         self.on_key(code);
                     }

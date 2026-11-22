@@ -33,7 +33,6 @@ pub enum Group {
 }
 
 impl Group {
-    #[expect(dead_code, reason = "設定の画面を作り直すとき、分類の名前に使う")]
     pub fn label(self) -> &'static str {
         match self {
             Self::Play => "演奏",
@@ -62,12 +61,12 @@ pub struct Choice {
 pub enum Kind {
     /// ON / OFF
     Toggle { default: bool },
-    /// 選択肢から 1 つ（Enter で次へ）
+    /// 選択肢から 1 つ（設定の画面では ◀▶ で隣へ。端で止まる）
     Choice {
         choices: &'static [Choice],
         default: usize,
     },
-    /// 数（Enter を押してから ↑↓ で `step` ずつ）
+    /// 数（設定の画面では ◀▶ で `step` ずつ）
     Number {
         min: i64,
         max: i64,
@@ -695,6 +694,22 @@ pub fn in_group(group: Group) -> impl Iterator<Item = &'static Def> {
     ALL.iter().filter(move |d| d.group == group)
 }
 
+/// 既定の値（[`Values::raw`] と同じ形）。まとめての項目は、ほかの既定が全部同じならその値
+pub fn default_raw(key: &str) -> Option<i64> {
+    match def(key).kind {
+        Kind::Toggle { default } => Some(i64::from(default)),
+        Kind::Choice { default, .. } => Some(default as i64),
+        Kind::Number { default, .. } => Some(default),
+        Kind::All { members } => {
+            let first = default_raw(members.first()?)?;
+            members
+                .iter()
+                .all(|m| default_raw(m) == Some(first))
+                .then_some(first)
+        }
+    }
+}
+
 /// 項目の値（config.toml の `[settings]`）。書いていないキーは既定の値
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -773,30 +788,42 @@ impl Values {
         }
     }
 
-    /// 値を 1 段変える。ON / OFF は切り替え、選択肢は `delta` だけ先へ（端で回る）、数は `delta` 刻み。
-    /// まとめての項目は、全部 ON なら全部 OFF に、そうでなければ全部 ON にする
-    pub fn change(&mut self, key: &str, delta: i32) {
+    /// 設定の画面で扱う形の値。ON / OFF は 1 と 0、選択肢は何番目か、数はそのまま。
+    /// まとめての項目は全部 ON なら 1、全部 OFF なら 0、混ざっていれば `None`
+    pub fn raw(&self, key: &str) -> Option<i64> {
         match def(key).kind {
-            Kind::Toggle { .. } => {
-                let v = !self.flag(key);
-                self.set(key, toml::Value::Boolean(v));
+            Kind::Toggle { .. } => Some(i64::from(self.flag(key))),
+            Kind::Choice { .. } => Some(self.choice(key) as i64),
+            Kind::Number { .. } => Some(self.number(key)),
+            Kind::All { members } => {
+                let on = members.iter().filter(|m| self.flag(m)).count();
+                match on {
+                    0 => Some(0),
+                    n if n == members.len() => Some(1),
+                    _ => None,
+                }
             }
+        }
+    }
+
+    /// [`Values::raw`] の形で値を決める（範囲の外は端に、数は刻みにそろえる）。
+    /// まとめての項目は、ほかの ON / OFF をすべて同じにする
+    pub fn set_raw(&mut self, key: &str, v: i64) {
+        match def(key).kind {
+            Kind::Toggle { .. } => self.set(key, toml::Value::Boolean(v != 0)),
             Kind::Choice { choices, .. } => {
-                let n = choices.len() as i64;
-                let i = (self.choice(key) as i64 + i64::from(delta)).rem_euclid(n) as usize;
+                let i = v.clamp(0, choices.len() as i64 - 1) as usize;
                 self.set(key, toml::Value::String(choices[i].key.to_owned()));
                 if key == DARK {
                     self.apply_dark(i);
                 }
             }
             Kind::Number { min, max, step, .. } => {
-                let v = snap(self.number(key) + i64::from(delta) * step, min, max, step);
-                self.set(key, toml::Value::Integer(v));
+                self.set(key, toml::Value::Integer(snap(v, min, max, step)));
             }
             Kind::All { members } => {
-                let v = !self.flag(key);
                 for m in members {
-                    self.set(m, toml::Value::Boolean(v));
+                    self.set(m, toml::Value::Boolean(v != 0));
                 }
             }
         }
@@ -930,23 +957,25 @@ mod tests {
         let mut v = Values::default();
         assert!(v.auto_lanes().is_empty());
         assert_eq!(v.label(AUTO_ALL), "OFF");
-        v.change("auto_bd", 1);
+        assert_eq!(v.raw(AUTO_ALL), Some(0));
+        assert_eq!(default_raw(AUTO_ALL), Some(0));
+        v.set_raw("auto_bd", 1);
         assert_eq!(v.auto_lanes(), vec![DrumLane::BD]);
         assert_eq!(v.label(AUTO_ALL), "-");
-        // 混ざっているときは全部 ON に
-        v.change(AUTO_ALL, 1);
+        assert_eq!(v.raw(AUTO_ALL), None);
+        v.set_raw(AUTO_ALL, 1);
         assert_eq!(v.label(AUTO_ALL), "ON");
         assert_eq!(v.auto_lanes().len(), 12);
-        v.change(AUTO_ALL, 1);
+        v.set_raw(AUTO_ALL, 0);
         assert!(v.auto_lanes().is_empty());
-        v.change("auto_hh", 1);
+        v.set_raw("auto_hh", 1);
         assert_eq!(v.auto_lanes(), vec![DrumLane::HH, DrumLane::HHO]);
     }
 
     #[test]
     fn values_round_trip_through_toml() {
         let mut v = Values::default();
-        v.change("auto_sd", 1);
+        v.set_raw("auto_sd", 1);
         let text = toml::to_string(&v).unwrap();
         assert_eq!(text.trim(), "auto_sd = true");
         let back: Values = toml::from_str(&text).unwrap();
@@ -961,9 +990,9 @@ mod tests {
         let mut v = Values::default();
         assert_eq!(v.number(SKIP_MS), 5000);
         assert_eq!(v.label(SKIP_MS), "5000 ms");
-        v.change(SKIP_MS, 2);
+        v.set_raw(SKIP_MS, 7400);
         assert_eq!(v.number(SKIP_MS), 7000);
-        v.change(SKIP_MS, -100);
+        v.set_raw(SKIP_MS, -100);
         assert_eq!(v.number(SKIP_MS), 1000);
     }
 
@@ -972,13 +1001,13 @@ mod tests {
         let mut v = Values::default();
         assert_eq!(v.damage_factor(), 0.5);
         assert_eq!(v.label(DAMAGE_LEVEL), "ふつう");
-        v.change(DAMAGE_LEVEL, 1);
+        v.set_raw(DAMAGE_LEVEL, 2);
         assert_eq!(v.damage_factor(), 0.75);
-        // 端で回る
-        v.change(DAMAGE_LEVEL, 1);
-        assert_eq!(v.label(DAMAGE_LEVEL), "少ない");
+        // 端で止まる
+        v.set_raw(DAMAGE_LEVEL, 3);
+        assert_eq!(v.damage_factor(), 0.75);
         assert_eq!(v.label(RISKY), "OFF");
-        v.change(RISKY, 3);
+        v.set_raw(RISKY, 3);
         assert_eq!(v.label(RISKY), "3 回");
         assert!(!v.flag(HAZARD) && !v.flag(TIGHT));
     }
@@ -989,8 +1018,8 @@ mod tests {
         assert_eq!(v.hit_windows(false), HitWindows::default());
         assert_eq!(v.hit_windows(true), HitWindows::default());
         // ペダルの GREAT を PERFECT より狭くしても、PERFECT までは広げる
-        v.change(PEDAL_HIT_KEYS[0], 10);
-        v.change(PEDAL_HIT_KEYS[1], -40);
+        v.set_raw(PEDAL_HIT_KEYS[0], 44);
+        v.set_raw(PEDAL_HIT_KEYS[1], 27);
         let w = v.hit_windows(true);
         assert_eq!((w.perfect, w.great), (44.0, 44.0));
         assert_eq!(v.hit_windows(false), HitWindows::default());
@@ -1001,17 +1030,17 @@ mod tests {
         let mut v = Values::default();
         assert!(v.flag(JUDGE_LINE_DISP) && v.flag(LANE_FLUSH));
         assert_eq!(v.number(MIN_COMBO), 10);
-        v.change(DARK, 2);
+        v.set_raw(DARK, 2);
         assert!(v.dark_full());
         assert_eq!(v.choice(LANE_DISP), 3);
         assert!(!v.flag(JUDGE_LINE_DISP) && !v.flag(LANE_FLUSH));
         // あとから 1 つずつ変えられる
-        v.change(LANE_FLUSH, 1);
+        v.set_raw(LANE_FLUSH, 1);
         assert!(v.flag(LANE_FLUSH));
-        v.change(DARK, -1);
+        v.set_raw(DARK, 1);
         assert_eq!(v.choice(LANE_DISP), 1);
         assert!(v.flag(JUDGE_LINE_DISP));
-        v.change(DARK, -1);
+        v.set_raw(DARK, 0);
         assert_eq!(v.choice(LANE_DISP), 0);
     }
 
@@ -1021,17 +1050,17 @@ mod tests {
         assert_eq!(v.lane_groups(), LaneGroups::default());
         assert_eq!(v.pad_sound_first(), [false; 3]);
         assert!(v.flag(MUTING_LP));
-        v.change(HH_GROUP, 1);
-        v.change(BD_GROUP, 1);
-        v.change(CYMBAL_FREE, 1);
-        v.change(CY_PRIORITY, 1);
+        v.set_raw(HH_GROUP, 1);
+        v.set_raw(BD_GROUP, 1);
+        v.set_raw(CYMBAL_FREE, 1);
+        v.set_raw(CY_PRIORITY, 1);
         let g = v.lane_groups();
         // HH-1 は左シンバルとハイハットが共通、BD-1 は左バスドラムとバスドラムが共通
         assert_eq!(g.hh, HhGroup::HiHatOnly);
         assert_eq!(g.bd, BdGroup::BassDrumsCommon);
         assert!(g.cymbal_free);
         assert_eq!(v.pad_sound_first(), [false, false, true]);
-        v.change(BD_GROUP, 1);
+        v.set_raw(BD_GROUP, 2);
         assert_eq!(v.lane_groups().bd, BdGroup::LeftPedalsCommon);
     }
 

@@ -1926,12 +1926,12 @@ mod tests {
         assert!(d.bar_lines && !d.dark_lanes && d.judge_line && d.lane_flush && d.progress);
         assert_eq!(d.judge_y(), JUDGE_LINE_Y);
         assert_eq!(d.min_combo, 10);
-        v.change(s::DARK, 2);
-        v.change(s::JUDGE_LINE_POS, 40);
+        v.set_raw(s::DARK, 2);
+        v.set_raw(s::JUDGE_LINE_POS, 40);
         let full = Looks::from_settings(&v);
         assert!(!full.bar_lines && full.dark_lanes && !full.judge_line && !full.progress);
         assert_eq!(full.judge_y(), JUDGE_LINE_Y - 40.0);
-        v.change(s::LANE_DISP, -1);
+        v.set_raw(s::LANE_DISP, 2);
         let line_off = Looks::from_settings(&v);
         assert!(!line_off.bar_lines && !line_off.dark_lanes);
     }
