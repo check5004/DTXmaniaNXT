@@ -54,6 +54,43 @@ pub enum Fx {
         offset_ms: Option<f64>,
         note_ms: f64,
     },
+    /// 音符の無いところを叩いて MISS にした（上流の Tight）。`lane` は叩いたパッドのレーン
+    StrayMiss { lane: DrumLane },
+}
+
+/// 判定の決まり（設定から）
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Rules {
+    /// 自動で叩くレーン（上流の AutoPlay）
+    pub auto: Vec<DrumLane>,
+    /// 判定の幅（ペダル以外）
+    pub windows: HitWindows,
+    /// バスドラム・左ペダル・左バスドラムの判定の幅
+    pub pedal_windows: HitWindows,
+    /// 音符の無いところを叩くと MISS（上流の Tight。練習では使わない）
+    pub tight: bool,
+    pub gauge: GaugeRule,
+}
+
+/// ゲージの増え方と減り方（上流 `CActPerfCommonGauge`）。演奏の画面がこれでゲージを動かす
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GaugeRule {
+    /// MISS の減りにかける数（上流 `fDamageLevelFactor`。ふつうは 0.5）
+    pub miss_factor: f64,
+    /// ミスの許容数（上流の Risky。0 なら使わない）
+    pub risky: u32,
+    /// GREAT と GOOD でも MISS と同じだけ減る（上流の HAZARD）
+    pub hazard: bool,
+}
+
+impl Default for GaugeRule {
+    fn default() -> Self {
+        Self {
+            miss_factor: 0.5,
+            risky: 0,
+            hazard: false,
+        }
+    }
 }
 
 /// 取り出されないまま溜められる効果の数（画面を描いていないあいだに増え続けないように）
@@ -188,6 +225,10 @@ pub struct Play {
     paused_ms: Option<f64>,
     /// 早送りか巻き戻しをした（上流の練習扱い。記録に残さず、STAGE FAILED にもしない）
     skipped: bool,
+    /// 空打ちを MISS にする（練習では使わない）
+    tight: bool,
+    /// ゲージの決まり（演奏の画面が使う）
+    pub gauge: GaugeRule,
 }
 
 impl Play {
@@ -200,14 +241,14 @@ impl Play {
             .collect();
     }
 
-    /// `auto` は自動で叩くレーン（上流の AutoPlay）
+    /// `rules` は自動で叩くレーンや判定の幅
     pub fn load(
         path: &Path,
         input_offset_ms: f64,
         drum_sounds: bool,
-        auto: &[DrumLane],
+        rules: &Rules,
     ) -> Result<Self> {
-        Self::open(path, input_offset_ms, drum_sounds, auto, None)
+        Self::open(path, input_offset_ms, drum_sounds, rules, None)
     }
 
     /// 区間を練習する
@@ -215,19 +256,20 @@ impl Play {
         path: &Path,
         input_offset_ms: f64,
         drum_sounds: bool,
-        auto: &[DrumLane],
+        rules: &Rules,
         options: PracticeOptions,
     ) -> Result<Self> {
-        Self::open(path, input_offset_ms, drum_sounds, auto, Some(options))
+        Self::open(path, input_offset_ms, drum_sounds, rules, Some(options))
     }
 
     fn open(
         path: &Path,
         input_offset_ms: f64,
         drum_sounds: bool,
-        auto: &[DrumLane],
+        rules: &Rules,
         practice: Option<PracticeOptions>,
     ) -> Result<Self> {
+        let auto = rules.auto.as_slice();
         let bytes =
             std::fs::read(path).with_context(|| format!("{} を読めません", path.display()))?;
         let chart = dtx::load(&bytes);
@@ -254,16 +296,15 @@ impl Play {
         // 叩き分けの寄せ方は曲全体の音符で決める（練習の区間によって判定が変わらないように）
         let groups = LaneGroups::default().effective_for(&notes);
         let (mut judge, practice) = match practice {
-            None => (
-                Judge::with_groups(notes, HitWindows::default(), groups),
-                None,
-            ),
+            None => (Judge::with_groups(notes, rules.windows, groups), None),
             Some(options) => (
-                Judge::with_groups(Vec::new(), HitWindows::default(), groups),
+                Judge::with_groups(Vec::new(), rules.windows, groups),
                 Some(Practice::new(options, &tempo, notes)),
             ),
         };
         judge.set_auto(auto);
+        judge.set_pedal_windows(rules.pedal_windows);
+        let tight = rules.tight && practice.is_none();
         let start_ms = practice
             .as_ref()
             .map_or(-LEAD_IN_MS, |p| p.first_audio_ms() - PRACTICE_LEAD_IN_MS);
@@ -359,6 +400,8 @@ impl Play {
             start_ms,
             paused_ms: None,
             skipped: false,
+            tight,
+            gauge: rules.gauge,
         };
         play.lay_laps(start_ms);
         play.lay_auto(start_ms);
@@ -397,7 +440,7 @@ impl Play {
         if let Some(sa) = self.section_audio.as_mut() {
             sa.poll();
         }
-        p.settle(now_ms, self.judge.windows().poor);
+        p.settle(now_ms, self.judge.widest_poor());
         let ahead = self.view_ahead_ms + LAY_MARGIN_MS;
         while p.wants_lap(now_ms, ahead) {
             // 決めた速度の音がまだできていなければ、できるまで前の周の速度で回す
@@ -670,8 +713,13 @@ impl Play {
                 hh_pedal,
             };
             match self.practice.as_mut() {
-                Some(p) => p.on_stray(stray, self.judge.windows().poor),
+                Some(p) => p.on_stray(stray, self.judge.widest_poor()),
                 None => self.strays.push(stray),
+            }
+            // 上流の Tight: MISS を出し、コンボを切り、ゲージを減らす（MISS の数には入れない）
+            if self.tight {
+                self.judge.break_combo();
+                self.push_fx(Fx::StrayMiss { lane });
             }
         }
         self.record(&events, articulation, hh_pedal);
@@ -813,6 +861,23 @@ impl Play {
             "{{\"input_offset_ms\":{},\"windows_ms\":[{},{},{},{}],\"drum_sounds\":{}",
             self.input_offset_ms, w.perfect, w.great, w.good, w.poor, self.drum_sounds
         );
+        let pw = self.judge.pedal_windows();
+        if pw != w {
+            settings += &format!(
+                ",\"pedal_windows_ms\":[{},{},{},{}]",
+                pw.perfect, pw.great, pw.good, pw.poor
+            );
+        }
+        if self.tight {
+            settings += ",\"tight\":true";
+        }
+        let g = self.gauge;
+        if g != GaugeRule::default() {
+            settings += &format!(
+                ",\"gauge\":{{\"miss_factor\":{},\"risky\":{},\"hazard\":{}}}",
+                g.miss_factor, g.risky, g.hazard
+            );
+        }
         let auto: Vec<String> = DrumLane::ALL
             .into_iter()
             .filter(|&l| self.judge.is_auto(l))

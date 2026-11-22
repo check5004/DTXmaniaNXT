@@ -8,6 +8,7 @@
 use std::collections::BTreeMap;
 
 use dtx::DrumLane;
+use engine::judge::HitWindows;
 use serde::{Deserialize, Serialize};
 
 /// 分類（設定の画面を作り直すときの 8 つの分類。名前は [`Group::label`]）
@@ -62,7 +63,6 @@ pub enum Kind {
     /// ON / OFF
     Toggle { default: bool },
     /// 選択肢から 1 つ（Enter で次へ）
-    #[expect(dead_code, reason = "次に移す設定（ゲージの減り方など）で使う")]
     Choice {
         choices: &'static [Choice],
         default: usize,
@@ -74,6 +74,8 @@ pub enum Kind {
         step: i64,
         default: i64,
         unit: &'static str,
+        /// 0 のときに数の代わりに出す名前（Risky の「OFF」など）
+        zero: Option<&'static str>,
     },
     /// ほかの ON / OFF をまとめて切り替える。値は全部 ON なら ON、全部 OFF なら OFF、混ざっていれば「-」
     /// （上流の三つの状態の項目 `CItemThreeState`）
@@ -114,6 +116,74 @@ const AUTO_SECTION: &str = "自動で叩く";
 
 /// 早送り・巻き戻しの幅（ミリ秒）
 pub const SKIP_MS: &str = "skip_ms";
+
+/// ゲージの減り方（MISS の減りにかける数を選ぶ）
+pub const DAMAGE_LEVEL: &str = "damage_level";
+/// ミスの許容数（0 なら使わない）
+pub const RISKY: &str = "risky";
+/// GREAT と GOOD でもゲージが減る
+pub const HAZARD: &str = "hazard";
+/// 空打ちをミスにする
+pub const TIGHT: &str = "tight";
+
+/// 判定の幅（PERFECT・GREAT・GOOD・POOR）のキー。ペダル以外とペダル
+pub const HIT_KEYS: [&str; 4] = ["hit_perfect", "hit_great", "hit_good", "hit_poor"];
+pub const PEDAL_HIT_KEYS: [&str; 4] = [
+    "pedal_hit_perfect",
+    "pedal_hit_great",
+    "pedal_hit_good",
+    "pedal_hit_poor",
+];
+
+const RULE_SECTION: &str = "演奏の決まり";
+
+/// ゲージの減り方の選択肢（上流 `EDamageLevel`。並びは MISS の減りにかける数 [`DAMAGE_FACTORS`] と同じ）
+const DAMAGE_CHOICES: &[Choice] = &[
+    Choice {
+        key: "small",
+        label: "少ない",
+    },
+    Choice {
+        key: "normal",
+        label: "ふつう",
+    },
+    Choice {
+        key: "large",
+        label: "多い",
+    },
+];
+
+/// MISS のゲージの減りにかける数（上流 `fDamageLevelFactor`）
+const DAMAGE_FACTORS: [f64; 3] = [0.25, 0.5, 0.75];
+
+/// 判定の幅 1 つ（上流 Config.ini の `[HitRange]`。上流は 0〜999）
+const fn hit_window(
+    key: &'static str,
+    section: &'static str,
+    name: &'static str,
+    default: i64,
+    desc: &'static str,
+) -> Def {
+    Def {
+        key,
+        group: Group::Play,
+        section,
+        name,
+        kind: Kind::Number {
+            min: 0,
+            max: 500,
+            step: 1,
+            default,
+            unit: " ms",
+            zero: None,
+        },
+        desc,
+        in_play: false,
+    }
+}
+
+const HIT_DESC: &str = "音符の時刻から前後この幅までに叩くと、この判定になります（上流の既定は PERFECT 34、GREAT 67、GOOD 84、POOR 117）。\nPOOR の幅の外は空打ちです。狭い判定の幅が広い判定を越えたら、広い判定もそこまで広げて使います。";
+const PEDAL_HIT_DESC: &str = "バスドラム・左ペダル・左バスドラムの判定の幅です（上流の DrumPedal〜）。\nほかのレーンと同じく、狭い判定の幅が広い判定を越えたら、広い判定もそこまで広げて使います。";
 
 /// オートのまとめての切り替え
 pub const AUTO_ALL: &str = "auto_all";
@@ -171,6 +241,52 @@ pub const ALL: &[Def] = &[
     auto_lane("auto_cy", "　右シンバル"),
     auto_lane("auto_rd", "　ライド"),
     Def {
+        key: DAMAGE_LEVEL,
+        group: Group::Play,
+        section: RULE_SECTION,
+        name: "ゲージの減り方（DamageLevel）",
+        kind: Kind::Choice {
+            choices: DAMAGE_CHOICES,
+            default: 1,
+        },
+        desc: "見逃したとき（MISS）にゲージがどれだけ減るかを選びます。\nミスの許容数（Risky）を使うときは効きません。",
+        in_play: false,
+    },
+    Def {
+        key: RISKY,
+        group: Group::Play,
+        section: RULE_SECTION,
+        name: "ミスの許容数（Risky）",
+        kind: Kind::Number {
+            min: 0,
+            max: 10,
+            step: 1,
+            default: 0,
+            unit: " 回",
+            zero: Some("OFF"),
+        },
+        desc: "POOR と MISS がこの回数になると、ゲージが尽きて STAGE FAILED になります（STAGE FAILED が ON のとき）。\nゲージは満タンから始まり、ミスのたびに同じだけ減ります。OFF ならふつうのゲージです。",
+        in_play: false,
+    },
+    Def {
+        key: HAZARD,
+        group: Group::Play,
+        section: RULE_SECTION,
+        name: "GREAT・GOOD でも減る（HAZARD）",
+        kind: Kind::Toggle { default: false },
+        desc: "GREAT と GOOD でも、MISS と同じだけゲージが減ります（Risky なら残りの回数が減ります）。\nPERFECT だけを狙うときに。",
+        in_play: false,
+    },
+    Def {
+        key: TIGHT,
+        group: Group::Play,
+        section: RULE_SECTION,
+        name: "空打ちをミスに（Tight）",
+        kind: Kind::Toggle { default: false },
+        desc: "音符の無いところを叩くと MISS を出し、コンボが切れてゲージが減ります（MISS の数には入れません）。\n区間の練習では効きません。",
+        in_play: false,
+    },
+    Def {
         key: SKIP_MS,
         group: Group::App,
         section: "演奏中のキー",
@@ -181,10 +297,49 @@ pub const ALL: &[Def] = &[
             step: 1000,
             default: 5000,
             unit: " ms",
+            zero: None,
         },
         desc: "演奏中に → で先へ、← で前へ、この幅だけ飛びます（練習では区間をずらします）。\n飛んだプレイは記録に残しません。Space か Pause で一時停止します。",
         in_play: true,
     },
+    hit_window(
+        HIT_KEYS[0],
+        "判定の幅",
+        "PERFECT（DrumPerfect）",
+        34,
+        HIT_DESC,
+    ),
+    hit_window(HIT_KEYS[1], "判定の幅", "GREAT（DrumGreat）", 67, HIT_DESC),
+    hit_window(HIT_KEYS[2], "判定の幅", "GOOD（DrumGood）", 84, HIT_DESC),
+    hit_window(HIT_KEYS[3], "判定の幅", "POOR（DrumPoor）", 117, HIT_DESC),
+    hit_window(
+        PEDAL_HIT_KEYS[0],
+        "判定の幅（ペダル）",
+        "PERFECT（DrumPedalPerfect）",
+        34,
+        PEDAL_HIT_DESC,
+    ),
+    hit_window(
+        PEDAL_HIT_KEYS[1],
+        "判定の幅（ペダル）",
+        "GREAT（DrumPedalGreat）",
+        67,
+        PEDAL_HIT_DESC,
+    ),
+    hit_window(
+        PEDAL_HIT_KEYS[2],
+        "判定の幅（ペダル）",
+        "GOOD（DrumPedalGood）",
+        84,
+        PEDAL_HIT_DESC,
+    ),
+    hit_window(
+        PEDAL_HIT_KEYS[3],
+        "判定の幅（ペダル）",
+        "POOR（DrumPedalPoor）",
+        117,
+        PEDAL_HIT_DESC,
+    ),
 ];
 
 /// キーの項目。表に無いキーはプログラムの誤り
@@ -260,7 +415,10 @@ impl Values {
         match def(key).kind {
             Kind::Toggle { .. } => on_off(self.flag(key)),
             Kind::Choice { choices, .. } => choices[self.choice(key)].label.to_owned(),
-            Kind::Number { unit, .. } => format!("{}{unit}", self.number(key)),
+            Kind::Number { unit, zero, .. } => match (self.number(key), zero) {
+                (0, Some(z)) => z.to_owned(),
+                (n, _) => format!("{n}{unit}"),
+            },
             Kind::All { members } => {
                 let on = members.iter().filter(|m| self.flag(m)).count();
                 if on == members.len() {
@@ -302,6 +460,24 @@ impl Values {
 
     fn set(&mut self, key: &str, v: toml::Value) {
         self.0.insert(key.to_owned(), v);
+    }
+
+    /// MISS のゲージの減りにかける数
+    pub fn damage_factor(&self) -> f64 {
+        DAMAGE_FACTORS[self.choice(DAMAGE_LEVEL)]
+    }
+
+    /// 判定の幅。`pedal` ならバスドラム・左ペダル・左バスドラムの幅
+    pub fn hit_windows(&self, pedal: bool) -> HitWindows {
+        let keys = if pedal { PEDAL_HIT_KEYS } else { HIT_KEYS };
+        let [perfect, great, good, poor] = keys.map(|k| self.number(k) as f64);
+        HitWindows {
+            perfect,
+            great,
+            good,
+            poor,
+        }
+        .ordered()
     }
 
     /// 自動で叩くレーン
@@ -393,6 +569,35 @@ mod tests {
         assert_eq!(v.number(SKIP_MS), 7000);
         v.change(SKIP_MS, -100);
         assert_eq!(v.number(SKIP_MS), 1000);
+    }
+
+    #[test]
+    fn rules_default_to_upstream() {
+        let mut v = Values::default();
+        assert_eq!(v.damage_factor(), 0.5);
+        assert_eq!(v.label(DAMAGE_LEVEL), "ふつう");
+        v.change(DAMAGE_LEVEL, 1);
+        assert_eq!(v.damage_factor(), 0.75);
+        // 端で回る
+        v.change(DAMAGE_LEVEL, 1);
+        assert_eq!(v.label(DAMAGE_LEVEL), "少ない");
+        assert_eq!(v.label(RISKY), "OFF");
+        v.change(RISKY, 3);
+        assert_eq!(v.label(RISKY), "3 回");
+        assert!(!v.flag(HAZARD) && !v.flag(TIGHT));
+    }
+
+    #[test]
+    fn hit_windows_come_from_the_table_in_order() {
+        let mut v = Values::default();
+        assert_eq!(v.hit_windows(false), HitWindows::default());
+        assert_eq!(v.hit_windows(true), HitWindows::default());
+        // ペダルの GREAT を PERFECT より狭くしても、PERFECT までは広げる
+        v.change(PEDAL_HIT_KEYS[0], 10);
+        v.change(PEDAL_HIT_KEYS[1], -40);
+        let w = v.hit_windows(true);
+        assert_eq!((w.perfect, w.great), (44.0, 44.0));
+        assert_eq!(v.hit_windows(false), HitWindows::default());
     }
 
     #[test]
