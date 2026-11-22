@@ -15,6 +15,7 @@
 
 mod audio;
 mod band;
+mod capture;
 mod chart_sound;
 mod config;
 mod config_view;
@@ -60,7 +61,7 @@ use winit::application::ApplicationHandler;
 use winit::event::{ElementState, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
-use winit::window::{Window, WindowId};
+use winit::window::{Fullscreen, Window, WindowId};
 
 use crate::chart_sound::AutoMix;
 use crate::config::Config;
@@ -91,6 +92,8 @@ struct Gpu {
     egui_renderer: egui_wgpu::Renderer,
     /// 描く画像を続けて受け取れなかった回数
     timeouts: u32,
+    /// 次に描く画面を PNG にして残す先（F12 と、記録を更新した結果の画面）
+    capture: Option<PathBuf>,
 }
 
 /// 描く画像をこの回数続けて受け取れなければ、画面への出力を作り直す
@@ -98,7 +101,7 @@ struct Gpu {
 const TIMEOUTS_BEFORE_RECONFIGURE: u32 = 3;
 
 impl Gpu {
-    fn new(window: Arc<Window>) -> Result<Self> {
+    fn new(window: Arc<Window>, vsync: bool) -> Result<Self> {
         let instance = wgpu::Instance::default();
         let surface = instance
             .create_surface(window.clone())
@@ -127,6 +130,7 @@ impl Gpu {
         }
         // 遅れを小さくするため、待ち行列の深さを最小にする
         config.desired_maximum_frame_latency = 1;
+        config.present_mode = present_mode(vsync);
         surface.configure(&device, &config);
         let egui_renderer = egui_wgpu::Renderer::new(
             &device,
@@ -140,7 +144,17 @@ impl Gpu {
             config,
             egui_renderer,
             timeouts: 0,
+            capture: None,
         })
+    }
+
+    /// 垂直同期（上流の VSyncWait）を切り替える
+    fn set_vsync(&mut self, on: bool) {
+        let mode = present_mode(on);
+        if self.config.present_mode != mode {
+            self.config.present_mode = mode;
+            self.surface.configure(&self.device, &self.config);
+        }
     }
 
     fn resize(&mut self, width: u32, height: u32) {
@@ -152,7 +166,8 @@ impl Gpu {
         self.surface.configure(&self.device, &self.config);
     }
 
-    fn render(&mut self, ctx: &egui::Context, mut output: egui::FullOutput) {
+    /// 描く。画面を残したら、その先を返す
+    fn render(&mut self, ctx: &egui::Context, mut output: egui::FullOutput) -> Option<PathBuf> {
         // 字形などのテクスチャは、画面を描けないフレームでも必ず反映する（捨てると文字が出ない）
         let mut textures = std::mem::take(&mut output.textures_delta);
         for (id, deltas) in textures.set.drain() {
@@ -162,20 +177,26 @@ impl Gpu {
             }
         }
         let free: Vec<egui::TextureId> = textures.free.drain().collect();
-        self.draw(ctx, output.shapes, output.pixels_per_point);
+        let saved = self.draw(ctx, output.shapes, output.pixels_per_point);
         for id in &free {
             self.egui_renderer.free_texture(id);
         }
+        saved
     }
 
-    fn draw(&mut self, ctx: &egui::Context, shapes: Vec<egui::epaint::ClippedShape>, ppp: f32) {
+    fn draw(
+        &mut self,
+        ctx: &egui::Context,
+        shapes: Vec<egui::epaint::ClippedShape>,
+        ppp: f32,
+    ) -> Option<PathBuf> {
         let frame = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(frame) => frame,
             wgpu::CurrentSurfaceTexture::Suboptimal(frame) => {
                 self.surface.configure(&self.device, &self.config);
                 frame
             }
-            wgpu::CurrentSurfaceTexture::Occluded => return,
+            wgpu::CurrentSurfaceTexture::Occluded => return None,
             wgpu::CurrentSurfaceTexture::Timeout => {
                 self.timeouts += 1;
                 if self.timeouts >= TIMEOUTS_BEFORE_RECONFIGURE {
@@ -183,12 +204,12 @@ impl Gpu {
                     self.surface.configure(&self.device, &self.config);
                     self.timeouts = 0;
                 }
-                return;
+                return None;
             }
             other => {
                 log::warn!("skip frame: {other:?}");
                 self.surface.configure(&self.device, &self.config);
-                return;
+                return None;
             }
         };
         self.timeouts = 0;
@@ -232,9 +253,49 @@ impl Gpu {
             let mut pass = pass.forget_lifetime();
             self.egui_renderer.render(&mut pass, &jobs, &screen);
         }
+        // 画面を残すときは、同じ絵を読み出せる画像にも描く（窓の画像は読み出せないことがある）
+        let capture = self.capture.take().map(|path| {
+            let shot = capture::Shot::new(
+                &self.device,
+                self.config.format,
+                self.config.width,
+                self.config.height,
+            );
+            {
+                let pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("capture"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: shot.view(),
+                        resolve_target: None,
+                        depth_slice: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    ..Default::default()
+                });
+                let mut pass = pass.forget_lifetime();
+                self.egui_renderer.render(&mut pass, &jobs, &screen);
+            }
+            shot.copy(&mut encoder);
+            (shot, path)
+        });
         self.queue
             .submit(extra.into_iter().chain([encoder.finish()]));
         self.queue.present(frame);
+        let (shot, path) = capture?;
+        shot.save(&self.device, path.clone());
+        Some(path)
+    }
+}
+
+/// 垂直同期の ON / OFF に当たる出し方（選べなければ wgpu が近いものにする）
+fn present_mode(vsync: bool) -> wgpu::PresentMode {
+    if vsync {
+        wgpu::PresentMode::AutoVsync
+    } else {
+        wgpu::PresentMode::AutoNoVsync
     }
 }
 
@@ -342,6 +403,10 @@ struct App {
     autoplay: bool,
     /// 新しい版を探して落とし、終えるときに入れ替える
     updater: update::Updater,
+    /// 押している Alt などのキー（Alt+Enter で全画面）
+    modifiers: winit::keyboard::ModifiersState,
+    /// 窓に当てた全画面と垂直同期の設定（変わったら当て直す）
+    applied_window: Option<(bool, bool)>,
 }
 
 /// 演奏の画面が数えたスコアを、記録に残す形にする
@@ -470,6 +535,57 @@ impl App {
             toast: None,
             autoplay: std::env::var_os("DTXMANIANXT_AUTOPLAY").is_some_and(|v| v == "1"),
             updater,
+            modifiers: winit::keyboard::ModifiersState::empty(),
+            applied_window: None,
+        }
+    }
+
+    /// 全画面と垂直同期を設定に合わせる（設定の画面で変えたときも、ここで当てる）
+    fn apply_window_settings(&mut self) {
+        let v = &self.config.settings;
+        let want = (v.flag(settings::FULLSCREEN), v.flag(settings::VSYNC));
+        if self.applied_window == Some(want) {
+            return;
+        }
+        if let Some(w) = &self.window
+            && self.applied_window.map(|a| a.0) != Some(want.0)
+        {
+            w.set_fullscreen(want.0.then_some(Fullscreen::Borderless(None)));
+        }
+        if let Some(gpu) = &mut self.gpu {
+            gpu.set_vsync(want.1);
+        }
+        self.applied_window = Some(want);
+    }
+
+    /// Alt+Enter と F11：全画面を切り替えて、設定にも残す（上流と同じく次に開いたときもそのまま）
+    fn toggle_fullscreen(&mut self) {
+        let on = !self.config.settings.flag(settings::FULLSCREEN);
+        self.config
+            .settings
+            .set_raw(settings::FULLSCREEN, i64::from(on));
+        self.config.save();
+        self.apply_window_settings();
+    }
+
+    /// F12：次に描く画面を「ピクチャ」に残す（上流の Capture キー）
+    fn request_screenshot(&mut self) {
+        let (Some(gpu), Some(path)) = (&mut self.gpu, capture::screenshot_path()) else {
+            return;
+        };
+        gpu.capture = Some(path);
+    }
+
+    /// 記録を更新した結果の画面を、譜面の隣に残す（上流の AutoSaveResult）
+    fn capture_new_record(&mut self) {
+        let Screen::Result(o, view) = &mut self.screen else {
+            return;
+        };
+        if !self.config.settings.flag(settings::AUTO_SAVE_RESULT) {
+            return;
+        }
+        if let (Some(rank), Some(gpu)) = (view.record_capture_due(), &mut self.gpu) {
+            gpu.capture = Some(capture::result_path(&o.path, rank));
         }
     }
 
@@ -976,6 +1092,7 @@ impl App {
                 self.sfx.play(se);
             }
         }
+        self.capture_new_record();
         let stage_failed = self.stage_failed_enabled();
         let mut failed_out = false;
         let mut finished = false;
@@ -1975,16 +2092,20 @@ impl App {
         self.shutter.update(Instant::now());
         let egui_ctx = self.egui_ctx.clone();
         let output = egui_ctx.run_ui(input, |ui| {
-            self.draw_screen(
-                ui,
-                &ports,
-                &toast,
-                scanning,
-                &mut mouse,
-                &mut result_actions,
-            );
-            // シャッターはどの画面のどの窓よりも上に
+            self.draw_screen(ui, &ports, scanning, &mut mouse, &mut result_actions);
+            // 短い知らせはどの画面でも（F12 で画面を残したときなど）
             let ctx = ui.ctx().clone();
+            if let Some(t) = &toast {
+                ui::play_toast(
+                    &ctx,
+                    &Canvas::overlay(
+                        &ctx.layer_painter(egui::LayerId::background()),
+                        ctx.content_rect(),
+                    ),
+                    t,
+                );
+            }
+            // シャッターはどの画面のどの窓よりも上に
             let top = ctx.layer_painter(egui::LayerId::new(
                 egui::Order::Debug,
                 egui::Id::unique("shutter"),
@@ -1995,8 +2116,14 @@ impl App {
         if let Some(state) = &mut self.egui_state {
             state.handle_platform_output(&window, output.platform_output.clone());
         }
-        if let Some(gpu) = &mut self.gpu {
-            gpu.render(&self.egui_ctx, output);
+        self.apply_window_settings();
+        let saved = self
+            .gpu
+            .as_mut()
+            .and_then(|gpu| gpu.render(&self.egui_ctx, output));
+        // 残した画面に知らせが写らないように、知らせは残したあとに出す
+        if let Some(path) = saved {
+            self.toast(format!("画面を残しました（{}）", path.display()));
         }
         self.select_mouse(mouse);
         for a in result_actions {
@@ -2009,7 +2136,6 @@ impl App {
         &mut self,
         ui: &mut egui::Ui,
         ports: &[String],
-        toast: &Option<String>,
         scanning: bool,
         mouse: &mut SelectMouse,
         result_actions: &mut Vec<ui::ResultAction>,
@@ -2088,9 +2214,6 @@ impl App {
                         show_info: self.show_play_info,
                     },
                 );
-                if let Some(t) = toast {
-                    ui::play_toast(&ctx, &c, t);
-                }
                 if let Some(q) = &mut self.quick {
                     let mut info =
                         config_info(&self.config, &self.midi, &self.monitor, &self.songs);
@@ -2172,9 +2295,11 @@ impl ApplicationHandler for App {
         if self.window.is_some() {
             return;
         }
+        let fullscreen = self.config.settings.flag(settings::FULLSCREEN);
         let attrs = Window::default_attributes()
             .with_title("DTXmaniaNXT")
-            .with_inner_size(winit::dpi::LogicalSize::new(1280.0, 720.0));
+            .with_inner_size(winit::dpi::LogicalSize::new(1280.0, 720.0))
+            .with_fullscreen(fullscreen.then_some(Fullscreen::Borderless(None)));
         let window = match event_loop.create_window(attrs) {
             Ok(w) => Arc::new(w),
             Err(e) => {
@@ -2183,7 +2308,8 @@ impl ApplicationHandler for App {
                 return;
             }
         };
-        match Gpu::new(window.clone()) {
+        let vsync = self.config.settings.flag(settings::VSYNC);
+        match Gpu::new(window.clone(), vsync) {
             Ok(gpu) => self.gpu = Some(gpu),
             Err(e) => {
                 self.startup_error = Some(e.context("GPU を使い始められません"));
@@ -2206,6 +2332,7 @@ impl ApplicationHandler for App {
         ));
         window.request_redraw();
         self.window = Some(window);
+        self.applied_window = Some((fullscreen, vsync));
         if let Some(path) = self.pending.take() {
             self.start(path);
         }
@@ -2226,10 +2353,24 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::DroppedFile(path) => self.on_drop(path),
+            WindowEvent::ModifiersChanged(m) => self.modifiers = m.state(),
             WindowEvent::KeyboardInput { event, .. } => {
                 if event.state == ElementState::Pressed
                     && let PhysicalKey::Code(code) = event.physical_key
                 {
+                    // どの画面でも効くキー（上流の Alt+Enter と Capture キー）
+                    let alt_enter = self.modifiers.alt_key()
+                        && matches!(code, KeyCode::Enter | KeyCode::NumpadEnter);
+                    if !event.repeat && (alt_enter || code == KeyCode::F11) {
+                        self.toggle_fullscreen();
+                        return;
+                    }
+                    if code == KeyCode::F12 {
+                        if !event.repeat {
+                            self.request_screenshot();
+                        }
+                        return;
+                    }
                     // 押し続けたときの繰り返しは、設定の画面の矢印だけ（上流のキーの反復と同じ。左右は値を続けて変える）
                     let repeat_ok = matches!(self.screen, Screen::Config(..))
                         && matches!(

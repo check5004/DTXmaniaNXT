@@ -25,6 +25,8 @@ use crate::text::Style;
 const FADE_IN: Duration = Duration::from_millis(500);
 /// 結果の音から New Record の音までの間（上流は 10 ミリ秒 × 150）
 const NEW_RECORD_DELAY: Duration = Duration::from_millis(1500);
+/// 記録を更新した結果を画像で残す時刻（上流と同じく動きが落ち着いてから）
+const CAPTURE_AT: Duration = Duration::from_millis(2000);
 
 /// 見ているページ
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -156,6 +158,8 @@ pub struct ResultView {
     new_record: bool,
     /// まだ鳴らしていない音と、鳴らす時刻（入ってきてから）
     sounds: Vec<(Duration, Se)>,
+    /// 記録を更新した結果を画像で残すことを、もう頼んだ
+    captured: bool,
 }
 
 impl ResultView {
@@ -182,7 +186,22 @@ impl ResultView {
             clear,
             new_record,
             sounds,
+            captured: false,
         }
+    }
+
+    /// 記録を更新した結果を画像で残す時刻になったら、1 回だけランクの名前を返す（上流の AutoSaveResult）。
+    /// 別のページを見ているあいだは待つ
+    pub fn record_capture_due(&mut self) -> Option<&'static str> {
+        if !self.new_record
+            || self.captured
+            || self.page != Page::Summary
+            || self.entered.elapsed() < CAPTURE_AT
+        {
+            return None;
+        }
+        self.captured = true;
+        Some(self.rank.name())
     }
 
     /// 鳴らす時刻になった音
@@ -559,6 +578,22 @@ mod tests {
         assert!(v.due_sounds().is_empty());
         v.entered -= NEW_RECORD_DELAY;
         assert_eq!(v.due_sounds(), vec![Se::NewRecord]);
+    }
+
+    #[test]
+    fn new_records_are_captured_once_on_the_summary() {
+        let mut v = ResultView::new(info(70.0, Some(best(None)), false));
+        assert_eq!(v.record_capture_due(), None);
+        v.entered -= CAPTURE_AT;
+        v.turn();
+        assert_eq!(v.record_capture_due(), None);
+        v.turn();
+        assert!(v.record_capture_due().is_some());
+        assert_eq!(v.record_capture_due(), None);
+        // 記録を更新していなければ残さない
+        let mut v = ResultView::new(info(50.0, Some(best(Some(60.0))), false));
+        v.entered -= CAPTURE_AT;
+        assert_eq!(v.record_capture_due(), None);
     }
 
     #[test]
