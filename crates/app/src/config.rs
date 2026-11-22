@@ -5,12 +5,13 @@ use std::path::PathBuf;
 
 use dtx::DrumLane;
 use engine::input::MidiProfile;
-use engine::practice::{LoopStyle, PassRule, SpeedPlan, snap_speed};
+use engine::practice::{LoopStyle, PassRule, STEP_LAPS, STEP_LAPS_CHOICES, SpeedPlan, snap_speed};
 use serde::{Deserialize, Serialize};
 
 use crate::practice::PracticePrefs;
-use crate::settings::Values;
+use crate::settings::{DisplayMode, Values};
 use crate::stretch::Pitch;
+use crate::update::UpdateMode;
 
 /// 設定の画面で全体の音量を 1 回で変える幅（%）
 pub const MASTER_VOLUME_STEP: u8 = 5;
@@ -39,7 +40,7 @@ pub struct Config {
     pub level: usize,
     /// 練習の周のつなぎ方（"connect" か "restart"）
     pub practice_style: String,
-    /// 練習の合格の基準（"easy"、"normal"、"strict"）
+    /// 練習の段の越え方（"easy"、"normal"、"strict"。同じ拍を 3・2・1 回落としたら「もう一度」）
     pub practice_rule: String,
     /// 練習の速度を段階アップで上げる（false なら固定）
     pub practice_ladder: bool,
@@ -51,6 +52,8 @@ pub struct Config {
     pub practice_pitch: String,
     /// 練習でメトロノームを鳴らす（区間の拍ごとに小さく鳴る）
     pub practice_metronome: bool,
+    /// 練習の 1 段の周の数（0.5 の 1 セットの周の数 practice_set_laps とは別。そちらは読まない）
+    pub practice_step_laps: u32,
     /// ゲージが尽きたら途中で終わる（STAGE FAILED）。書いていなければ ON（上流の既定）
     pub stage_failed: Option<bool>,
     /// 判定の下のずれの数字（0 は出さない、1 は出す、2 は PERFECT 以外だけ。上流 `ShowLagTime`）
@@ -69,8 +72,18 @@ pub struct Config {
     /// PC のキーボードの割り当てのうち、既定から変えたもの（順に重ねる）
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub keys: Vec<KeyBind>,
-    /// 起動したときに GitHub のリリースから新しい版を落とし、終えるときに入れ替える（Setup.exe で入れたときだけ）
-    pub auto_update: bool,
+    /// 0.5.0 までの自動更新の ON/OFF。読むだけで書かない（OFF にしていたら `update` を「確かめない」にする）
+    #[serde(skip_serializing)]
+    pub auto_update: Option<bool>,
+    /// 新しい版の扱い（"notify"、"auto"、"off"。[`crate::update::UpdateMode`]）。書いていなければ知らせる
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub update: String,
+    /// 最後に起動した版（更新のあとに「新しい版になりました」を出す）
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub last_version: String,
+    /// 最後に使った全画面の出し方（"borderless" か "fullscreen"）。Alt+Enter と F11 でウィンドウから戻る先
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub last_full_mode: String,
     /// 設定の表（[`crate::settings`]）の項目の値（config.toml の `[settings]`）。書いていないものは既定
     #[serde(skip_serializing_if = "Values::is_empty")]
     pub settings: Values,
@@ -147,6 +160,7 @@ impl Default for Config {
             practice_target: SpeedPlan::DEFAULT_TARGET,
             practice_pitch: Pitch::default().name().to_owned(),
             practice_metronome: true,
+            practice_step_laps: STEP_LAPS,
             stage_failed: None,
             show_lag_time: 1,
             show_lag_time_color: 0,
@@ -154,7 +168,10 @@ impl Default for Config {
             pad_notes: Vec::new(),
             midi_devices: Vec::new(),
             keys: Vec::new(),
-            auto_update: true,
+            auto_update: None,
+            update: String::new(),
+            last_version: String::new(),
+            last_full_mode: String::new(),
             settings: Values::default(),
         }
     }
@@ -243,13 +260,36 @@ impl Config {
         self.stage_failed.unwrap_or(true)
     }
 
+    /// Alt+Enter と F11 でウィンドウから切り替える先（最後に使った方。初めは全画面）
+    pub fn full_mode(&self) -> DisplayMode {
+        DisplayMode::from_name(&self.last_full_mode)
+            .filter(|m| *m != DisplayMode::Window)
+            .unwrap_or(DisplayMode::Fullscreen)
+    }
+
+    /// 全画面の出し方を使ったら覚える。覚え直したら true
+    pub fn remember_full_mode(&mut self, mode: DisplayMode) -> bool {
+        if mode == DisplayMode::Window || self.last_full_mode == mode.name() {
+            return false;
+        }
+        mode.name().clone_into(&mut self.last_full_mode);
+        true
+    }
+
     pub fn load() -> Self {
         let Some(path) = Self::path() else {
             return Self::default();
         };
         match std::fs::read_to_string(&path) {
-            Ok(text) => match toml::from_str(&text) {
-                Ok(c) => c,
+            Ok(text) => match toml::from_str::<Self>(&text) {
+                Ok(mut c) => {
+                    c.upgrade_update();
+                    // 前の版のキーを写したら書き直す
+                    if c.settings.upgrade() {
+                        c.save();
+                    }
+                    c
+                }
                 Err(e) => {
                     log::warn!("{}: {e}", path.display());
                     Self::default()
@@ -278,12 +318,52 @@ impl Config {
         }
     }
 
+    /// 0.5.0 までの自動更新を OFF にしていたら、新しい版の扱いを「確かめない」にする（次に書くときに残る）
+    fn upgrade_update(&mut self) {
+        if self.update.is_empty() && self.auto_update == Some(false) {
+            self.update = UpdateMode::Off.name().to_owned();
+        }
+    }
+
+    /// 新しい版の扱い（読めない値なら既定の「知らせる」）
+    pub fn update_mode(&self) -> UpdateMode {
+        UpdateMode::from_name(&self.update).unwrap_or_default()
+    }
+
+    pub fn set_update_mode(&mut self, mode: UpdateMode) {
+        mode.name().clone_into(&mut self.update);
+    }
+
+    /// 起動した版を覚える。前と違う版なら、前の版（分かれば）を返す（呼ぶ側が知らせて保存する）。
+    /// 初めての起動なら何も返さない。0.5.0 までの設定（前の版を覚えていない）なら空の文字を返す
+    pub fn remember_version(&mut self, current: &str) -> Option<String> {
+        if self.last_version == current {
+            return None;
+        }
+        let previous = std::mem::replace(&mut self.last_version, current.to_owned());
+        (!previous.is_empty() || self.auto_update.is_some()).then_some(previous)
+    }
+
+    /// 書いてあるファイルが読める（または無い）ときだけ保存する。起動しただけで書くときに使い、
+    /// 読めないファイルを既定の値で上書きしない
+    pub fn save_unless_broken(&self) {
+        let Some(path) = Self::path() else {
+            return;
+        };
+        if let Ok(text) = std::fs::read_to_string(&path)
+            && toml::from_str::<Self>(&text).is_err()
+        {
+            return;
+        }
+        self.save();
+    }
+
     /// 練習の周のつなぎ方（読めない値なら既定）
     pub fn loop_style(&self) -> LoopStyle {
         LoopStyle::from_name(&self.practice_style).unwrap_or_default()
     }
 
-    /// 練習の合格の基準（読めない値なら既定）
+    /// 練習の苦手の見方（読めない値なら既定）
     pub fn pass_rule(&self) -> PassRule {
         PassRule::from_name(&self.practice_rule).unwrap_or_default()
     }
@@ -314,6 +394,7 @@ impl Config {
             speed: self.speed_plan(),
             pitch: self.pitch(),
             metronome: self.practice_metronome,
+            step_laps: self.step_laps(),
         }
     }
 
@@ -334,6 +415,15 @@ impl Config {
         }
         self.practice_pitch = p.pitch.name().to_owned();
         self.practice_metronome = p.metronome;
+        self.practice_step_laps = p.step_laps;
+    }
+
+    /// 練習の 1 段の周の数（選べる数のうち一番近いもの）
+    pub fn step_laps(&self) -> u32 {
+        STEP_LAPS_CHOICES
+            .into_iter()
+            .min_by_key(|&n| n.abs_diff(self.practice_step_laps))
+            .unwrap_or(STEP_LAPS)
     }
 
     /// 前の版の、機器を区別しないパッドの割り当て（読めないレーンの名前は飛ばす）
@@ -399,6 +489,7 @@ mod tests {
             speed: SpeedPlan::Fixed(85),
             pitch: Pitch::Tape,
             metronome: false,
+            step_laps: 6,
         };
         c.set_practice_prefs(p);
         assert_eq!(c.practice_prefs(), p);
@@ -541,6 +632,21 @@ lane = \"LP\"
     }
 
     #[test]
+    fn f11_returns_to_the_last_full_mode() {
+        let mut c = Config::default();
+        assert_eq!(c.full_mode(), DisplayMode::Fullscreen);
+        assert!(!c.remember_full_mode(DisplayMode::Window));
+        assert!(c.remember_full_mode(DisplayMode::Borderless));
+        assert!(!c.remember_full_mode(DisplayMode::Borderless));
+        assert_eq!(c.full_mode(), DisplayMode::Borderless);
+        let back: Config = toml::from_str(&toml::to_string(&c).unwrap()).unwrap();
+        assert_eq!(back.full_mode(), DisplayMode::Borderless);
+        // 読めない名前やウィンドウは全画面に
+        c.last_full_mode = "window".into();
+        assert_eq!(c.full_mode(), DisplayMode::Fullscreen);
+    }
+
+    #[test]
     fn round_trip() {
         let mut c = Config::default();
         c.song_dirs.push(PathBuf::from("曲"));
@@ -563,7 +669,40 @@ lane = \"LP\"
             preset: "roland".to_owned(),
             ..MidiDevice::default()
         });
+        c.set_update_mode(UpdateMode::Auto);
+        c.last_version = "0.5.0".to_owned();
         let back: Config = toml::from_str(&toml::to_string_pretty(&c).unwrap()).unwrap();
         assert_eq!(back, c);
+    }
+
+    #[test]
+    fn auto_update_off_becomes_no_checks() {
+        let mut c: Config = toml::from_str("auto_update = false").unwrap();
+        c.upgrade_update();
+        assert_eq!(c.update_mode(), UpdateMode::Off);
+        // 書くのは新しいキーだけ
+        let text = toml::to_string_pretty(&c).unwrap();
+        assert!(text.contains("update = \"off\""), "{text}");
+        assert!(!text.contains("auto_update"), "{text}");
+        // ON のままだった人は、勝手に入れ替えない「知らせる」になる
+        let mut c: Config = toml::from_str("auto_update = true").unwrap();
+        c.upgrade_update();
+        assert_eq!(c.update_mode(), UpdateMode::Notify);
+        // 読めない値は既定
+        let c: Config = toml::from_str("update = \"later\"").unwrap();
+        assert_eq!(c.update_mode(), UpdateMode::Notify);
+    }
+
+    #[test]
+    fn a_new_version_is_noticed_once() {
+        // 初めての起動
+        let mut c = Config::default();
+        assert_eq!(c.remember_version("0.5.1"), None);
+        assert_eq!(c.remember_version("0.5.1"), None);
+        assert_eq!(c.remember_version("0.5.2"), Some("0.5.1".to_owned()));
+        assert_eq!(c.last_version, "0.5.2");
+        // 0.5.0 までの設定（自動更新のキーはあるが、前の版を覚えていない）
+        let mut c: Config = toml::from_str("auto_update = true").unwrap();
+        assert_eq!(c.remember_version("0.5.1"), Some(String::new()));
     }
 }

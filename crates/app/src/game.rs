@@ -10,14 +10,16 @@ use engine::analysis::{NoteResult, Tendency, WeakPhrase, mean_and_sd};
 use engine::clock::MidiTimestampMapper;
 use engine::input::{Articulation, InputEvent, MidiMessage, MidiProfile, Normalizer, Pad};
 use engine::judge::{Hit, HitWindows, Judge, JudgeEvent, Judgement, LaneGroups, Tally};
-use engine::practice::{SpeedPlan, place};
+use engine::practice::{Attempt, SpeedPlan, place};
 use records::{Lap, NoteHit, SectionClear, Session, SessionKind, StrayHit};
 
 use crate::audio::{AudioOut, Sound, click, load_sound};
 use crate::chart_sound::{AutoMix, ChartSounds, METRONOME_BAR, METRONOME_BEAT};
 use crate::history::OvercomeCheck;
 use crate::midi::RawMidi;
-use crate::practice::{LapSummary, Practice, PracticeOptions, StrayHint, count_per_measure};
+use crate::practice::{
+    CLEAR_HOLD_MS, LapSummary, Practice, PracticeOptions, StrayHint, count_per_measure,
+};
 use crate::stretch::{SectionAudio, mix_bgm};
 use crate::time::host_us;
 
@@ -44,6 +46,17 @@ const AUTO_AHEAD_MS: f64 = 1500.0;
 
 /// 自動で叩いたときのレーンの光の強さ（ベロシティ）
 const AUTO_VELOCITY: u8 = 100;
+
+/// 練習の出来事。演奏の画面が取り出して音を鳴らし、終わったら結果へ進む
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PracticeEvent {
+    /// 段を越えた（次の段へ）
+    StepUp,
+    /// 目標の段を越えた
+    Cleared,
+    /// クリアを見せ終えた。この時刻（曲の時刻）までで結果へ
+    Finished { at_ms: f64 },
+}
 
 /// 画面の効果に使う出来事。演奏画面が毎フレーム取り出す
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -162,6 +175,11 @@ pub struct Outcome {
     /// 叩けた音符のずれ（ミリ秒、マイナスは早い）の平均と標準偏差
     pub offset_mean_ms: Option<f64>,
     pub offset_sd_ms: Option<f64>,
+    /// 叩けた音符のずれ（結果の画面の散らばりに使う）と、判定の幅（ペダル以外）
+    pub offsets: Vec<f64>,
+    pub windows: HitWindows,
+    /// 結果の画面の「ずれ」の板（普通のプレイだけ。記録を読んでから入れる）
+    pub lag: Option<crate::lag_view::LagResult>,
     /// 最後まで遊んだ（途中でやめたら false）
     pub cleared: bool,
     /// 小節ごとの音符の数（長さが譜面の小節の数）
@@ -185,7 +203,13 @@ pub struct Outcome {
 pub struct PracticeOutcome {
     pub options: PracticeOptions,
     pub laps: Vec<LapSummary>,
-    /// 段階アップで目標の速度まで合格した
+    /// 段の挑戦ごとのまとめ（途中でやめた挑戦も、最後まで叩いた周があれば入れる）
+    pub attempts: Vec<Attempt>,
+    /// 区間の小節ごとの拍の数（ミスした所の地図）
+    pub beats_per_measure: Vec<u32>,
+    /// 練習した時間（最初の助走から、やめるまで。ミリ秒）
+    pub elapsed_ms: f64,
+    /// 目標の段を越えた
     pub cleared: bool,
     /// 空打ちが偏っているパッド（拾いすぎの疑い）
     pub strays: Option<StrayHint>,
@@ -213,12 +237,19 @@ pub struct Play {
     pub judge: Judge,
     pub audio: Option<AudioOut>,
     pub end_ms: f64,
-    /// 入力の遅れの補正。叩いた時刻からこの分を引く
+    /// 入力の遅れの補正（全体）。叩いた時刻からこの分を引く
     pub input_offset_ms: f64,
+    /// この曲の補正。判定と譜面の流れを一緒にこの分だけ遅らせる（譜面と BGM が合っていない曲など）
+    pub song_offset_ms: f64,
     /// 叩いたときに譜面の音を鳴らすか（モジュールの音を使うなら切る）
     pub drum_sounds: bool,
     /// 画面の効果（演奏画面が取り出す）
     fx: Vec<Fx>,
+    /// 練習の出来事（演奏画面が取り出す）
+    practice_events: Vec<PracticeEvent>,
+    /// 練習で、終わった段の挑戦の数と、クリアを見せ終えたと知らせたか
+    seen_attempts: usize,
+    finish_sent: bool,
     /// 小節線と拍線（時刻の順）
     pub lines: Vec<BeatLine>,
     /// 曲の頭のテンポ
@@ -384,7 +415,7 @@ impl Play {
             let from = t.run_up_ms - SECTION_MARGIN_MS;
             let to = t.tail_ms.max(t.end_ms) + SECTION_MARGIN_MS;
             let started = std::time::Instant::now();
-            let first = p.ladder().speed();
+            let first = p.speed();
             section_audio = Some(SectionAudio::new(
                 mix_bgm(&chart_sounds.auto, &sounds, a.rate(), from, to),
                 from,
@@ -421,8 +452,12 @@ impl Play {
             audio,
             end_ms,
             input_offset_ms,
+            song_offset_ms: 0.0,
             drum_sounds,
             fx: Vec::new(),
+            practice_events: Vec::new(),
+            seen_attempts: 0,
+            finish_sent: false,
             lines,
             bpm: 60_000.0 / (tempo.beat_to_ms(1.0) - tempo.beat_to_ms(0.0)).max(1.0),
             last_chip_ms,
@@ -478,6 +513,37 @@ impl Play {
         std::mem::take(&mut self.fx)
     }
 
+    /// たまった練習の出来事を取り出す
+    pub fn take_practice_events(&mut self) -> Vec<PracticeEvent> {
+        std::mem::take(&mut self.practice_events)
+    }
+
+    /// 終わった段の挑戦とクリアを、練習の出来事にする
+    fn note_practice(&mut self, now: f64) {
+        let Some(p) = self.practice.as_ref() else {
+            return;
+        };
+        for a in &p.done[self.seen_attempts.min(p.done.len())..] {
+            if a.passed == Some(true) {
+                self.practice_events
+                    .push(if p.cleared() && a.index + 1 == p.done.len() {
+                        PracticeEvent::Cleared
+                    } else {
+                        PracticeEvent::StepUp
+                    });
+            }
+        }
+        self.seen_attempts = p.done.len();
+        if let Some(at) = p.cleared_at_ms
+            && !self.finish_sent
+            && now - at >= CLEAR_HOLD_MS
+        {
+            self.finish_sent = true;
+            self.practice_events
+                .push(PracticeEvent::Finished { at_ms: now });
+        }
+    }
+
     fn push_fx(&mut self, fx: Fx) {
         if self.fx.len() >= MAX_FX {
             self.fx.drain(..MAX_FX / 2);
@@ -499,7 +565,7 @@ impl Play {
         let ready = self
             .section_audio
             .as_ref()
-            .is_none_or(|sa| sa.get(p.ladder().speed()).is_some());
+            .is_none_or(|sa| sa.get(p.speed()).is_some());
         if ready {
             while let Some(w) = p.withdraw_stale(now_ms) {
                 if !self.judge.truncate(w.notes_from) {
@@ -514,7 +580,16 @@ impl Play {
         let ahead = self.view_ahead_ms + LAY_MARGIN_MS;
         while p.wants_lap(now_ms, ahead) {
             // 決めた速度の音がまだできていなければ、できるまで前の周の速度で回す
-            let want = p.ladder().speed();
+            let want = p.speed();
+            // セットの始めは、選んだ速度の音ができるまで並べない（前の速度で始めると知らせと合わない）
+            if p.resume_pending()
+                && self
+                    .section_audio
+                    .as_ref()
+                    .is_some_and(|sa| sa.get(want).is_none())
+            {
+                break;
+            }
             let speed = match &self.section_audio {
                 Some(sa) if sa.get(want).is_none() => p.last_speed().unwrap_or(want),
                 _ => want,
@@ -612,6 +687,16 @@ impl Play {
             .map_or(now_ms, |p| p.chart_ms(now_ms))
     }
 
+    /// 曲の時刻 `song_ms` を判定の時刻にする（入力の補正とこの曲の補正を引く）
+    fn judge_ms(&self, song_ms: f64) -> f64 {
+        song_ms - self.input_offset_ms - self.song_offset_ms
+    }
+
+    /// 譜面を描く時刻。`visual_offset_ms` は表示の補正。この曲の補正のぶん譜面を遅らせる
+    pub fn view_ms(&self, visual_offset_ms: f64) -> f64 {
+        self.now_ms() + visual_offset_ms - self.song_offset_ms
+    }
+
     /// 曲が終わった（練習は自分でやめるまで終わらない）
     pub fn finished(&self) -> bool {
         self.practice.is_none() && self.now_ms() > self.end_ms
@@ -669,7 +754,7 @@ impl Play {
         if self.paused_ms.is_some() {
             self.paused_ms = Some(to);
         }
-        self.judge.jump_to(to);
+        self.judge.jump_to(self.judge_ms(to));
         // 飛んだ先でまだ鳴っているはずの自動の音（長い BGM など）は途中から鳴らし直し、その先は `lay_auto` に任せる
         self.auto_next = self.chart_sounds.auto.partition_point(|v| v.ms < to);
         if let Some(a) = self.audio.as_mut() {
@@ -697,8 +782,10 @@ impl Play {
         }
         let now = self.now_ms();
         self.lay_laps(now);
+        self.note_practice(now);
         self.lay_auto(now);
-        let events = self.judge.advance(now);
+        // 見逃しは判定の時刻で決める（遅めに叩いても POOR の幅の中なら、見逃しより先に届いた打撃で取れるように）
+        let events = self.judge.advance(self.judge_ms(now));
         // 自動で叩いた音符は、叩いたときと同じくレーンを光らせる（音は時刻を決めて鳴らしてある）
         for e in &events {
             let lane = self.judge.notes()[e.note].lane;
@@ -783,7 +870,7 @@ impl Play {
         if self.paused() {
             return;
         }
-        let ms = self.song_ms_at(at_us) - self.input_offset_ms;
+        let ms = self.judge_ms(self.song_ms_at(at_us));
         self.push_fx(Fx::Hit { lane, velocity });
         let events = self.judge.hit(Hit { ms, lane, velocity });
         // 自動で叩くレーンを叩いても空打ちには数えない
@@ -920,6 +1007,9 @@ impl Play {
             tally: self.judge.tally().clone(),
             offset_mean_ms: mean,
             offset_sd_ms: sd,
+            offsets: self.hit_offsets.clone(),
+            windows: self.judge.windows(),
+            lag: None,
             cleared: self.finished(),
             notes_per_measure: self.notes_per_measure.clone(),
             results: self
@@ -938,7 +1028,15 @@ impl Play {
             practice: self.practice.as_ref().map(|p| PracticeOutcome {
                 options: p.options,
                 laps: p.summaries(self.now_ms()),
-                cleared: p.ladder().cleared(),
+                attempts: p.attempts(),
+                beats_per_measure: (p.options.section.first..=p.options.section.last)
+                    .map(|m| p.grid.beats_in(m))
+                    .collect(),
+                elapsed_ms: p
+                    .laps
+                    .first()
+                    .map_or(0.0, |l| (self.now_ms() - l.plan.audio.at_ms).max(0.0)),
+                cleared: p.cleared(),
                 strays: p.stray_hint(),
                 offset: p.offset_mean(),
             }),
@@ -990,6 +1088,9 @@ impl Play {
             "{{\"input_offset_ms\":{},\"windows_ms\":[{},{},{},{}],\"drum_sounds\":{}",
             self.input_offset_ms, w.perfect, w.great, w.good, w.poor, self.drum_sounds
         );
+        if self.song_offset_ms != 0.0 {
+            settings += &format!(",\"song_offset_ms\":{}", self.song_offset_ms);
+        }
         let pw = self.judge.pedal_windows();
         if pw != w {
             settings += &format!(
@@ -1028,7 +1129,7 @@ impl Play {
                 }
             };
             settings += &format!(
-                ",\"section\":[{},{}],\"style\":\"{}\",\"rule\":\"{}\",\"speed\":{},\"pitch\":\"{}\",\"metronome\":{},\"cleared\":{}",
+                ",\"section\":[{},{}],\"style\":\"{}\",\"rule\":\"{}\",\"speed\":{},\"pitch\":\"{}\",\"metronome\":{},\"step_laps\":{},\"attempts\":{},\"cleared\":{}",
                 o.section.first,
                 o.section.last,
                 o.style.name(),
@@ -1036,7 +1137,9 @@ impl Play {
                 speed,
                 o.pitch.name(),
                 o.metronome,
-                p.ladder().cleared()
+                o.step_laps,
+                p.attempts().len(),
+                p.cleared()
             );
         }
         settings.push('}');
@@ -1064,7 +1167,7 @@ impl Play {
                 .iter()
                 .filter(|l| l.complete() && !l.notes.is_empty())
                 .map(|l| {
-                    let s = l.summary(p.options.rule);
+                    let s = l.summary();
                     Lap {
                         speed: s.speed,
                         completed: s.completed,
@@ -1094,7 +1197,7 @@ impl Play {
             started_at: self.started_at,
             settings,
             laps,
-            // 等速以上で続けて合格したら、その区間をクリアとして残す（普通のプレイで克服したかを見る）
+            // 等速以上で区間全体を苦手なしで叩き終えたら、その区間をクリアとして残す（普通のプレイで克服したかを見る）
             clear: self.practice.as_ref().and_then(|p| {
                 p.clear_speed().map(|speed| SectionClear {
                     first: p.options.section.first,
@@ -1236,15 +1339,19 @@ mod tests {
         let text = "#BPM 120\n#AVI01: movie.mp4\n#AVI02: missing.avi\n#00154: 0102\n#00254: 01\n#0025A: 0001\n";
         std::fs::write(&path, text).unwrap();
         let play = Play::load(&path, 0.0, false, &Rules::default()).unwrap();
+        // 大文字小文字を区別しないファイルシステム（Windows・macOS）では、譜面に書いた綴りのまま見つかる
+        let found = play
+            .movies
+            .iter()
+            .all(|(_, p)| p.parent() == Some(&*dir) && p.is_file());
         std::fs::remove_dir_all(&dir).unwrap();
-        let file = dir.join("Movie.MP4");
-        assert_eq!(
-            play.movies,
-            [
-                (2000.0, file.clone()),
-                (4000.0, file.clone()),
-                (5000.0, file)
-            ]
+        assert!(found, "{:?}", play.movies);
+        let times: Vec<f64> = play.movies.iter().map(|m| m.0).collect();
+        assert_eq!(times, [2000.0, 4000.0, 5000.0]);
+        assert!(
+            play.movies
+                .iter()
+                .all(|(_, p)| p.file_name().unwrap().eq_ignore_ascii_case("movie.mp4"))
         );
     }
 
@@ -1295,6 +1402,15 @@ mod tests {
         assert_eq!(pad_first.hit_wav(DrumLane::HHO, &hh, 4000.0), 1);
         // 同じレーンなら譜面の音のまま
         assert_eq!(pad_first.hit_wav(DrumLane::HH, &hh, 4000.0), 1);
+    }
+
+    #[test]
+    fn the_song_offset_adds_to_the_input_offset() {
+        let mut p = load_text("song-offset", "#BPM 60\n#00111: 01\n", &Rules::default());
+        p.input_offset_ms = 3.0;
+        p.song_offset_ms = 10.0;
+        // 合わせて 13 ms 遅く叩くのがちょうど
+        assert_eq!(p.judge_ms(4013.0), 4000.0);
     }
 
     #[test]

@@ -259,6 +259,8 @@ impl Preset {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Pad {
     Kick,
+    /// 左のキック（ツインペダルの左を別のパッドで受けるときなど。左バスドラム）
+    LeftKick,
     Snare,
     Tom1,
     Tom2,
@@ -465,7 +467,7 @@ impl MidiProfile {
     /// DTXManiaNX の Config.ini のパッドの割り当て（ノート番号 → レーン）を重ねる。
     /// NX で遊べていた割り当てをそのまま使えるようにする。
     /// すでに同じレーンになるノートはそのまま（リムやエッジ、ハイハットの開き具合の区別を残す）。
-    /// 違うレーンになるノートと、知らないノートは NX に合わせる。左バスドラム（LBD）はまだ扱わない
+    /// 違うレーンになるノートと、知らないノートは NX に合わせる
     pub fn apply_lanes(&mut self, notes: &[(u8, DrumLane)]) {
         use Articulation::*;
         for &(note, lane) in notes {
@@ -490,7 +492,7 @@ impl MidiProfile {
                 DrumLane::RD => (Pad::Ride, Bow, false),
                 DrumLane::LC => (Pad::Crash1, Bow, false),
                 DrumLane::LP => (Pad::HiHatPedal, Head, false),
-                DrumLane::LBD => continue,
+                DrumLane::LBD => (Pad::LeftKick, Head, false),
             };
             self.notes.insert(
                 note,
@@ -548,6 +550,7 @@ impl MidiProfile {
 fn pad_lane(pad: Pad) -> Option<DrumLane> {
     Some(match pad {
         Pad::Kick => DrumLane::BD,
+        Pad::LeftKick => DrumLane::LBD,
         Pad::Snare => DrumLane::SD,
         Pad::Tom1 => DrumLane::HT,
         Pad::Tom2 => DrumLane::LT,
@@ -695,7 +698,9 @@ mod tests {
         assert_eq!(p.notes[&49].pad, Pad::Crash2);
         // 知らないノートは足す
         assert_eq!(p.notes[&60].pad, Pad::Snare);
-        assert!(!p.notes.contains_key(&35));
+        // 左バスドラムは左のキックとして足す
+        assert_eq!(p.notes[&35].pad, Pad::LeftKick);
+        assert_eq!(p.note_lane(35), Some(DrumLane::LBD));
     }
 
     fn on(note: u8, velocity: u8) -> MidiMessage {

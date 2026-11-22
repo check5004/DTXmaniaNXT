@@ -142,6 +142,18 @@ pub fn hgrad(c: &Canvas, x: f32, y: f32, w: f32, h: f32, left: Color32, right: C
     c.painter().add(mesh);
 }
 
+/// 上から下へのグラデーションで塗る
+pub fn vgrad(c: &Canvas, x: f32, y: f32, w: f32, h: f32, top: Color32, bottom: Color32) {
+    let mut mesh = Mesh::default();
+    mesh.colored_vertex(c.pos(x, y), top);
+    mesh.colored_vertex(c.pos(x + w, y), top);
+    mesh.colored_vertex(c.pos(x + w, y + h), bottom);
+    mesh.colored_vertex(c.pos(x, y + h), bottom);
+    mesh.add_triangle(0, 1, 2);
+    mesh.add_triangle(0, 2, 3);
+    c.painter().add(mesh);
+}
+
 /// 板（上の縁に v2 の帯と同じ紫と橙の線）
 pub fn panel(c: &Canvas, x: f32, y: f32, w: f32, h: f32) {
     panel_with(c, x, y, w, h, PANEL_BG);
@@ -417,7 +429,8 @@ pub fn lane_color(lane: DrumLane) -> Color32 {
         DrumLane::LC => Pad::LC.color(),
         DrumLane::HH | DrumLane::HHO => Pad::HH.color(),
         DrumLane::SD => Pad::SD.color(),
-        DrumLane::BD | DrumLane::LBD => Pad::BD.color(),
+        DrumLane::BD => Pad::BD.color(),
+        DrumLane::LBD => crate::play_view::LEFT_BASS_COLOR,
         DrumLane::HT => Pad::HT.color(),
         DrumLane::LT => Pad::LT.color(),
         DrumLane::FT => Pad::FT.color(),
@@ -533,10 +546,11 @@ pub fn lane_spot(lane: DrumLane) -> (f32, f32) {
         DrumLane::LC => (215.0, 330.0),
         DrumLane::HHO => (365.0, 330.0),
         DrumLane::HH => (365.0, 450.0),
-        DrumLane::LP => (430.0, 590.0),
+        DrumLane::LP => (400.0, 590.0),
         DrumLane::SD => (500.0, 470.0),
         DrumLane::HT => (560.0, 330.0),
-        DrumLane::BD | DrumLane::LBD => (640.0, 570.0),
+        DrumLane::BD => (700.0, 560.0),
+        DrumLane::LBD => (555.0, 595.0),
         DrumLane::LT => (720.0, 330.0),
         DrumLane::FT => (800.0, 470.0),
         DrumLane::CY => (920.0, 300.0),

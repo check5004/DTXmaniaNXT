@@ -11,9 +11,10 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::mpsc::{Receiver, Sender, channel};
 
 use egui::{Color32, Mesh, Pos2, Rect, Vec2, pos2, vec2};
+
+use crate::jobs::Jobs;
 
 /// NX の画面の幅と高さ
 pub const W: f32 = 1280.0;
@@ -388,6 +389,36 @@ impl Skin {
         self.tex(rel)
     }
 
+    /// スキンの画像 `rel` を `make` で描き換えた画像（`tag` で見分けて、一度作ったら覚えておく）
+    pub fn tex_made(
+        &self,
+        rel: &str,
+        tag: &str,
+        make: fn(image::RgbaImage) -> image::RgbaImage,
+    ) -> Option<Tex> {
+        let name = format!("{rel}#{tag}");
+        let key = (name.clone(), false);
+        if let Some(t) = self.cache.borrow().get(&key) {
+            return t.clone();
+        }
+        let tex = crate::skin::read(rel)
+            .and_then(|bytes| match image::load_from_memory(&bytes) {
+                Ok(img) => Some(img),
+                Err(e) => {
+                    log::warn!("skin: {rel}: {e}");
+                    None
+                }
+            })
+            .map(|img| {
+                let made = make(img.to_rgba8());
+                let size = [made.width() as usize, made.height() as usize];
+                let image = egui::ColorImage::from_rgba_unmultiplied(size, made.as_raw());
+                Tex::new(&self.ctx, &name, image)
+            });
+        self.cache.borrow_mut().insert(key, tex.clone());
+        tex
+    }
+
     fn tex_with(&self, rel: &str, black_key: bool) -> Option<Tex> {
         let key = (rel.to_owned(), black_key);
         if let Some(t) = self.cache.borrow().get(&key) {
@@ -407,16 +438,14 @@ impl Skin {
 }
 
 enum Slot {
-    Loading,
     Ready(Tex, u64),
     Failed,
 }
 
-/// 曲の画像（ジャケット）を別のスレッドで読む
+/// 曲の画像（ジャケット）を別のスレッドで読む。後で頼んだもの（今見えているもの）から読む
 pub struct Images {
     ctx: egui::Context,
-    tx: Sender<PathBuf>,
-    rx: Receiver<(PathBuf, Option<egui::ColorImage>)>,
+    jobs: Jobs<PathBuf, Option<egui::ColorImage>>,
     slots: HashMap<PathBuf, Slot>,
     frame: u64,
 }
@@ -425,23 +454,18 @@ pub struct Images {
 const MAX_IMAGES: usize = 200;
 /// 読むときに縮める大きさ（NX のジャケットの表示は最大 368 ピクセル）
 const MAX_SIDE: u32 = 400;
+/// 画像を読むスレッドの数
+const IMAGE_THREADS: usize = 2;
+/// これだけのフレームのあいだ頼み直されなかった画像は読まずに捨てる（速く送って通り過ぎた曲）
+const STALE_FRAMES: u64 = 20;
 
 impl Images {
     pub fn new(ctx: &egui::Context) -> Self {
-        let (tx, job_rx) = channel::<PathBuf>();
-        let (done_tx, rx) = channel();
-        std::thread::spawn(move || {
-            for path in job_rx {
-                let img = load_image(&path, Some(MAX_SIDE));
-                if done_tx.send((path, img)).is_err() {
-                    break;
-                }
-            }
-        });
         Self {
             ctx: ctx.clone(),
-            tx,
-            rx,
+            jobs: Jobs::new("image", IMAGE_THREADS, |path: &PathBuf| {
+                load_image(path, Some(MAX_SIDE))
+            }),
             slots: HashMap::new(),
             frame: 0,
         }
@@ -450,7 +474,7 @@ impl Images {
     /// 読み終わったものを GPU に載せる。毎フレーム 1 回呼ぶ
     pub fn poll(&mut self) {
         self.frame += 1;
-        for (path, img) in self.rx.try_iter() {
+        for (path, img) in self.jobs.poll(self.frame.saturating_sub(STALE_FRAMES)) {
             let slot = match img {
                 Some(img) => Slot::Ready(
                     Tex::new(&self.ctx, &path.to_string_lossy(), img),
@@ -467,19 +491,23 @@ impl Images {
         }
     }
 
-    /// 読めていれば画像。まだなら読み始める
+    /// 読めていれば画像。まだなら読むよう頼む（要るあいだは毎フレーム呼ぶ）
     pub fn get(&mut self, path: &Path) -> Option<Tex> {
+        let t = self.ready(path);
+        if t.is_none() && !self.slots.contains_key(path) {
+            self.jobs.request(&path.to_owned(), self.frame);
+        }
+        t
+    }
+
+    /// 読めていれば画像（読むよう頼みはしない）
+    pub fn ready(&mut self, path: &Path) -> Option<Tex> {
         match self.slots.get_mut(path) {
             Some(Slot::Ready(t, used)) => {
                 *used = self.frame;
                 Some(t.clone())
             }
-            Some(_) => None,
-            None => {
-                self.slots.insert(path.to_owned(), Slot::Loading);
-                let _ = self.tx.send(path.to_owned());
-                None
-            }
+            _ => None,
         }
     }
 

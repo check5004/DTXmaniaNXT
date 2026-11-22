@@ -116,7 +116,7 @@ const AUTO_SECTION: &str = "自動で叩く";
 /// 早送り・巻き戻しの幅（ミリ秒）
 pub const SKIP_MS: &str = "skip_ms";
 /// 窓と画面の保存（上流の FullScreen、VSyncWait、AutoSaveResult）
-pub const FULLSCREEN: &str = "fullscreen";
+pub const DISPLAY_MODE: &str = "display_mode";
 pub const VSYNC: &str = "vsync";
 pub const AUTO_SAVE_RESULT: &str = "auto_save_result";
 
@@ -156,6 +156,8 @@ pub const LANE_TYPE: &str = "lane_type";
 pub const RD_POSITION: &str = "rd_position";
 pub const HHO_GRAPHICS: &str = "hho_graphics";
 pub const LBD_GRAPHICS: &str = "lbd_graphics";
+/// ずれのバー（叩いた音符のずれを、判定の線の時刻を真ん中にした横の目盛りに印で出す）
+pub const HIT_ERROR_BAR: &str = "hit_error_bar";
 /// 譜面の動画（上流 `bAVIEnabled` と `nMovieAlpha`）
 pub const AVI: &str = "avi";
 pub const MOVIE_ALPHA: &str = "movie_alpha";
@@ -165,6 +167,41 @@ macro_rules! choices {
     ($($key:literal => $label:literal),+ $(,)?) => {
         &[$(Choice { key: $key, label: $label }),+]
     };
+}
+
+/// 画面の出し方（並びは [`DisplayMode`] と同じ）
+const DISPLAY_MODE_CHOICES: &[Choice] = choices![
+    "window" => "ウィンドウ",
+    "borderless" => "ボーダーレス（疑似全画面）",
+    "fullscreen" => "全画面",
+];
+
+/// 0.4.2 までの全画面の ON / OFF のキー（読むだけ。[`Values::upgrade`] で画面の出し方に写す）
+const OLD_FULLSCREEN: &str = "fullscreen";
+
+/// 画面の出し方
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DisplayMode {
+    /// 枠のある窓
+    Window,
+    /// 枠のない窓を画面いっぱいに（OS とドライバーには普通の窓）
+    Borderless,
+    /// OS の全画面（解像度は変えない）
+    Fullscreen,
+}
+
+impl DisplayMode {
+    const ALL: [Self; 3] = [Self::Window, Self::Borderless, Self::Fullscreen];
+
+    /// config.toml に書く名前
+    pub fn name(self) -> &'static str {
+        DISPLAY_MODE_CHOICES[self as usize].key
+    }
+
+    /// [`DisplayMode::name`] から（読めなければ `None`）
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|m| m.name() == name)
+    }
 }
 
 /// 上流 `nHidSud`（並びは上流と同じ）
@@ -227,10 +264,13 @@ const HHO_GRAPHICS_CHOICES: &[Choice] = choices![
     "c" => "C（クローズと同じ）",
 ];
 
-/// 上流 `eLBDGraphics.Drums`
+/// 左バスドラムの出し方。先頭の 2 つは NXT のもの（BD のレーンに水色で出す、LP の右に水色のレーンを足す）、
+/// あとの 2 つは上流 `eLBDGraphics.Drums`
 const LBD_GRAPHICS_CHOICES: &[Choice] = choices![
-    "a" => "A（LP と同じ）",
-    "b" => "B（LP と色を分ける）",
+    "bd_lane" => "BD のレーンに水色で",
+    "own_lane" => "LP の右にレーンを足す（水色）",
+    "a" => "LP のレーンに同じ絵（NX の A）",
+    "b" => "LP のレーンに紫の絵（NX の B）",
 ];
 
 const VIEW_LANES: &str = "画面の部品";
@@ -579,7 +619,7 @@ pub const ALL: &[Def] = &[
         BD_GROUP,
         "ペダルの叩き分け（BD Group）",
         BD_GROUP_CHOICES,
-        "左ペダル・左バスドラム・バスドラムを叩き分けるかを選びます。",
+        "左ペダル・左バスドラム・バスドラムを叩き分けるかを選びます。\n左バスドラムにパッドもキーも割り当てていなければ、BD-0 でもバスドラムで左バスドラムを取れます。",
     ),
     Def {
         key: CYMBAL_FREE,
@@ -607,12 +647,15 @@ pub const ALL: &[Def] = &[
         in_play: true,
     },
     Def {
-        key: FULLSCREEN,
+        key: DISPLAY_MODE,
         group: Group::App,
         section: "画面",
-        name: "全画面（FullScreen）",
-        kind: Kind::Toggle { default: false },
-        desc: "画面いっぱいに出します。どの画面でも Alt+Enter か F11 で切り替えられます。",
+        name: "画面の出し方（FullScreen）",
+        kind: Kind::Choice {
+            choices: DISPLAY_MODE_CHOICES,
+            default: 0,
+        },
+        desc: "ボーダーレスは枠のない窓を画面いっぱいに広げ、ほかの窓へすぐ切り替えたり上に重ねたりできます。\n全画面は絵が少し早く出ることがありますが、切り替えで画面が一瞬暗くなることがあります。どの画面でも Alt+Enter か F11 で、ウィンドウと最後に使った方を行き来します。",
         in_play: true,
     },
     Def {
@@ -672,9 +715,9 @@ pub const ALL: &[Def] = &[
     view_choice(
         LBD_GRAPHICS,
         VIEW_ORDER,
-        "左バスドラムの絵（LBDGraphics）",
+        "左バスドラムの出し方（LBDGraphics）",
         LBD_GRAPHICS_CHOICES,
-        "左バスドラム（LBD）のチップを、左ペダル（LP）と同じ絵にするか、色の違う絵にするか。",
+        "左バスドラム（LBD）の音符を BD のレーンに水色で出すか、LP の右に足したレーン（実物のツインペダルと同じ並び）に出すか、NX と同じく LP のレーンに出すか。\n光・判定の文字・火花も、音符を出したレーンに出します。",
     ),
     view_choice(
         HID_SUD,
@@ -734,6 +777,15 @@ pub const ALL: &[Def] = &[
         "PERFECT などの文字を、レーンの上か、判定ラインの下に出します。出さないこともできます。",
     ),
     view_toggle(COMBO_DISP, "コンボ（Combo）", "コンボの数を出すかどうか。"),
+    Def {
+        key: HIT_ERROR_BAR,
+        group: Group::View,
+        section: "ずれの表示",
+        name: "ずれのバー",
+        kind: Kind::Toggle { default: true },
+        desc: "左のスコアの下（練習では左下）に、叩いたずれを印で出します。真ん中が ±0 で、左が早く、右が遅いです。\n印の色は判定の色で、少しずつ消えます。▼ と数字は直近 20 打の平均です。",
+        in_play: true,
+    },
     Def {
         key: MIN_COMBO,
         group: Group::View,
@@ -1052,8 +1104,40 @@ impl Values {
         self.choice(DARK) == 2
     }
 
+    /// 画面の出し方
+    pub fn display_mode(&self) -> DisplayMode {
+        DisplayMode::ALL[self.choice(DISPLAY_MODE)]
+    }
+
+    pub fn set_display_mode(&mut self, mode: DisplayMode) {
+        self.set_raw(DISPLAY_MODE, mode as i64);
+    }
+
+    /// 前の版のキーを今のキーに写す（読んだときに 1 回）。写したら true
+    ///
+    /// - 0.4.2 までの `fullscreen = true` は、画面の出し方の「全画面」
+    pub fn upgrade(&mut self) -> bool {
+        let Some(old) = self.0.remove(OLD_FULLSCREEN) else {
+            return false;
+        };
+        if !self.0.contains_key(DISPLAY_MODE) && old.as_bool() == Some(true) {
+            self.set_display_mode(DisplayMode::Fullscreen);
+        }
+        true
+    }
+
     fn set(&mut self, key: &str, v: toml::Value) {
         self.0.insert(key.to_owned(), v);
+    }
+
+    /// LP の右に左バスドラムのレーンを足す（出し方の 2 つめ）
+    pub fn left_bass_lane(&self) -> bool {
+        self.choice(LBD_GRAPHICS) == 1
+    }
+
+    /// 左バスドラムを LP と分けて出す（BD のレーンか、足したレーン）。分けないのは NX の 2 つ
+    pub fn left_bass_apart(&self) -> bool {
+        self.choice(LBD_GRAPHICS) <= 1
     }
 
     /// 叩き分け（上流の HH / FT / CY / BD Group と CymbalFree）
@@ -1275,6 +1359,43 @@ mod tests {
         assert!(v.flag(BGM_SOUND) && !v.flag(METRONOME));
         v.set_raw(BGM_ADJUST, -150);
         assert_eq!(v.number(BGM_ADJUST), -99);
+    }
+
+    #[test]
+    fn old_fullscreen_becomes_the_display_mode() {
+        let mut v: Values = toml::from_str("fullscreen = true\nvsync = false\n").unwrap();
+        assert!(v.upgrade());
+        assert_eq!(v.display_mode(), DisplayMode::Fullscreen);
+        assert_eq!(v.label(DISPLAY_MODE), "全画面");
+        assert!(!v.flag(VSYNC));
+        let text = toml::to_string(&v).unwrap();
+        assert!(!text.contains("fullscreen ="), "{text}");
+        assert!(text.contains("display_mode = \"fullscreen\""), "{text}");
+        // 2 回目は何もしない
+        assert!(!v.upgrade());
+
+        let mut off: Values = toml::from_str("fullscreen = false\n").unwrap();
+        assert!(off.upgrade());
+        assert_eq!(off.display_mode(), DisplayMode::Window);
+        assert!(off.is_empty());
+
+        // 新しいキーがあればそちらのまま
+        let mut both: Values =
+            toml::from_str("fullscreen = true\ndisplay_mode = \"borderless\"\n").unwrap();
+        assert!(both.upgrade());
+        assert_eq!(both.display_mode(), DisplayMode::Borderless);
+    }
+
+    #[test]
+    fn display_modes_match_their_choices() {
+        let mut v = Values::default();
+        assert_eq!(v.display_mode(), DisplayMode::Window);
+        for m in DisplayMode::ALL {
+            v.set_display_mode(m);
+            assert_eq!(v.display_mode(), m);
+            assert_eq!(DisplayMode::from_name(m.name()), Some(m));
+        }
+        assert_eq!(DisplayMode::from_name("exclusive"), None);
     }
 
     #[test]

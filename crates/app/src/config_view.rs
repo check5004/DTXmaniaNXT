@@ -22,8 +22,8 @@ use dtx::DrumLane;
 use egui::Color32;
 use engine::input::Preset;
 use engine::practice::{
-    FAILS_TO_DOWN, LADDER_DOWN, LADDER_UP, LoopStyle, PASSES_TO_UP, PassRule, SPEED_MAX, SPEED_MIN,
-    SPEED_STEP, SpeedPlan, snap_speed,
+    LoopStyle, PassRule, SPEED_MAX, SPEED_MIN, SPEED_STEP, STEP_LAPS_CHOICES, STEP_SPEED,
+    SpeedPlan, snap_speed,
 };
 use library::Progress;
 use winit::keyboard::KeyCode;
@@ -37,6 +37,7 @@ use crate::sfx::Se;
 use crate::stretch::Pitch;
 use crate::text::Style;
 use crate::title_view::draw_scanning;
+use crate::update::UpdateMode;
 
 /// 補正の値の範囲（ミリ秒）
 pub const OFFSET_RANGE: f64 = 200.0;
@@ -137,7 +138,7 @@ pub enum Page {
     Lanes,
     /// MIDI の機器（ポートの何番目か）
     Device(usize),
-    /// 選曲で BD を 2 回叩いて開く簡易設定（よく使う項目と、練習・すべての設定へ）
+    /// 選曲で RD を叩いて（キーボードは F2）開く簡易設定（よく使う項目と、練習・すべての設定へ）
     Quick,
     /// 演奏中の一時停止（演奏に戻る・やり直す・演奏中に変えてよい項目・やめる）
     Pause,
@@ -155,7 +156,7 @@ pub enum Setting {
     ShowLagTime,
     ShowLagTimeColor,
     ShowLagHitCount,
-    AutoUpdate,
+    Update,
 }
 
 /// 練習の決めごと（練習のポップアップと同じ項目。区間のほか）
@@ -163,6 +164,8 @@ pub enum Setting {
 pub enum Drill {
     Style,
     Rule,
+    /// 1 段の周の数
+    StepLaps,
     /// 速度の決め方（段階アップか固定か）
     Ladder,
     Speed,
@@ -211,6 +214,10 @@ pub enum ItemId {
     Quit,
     /// 曲の位置（秒。◀▶ で早送り・巻き戻し）
     Seek,
+    /// この曲の補正（ミリ秒。入力の補正（全体）に足す）
+    SongOffset,
+    /// 補正をおすすめの値にする（全体とこの曲）
+    ApplyAdvice,
 }
 
 /// 数の見せ方
@@ -466,7 +473,10 @@ pub fn get(s: Setting, c: &Config) -> i64 {
         Setting::ShowLagTime => i64::from(c.show_lag_time.min(2)),
         Setting::ShowLagTimeColor => i64::from(c.show_lag_time_color.min(1)),
         Setting::ShowLagHitCount => i64::from(c.show_lag_hit_count),
-        Setting::AutoUpdate => i64::from(c.auto_update),
+        Setting::Update => UpdateMode::ALL
+            .iter()
+            .position(|&m| m == c.update_mode())
+            .unwrap_or(0) as i64,
     }
 }
 
@@ -483,7 +493,9 @@ pub fn set(s: Setting, c: &mut Config, v: i64) {
         Setting::ShowLagTime => c.show_lag_time = v.clamp(0, 2) as u8,
         Setting::ShowLagTimeColor => c.show_lag_time_color = v.clamp(0, 1) as u8,
         Setting::ShowLagHitCount => c.show_lag_hit_count = v != 0,
-        Setting::AutoUpdate => c.auto_update = v != 0,
+        Setting::Update => c.set_update_mode(
+            UpdateMode::ALL[v.clamp(0, UpdateMode::ALL.len() as i64 - 1) as usize],
+        ),
     }
 }
 
@@ -507,12 +519,12 @@ fn value_row(s: Setting, c: &Config) -> Row {
         ),
         Setting::InputAdjust => number(
             id,
-            "入力の補正",
+            "入力の補正（全体）",
             at,
             (-(OFFSET_RANGE as i64), OFFSET_RANGE as i64, 1),
             Some(def),
             Fmt::Ms,
-            "叩いた時刻の補正です。結果の画面のずれがいつも遅めなら大きく、早めなら小さくします。\n演奏中は - と = キーでも変えられます。"
+            "すべての曲の、叩いた時刻の補正です。ずれがいつも遅めなら大きく、早めなら小さくします（演奏中は - と = キー）。"
                 .to_owned(),
         ),
         Setting::VisualAdjust => number(
@@ -567,9 +579,13 @@ fn value_row(s: Setting, c: &Config) -> Row {
             "早い・遅いの数",
             "ON にすると、結果の画面に早かった数と遅かった数を出します。",
         ),
-        Setting::AutoUpdate => flag(
-            "自動更新",
-            "ON にすると、起動したときに新しい版を GitHub から落とし、終了したときに入れ替えます。\nSetup.exe で入れたときだけ働きます。切り替えは次の起動から効きます。",
+        Setting::Update => choice(
+            id,
+            "更新",
+            &UpdateMode::ALL.map(UpdateMode::label),
+            at as usize,
+            Some(def as usize),
+            "新しい版の扱いです。Setup.exe で入れたときだけ働きます。\n知らせる: 起動したときに確かめ、あればタイトルのメニューの下に出します。更新するかは自分で選びます。\n自動: 起動したときに落とし、終了したときに入れ替えます。\n確かめない: 新しい版を確かめません。",
         ),
     }
 }
@@ -580,6 +596,7 @@ pub fn get_drill(d: Drill, c: &Config) -> i64 {
     match d {
         Drill::Style => at(LoopStyle::ALL.iter().position(|&s| s == c.loop_style())),
         Drill::Rule => at(PassRule::ALL.iter().position(|&r| r == c.pass_rule())),
+        Drill::StepLaps => at(STEP_LAPS_CHOICES.iter().position(|&n| n == c.step_laps())),
         Drill::Ladder => i64::from(!c.practice_ladder),
         Drill::Speed => i64::from(snap_speed(i64::from(c.practice_speed))),
         Drill::Target => at(SpeedPlan::TARGETS
@@ -596,6 +613,7 @@ pub fn set_drill(d: Drill, c: &mut Config, v: i64) {
     match d {
         Drill::Style => c.practice_style = LoopStyle::ALL[pick(2)].name().to_owned(),
         Drill::Rule => c.practice_rule = PassRule::ALL[pick(3)].name().to_owned(),
+        Drill::StepLaps => c.practice_step_laps = STEP_LAPS_CHOICES[pick(STEP_LAPS_CHOICES.len())],
         Drill::Ladder => c.practice_ladder = v == 0,
         Drill::Speed => c.practice_speed = snap_speed(v),
         Drill::Target => {
@@ -621,15 +639,20 @@ fn drill_row(d: Drill, c: &Config) -> Row {
             "切れ目なく: 区間の終わりから切れ目なく頭へ戻ります（ビート向き）。\n毎回区切る: 次の小節の頭の 1 打まで叩き、助走からやり直します（フィル向き）。",
         ),
         Drill::Rule => pick(
-            "合格の基準",
-            &["Easy", "Normal", "Strict"],
-            "Easy: MISS が 0 なら合格。\nNormal: フルコンボ（MISS と POOR が 0）で合格。\nStrict: フルコンボで、PERFECT が 8 割以上なら合格。",
+            "段の越え方",
+            &["ゆるい", "ふつう", "きびしい"],
+            "1 段のうちに、同じ拍を何回落としたら「もう一度」にするかです（落としたのは POOR と MISS）。違う拍のミスは数えません。\nゆるい: 3 回。\nふつう: 2 回。\nきびしい: 1 回でも。",
+        ),
+        Drill::StepLaps => pick(
+            "1 段の周",
+            &["3 周", "4 周", "6 周", "8 周"],
+            "1 つの段で叩く周の数です。叩き終えて同じ拍のミスが重ならなければ、次の段へ進みます。",
         ),
         Drill::Ladder => pick(
             "速度の決め方",
             &["段階アップ", "固定"],
             &format!(
-                "段階アップ: その速度で {PASSES_TO_UP} 回合格するたびに {LADDER_UP}% 上げ、不合格が {FAILS_TO_DOWN} 回続くと {LADDER_DOWN}% 下げます。目標の速度で {PASSES_TO_UP} 回合格したらクリア。\n固定: 同じ速度のまま回ります（練習中も , と . キーで 5% ずつ変えられます）。"
+                "段階アップ: 始めの速度から目標の速度まで {STEP_SPEED}% ずつの段をのぼります。目標の段を越えたらクリア。「もう一度」が 2 回続いたら 1 段下げます。\n固定: その速度の 1 段だけです。越えたらクリア（練習中も , と . キーで 5% ずつ変えられます）。"
             ),
         ),
         Drill::Speed => number(
@@ -662,7 +685,7 @@ fn drill_row(d: Drill, c: &Config) -> Row {
         Drill::Metronome => pick(
             "メトロノーム",
             &["オン", "オフ"],
-            "オン: 区間のあいだ拍ごとに小さくクリックを鳴らします（小節の頭は強く）。\n速度が変わる周の前の 4 拍のカウントは、オフでも鳴ります。",
+            "オン: 区間のあいだ拍ごとに小さくクリックを鳴らします（小節の頭は強く）。\n段の頭の 4 拍のカウントは、オフでも鳴ります。",
         ),
     }
 }
@@ -777,6 +800,76 @@ pub struct ConfigInfo<'a> {
     pub song: bool,
     /// 演奏中（一時停止の一覧に出す、曲の位置）
     pub play: Option<PlayPos>,
+    /// 補正とおすすめ（簡易設定・一時停止・設定の画面を開いたときに記録から出す）
+    pub timing: Option<TimingInfo>,
+}
+
+/// 補正とおすすめ
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TimingInfo {
+    /// この曲の補正（ミリ秒）。曲を選んでいなければ None（全体のおすすめだけ）
+    pub song_ms: Option<i64>,
+    pub advice: engine::lag::Advice,
+}
+
+/// 入力の補正（全体）の行のうしろに、この曲の補正とおすすめの行を足し、全体のおすすめを説明に書く
+fn add_timing_rows(rows: &mut Vec<Row>, t: &TimingInfo, global_ms: i64) {
+    let Some(i) = rows
+        .iter()
+        .position(|r| r.id == Some(ItemId::Value(Setting::InputAdjust)))
+    else {
+        return;
+    };
+    let a = &t.advice;
+    if let Some((_, n)) = a.global {
+        rows[i].desc.push_str(&if a.global_ms != a.global_now {
+            format!("おすすめは {:+} ms（直近 {n} 曲のずれから）。", a.global_ms)
+        } else {
+            format!("直近 {n} 曲のずれからは、今のままでよさそうです。")
+        });
+    }
+    let mut add = Vec::new();
+    if let Some(at) = t.song_ms {
+        let r = OFFSET_RANGE as i64;
+        let mut desc = format!(
+            "この曲だけの補正（難易度はまとめて）。全体に足し、判定と譜面の流れを一緒にずらします。今は {global_ms:+} + {at:+} = {:+} ms。",
+            global_ms + at
+        );
+        match a.song {
+            Some(l) if l.enough() && a.song_ms != a.song_now => desc.push_str(&format!(
+                "おすすめは {:+} ms（直近 {} 回から）。",
+                a.song_ms, l.sessions
+            )),
+            Some(l) if l.enough() => desc.push_str(&format!(
+                "直近 {} 回からは今のままでよさそうです。",
+                l.sessions
+            )),
+            _ => {}
+        }
+        add.push(number(
+            ItemId::SongOffset,
+            "この曲の補正",
+            at,
+            (-r, r, 1),
+            Some(0),
+            Fmt::Ms,
+            desc,
+        ));
+    }
+    if let Some(text) = crate::lag_view::advice_text(a) {
+        add.push(Row {
+            tone: Tone::Strong,
+            ..action(
+                ItemId::ApplyAdvice,
+                "おすすめにする",
+                text,
+                "記録のずれから出した値にします。全体は直近の曲のずれの真ん中、この曲はこの曲のずれと全体の差です。"
+                    .to_owned(),
+                None,
+            )
+        });
+    }
+    rows.splice(i + 1..i + 1, add);
 }
 
 /// 一時停止しているところ
@@ -789,7 +882,8 @@ pub struct PlayPos {
     pub end_ms: f64,
 }
 
-/// パッドの割り当ての並び（上流 `tSetupItemList_KeyAssignDrums`）。順に割り当てるときもこの順
+/// 順に叩いて割り当てるレーン（上流 `tSetupItemList_KeyAssignDrums` の並び）。左バスドラムは別のパッドを
+/// 持つ人だけが使うので聞かない（キックを踏んで、バスドラムのノートを左バスドラムに取られないように）
 pub const PADS: [DrumLane; 11] = [
     DrumLane::LC,
     DrumLane::HH,
@@ -803,6 +897,17 @@ pub const PADS: [DrumLane; 11] = [
     DrumLane::RD,
     DrumLane::LP,
 ];
+
+/// 割り当ての一覧と配置図に出すレーン（[`PADS`] と左バスドラム）
+pub const LANES: [DrumLane; 12] = {
+    let mut lanes = [DrumLane::LBD; 12];
+    let mut i = 0;
+    while i < PADS.len() {
+        lanes[i] = PADS[i];
+        i += 1;
+    }
+    lanes
+};
 
 fn folder_name(p: &Path) -> String {
     p.file_name().map_or_else(
@@ -1060,6 +1165,7 @@ pub fn rows(page: Page, info: &ConfigInfo<'_>) -> Vec<Row> {
             for d in [
                 Drill::Style,
                 Drill::Rule,
+                Drill::StepLaps,
                 Drill::Ladder,
                 Drill::Speed,
                 Drill::Target,
@@ -1071,7 +1177,7 @@ pub fn rows(page: Page, info: &ConfigInfo<'_>) -> Vec<Row> {
             s.table(Group::Practice, v);
         }
         Page::Cat(Cat::App) => {
-            s.at("").push(value_row(Setting::AutoUpdate, c));
+            s.at("").push(value_row(Setting::Update, c));
             s.table(Group::App, v);
         }
         Page::Lanes => {
@@ -1081,19 +1187,25 @@ pub fn rows(page: Page, info: &ConfigInfo<'_>) -> Vec<Row> {
                     ItemId::AssignAll,
                     "順に叩いて割り当てる",
                     String::new(),
-                    "左シンバルからライドまで、言われたレーンのパッドを順に叩いて割り当てます。叩いた機器の割り当てになります。\n叩かずに 4 秒たつと次のレーンへ飛ばします。"
+                    "左シンバルから左ペダルまで、言われたレーンのパッドを順に叩いて割り当てます。叩いた機器の割り当てになります。\n叩かずに 4 秒たつと次のレーンへ飛ばします。左バスドラムは下の一覧から足します。"
                         .to_owned(),
                     None,
                 )
             });
             let lanes = s.at("レーン");
-            for lane in PADS {
+            for lane in LANES {
                 let sources = info.lanes.get(&lane).map_or(&[][..], Vec::as_slice);
                 let mut desc: String = sources
                     .iter()
                     .map(|s| format!("{}: {}\n", s.source, s.inputs.join(", ")))
                     .collect();
-                if sources.is_empty() {
+                if lane == DrumLane::LBD {
+                    desc.push_str(if sources.is_empty() {
+                        "割り当てが無いので、バスドラムで左バスドラムの音符も取れます（ペダルの叩き分けが BD-2 なら左ペダルで）。別のパッドやキーで踏むときだけ足します。\n"
+                    } else {
+                        "左バスドラムをバスドラムでも取るかは、演奏の「ペダルの叩き分け」で決めます。\n"
+                    });
+                } else if sources.is_empty() {
                     desc.push_str("割り当てがありません。\n");
                 }
                 desc.push_str(
@@ -1190,7 +1302,16 @@ pub fn rows(page: Page, info: &ConfigInfo<'_>) -> Vec<Row> {
             ));
         }
     }
-    s.rows()
+    let mut out = s.rows();
+    if let Some(t) = &info.timing
+        && matches!(
+            page,
+            Page::Quick | Page::Pause | Page::Cat(Cat::Fav) | Page::Cat(Cat::Timing)
+        )
+    {
+        add_timing_rows(&mut out, t, get(Setting::InputAdjust, c));
+    }
+    out
 }
 
 /// よく使う項目（設定の画面の「よく使う」と、選曲の簡易設定）
@@ -2656,7 +2777,7 @@ fn preview_kit(
     lit: Option<DrumLane>,
     (x, y, w, h): (f32, f32, f32, f32),
 ) {
-    for lane in PADS {
+    for lane in LANES {
         let p = ui::lane_spot_in(lane, x + 30.0, y + 26.0, w - 60.0, h - 66.0);
         let sources = info.lanes.get(&lane).map_or(&[][..], Vec::as_slice);
         let notes = sources
@@ -2691,7 +2812,7 @@ fn preview_kit(
 /// 自動演奏の見本（自動で叩くレーンを光らせる）
 fn preview_auto(c: &Canvas, g: &mut Gfx, cfg: &Config, (x, y, w, h): (f32, f32, f32, f32)) {
     let auto = cfg.settings.auto_lanes();
-    for lane in PADS {
+    for lane in LANES {
         let p = ui::lane_spot_in(lane, x + 30.0, y + 26.0, w - 60.0, h - 66.0);
         let on = auto.contains(&lane);
         ui::pad_circle(
@@ -3029,6 +3150,7 @@ mod tests {
             song_count: 3,
             song: true,
             play: None,
+            timing: None,
         }
     }
 
@@ -3101,6 +3223,56 @@ mod tests {
     }
 
     #[test]
+    fn the_song_offset_and_advice_follow_the_input_offset() {
+        let c = Config {
+            input_offset_ms: 3.0,
+            ..Default::default()
+        };
+        let mut i = info(&c);
+        i.timing = Some(TimingInfo {
+            song_ms: Some(0),
+            advice: engine::lag::Advice {
+                global: Some((4.0, 6)),
+                song: None,
+                global_ms: 3,
+                song_ms: 10,
+                global_now: 3,
+                song_now: 0,
+            },
+        });
+        for page in [Page::Quick, Page::Pause, Page::Cat(Cat::Timing)] {
+            let rows = rows(page, &i);
+            let at = rows
+                .iter()
+                .position(|r| r.id == Some(ItemId::Value(Setting::InputAdjust)))
+                .unwrap();
+            assert_eq!(rows[at + 1].id, Some(ItemId::SongOffset), "{page:?}");
+            assert!(rows[at + 1].desc.contains("+3 + +0 = +3 ms"));
+            assert_eq!(rows[at + 2].id, Some(ItemId::ApplyAdvice));
+            assert_eq!(rows[at + 2].value, "この曲の補正 +0 → +10 ms");
+            assert!(rows[at].desc.contains("今のままでよさそうです"));
+        }
+        // 曲を選んでいなければ全体だけ。すすめるものが無ければ行も無い
+        i.timing = Some(TimingInfo {
+            song_ms: None,
+            advice: engine::lag::Advice {
+                global: Some((4.0, 6)),
+                song: None,
+                global_ms: 3,
+                song_ms: 0,
+                global_now: 3,
+                song_now: 0,
+            },
+        });
+        let rows = rows(Page::Cat(Cat::Timing), &i);
+        assert!(
+            !rows
+                .iter()
+                .any(|r| matches!(r.id, Some(ItemId::SongOffset | ItemId::ApplyAdvice)))
+        );
+    }
+
+    #[test]
     fn values_round_trip_through_the_list_numbers() {
         let mut c = Config::default();
         for (s, v) in [
@@ -3113,7 +3285,8 @@ mod tests {
             (Setting::StageFailed, 0),
             (Setting::HitSound, 1),
             (Setting::ShowLagHitCount, 1),
-            (Setting::AutoUpdate, 0),
+            (Setting::Update, 2),
+            (Setting::Update, 1),
         ] {
             set(s, &mut c, v);
             assert_eq!(get(s, &c), v, "{s:?}");

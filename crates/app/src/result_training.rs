@@ -1,23 +1,24 @@
 //! 結果の画面に足すトレーニングの表示（NX の部品で）。
 //!
-//! - 練習の結果：ランクとジャケットの場所に、合格の数・クリア・気づいたこと（空打ちの偏り、ずれ）と、
-//!   周ごとの成績の表を出す
+//! - 練習の結果：ランクとジャケットの場所に、のぼった段と挑戦の印、時間と周の数、ミスした所の地図、
+//!   気づいたこと（空打ちの偏り、ずれ）を、文章でなく絵と数で出す。周ごとの成績の表は 2 ページ目
 //! - ふだんのプレイ：右の空いた場所に、苦手な小節を進み具合のバーの形（黒地に縞）で出す
 
-use egui::Color32;
-use engine::practice::{PASSES_TO_UP, Section, SpeedPlan, speed_percent};
+use egui::{Color32, Stroke, StrokeKind};
+use engine::practice::{BeatSlot, Section, SpeedPlan, SpotTally, speed_percent};
 
 use crate::band::{Band, BandData, CLEARED_COLOR};
 use crate::game::{Outcome, PracticeOutcome};
 use crate::gfx::{Canvas, Gfx};
 use crate::inputs::lane_label;
-use crate::practice::{
-    LapSummary, StrayHint, WEAK_VELOCITY, rule_pass_label, section_label, style_label,
-};
+use crate::practice::{LapSummary, StrayHint, WEAK_VELOCITY, section_label, style_label};
 use crate::text::Style;
 
 const PASS_COLOR: Color32 = Color32::from_rgb(0x70, 0xE0, 0x90);
-const FAIL_COLOR: Color32 = Color32::from_rgb(0xF0, 0x80, 0x60);
+/// ミスした周・ミス 1 回の拍
+const SLIP_COLOR: Color32 = Color32::from_rgb(0xF0, 0xD0, 0x50);
+/// 何度もミスした拍・もう一度
+const WEAK_COLOR: Color32 = Color32::from_rgb(0xFF, 0x70, 0x50);
 /// 気づいたこと（空打ちの偏り、ずれ）
 const NOTE_COLOR: Color32 = Color32::from_rgb(0xFF, 0xD0, 0x80);
 /// ずれの平均をこれ以上なら知らせる（ミリ秒）と、そのために要る打った数
@@ -90,10 +91,9 @@ fn paragraph(
 /// 空打ちが一つのパッドの弱い打に偏っているときの知らせ
 fn stray_note(h: &StrayHint) -> String {
     format!(
-        "空打ち {} 回のうち {} 回が{}で、{} 回は強さ {WEAK_VELOCITY} 未満の弱い打でした。パッドが振動を拾いすぎているかもしれません。設定の「MIDI 機器」で最小ベロシティを上げると減ります。",
-        h.total,
-        h.count,
+        "空打ちが {}で {} 回（うち弱い打 {} 回、強さ {WEAK_VELOCITY} 未満）。パッドの拾いすぎかも。設定の「MIDI 機器」で最小ベロシティを上げると減ります。",
         lane_label(h.lane),
+        h.count,
         h.weak
     )
 }
@@ -102,26 +102,344 @@ fn stray_note(h: &StrayHint) -> String {
 fn offset_note((mean, hits): (f64, usize)) -> Option<String> {
     (hits >= OFFSET_NOTE_HITS && mean.abs() >= OFFSET_NOTE_MS).then(|| {
         format!(
-            "叩くタイミングは平均 {mean:+.0}ms（{}）でした。いつもこうなら、入力の補正（演奏中に - / =）で合わせると判定が楽になります。",
+            "叩くのが平均 {:.0}ms {}。いつもなら、演奏中に - / = で入力の補正を合わせると楽になります。",
+            mean.abs(),
             if mean < 0.0 { "早め" } else { "遅め" }
         )
     })
 }
 
-/// 練習の結果。合格の数、クリア、気づいたこと、周ごとの成績の表
+/// 段の挑戦の印の色（越えた・もう一度・途中でやめた）
+fn try_color(passed: Option<bool>) -> Color32 {
+    match passed {
+        Some(true) => PASS_COLOR,
+        Some(false) => WEAK_COLOR,
+        None => Color32::from_gray(150),
+    }
+}
+
+fn round_fill(c: &Canvas, (x, y, w, h): (f32, f32, f32, f32), r: f32, color: Color32) {
+    c.painter()
+        .rect_filled(c.rect(x, y, w, h), r * c.scale(), color);
+}
+
+fn round_frame(c: &Canvas, (x, y, w, h): (f32, f32, f32, f32), r: f32, color: Color32) {
+    c.painter().rect_stroke(
+        c.rect(x, y, w, h),
+        r * c.scale(),
+        Stroke::new(1.0, color),
+        StrokeKind::Inside,
+    );
+}
+
+/// 文字を真ん中ぞろえで描く（`cy` は縦の真ん中）
+#[allow(clippy::too_many_arguments)]
+fn centered(
+    c: &Canvas,
+    g: &mut Gfx,
+    s: &str,
+    cx: f32,
+    cy: f32,
+    px: f32,
+    color: Color32,
+    max_w: f32,
+) {
+    let style = Style::edged(px, color, Color32::BLACK, (px / 12.0).max(1.0));
+    if let Some(t) = g.texts.get(s, &style) {
+        let sx = if t.w > max_w { max_w / t.w } else { 1.0 };
+        t.draw(c, cx - t.w * sx / 2.0, cy - t.h / 2.0, sx, 1.0);
+    }
+}
+
+/// 時間（「8:40」）
+fn duration_text(ms: f64) -> String {
+    let s = (ms / 1000.0).max(0.0).round() as u64;
+    format!("{}:{:02}", s / 60, s % 60)
+}
+
+/// 段の絵。段ごとに、挑戦の印（緑は越えた、赤はもう一度）を段の下に
+fn draw_stairs(c: &Canvas, g: &mut Gfx, p: &PracticeOutcome, (x, y, w, h): (f32, f32, f32, f32)) {
+    let lowest = p
+        .attempts
+        .iter()
+        .map(|a| a.speed)
+        .min()
+        .unwrap_or(p.options.speed.first_speed());
+    let mut steps = p.options.speed.stairs(lowest);
+    for a in &p.attempts {
+        if !steps.contains(&a.speed) {
+            steps.push(a.speed);
+        }
+    }
+    steps.sort_unstable();
+    let passed: Vec<u32> = p
+        .attempts
+        .iter()
+        .filter(|a| a.passed == Some(true))
+        .map(|a| a.speed)
+        .collect();
+    let n = steps.len().max(1) as f32;
+    let gap = 8.0;
+    let sw = (w - gap * (n - 1.0)) / n;
+    let rise = (h - 20.0) / n;
+    let px = (sw * 0.16).clamp(12.0, 18.0);
+    for (i, &s) in steps.iter().enumerate() {
+        let bx = x + i as f32 * (sw + gap);
+        let top = y + h - (i as f32 + 1.0) * rise;
+        let cell = (bx, top, sw, y + h - top);
+        let ok = passed.contains(&s);
+        if ok {
+            round_fill(c, cell, 5.0, PASS_COLOR.gamma_multiply(0.65));
+        } else {
+            round_fill(c, cell, 5.0, Color32::from_white_alpha(18));
+            round_frame(c, cell, 5.0, Color32::from_white_alpha(70));
+        }
+        let color = if ok {
+            Color32::WHITE
+        } else {
+            Color32::from_gray(190)
+        };
+        centered(
+            c,
+            g,
+            &format!("{s}%"),
+            bx + sw / 2.0,
+            top + 15.0,
+            px,
+            color,
+            sw - 4.0,
+        );
+        // 挑戦の印（この段で挑戦した順に）
+        let tries: Vec<Option<bool>> = p
+            .attempts
+            .iter()
+            .filter(|a| a.speed == s)
+            .map(|a| a.passed)
+            .collect();
+        let k = tries.len() as f32;
+        let pitch = (sw / k.max(1.0)).min(16.0);
+        for (j, t) in tries.iter().enumerate() {
+            let cx = bx + sw / 2.0 + (j as f32 - (k - 1.0) / 2.0) * pitch;
+            c.painter()
+                .circle_filled(c.pos(cx, y + h + 14.0), 5.5 * c.scale(), try_color(*t));
+        }
+    }
+    // いちばん上の段（目標）に旗
+    let goal = p.options.speed.goal();
+    if let Some(i) = steps.iter().position(|&s| s == goal) {
+        let bx = x + i as f32 * (sw + gap);
+        let top = y + h - (i as f32 + 1.0) * rise;
+        let fx = bx + sw - 14.0;
+        let pnt = c.painter();
+        pnt.line_segment(
+            [c.pos(fx, top - 30.0), c.pos(fx, top)],
+            Stroke::new(2.0 * c.scale(), Color32::WHITE),
+        );
+        pnt.add(egui::Shape::convex_polygon(
+            vec![
+                c.pos(fx, top - 30.0),
+                c.pos(fx - 18.0, top - 24.0),
+                c.pos(fx, top - 18.0),
+            ],
+            PASS_COLOR,
+            Stroke::NONE,
+        ));
+    }
+}
+
+/// 落とした所の地図（全部の周）。1 マスが 1 拍で、落とした周の数（1 回は黄、2 回から赤で ×n）
+fn draw_map(
+    c: &Canvas,
+    g: &mut Gfx,
+    p: &PracticeOutcome,
+    spots: &SpotTally,
+    (x, y, w, h): (f32, f32, f32, f32),
+) {
+    let s = p.options.section;
+    let n = s.measures().max(1) as f32;
+    let gap = if n > 6.0 { 2.0 } else { 4.0 };
+    let row = (h / n - gap).clamp(3.0, 26.0);
+    let labels = row >= 11.0;
+    let label_w = if labels { 30.0 } else { 0.0 };
+    let px = (row * 0.55).clamp(9.0, 14.0);
+    for (i, m) in (s.first..=s.last).enumerate() {
+        let ry = y + i as f32 * (row + gap);
+        if labels {
+            let style = Style::edged(px, Color32::from_gray(200), Color32::BLACK, 1.0);
+            if let Some(t) = g.texts.get(&m.to_string(), &style) {
+                t.draw(c, x + label_w - 8.0 - t.w, ry + (row - t.h) / 2.0, 1.0, 1.0);
+            }
+        }
+        let beats = p.beats_per_measure.get(i).copied().unwrap_or(4).max(1);
+        let cw = (w - label_w) / beats as f32;
+        for b in 0..beats {
+            let cell = (x + label_w + b as f32 * cw + 2.0, ry, cw - 4.0, row);
+            let k = spots.count(BeatSlot {
+                measure: m,
+                beat: b,
+            });
+            if k >= 2 {
+                round_fill(c, cell, 4.0, WEAK_COLOR.gamma_multiply(0.92));
+                if labels {
+                    centered(
+                        c,
+                        g,
+                        &format!("×{k}"),
+                        cell.0 + cell.2 / 2.0,
+                        ry + row / 2.0,
+                        px + 1.0,
+                        Color32::WHITE,
+                        cell.2,
+                    );
+                }
+            } else if k == 1 {
+                round_fill(c, cell, 4.0, SLIP_COLOR.gamma_multiply(0.45));
+            } else {
+                round_fill(c, cell, 4.0, Color32::from_white_alpha(20));
+                round_frame(c, cell, 4.0, Color32::from_white_alpha(45));
+            }
+        }
+    }
+}
+
+/// 練習の結果。段と挑戦の印、時間と周の数、ミスした所の地図、いちばんミスした所、気づいたこと
 pub fn draw_practice(c: &Canvas, g: &mut Gfx, p: &PracticeOutcome) {
     let (x, y, w, h) = PRACTICE;
     panel(c, PRACTICE);
     let left = x + 20.0;
-    let heading_w = g.heading(c, left, y + 10.0, "練習の結果");
     let o = p.options;
     let head = format!(
-        "{}　{} / {} / {}",
+        "{}　目標 {}%　{}",
         section_text(o.section),
-        style_label(o.style),
-        rule_pass_label(o.rule),
-        plan_text(o.speed)
+        o.speed.goal(),
+        style_label(o.style)
     );
+    text(c, g, &head, left, y + 14.0, 20.0, Color32::WHITE);
+    // 段（左）と数（右）
+    draw_stairs(c, g, p, (left + 6.0, y + 58.0, 500.0, 190.0));
+    let legend_y = y + 278.0;
+    let dot = |c: &Canvas, cx: f32, color: Color32| {
+        c.painter()
+            .circle_filled(c.pos(cx, legend_y + 8.0), 5.0 * c.scale(), color);
+    };
+    dot(c, left + 10.0, PASS_COLOR);
+    let w1 = text(
+        c,
+        g,
+        "OK",
+        left + 20.0,
+        legend_y,
+        13.0,
+        Color32::from_gray(200),
+    );
+    dot(c, left + 34.0 + w1, WEAK_COLOR);
+    text(
+        c,
+        g,
+        "もう一度",
+        left + 44.0 + w1,
+        legend_y,
+        13.0,
+        Color32::from_gray(200),
+    );
+    let done: Vec<&LapSummary> = p.laps.iter().filter(|l| l.completed).collect();
+    let clean = done.iter().filter(|l| l.passed == Some(true)).count();
+    let nums = [
+        (duration_text(p.elapsed_ms), "練習した時間"),
+        (done.len().to_string(), "叩いた周"),
+        (clean.to_string(), "ノーミスの周"),
+    ];
+    for (i, (v, k)) in nums.iter().enumerate() {
+        let ny = y + 56.0 + i as f32 * 74.0;
+        text(c, g, v, x + w - 200.0, ny, 40.0, Color32::WHITE);
+        text(
+            c,
+            g,
+            k,
+            x + w - 200.0,
+            ny + 46.0,
+            13.0,
+            Color32::from_gray(200),
+        );
+    }
+    // ミスした所（全部の周）
+    let mut spots = SpotTally::default();
+    for l in &done {
+        spots.add_lap(&l.misses);
+    }
+    let map_y = y + 306.0;
+    text(
+        c,
+        g,
+        "ミスした所（全部の周）",
+        left,
+        map_y,
+        15.0,
+        Color32::WHITE,
+    );
+    draw_map(c, g, p, &spots, (left - 4.0, map_y + 28.0, 340.0, 150.0));
+    let worst = spots.weak(1);
+    let wx = left + 370.0;
+    match worst.first() {
+        Some((b, spot)) => {
+            text(
+                c,
+                g,
+                "いちばんミスした所",
+                wx,
+                map_y + 30.0,
+                14.0,
+                Color32::from_gray(200),
+            );
+            let name = format!("{} 小節目の {} 拍目", b.measure, b.beat + 1);
+            text(c, g, &name, wx, map_y + 54.0, 22.0, WEAK_COLOR);
+            let lanes: Vec<&str> = spot.lanes.iter().map(|l| l.name()).collect();
+            let line = format!("{}　{} 回", lanes.join("・"), spot.laps);
+            text(c, g, &line, wx, map_y + 86.0, 18.0, Color32::WHITE);
+        }
+        None if !done.is_empty() => {
+            text(c, g, "ミスなし", wx, map_y + 54.0, 22.0, PASS_COLOR);
+        }
+        None => {
+            text(
+                c,
+                g,
+                "最後まで叩いた周はありません",
+                wx,
+                map_y + 54.0,
+                16.0,
+                Color32::from_gray(200),
+            );
+        }
+    }
+    // 気づいたこと（短く）
+    let mut notes: Vec<String> = Vec::new();
+    if let Some(hint) = &p.strays {
+        notes.push(stray_note(hint));
+    }
+    if let Some(note) = p.offset.and_then(offset_note) {
+        notes.push(note);
+    }
+    let mut ny = map_y + 126.0;
+    for n in notes {
+        ny = paragraph(c, g, &n, wx, ny, 13.0, NOTE_COLOR, x + w - 20.0 - wx);
+    }
+    // 操作の案内
+    let keys = "R：もう一度　　P：区間を選び直す　　→：周ごとの表　　Enter：選曲へ";
+    let style = Style::edged(15.0, Color32::from_gray(220), Color32::BLACK, 1.5);
+    if let Some(t) = g.texts.get(keys, &style) {
+        t.draw_fit(c, x + ((w - t.w) / 2.0).max(10.0), y + h - 30.0, w - 20.0);
+    }
+}
+
+/// 練習の結果の 2 ページ目：周ごとの成績の表
+pub fn draw_practice_laps(c: &Canvas, g: &mut Gfx, p: &PracticeOutcome) {
+    let (x, y, w, h) = PRACTICE;
+    panel(c, PRACTICE);
+    let left = x + 20.0;
+    let heading_w = g.heading(c, left, y + 10.0, "周ごとの成績");
+    let o = p.options;
+    let head = format!("{}　{}", section_text(o.section), plan_text(o.speed));
     text(
         c,
         g,
@@ -131,97 +449,34 @@ pub fn draw_practice(c: &Canvas, g: &mut Gfx, p: &PracticeOutcome) {
         18.0,
         Color32::WHITE,
     );
-    let mut ty = y + 50.0;
-    let max_w = w - 40.0;
     let done: Vec<&LapSummary> = p.laps.iter().filter(|l| l.completed).collect();
-    if done.is_empty() {
-        text(
-            c,
-            g,
-            "最後まで叩いた周はありませんでした。",
-            left,
-            ty,
-            20.0,
-            Color32::WHITE,
-        );
-        ty += 30.0;
-    } else {
-        let passed = done.iter().filter(|l| l.passed == Some(true)).count();
-        let line = format!(
-            "{} 周のうち合格 {passed} 周（{}）",
-            done.len(),
-            rule_pass_label(o.rule)
-        );
-        text(c, g, &line, left, ty, 20.0, Color32::WHITE);
-        ty += 28.0;
-        let reached = done.iter().map(|l| speed_percent(l.speed)).max();
-        let top = done
-            .iter()
-            .filter(|l| l.passed == Some(true))
-            .map(|l| speed_percent(l.speed))
-            .max();
-        let mut parts = Vec::new();
-        if let (SpeedPlan::Ladder { start, target }, Some(r)) = (o.speed, reached) {
-            parts.push(format!("{start}% から始めて {r}% まで（目標 {target}%）"));
-        }
-        if let Some(top) = top {
-            parts.push(format!("合格した一番速い速度 {top}%"));
-        }
-        if !parts.is_empty() {
-            text(
-                c,
-                g,
-                &parts.join("　"),
-                left,
-                ty,
-                16.0,
-                Color32::from_gray(220),
-            );
-            ty += 22.0;
-        }
-    }
-    if p.cleared
-        && let SpeedPlan::Ladder { target, .. } = o.speed
-    {
-        let line = format!("クリア！ 目標の {target}% で {PASSES_TO_UP} 回合格しました");
-        text(c, g, &line, left, ty, 20.0, PASS_COLOR);
-        ty += 28.0;
-    }
-    // 気づいたこと
-    if let Some(hint) = &p.strays {
-        ty = paragraph(
-            c,
-            g,
-            &stray_note(hint),
-            left,
-            ty + 2.0,
-            14.0,
-            NOTE_COLOR,
-            max_w,
-        );
-    }
-    if let Some(note) = p.offset.and_then(offset_note) {
-        ty = paragraph(c, g, &note, left, ty + 2.0, 14.0, NOTE_COLOR, max_w);
-    }
+    let mut ty = y + 50.0;
     if p.laps.len() > done.len() {
         text(
             c,
             g,
-            "途中でやめた周は数えず、記録にも残しません。",
+            "途中でやめた周は入れていません（記録にも残しません）。",
             left,
             ty,
             14.0,
             Color32::from_gray(160),
         );
-        ty += 20.0;
+        ty += 22.0;
     }
-    if !done.is_empty() {
-        ty += 8.0;
+    if done.is_empty() {
+        text(
+            c,
+            g,
+            "最後まで叩いた周はありません。",
+            left,
+            ty,
+            18.0,
+            Color32::WHITE,
+        );
+    } else {
         lap_table(c, g, &done, left, ty, y + h - 44.0);
     }
-    // 操作の案内
-    let keys =
-        "R：もう一度　　P：区間を選び直す　　Enter（ドラムは右シンバルかライド）：選曲に戻る";
+    let keys = "←：練習の結果　　R：もう一度　　P：区間を選び直す　　Enter：選曲へ";
     let style = Style::edged(15.0, Color32::from_gray(220), Color32::BLACK, 1.5);
     if let Some(t) = g.texts.get(keys, &style) {
         t.draw_fit(c, x + ((w - t.w) / 2.0).max(10.0), y + h - 30.0, w - 20.0);
@@ -231,15 +486,15 @@ pub fn draw_practice(c: &Canvas, g: &mut Gfx, p: &PracticeOutcome) {
 /// 表の列（見出し、左の端からの位置）
 const COLUMNS: [(&str, f32); 10] = [
     ("周", 0.0),
-    ("速度", 56.0),
-    ("PERFECT", 138.0),
-    ("GREAT", 268.0),
-    ("GOOD", 344.0),
-    ("POOR", 414.0),
-    ("MISS", 482.0),
-    ("空打ち", 546.0),
-    ("ずれ", 616.0),
-    ("", 718.0),
+    ("速度", 44.0),
+    ("PERFECT", 116.0),
+    ("GREAT", 240.0),
+    ("GOOD", 312.0),
+    ("POOR", 378.0),
+    ("MISS", 440.0),
+    ("空打ち", 500.0),
+    ("ずれ", 566.0),
+    ("", 672.0),
 ];
 
 /// 周ごとの成績の表。入りきらないときは新しい周を出す
@@ -285,6 +540,10 @@ fn shown_laps(n: usize, rows: usize) -> (usize, Option<usize>) {
 
 fn rows_of(c: &Canvas, g: &mut Gfx, laps: &[&LapSummary], x: f32, mut y: f32) {
     for (i, l) in laps.iter().enumerate() {
+        // 段の挑戦の変わり目に線を引く
+        if i > 0 && laps[i - 1].attempt != l.attempt {
+            c.fill(x - 6.0, y - 3.0, 740.0, 1.0, Color32::from_white_alpha(70));
+        }
         if i % 2 == 0 {
             c.fill(
                 x - 6.0,
@@ -315,8 +574,8 @@ fn rows_of(c: &Canvas, g: &mut Gfx, laps: &[&LapSummary], x: f32, mut y: f32) {
             text(c, g, s, x + dx, y, 17.0, Color32::WHITE);
         }
         let (verdict, color) = match l.passed {
-            Some(true) => ("合格", PASS_COLOR),
-            Some(false) => ("不合格", FAIL_COLOR),
+            Some(true) => ("ノーミス", PASS_COLOR),
+            Some(false) => ("ミス", SLIP_COLOR),
             None => ("途中", Color32::from_gray(150)),
         };
         text(c, g, verdict, x + COLUMNS[9].1, y, 17.0, color);
