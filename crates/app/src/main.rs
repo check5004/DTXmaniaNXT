@@ -51,7 +51,7 @@ use crate::config_view::{ConfigAction, ConfigInfo, ConfigInput, ConfigView, Sett
 use crate::game::{Outcome, Play};
 use crate::gfx::{Canvas, Gfx, Skin};
 use crate::history::History;
-use crate::loading::Loading;
+use crate::loading::{Job, Loading};
 use crate::midi::MidiIn;
 use crate::play_view::PlayView;
 use crate::practice::{PracticeOptions, PracticeSetup};
@@ -69,7 +69,13 @@ struct Gpu {
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
     egui_renderer: egui_wgpu::Renderer,
+    /// 描く画像を続けて受け取れなかった回数
+    timeouts: u32,
 }
+
+/// 描く画像をこの回数続けて受け取れなければ、画面への出力を作り直す
+/// （1 回は 1 秒待つ。そのままにすると画面が止まったまま遊びだけ進む）
+const TIMEOUTS_BEFORE_RECONFIGURE: u32 = 3;
 
 impl Gpu {
     fn new(window: Arc<Window>) -> Result<Self> {
@@ -113,6 +119,7 @@ impl Gpu {
             queue,
             config,
             egui_renderer,
+            timeouts: 0,
         })
     }
 
@@ -148,13 +155,23 @@ impl Gpu {
                 self.surface.configure(&self.device, &self.config);
                 frame
             }
-            wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => return,
+            wgpu::CurrentSurfaceTexture::Occluded => return,
+            wgpu::CurrentSurfaceTexture::Timeout => {
+                self.timeouts += 1;
+                if self.timeouts >= TIMEOUTS_BEFORE_RECONFIGURE {
+                    log::warn!("no frame for {} tries; reconfiguring", self.timeouts);
+                    self.surface.configure(&self.device, &self.config);
+                    self.timeouts = 0;
+                }
+                return;
+            }
             other => {
                 log::warn!("skip frame: {other:?}");
                 self.surface.configure(&self.device, &self.config);
                 return;
             }
         };
+        self.timeouts = 0;
         let view = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
@@ -198,6 +215,30 @@ impl Gpu {
         self.queue
             .submit(extra.into_iter().chain([encoder.finish()]));
         self.queue.present(frame);
+    }
+}
+
+/// 曲を読むのに使う設定。読むスレッドへ渡せるように、設定から写しておく
+struct LoadSettings {
+    input_offset_ms: f64,
+    drum_sounds: bool,
+    profile: MidiProfile,
+}
+
+impl LoadSettings {
+    /// 曲を読む（時間がかかる）。`practice` があれば区間の練習
+    fn load(self, path: &std::path::Path, practice: Option<PracticeOptions>) -> Result<Play> {
+        let started = Instant::now();
+        let mut p = match practice {
+            Some(o) => Play::load_practice(path, self.input_offset_ms, self.drum_sounds, o)?,
+            None => Play::load(path, self.input_offset_ms, self.drum_sounds)?,
+        };
+        p.set_midi_profile(self.profile);
+        log::info!(
+            "loaded in {:.0}ms",
+            started.elapsed().as_secs_f64() * 1000.0
+        );
+        Ok(p)
     }
 }
 
@@ -521,37 +562,49 @@ impl App {
         let label = self.songs.chart_label(&path);
         // 音が無いときも、読み込みの画面が一瞬で消えないように少しは出す
         let wait = self.sfx.play_loading().max(MIN_LOADING);
+        // 曲は別のスレッドで読む（画面のスレッドを止めない。読み込み中も Esc がすぐ効く）
+        let settings = self.load_settings();
+        let job = {
+            let path = path.clone();
+            Job::spawn("chart loader", move || settings.load(&path, practice))
+        };
         self.screen = Screen::Loading(Box::new(Loading::new(
-            path,
-            practice,
+            &path,
             &label,
             self.gfx.skin.dir(),
             wait,
+            job,
         )));
     }
 
-    /// 曲を読み込む（読み込みの画面を 1 回出してから呼ぶ。時間がかかる）
-    fn load_play(&self, path: &std::path::Path, practice: Option<PracticeOptions>) -> Result<Play> {
-        let mut p = match practice {
-            Some(o) => Play::load_practice(
-                path,
-                self.config.input_offset_ms,
-                self.config.drum_sounds,
-                o,
-            )?,
-            None => Play::load(path, self.config.input_offset_ms, self.config.drum_sounds)?,
-        };
-        p.set_midi_profile(midi_profile(self.nx.as_ref(), &self.config));
-        if p.practice.is_some() {
-            let band = self
-                .history
-                .weak_map(path, p.notes_per_measure(), None)
-                .weakness;
-            if let Some(pr) = p.practice.as_mut() {
-                pr.band = band;
-            }
+    /// 曲を読むのに使う設定（読むスレッドへ渡す）
+    fn load_settings(&self) -> LoadSettings {
+        LoadSettings {
+            input_offset_ms: self.config.input_offset_ms,
+            drum_sounds: self.config.drum_sounds,
+            profile: midi_profile(self.nx.as_ref(), &self.config),
         }
+    }
+
+    /// 曲をこのスレッドで読む（時間がかかる。演奏中のやり直しで使う）
+    fn load_play(&self, path: &std::path::Path, practice: Option<PracticeOptions>) -> Result<Play> {
+        let mut p = self.load_settings().load(path, practice)?;
+        self.add_weak_band(&mut p);
         Ok(p)
+    }
+
+    /// 練習なら、苦手な小節の帯を記録から付ける（記録は画面のスレッドで読む）
+    fn add_weak_band(&self, p: &mut Play) {
+        if p.practice.is_none() {
+            return;
+        }
+        let band = self
+            .history
+            .weak_map(&p.path, p.notes_per_measure(), None)
+            .weakness;
+        if let Some(pr) = p.practice.as_mut() {
+            pr.band = band;
+        }
     }
 
     /// 読み込んだ曲を鳴らし始め、演奏の画面にする
@@ -582,24 +635,23 @@ impl App {
         self.go_to_select();
     }
 
-    /// 読み込みの画面を進める。1 回描いたら読み、音が鳴り終えたら演奏へ
+    /// 読み込みの画面を進める。読み終えた曲を受け取り、音が鳴り終えたら演奏へ
     fn pump_loading(&mut self) {
-        let Screen::Loading(l) = &self.screen else {
+        let Screen::Loading(l) = &mut self.screen else {
             return;
         };
-        if l.ready_to_load() {
-            let (path, practice) = (l.path.clone(), l.practice);
-            match self.load_play(&path, practice) {
-                Ok(p) => {
-                    if let Screen::Loading(l) = &mut self.screen {
-                        l.play = Some(Box::new(p));
-                    }
-                }
-                Err(e) => {
-                    self.load_failed(&e);
-                    return;
+        match l.take_result() {
+            Some(Ok(mut p)) => {
+                self.add_weak_band(&mut p);
+                if let Screen::Loading(l) = &mut self.screen {
+                    l.play = Some(Box::new(p));
                 }
             }
+            Some(Err(e)) => {
+                self.load_failed(&e);
+                return;
+            }
+            None => {}
         }
         if let Screen::Loading(l) = &mut self.screen
             && l.done()
@@ -1665,6 +1717,11 @@ impl ApplicationHandler for App {
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         // 叩いた音をすぐ鳴らすため、描画を待たずに MIDI を処理する
         self.pump();
+        // 描画の頼みはここでも出す。描画の中で次を頼むだけだと、描画の知らせが 1 度でも来なかったとき
+        // 画面が止まったまま遊びだけ進む（頼みが重なっても描画は 1 回）
+        if let Some(w) = &self.window {
+            w.request_redraw();
+        }
         if self.quit {
             event_loop.exit();
         }
