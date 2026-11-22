@@ -6,12 +6,17 @@ use std::path::PathBuf;
 use dtx::DrumLane;
 use engine::input::MidiProfile;
 use engine::practice::{LoopStyle, PassRule, STEP_LAPS, STEP_LAPS_CHOICES, SpeedPlan, snap_speed};
+use i18n::Lang;
 use serde::{Deserialize, Serialize};
 
 use crate::practice::PracticePrefs;
 use crate::settings::{DisplayMode, Values};
 use crate::stretch::Pitch;
 use crate::update::UpdateMode;
+
+/// 言語を選べるようにする。英語版の文が揃うまでは false にして、設定の「言語」を出さず日本語で動かす
+/// （途中の版で英語と日本語が混ざった画面を出さないため）。揃えたら true にする
+pub const LANGUAGE_READY: bool = false;
 
 /// 設定の画面で全体の音量を 1 回で変える幅（%）
 pub const MASTER_VOLUME_STEP: u8 = 5;
@@ -84,6 +89,10 @@ pub struct Config {
     /// 最後に使った全画面の出し方（"borderless" か "fullscreen"）。Alt+Enter と F11 でウィンドウから戻る先
     #[serde(skip_serializing_if = "String::is_empty")]
     pub last_full_mode: String,
+    /// 画面の言語（"en" か "ja"。[`i18n::Lang::code`]）。新しく入れた人は英語。
+    /// 書いていない設定のファイルは英語版の前からの人なので日本語にする（[`Config::load`]、2026-11-22 ユーザーが選んだ）
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub language: String,
     /// 設定の表（[`crate::settings`]）の項目の値（config.toml の `[settings]`）。書いていないものは既定
     #[serde(skip_serializing_if = "Values::is_empty")]
     pub settings: Values,
@@ -172,6 +181,7 @@ impl Default for Config {
             update: String::new(),
             last_version: String::new(),
             last_full_mode: String::new(),
+            language: String::new(),
             settings: Values::default(),
         }
     }
@@ -278,12 +288,13 @@ impl Config {
 
     pub fn load() -> Self {
         let Some(path) = Self::path() else {
-            return Self::default();
+            return Self::first_run();
         };
         match std::fs::read_to_string(&path) {
             Ok(text) => match toml::from_str::<Self>(&text) {
                 Ok(mut c) => {
                     c.upgrade_update();
+                    c.upgrade_language();
                     // 前の版のキーを写したら書き直す
                     if c.settings.upgrade() {
                         c.save();
@@ -292,11 +303,47 @@ impl Config {
                 }
                 Err(e) => {
                     log::warn!("{}: {e}", path.display());
-                    Self::default()
+                    // 読めなくてもファイルはあるので、英語版の前からの人として日本語で
+                    let mut c = Self::default();
+                    c.upgrade_language();
+                    c
                 }
             },
-            Err(_) => Self::default(),
+            Err(_) => Self::first_run(),
         }
+    }
+
+    /// 設定のファイルが無いとき（初めての起動）。英語で始め、次に書くときに言語も残す
+    fn first_run() -> Self {
+        Self {
+            language: Lang::En.code().to_owned(),
+            ..Self::default()
+        }
+    }
+
+    /// 言語を書いていない設定のファイルは、英語版より前（日本語だけの版）から使っている人なので日本語のままにする
+    fn upgrade_language(&mut self) {
+        if self.language.is_empty() {
+            Lang::Ja.code().clone_into(&mut self.language);
+        }
+    }
+
+    /// 設定に書いた言語（読めない値なら英語）
+    pub fn lang(&self) -> Lang {
+        Lang::from_code(&self.language).unwrap_or_default()
+    }
+
+    /// 画面に使う言語（[`LANGUAGE_READY`] までは日本語）
+    pub fn ui_lang(&self) -> Lang {
+        if LANGUAGE_READY {
+            self.lang()
+        } else {
+            Lang::Ja
+        }
+    }
+
+    pub fn set_lang(&mut self, lang: Lang) {
+        lang.code().clone_into(&mut self.language);
     }
 
     pub fn save(&self) {
@@ -465,6 +512,31 @@ pub fn note_overrides(notes: &[PadNote]) -> Vec<(u8, Option<DrumLane>)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn new_players_start_in_english_and_earlier_players_keep_japanese() {
+        // 初めての起動は英語で、書くときに言語も残す（次の起動で日本語と取り違えない）
+        let first = Config::first_run();
+        assert_eq!(first.lang(), Lang::En);
+        let text = toml::to_string_pretty(&first).unwrap();
+        let mut again: Config = toml::from_str(&text).unwrap();
+        again.upgrade_language();
+        assert_eq!(again.lang(), Lang::En);
+        // 英語版より前の設定（言語が無い）は日本語のまま
+        let mut earlier: Config = toml::from_str("level = 3\n").unwrap();
+        earlier.upgrade_language();
+        assert_eq!(earlier.lang(), Lang::Ja);
+        // 選んだ言語はそのまま
+        let mut chosen: Config = toml::from_str("language = \"en\"\n").unwrap();
+        chosen.upgrade_language();
+        assert_eq!(chosen.lang(), Lang::En);
+        chosen.set_lang(Lang::Ja);
+        assert!(
+            toml::to_string_pretty(&chosen)
+                .unwrap()
+                .contains("language = \"ja\"")
+        );
+    }
 
     #[test]
     fn missing_keys_use_defaults() {
