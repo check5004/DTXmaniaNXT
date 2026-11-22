@@ -19,6 +19,8 @@ struct Expected {
     /// 空打ちの音と見えない音符（省略できる）
     empty_hits: Option<Vec<ExpectedLaneSound>>,
     hidden: Option<Vec<ExpectedLaneSound>>,
+    /// スネアの音符の音のうち、リムの音らしいもの（省略できる）
+    rim_wavs: Option<Vec<String>>,
 }
 
 #[derive(Deserialize)]
@@ -156,6 +158,12 @@ fn shared_test_charts() {
                 .map(|s| (s.ms, s.lane.as_str(), wav(&s.wav)))
                 .collect();
             assert_eq!(got, want, "{name}: {what}");
+        }
+        if let Some(want) = &expected.rim_wavs {
+            let mut got: Vec<u16> = chart.rim_wavs(&notes).into_iter().collect();
+            got.sort_unstable();
+            let want: Vec<u16> = want.iter().map(|w| wav(w)).collect();
+            assert_eq!(got, want, "{name}: rim wavs");
         }
         checked += 1;
     }

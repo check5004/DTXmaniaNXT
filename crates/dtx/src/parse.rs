@@ -27,6 +27,9 @@ pub struct Warning {
 pub struct Chart {
     /// `#TITLE` などのヘッダ（キーは大文字。同じキーは後のものが有効）
     pub fields: HashMap<String, String>,
+    /// ヘッダの行の `;` から後ろの注釈（キーは大文字。空でないものだけ）。
+    /// DTXCreator は `#WAVzz` の行に、音につけた名前（「Snare Rim」など）を注釈として書く
+    pub comments: HashMap<String, String>,
     pub chips: Vec<Chip>,
     /// 小節長の変更（小節番号 → 倍率）。変更は次の変更まで続く
     pub bar_lengths: BTreeMap<u32, f64>,
@@ -73,6 +76,13 @@ impl Chart {
     pub fn avi(&self, id: u16) -> Option<&str> {
         self.field(&format!("AVI{}", to_base36x2(id)))
     }
+
+    /// `#WAVzz` の行の注釈（音の名前）
+    pub fn wav_comment(&self, id: u16) -> Option<&str> {
+        self.comments
+            .get(&format!("WAV{}", to_base36x2(id)))
+            .map(String::as_str)
+    }
 }
 
 pub(crate) fn to_base36x2(n: u16) -> String {
@@ -84,6 +94,8 @@ pub(crate) fn to_base36x2(n: u16) -> String {
 struct CommandLine<'a> {
     command: &'a str,
     param: &'a str,
+    /// `;` から後ろ（`;` は含まない。前後の空白は除く）
+    comment: &'a str,
 }
 
 /// '#' で始まる 1 行を分解する。コマンドの後ろは ':' か空白で区切り、';' から後は注釈
@@ -97,7 +109,15 @@ fn split_command_line(line: &str) -> Option<CommandLine<'_>> {
     rest = rest.strip_prefix(':').unwrap_or(rest);
     let param_end = rest.find(';').unwrap_or(rest.len());
     let param = rest[..param_end].trim_matches([' ', '\t']);
-    Some(CommandLine { command, param })
+    let comment = rest
+        .get(param_end + 1..)
+        .unwrap_or("")
+        .trim_matches([' ', '\t', '\r']);
+    Some(CommandLine {
+        command,
+        param,
+        comment,
+    })
 }
 
 fn starts_with_ci(s: &str, prefix: &str) -> bool {
@@ -172,9 +192,13 @@ pub fn parse(text: &str) -> Chart {
             continue;
         }
 
-        chart
-            .fields
-            .insert(cmd.to_ascii_uppercase(), p.param.to_owned());
+        let key = cmd.to_ascii_uppercase();
+        if p.comment.is_empty() {
+            chart.comments.remove(&key);
+        } else {
+            chart.comments.insert(key.clone(), p.comment.to_owned());
+        }
+        chart.fields.insert(key, p.param.to_owned());
     }
 
     if if_depth > 0 {
@@ -247,6 +271,19 @@ mod tests {
             (c.chips[0].pos, c.chips[0].div, c.chips[0].value),
             (1, 2, 1)
         );
+    }
+
+    #[test]
+    fn wav_comments() {
+        let c = parse(
+            "#WAV01: 037_Rimshot.ogg\t;Snare Rim\r\n#WAV02 snare.ogg\n#WAV03 a.ogg ;x\n#WAV03 b.ogg\n",
+        );
+        assert_eq!(c.wav(1), Some("037_Rimshot.ogg"));
+        assert_eq!(c.wav_comment(1), Some("Snare Rim"));
+        assert_eq!(c.wav_comment(2), None);
+        // 後の定義が勝つ（注釈の無い行で上書きしたら注釈も消える）
+        assert_eq!(c.wav(3), Some("b.ogg"));
+        assert_eq!(c.wav_comment(3), None);
     }
 
     #[test]

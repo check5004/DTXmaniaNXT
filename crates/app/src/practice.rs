@@ -395,8 +395,8 @@ pub struct Practice {
     pub laps: Vec<LapState>,
     /// 判定の音符の添字 → 周
     lap_of: Vec<usize>,
-    /// 判定しない音符（助走など。実時間、レーン）。薄く見せる
-    pub faint: Vec<(f64, DrumLane)>,
+    /// 判定しない音符（助走など。実時間、レーン、`#WAVzz` の番号）。薄く見せる
+    pub faint: Vec<(f64, DrumLane, u16)>,
     /// 曲全体の小節の帯（苦手度）。区間の場所を見せる。始めてから記録を読んで入れる
     pub band: Vec<Option<f64>>,
     /// 区間の拍（落とした所の地図）
@@ -532,7 +532,7 @@ impl Practice {
                     ..note.clone()
                 });
             } else {
-                self.faint.push((n.ms, note.lane));
+                self.faint.push((n.ms, note.lane, note.wav));
             }
         }
         (lap, judged)
