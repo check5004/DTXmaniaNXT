@@ -19,6 +19,7 @@ use engine::practice::{
     STEP_LAPS, STEP_SPEED, Section, SectionTimes, SpeedPlan, SpotTally, next_step, snap_speed,
     speed_percent,
 };
+use i18n::{t, tf};
 use records::{ClearRecord, StrayHit};
 
 use crate::game::WeakMap;
@@ -1062,25 +1063,33 @@ impl Practice {
 /// つなぎ方の名前
 pub fn style_label(s: LoopStyle) -> &'static str {
     match s {
-        LoopStyle::Connect => "切れ目なく",
-        LoopStyle::Restart => "毎回区切る",
+        LoopStyle::Connect => t("Seamless", "切れ目なく"),
+        LoopStyle::Restart => t("Restart Each Loop", "毎回区切る"),
     }
 }
 
 /// 段の越え方（「同じ拍で 2 回ミスしなければ、次の段へ」）
 pub fn pass_line(r: PassRule) -> String {
     match r.weak_times() {
-        1 => "ミスしなければ、次の段へ".to_owned(),
-        n => format!("同じ拍で {n} 回ミスしなければ、次の段へ"),
+        1 => t("Move up with no misses.", "ミスしなければ、次の段へ").to_owned(),
+        2 => t(
+            "Move up unless you miss the same beat twice.",
+            "同じ拍で 2 回ミスしなければ、次の段へ",
+        )
+        .to_owned(),
+        n => tf!(
+            "Move up unless you miss the same beat {n} times.",
+            "同じ拍で {n} 回ミスしなければ、次の段へ"
+        ),
     }
 }
 
 /// 区間の名前（「小節 3〜6」）
 pub fn section_label(s: Section) -> String {
     if s.first == s.last {
-        format!("小節 {}", s.first)
+        tf!("Measure {}", "小節 {}", s.first)
     } else {
-        format!("小節 {}〜{}", s.first, s.last)
+        tf!("Measures {}–{}", "小節 {}〜{}", s.first, s.last)
     }
 }
 

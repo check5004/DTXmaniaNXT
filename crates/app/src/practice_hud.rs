@@ -15,6 +15,7 @@
 
 use egui::{Color32, Stroke, StrokeKind};
 use engine::practice::{BeatSlot, Next, SPEED_MIN, STEP_SPEED, SpotTally, speed_percent};
+use i18n::{count, t, tf};
 
 use crate::gfx::{Canvas, Gfx, Opt, src};
 use crate::play_view::JUDGE_LINE_Y;
@@ -316,14 +317,24 @@ fn current_speed(p: &Practice, now: f64) -> u32 {
     speed_percent(lap.plan.speed)
 }
 
-/// 周（この段の何周目か / 1 段の周の数）と速度（スコアの場所）。見出しは日本語で
+/// 周（この段の何周目か / 1 段の周の数）と速度（スコアの場所）
 fn draw_lap_and_speed(c: &Canvas, g: &mut Gfx, p: &Practice, now: f64) {
     let head = bold(22.0, Color32::WHITE);
-    put(c, g, "周", &head, LAP_X, LABEL_Y, Align::Left, 100.0, 1.0);
     put(
         c,
         g,
-        "速度",
+        t("LOOP", "周"),
+        &head,
+        LAP_X,
+        LABEL_Y,
+        Align::Left,
+        100.0,
+        1.0,
+    );
+    put(
+        c,
+        g,
+        t("SPEED", "速度"),
         &head,
         SPEED_X,
         LABEL_Y,
@@ -359,10 +370,23 @@ fn draw_info(c: &Canvas, g: &mut Gfx, p: &Practice) {
     let started = p.attempt_laps().iter().any(|l| l.judged > 0);
     let (title, spots) = match p.done.last() {
         Some(last) if !started => (
-            format!("ミスした所（さっきの {} 周）", last.laps),
+            {
+                let laps = count(last.laps, "loop", "loops", "周");
+                tf!(
+                    "Misses (last step, {laps})",
+                    "ミスした所（さっきの {laps}）"
+                )
+            },
             last.spots.clone(),
         ),
-        _ => (format!("ミスした所（この {} 周）", p.step_laps()), current),
+        _ => (
+            tf!(
+                "Misses (this step, {} loops)",
+                "ミスした所（この {} 周）",
+                p.step_laps()
+            ),
+            current,
+        ),
     };
     put(
         c,
@@ -467,7 +491,7 @@ fn draw_card(c: &Canvas, g: &mut Gfx, p: &Practice, now: f64) {
     put(
         c,
         g,
-        &format!("目標 {goal}%"),
+        &tf!("Target {goal}%", "目標 {goal}%"),
         &bold(19.0, Color32::WHITE),
         x + 14.0,
         y + 10.0,
@@ -476,9 +500,9 @@ fn draw_card(c: &Canvas, g: &mut Gfx, p: &Practice, now: f64) {
         1.0,
     );
     let (right, color) = if p.cleared() {
-        ("クリア".to_owned(), OK_COLOR)
+        (t("CLEAR", "クリア").to_owned(), OK_COLOR)
     } else {
-        (format!("あと {} 段", p.steps_left()), CURRENT_COLOR)
+        (steps_left(p.steps_left()), CURRENT_COLOR)
     };
     put(
         c,
@@ -500,7 +524,7 @@ fn draw_card(c: &Canvas, g: &mut Gfx, p: &Practice, now: f64) {
     put(
         c,
         g,
-        &format!("この段の {} 周", p.step_laps()),
+        &tf!("This step: {} loops", "この段の {} 周", p.step_laps()),
         &edged(13.0, GREY),
         x + 14.0,
         y + 218.0,
@@ -588,7 +612,7 @@ fn draw_stairs(
             put_mid(
                 c,
                 g,
-                "いまここ",
+                t("NOW", "いまここ"),
                 &edged(12.0, CURRENT_COLOR),
                 bx + sw / 2.0,
                 top - 13.0,
@@ -730,14 +754,35 @@ fn line(c: &Canvas, g: &mut Gfx, ln: Lanes, text: &str, style: &Style, y: f32, a
 fn beat_name(b: BeatSlot, lanes: &[dtx::DrumLane]) -> String {
     let lanes: Vec<&str> = lanes.iter().map(|l| l.name()).collect();
     if lanes.is_empty() {
-        format!("{} 小節目の {} 拍目", b.measure, b.beat + 1)
+        tf!(
+            "measure {}, beat {}",
+            "{} 小節目の {} 拍目",
+            b.measure,
+            b.beat + 1
+        )
     } else {
-        format!(
+        tf!(
+            "measure {}, beat {} ({})",
             "{} 小節目の {} 拍目（{}）",
             b.measure,
             b.beat + 1,
-            lanes.join("・")
+            lanes.join(t("/", "・"))
         )
+    }
+}
+
+/// 「あと 2 段」
+fn steps_left(n: usize) -> String {
+    let n = count(n, "step", "steps", "段");
+    tf!("{n} to go", "あと {n}")
+}
+
+/// 「2 回」（英語は once・twice）
+fn times(n: u32) -> String {
+    match n {
+        1 => t("once", "1 回").to_owned(),
+        2 => t("twice", "2 回").to_owned(),
+        n => tf!("{n} times", "{n} 回"),
     }
 }
 
@@ -764,7 +809,7 @@ fn draw_banner(
                 c,
                 g,
                 ln,
-                "スタート",
+                t("START", "スタート"),
                 &bold(34.0, CURRENT_COLOR),
                 top + 30.0,
                 alpha,
@@ -772,7 +817,12 @@ fn draw_banner(
             let s = format!("{speed}%");
             let w = score_digits_width(g, &s, 0.9);
             score_digits(c, g, &s, ln.cx() - w / 2.0, top + 84.0, 0.9, alpha);
-            let rule = format!("1 段 {} 周。{}", p.step_laps(), pass_line(p.options.rule));
+            let rule = tf!(
+                "{} loops per step. {}",
+                "1 段 {} 周。{}",
+                p.step_laps(),
+                pass_line(p.options.rule)
+            );
             line(
                 c,
                 g,
@@ -787,7 +837,10 @@ fn draw_banner(
                 c,
                 g,
                 ln,
-                "止めるときは、叩くのをやめる（1 周で一時停止）",
+                t(
+                    "To stop, just stop playing (pauses after one loop)",
+                    "止めるときは、叩くのをやめる（1 周で一時停止）",
+                ),
                 &edged(14.0, GREY),
                 top + 190.0,
                 alpha,
@@ -801,34 +854,44 @@ fn draw_banner(
                     c,
                     g,
                     ln,
-                    &format!("次は {to}%"),
+                    &tf!("Next: {to}%", "次は {to}%"),
                     &bold(34.0, Color32::WHITE),
                     top + 112.0,
                     alpha,
                 );
                 let sub = match last {
-                    Some(r) if r.missed == 0 => "ノーミス".to_owned(),
-                    Some(r) => format!("ミス {} 回（同じ拍ではない）", r.missed),
+                    Some(r) if r.missed == 0 => t("No misses", "ノーミス").to_owned(),
+                    Some(r) if r.missed == 1 => t(
+                        "1 miss (no beat missed twice)",
+                        "ミス 1 回（同じ拍ではない）",
+                    )
+                    .to_owned(),
+                    Some(r) => tf!(
+                        "{} misses (no beat missed twice)",
+                        "ミス {} 回（同じ拍ではない）",
+                        r.missed
+                    ),
                     None => String::new(),
                 };
                 line(c, g, ln, &sub, &edged(16.0, GREY), top + 172.0, alpha);
             }
             Next::Again | Next::Down(_) => {
                 let (head, color) = match next {
-                    Next::Down(to) => (format!("{to}% に下げます"), DOWN_COLOR),
-                    _ => (format!("もう一度 {from}%"), SLIP_COLOR),
+                    Next::Down(to) => (tf!("Down to {to}%", "{to}% に下げます"), DOWN_COLOR),
+                    _ => (tf!("Again at {from}%", "もう一度 {from}%"), SLIP_COLOR),
                 };
                 banner_frame(c, ln, top, BANNER_H, color, alpha);
                 line(c, g, ln, &head, &bold(38.0, color), top + 16.0, alpha);
                 let weak = last.map(|r| r.weak()).unwrap_or_default();
                 if let Some(&(b, spot)) = weak.first() {
                     let more = if weak.len() > 1 {
-                        format!("ほか {} か所", weak.len() - 1)
+                        tf!(" and {} more", "ほか {} か所", weak.len() - 1)
                     } else {
                         String::new()
                     };
-                    let text =
-                        format!("{}{more}で {} 回ミス", beat_name(b, &spot.lanes), spot.laps);
+                    let beat = beat_name(b, &spot.lanes);
+                    let n = times(spot.laps);
+                    let text = tf!("Missed {n} at {beat}{more}", "{beat}{more}で {n}ミス");
                     line(
                         c,
                         g,
@@ -841,8 +904,15 @@ fn draw_banner(
                     draw_measure_cells(c, g, ln, p, b, spot.laps, top + 104.0, alpha);
                 }
                 let note = match next {
-                    Next::Down(_) => format!("{from}% で、もう一度が 2 回続いたので"),
-                    _ => format!("次の {} 周は、この拍が赤く光ります", p.step_laps()),
+                    Next::Down(_) => tf!(
+                        "Two retries in a row at {from}%",
+                        "{from}% で、もう一度が 2 回続いたので"
+                    ),
+                    _ => tf!(
+                        "This beat flashes red for the next {} loops",
+                        "次の {} 周は、この拍が赤く光ります",
+                        p.step_laps()
+                    ),
                 };
                 line(c, g, ln, &note, &edged(15.0, GREY), top + 152.0, alpha);
                 // あと 1 回で下げるときは、先に言っておく
@@ -856,7 +926,10 @@ fn draw_banner(
                         c,
                         g,
                         ln,
-                        &format!("もう一度が 2 回続いたら、{d}% に下げます"),
+                        &tf!(
+                            "Two retries in a row will drop it to {d}%",
+                            "もう一度が 2 回続いたら、{d}% に下げます"
+                        ),
                         &edged(13.0, DIM),
                         top + 182.0,
                         alpha,
@@ -871,7 +944,7 @@ fn draw_banner(
                 c,
                 g,
                 ln,
-                "速度を変えました",
+                t("Speed Changed", "速度を変えました"),
                 &bold(30.0, Color32::WHITE),
                 top + 26.0,
                 alpha,
@@ -890,7 +963,10 @@ fn draw_banner(
                 c,
                 g,
                 ln,
-                "この段は 1 周目から数え直します",
+                t(
+                    "This step starts over from loop 1",
+                    "この段は 1 周目から数え直します",
+                ),
                 &edged(16.0, GREY),
                 top + 150.0,
                 alpha,
@@ -986,13 +1062,25 @@ fn draw_clear(c: &Canvas, g: &mut Gfx, ln: Lanes, p: &Practice, now: f64, revers
         );
         y += bh * BADGE_SCALE;
     }
-    line(c, g, ln, "クリア！", &bold(48.0, OK_COLOR), y + 4.0, alpha);
+    line(
+        c,
+        g,
+        ln,
+        t("CLEAR!", "クリア！"),
+        &bold(48.0, OK_COLOR),
+        y + 4.0,
+        alpha,
+    );
     let goal = p.done.last().map_or(p.plan().goal(), |r| r.speed);
     line(
         c,
         g,
         ln,
-        &format!("{goal}% の {} 周を、同じ拍のミスなしで", p.step_laps()),
+        &tf!(
+            "{} loops at {goal}% with no beat missed twice",
+            "{goal}% の {} 周を、同じ拍のミスなしで",
+            p.step_laps()
+        ),
         &edged(16.0, Color32::WHITE),
         y + 70.0,
         alpha,
@@ -1001,7 +1089,7 @@ fn draw_clear(c: &Canvas, g: &mut Gfx, ln: Lanes, p: &Practice, now: f64, revers
         c,
         g,
         ln,
-        "まもなく結果へ",
+        t("Results coming up…", "まもなく結果へ"),
         &edged(13.0, GREY),
         y + 98.0,
         alpha,

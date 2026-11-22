@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 
 use egui::Color32;
 use engine::judge::Tally;
+use i18n::{t, tf};
 use records::{BestScore, PROGRESS_SECTIONS};
 
 use crate::game::Outcome;
@@ -428,19 +429,25 @@ impl ResultView {
 /// 結果の画面のパッドの役目（`main.rs` の結果の画面のパッドと同じ）。足のパッドは使わない
 fn result_hints(page: Page, practice: bool, lag: Option<&LagResult>) -> Vec<ui::Hint<'static>> {
     let turn: ui::Hint<'static> = match (page, practice) {
-        (Page::Summary, true) => (&[Pad::HT, Pad::LT], "周ごとの表（→）"),
-        (Page::Summary, false) => (&[Pad::HT, Pad::LT], "詳しい結果（→）"),
-        (Page::Analysis, true) => (&[Pad::HT, Pad::LT], "練習の結果（←）"),
-        (Page::Analysis, false) => (&[Pad::HT, Pad::LT], "スコアとランク（←）"),
+        (Page::Summary, true) => (&[Pad::HT, Pad::LT], t("Loop Table (→)", "周ごとの表（→）")),
+        (Page::Summary, false) => (&[Pad::HT, Pad::LT], t("Details (→)", "詳しい結果（→）")),
+        (Page::Analysis, true) => (
+            &[Pad::HT, Pad::LT],
+            t("Practice Result (←)", "練習の結果（←）"),
+        ),
+        (Page::Analysis, false) => (
+            &[Pad::HT, Pad::LT],
+            t("Score and Rank (←)", "スコアとランク（←）"),
+        ),
     };
     let mut v: Vec<ui::Hint<'static>> = vec![
-        (&[Pad::SD], "もう一度（R）"),
+        (&[Pad::SD], t("Play Again (R)", "もう一度（R）")),
         (
             &[Pad::RD],
             if practice {
-                "区間・速度を選び直す（P）"
+                t("Change Section / Speed (P)", "区間・速度を選び直す（P）")
             } else {
-                "区間練習（P）"
+                t("Practice a Section (P)", "区間練習（P）")
             },
         ),
     ];
@@ -449,19 +456,28 @@ fn result_hints(page: Page, practice: bool, lag: Option<&LagResult>) -> Vec<ui::
         && let Some(lag) = lag
     {
         if lag.applied.is_some() {
-            v.push((&[Pad::FT], "おすすめを戻す（O）"));
+            v.push((
+                &[Pad::FT],
+                t("Undo Suggested Offset (O)", "おすすめを戻す（O）"),
+            ));
         } else if lag.advice.changes() {
-            v.push((&[Pad::FT], "補正をおすすめに（O）"));
+            v.push((
+                &[Pad::FT],
+                t("Use Suggested Offset (O)", "補正をおすすめに（O）"),
+            ));
         }
     }
     v.push(turn);
-    v.push((&[Pad::CY, Pad::LC], "選曲へ（Enter）"));
+    v.push((
+        &[Pad::CY, Pad::LC],
+        t("Song Select (Enter)", "選曲へ（Enter）"),
+    ));
     v
 }
 
 /// 練習の結果のスコアの場所：クリアしたか、どこまでのぼったか
 fn draw_passed(c: &Canvas, g: &mut Gfx, p: &crate::game::PracticeOutcome) {
-    g.heading(c, 30.0, 28.0, "練習の結果");
+    g.heading(c, 30.0, 28.0, t("Practice Result", "練習の結果"));
     let top = p
         .attempts
         .iter()
@@ -469,15 +485,24 @@ fn draw_passed(c: &Canvas, g: &mut Gfx, p: &crate::game::PracticeOutcome) {
         .map(|a| a.speed)
         .max();
     let (text, color) = if p.cleared {
-        ("クリア".to_owned(), Color32::from_rgb(0x70, 0xE0, 0x90))
+        (
+            t("CLEAR", "クリア").to_owned(),
+            Color32::from_rgb(0x70, 0xE0, 0x90),
+        )
     } else if let Some(s) = top {
-        (format!("{s}% まで OK"), Color32::from_rgb(0xFF, 0xB8, 0x40))
+        (
+            tf!("OK up to {s}%", "{s}% まで OK"),
+            Color32::from_rgb(0xFF, 0xB8, 0x40),
+        )
     } else {
         let speed = p
             .attempts
             .last()
             .map_or(p.options.speed.first_speed(), |a| a.speed);
-        (format!("{speed}% で練習"), Color32::WHITE)
+        (
+            tf!("Practiced at {speed}%", "{speed}% で練習"),
+            Color32::WHITE,
+        )
     };
     let style = Style {
         bold: true,
@@ -639,6 +664,7 @@ mod tests {
 
     #[test]
     fn the_legend_shows_what_each_pad_does() {
+        let _ja = i18n::scoped(i18n::Lang::Ja);
         let pads = |h: &[ui::Hint<'static>], what: &str| {
             h.iter()
                 .find(|x| x.1.starts_with(what))

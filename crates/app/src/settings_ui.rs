@@ -5,6 +5,7 @@
 use dtx::DrumLane;
 use egui::epaint::{Mesh, PathShape, PathStroke};
 use egui::{Color32, Pos2, Shape, Stroke, pos2};
+use i18n::t;
 
 use crate::gfx::{Canvas, Gfx};
 use crate::text::Style;
@@ -504,14 +505,14 @@ pub fn legend(c: &Canvas, g: &mut Gfx, hints: &[Hint<'_>]) {
 /// ドラムだけで操作するときの、パッドの役目の図（説明の列の下に出す）
 pub fn pad_roles(c: &Canvas, g: &mut Gfx, x: f32, y: f32, w: f32, h: f32) {
     let pads: [(Pad, f32, f32, &str); 9] = [
-        (Pad::LC, 0.08, 0.26, "戻る"),
+        (Pad::LC, 0.08, 0.26, t("Back", "戻る")),
         (Pad::HH, 0.2, 0.52, ""),
-        (Pad::HT, 0.4, 0.2, "上"),
-        (Pad::LT, 0.6, 0.2, "下"),
-        (Pad::CY, 0.88, 0.2, "決定"),
-        (Pad::RD, 0.9, 0.55, "決定"),
-        (Pad::SD, 0.32, 0.6, "左"),
-        (Pad::FT, 0.72, 0.62, "右"),
+        (Pad::HT, 0.4, 0.2, t("Up", "上")),
+        (Pad::LT, 0.6, 0.2, t("Down", "下")),
+        (Pad::CY, 0.88, 0.2, t("Select", "決定")),
+        (Pad::RD, 0.9, 0.55, t("Select", "決定")),
+        (Pad::SD, 0.32, 0.6, t("Left", "左")),
+        (Pad::FT, 0.72, 0.62, t("Right", "右")),
         (Pad::BD, 0.52, 0.8, ""),
     ];
     for (pad, fx, fy, role) in pads {
@@ -523,7 +524,10 @@ pub fn pad_roles(c: &Canvas, g: &mut Gfx, x: f32, y: f32, w: f32, h: f32) {
     text(
         c,
         g,
-        "ドラムだけで操作するときのパッドの役目",
+        t(
+            "Pad controls for drums-only navigation",
+            "ドラムだけで操作するときのパッドの役目",
+        ),
         x + 12.0,
         y + h - 22.0,
         &plain(13.0, MUTED),

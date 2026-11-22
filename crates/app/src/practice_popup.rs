@@ -14,6 +14,7 @@
 
 use egui::{Color32, Pos2};
 use engine::practice::{LoopStyle, STEP_SPEED, Section, SpeedPlan};
+use i18n::{count, t, tf};
 
 use crate::band::{Band, BandData};
 use crate::gfx::{Canvas, Gfx, src};
@@ -307,12 +308,10 @@ impl PracticePopup {
                 if x.first == x.last {
                     x.first.to_string()
                 } else {
-                    format!("{}〜{}", x.first, x.last)
+                    tf!("{}–{}", "{}〜{}", x.first, x.last)
                 }
             }),
-            Row::Length => s
-                .section
-                .map_or("-".to_owned(), |x| format!("{} 小節", x.measures())),
+            Row::Length => s.section.map_or("-".to_owned(), |x| measures(x.measures())),
             Row::Weak => match (self.weak_index(), s.weak.phrases.len()) {
                 (_, 0) => "-".to_owned(),
                 (Some(i), n) => format!("{}/{n}", i + 1),
@@ -320,8 +319,8 @@ impl PracticePopup {
             },
             Row::Loop => style_label(s.style).to_owned(),
             Row::Speed => match s.speed {
-                SpeedPlan::Ladder { .. } => "段階アップ",
-                SpeedPlan::Fixed(_) => "固定",
+                SpeedPlan::Ladder { .. } => t("Step Up", "段階アップ"),
+                SpeedPlan::Fixed(_) => t("Fixed", "固定"),
             }
             .to_owned(),
             Row::SpeedValue => format!("{}%", s.speed.first_speed()),
@@ -330,31 +329,36 @@ impl PracticePopup {
                 SpeedPlan::Fixed(_) => "-".to_owned(),
             },
             Row::Pitch => match s.pitch {
-                Pitch::Keep => "保つ",
-                Pitch::Tape => "一緒に下げる",
+                Pitch::Keep => t("Keep", "保つ"),
+                Pitch::Tape => t("Lower", "一緒に下げる"),
             }
             .to_owned(),
-            Row::Metronome => if s.metronome { "オン" } else { "オフ" }.to_owned(),
+            Row::Metronome => if s.metronome {
+                t("On", "オン")
+            } else {
+                t("Off", "オフ")
+            }
+            .to_owned(),
             Row::Start | Row::Back => String::new(),
         }
     }
 
     fn name(&self, row: Row) -> &'static str {
         match row {
-            Row::Section => "区間",
-            Row::Length => "長さ",
-            Row::Weak => "苦手なフレーズ",
-            Row::Loop => "つなぎ方",
-            Row::Speed => "速度の決め方",
+            Row::Section => t("Section", "区間"),
+            Row::Length => t("Length", "長さ"),
+            Row::Weak => t("Weak Phrases", "苦手なフレーズ"),
+            Row::Loop => t("Looping", "つなぎ方"),
+            Row::Speed => t("Speed Mode", "速度の決め方"),
             Row::SpeedValue => match self.setup.speed {
-                SpeedPlan::Ladder { .. } => "始めの速度",
-                SpeedPlan::Fixed(_) => "速度",
+                SpeedPlan::Ladder { .. } => t("Start Speed", "始めの速度"),
+                SpeedPlan::Fixed(_) => t("Speed", "速度"),
             },
-            Row::Target => "目標の速度",
-            Row::Pitch => "遅くしたときの音程",
-            Row::Metronome => "メトロノーム",
-            Row::Start => "練習を始める",
-            Row::Back => "戻る",
+            Row::Target => t("Target Speed", "目標の速度"),
+            Row::Pitch => t("Pitch When Slowed", "遅くしたときの音程"),
+            Row::Metronome => t("Metronome", "メトロノーム"),
+            Row::Start => t("Start Practice", "練習を始める"),
+            Row::Back => t("Back", "戻る"),
         }
     }
 
@@ -363,56 +367,106 @@ impl PracticePopup {
         let s = &self.setup;
         match row {
             Row::Section => {
-                "練習する小節。1 小節ずつ前後に動きます。マウスなら左の帯を押すかドラッグしても選べます。"
-                    .to_owned()
+                t(
+                    "The measures to practice. Moves one measure at a time. With a mouse, you can also click or drag on the measure strip.",
+                    "練習する小節。1 小節ずつ前後に動きます。マウスなら左の帯を押すかドラッグしても選べます。",
+                )
+                .to_owned()
             }
-            Row::Length => "区間の長さ。1 小節ずつ増やしたり減らしたりします。".to_owned(),
+            Row::Length => t(
+                "Length of the section. Grows or shrinks one measure at a time.",
+                "区間の長さ。1 小節ずつ増やしたり減らしたりします。",
+            )
+            .to_owned(),
             Row::Weak => {
                 if s.weak.phrases.is_empty() {
-                    "苦手なフレーズはまだありません（遊んだ記録から出します）。".to_owned()
+                    t(
+                        "No weak phrases yet. They are found from your play records.",
+                        "苦手なフレーズはまだありません（遊んだ記録から出します）。",
+                    )
+                    .to_owned()
                 } else {
-                    "遊んだ記録から見つけた苦手な所。苦手な順に選ぶと、区間がそこに変わります。".to_owned()
+                    t(
+                        "Weak spots found in your play records. Steps through them weakest first and moves the section there.",
+                        "遊んだ記録から見つけた苦手な所。苦手な順に選ぶと、区間がそこに変わります。",
+                    )
+                    .to_owned()
                 }
             }
             Row::Loop => match s.style {
-                LoopStyle::Connect => {
-                    "切れ目なく: 区間の終わりから切れ目なく頭へ戻ります（ビート向き）。"
-                }
-                LoopStyle::Restart => {
-                    "毎回区切る: 次の小節の頭の 1 打まで叩き、助走からやり直します（フィル向き）。"
-                }
+                LoopStyle::Connect => t(
+                    "Seamless: goes straight from the end of the section back to its start. Good for grooves.",
+                    "切れ目なく: 区間の終わりから切れ目なく頭へ戻ります（ビート向き）。",
+                ),
+                LoopStyle::Restart => t(
+                    "Restart Each Loop: you play through the first hit of the next measure, then it restarts with a lead-in. Good for fills.",
+                    "毎回区切る: 次の小節の頭の 1 打まで叩き、助走からやり直します（フィル向き）。",
+                ),
             }
             .to_owned(),
             Row::Speed => match s.speed {
-                SpeedPlan::Ladder { .. } => format!(
+                SpeedPlan::Ladder { .. } => tf!(
+                    "Step Up: climbs from the start speed to the target speed in {STEP_SPEED}% steps. {}",
                     "段階アップ: 始めの速度から目標の速度まで、{STEP_SPEED}% ずつの段をのぼります。{}",
                     step_rule(s)
                 ),
-                SpeedPlan::Fixed(_) => format!("固定: この速度の 1 段だけです。{}", step_rule(s)),
+                SpeedPlan::Fixed(_) => tf!(
+                    "Fixed: a single step at this speed. {}",
+                    "固定: この速度の 1 段だけです。{}",
+                    step_rule(s)
+                ),
             },
             Row::SpeedValue => match s.speed {
-                SpeedPlan::Ladder { .. } => "はじめの段の速度。5% ずつ変わります。".to_owned(),
-                SpeedPlan::Fixed(_) => "練習する速度。5% ずつ変わります。".to_owned(),
-            },
+                SpeedPlan::Ladder { .. } => t(
+                    "Speed of the first step. Changes in 5% steps.",
+                    "はじめの段の速度。5% ずつ変わります。",
+                ),
+                SpeedPlan::Fixed(_) => t(
+                    "Practice speed. Changes in 5% steps.",
+                    "練習する速度。5% ずつ変わります。",
+                ),
+            }
+            .to_owned(),
             Row::Target => match s.speed {
-                SpeedPlan::Ladder { .. } => "いちばん上の段の速度。ここを越えたらクリアです。".to_owned(),
-                SpeedPlan::Fixed(_) => "速度を固定にしているので、目標はありません。".to_owned(),
-            },
+                SpeedPlan::Ladder { .. } => t(
+                    "Speed of the top step. Pass it to clear.",
+                    "いちばん上の段の速度。ここを越えたらクリアです。",
+                ),
+                SpeedPlan::Fixed(_) => t(
+                    "No target while the speed is fixed.",
+                    "速度を固定にしているので、目標はありません。",
+                ),
+            }
+            .to_owned(),
             Row::Pitch => match s.pitch {
-                Pitch::Keep => "保つ: 音程を保ったまま遅くします。",
-                Pitch::Tape => "一緒に下げる: 音程ごと遅くします（テープと同じ）。",
+                Pitch::Keep => t(
+                    "Keep: slows the music down without changing its pitch.",
+                    "保つ: 音程を保ったまま遅くします。",
+                ),
+                Pitch::Tape => t(
+                    "Lower: the pitch drops with the speed, like a slowed-down tape.",
+                    "一緒に下げる: 音程ごと遅くします（テープと同じ）。",
+                ),
             }
             .to_owned(),
             Row::Metronome => {
-                "オンなら区間のあいだ拍ごとに小さく鳴らします（小節の頭は強く）。段の頭の 4 拍のカウントは、オフでも鳴ります。"
-                    .to_owned()
+                t(
+                    "When on, a soft click plays on every beat of the section (louder on the first beat of each measure). The 4-beat count-in before each step plays even when off.",
+                    "オンなら区間のあいだ拍ごとに小さく鳴らします（小節の頭は強く）。段の頭の 4 拍のカウントは、オフでも鳴ります。",
+                )
+                .to_owned()
             }
             Row::Start => match s.section {
-                Some(sec) if s.notes_in(sec) == 0 => "この区間には音符がありません。".to_owned(),
-                _ => "この決めごとで練習を始めます。止めるときは叩くのをやめると、1 周のあとで一時停止します。"
-                    .to_owned(),
+                Some(sec) if s.notes_in(sec) == 0 => {
+                    t("This section has no notes.", "この区間には音符がありません。").to_owned()
+                }
+                _ => t(
+                    "Start practicing with these settings. To stop, just stop playing: it pauses after one loop.",
+                    "この決めごとで練習を始めます。止めるときは叩くのをやめると、1 周のあとで一時停止します。",
+                )
+                .to_owned(),
             },
-            Row::Back => "選曲に戻ります。".to_owned(),
+            Row::Back => t("Return to song select.", "選曲に戻ります。").to_owned(),
         }
     }
 
@@ -442,7 +496,15 @@ impl PracticePopup {
             }
         };
         // 題（上流は (+96, +4)）
-        label(c, g, X + 96.0, Y + 4.0, "区間練習", false, W - 110.0);
+        label(
+            c,
+            g,
+            X + 96.0,
+            Y + 4.0,
+            t("Section Practice", "区間練習"),
+            false,
+            W - 110.0,
+        );
         // カーソル（上流：左の端 16、中を 16 ずつ 19 個、右の端 16）
         match g.skin.tex_optional("Graphics/ScreenConfig menu cursor.png") {
             Some(t) => {
@@ -492,9 +554,9 @@ impl PracticePopup {
             .collect::<Vec<_>>()
             .join(" → ");
         let head = if steps.len() > 1 {
-            format!("{path}%（{} 段）", steps.len())
+            tf!("{path}% ({} steps)", "{path}%（{} 段）", steps.len())
         } else {
-            format!("{path}%（1 段）")
+            tf!("{path}% (1 step)", "{path}%（1 段）")
         };
         let accent = Style::edged(
             15.0,
@@ -506,7 +568,8 @@ impl PracticePopup {
             t.draw_fit(c, X + 18.0, y, W - 36.0);
         }
         let grey = Style::edged(13.0, Color32::from_gray(200), Color32::BLACK, 1.0);
-        let rule = format!(
+        let rule = tf!(
+            "{} loops per step. Pass the {}% step to clear.",
             "1 段 {} 周。{}% の段を越えたらクリア",
             self.setup.step_laps,
             self.setup.speed.goal()
@@ -539,17 +602,18 @@ impl PracticePopup {
     /// 画面の下に出す、パッドの役目（設定の画面と同じ帯）
     fn hints(&self) -> Vec<ui::Hint<'static>> {
         let row = self.row();
-        let mut v: Vec<ui::Hint<'static>> = vec![(&[Pad::HT], "上"), (&[Pad::LT], "下")];
+        let mut v: Vec<ui::Hint<'static>> =
+            vec![(&[Pad::HT], t("Up", "上")), (&[Pad::LT], t("Down", "下"))];
         if row.adjustable() {
-            v.push((&[Pad::SD, Pad::FT], "←→ 値を変える"));
+            v.push((&[Pad::SD, Pad::FT], t("←→ Change", "←→ 値を変える")));
         }
         let decide = match row {
-            Row::Start => "練習を始める（Enter）",
-            Row::Back => "閉じる（Enter）",
-            _ => "次の値（Enter）",
+            Row::Start => t("Start Practice (Enter)", "練習を始める（Enter）"),
+            Row::Back => t("Close (Enter)", "閉じる（Enter）"),
+            _ => t("Next Value (Enter)", "次の値（Enter）"),
         };
         v.push((&[Pad::CY, Pad::RD], decide));
-        v.push((&[Pad::LC], "閉じる（Esc）"));
+        v.push((&[Pad::LC], t("Close (Esc)", "閉じる（Esc）")));
         v
     }
 
@@ -560,7 +624,15 @@ impl PracticePopup {
         // 下の難易度パネルの文字が透けないように、不透明に
         c.fill(px, py, pw, ph, Color32::from_rgb(10, 10, 18));
         c.frame(px, py, pw, ph, Color32::from_gray(150));
-        let heading_w = label(c, g, px + 14.0, py + 8.0, "小節", false, 200.0);
+        let heading_w = label(
+            c,
+            g,
+            px + 14.0,
+            py + 8.0,
+            t("Measures", "小節"),
+            false,
+            200.0,
+        );
         // 練習する曲（結果の画面から開いたときは、選曲のカーソルの曲と違うことがある）
         let song = if s.artist.is_empty() {
             s.title.clone()
@@ -594,17 +666,25 @@ impl PracticePopup {
         let mut y = bottom + 8.0;
         let info = match (self.hover, s.section) {
             (Some(m), _) => match s.weak.weakness.get(m as usize).copied().flatten() {
-                Some(v) => format!("小節 {m}：苦手度 {:.0}%", v * 100.0),
-                None => format!("小節 {m}：記録なし"),
+                Some(v) => tf!(
+                    "Measure {m}: weakness {:.0}%",
+                    "小節 {m}：苦手度 {:.0}%",
+                    v * 100.0
+                ),
+                None => tf!("Measure {m}: no records", "小節 {m}：記録なし"),
             },
-            (None, Some(sec)) => format!(
-                "区間 {}（{} 小節、音符 {}）",
-                section_text(sec),
-                sec.measures(),
-                s.notes_in(sec)
-            ),
-            (None, None) if n == 0 => "小節がありません".to_owned(),
-            (None, None) => "区間を選んでください".to_owned(),
+            (None, Some(sec)) => {
+                let m = measures(sec.measures());
+                let n = s.notes_in(sec);
+                let notes = count(n, "note", "notes", "");
+                tf!(
+                    "{} ({m}, {notes})",
+                    "区間 {}（{m}、音符 {n}）",
+                    section_text(sec)
+                )
+            }
+            (None, None) if n == 0 => t("No measures", "小節がありません").to_owned(),
+            (None, None) => t("Choose a section", "区間を選んでください").to_owned(),
         };
         let big = Style::edged(18.0, Color32::WHITE, Color32::BLACK, 1.5);
         if let Some(t) = g.texts.get(&info, &big) {
@@ -613,10 +693,10 @@ impl PracticePopup {
         y += 28.0;
         // 苦手なフレーズ（今の区間は黄色）
         let small = Style::edged(14.0, Color32::from_gray(190), Color32::BLACK, 1.0);
-        if let Some(t) = g
-            .texts
-            .get(&format!("苦手なフレーズ（{}）", weak_source(s)), &small)
-        {
+        if let Some(t) = g.texts.get(
+            &tf!("Weak phrases ({})", "苦手なフレーズ（{}）", weak_source(s)),
+            &small,
+        ) {
             t.draw(c, BAND.x, y, 1.0, 1.0);
         }
         y += 20.0;
@@ -630,12 +710,13 @@ impl PracticePopup {
             } else {
                 Color32::from_gray(225)
             };
-            let line = format!(
-                "{}. {}　苦手度 {:.0}%（音符 {}）",
+            let (n, notes) = (p.notes, count(p.notes, "note", "notes", ""));
+            let line = tf!(
+                "{}. {}   weakness {:.0}% ({notes})",
+                "{}. {}　苦手度 {:.0}%（音符 {n}）",
                 i + 1,
                 section_text(Section::new(p.first, p.last)),
-                p.weakness * 100.0,
-                p.notes
+                p.weakness * 100.0
             );
             if let Some(t) = g
                 .texts
@@ -651,7 +732,17 @@ impl PracticePopup {
 /// ポップアップの上の点にある行
 /// 1 段の決まり（「1 段 4 周。同じ拍で 2 回ミスしなければ、次の段へ。」）
 fn step_rule(s: &PracticeSetup) -> String {
-    format!("1 段 {} 周。{}。", s.step_laps, pass_line(s.rule))
+    tf!(
+        "{} loops per step. {}",
+        "1 段 {} 周。{}。",
+        s.step_laps,
+        pass_line(s.rule)
+    )
+}
+
+/// 「4 小節」
+fn measures(n: u32) -> String {
+    count(n, "measure", "measures", "小節")
 }
 
 fn row_at(p: Pos2) -> Option<usize> {
@@ -690,10 +781,23 @@ fn label(c: &Canvas, g: &mut Gfx, x: f32, y: f32, text: &str, emphasized: bool, 
 /// 苦手度をどの記録から出したか
 fn weak_source(s: &PracticeSetup) -> String {
     match (s.weak.plays, s.weak.practice_laps) {
-        (0, 0) => "まだ記録がありません".to_owned(),
-        (p, 0) => format!("直近のプレイ {p} 回から"),
-        (0, l) => format!("直近の練習 {l} 周から"),
-        (p, l) => format!("直近のプレイ {p} 回と練習 {l} 周から"),
+        (0, 0) => t("no records yet", "まだ記録がありません").to_owned(),
+        (p, 0) => {
+            let p = count(p, "play", "plays", "回");
+            tf!("from your last {p}", "直近のプレイ {p}から")
+        }
+        (0, l) => {
+            let l = count(l, "practice loop", "practice loops", "周");
+            tf!("from your last {l}", "直近の練習 {l}から")
+        }
+        (p, l) => {
+            let p = count(p, "play", "plays", "回");
+            let l = count(l, "practice loop", "practice loops", "周");
+            tf!(
+                "from your last {p} and {l}",
+                "直近のプレイ {p}と練習 {l}から"
+            )
+        }
     }
 }
 
@@ -857,6 +961,7 @@ mod tests {
 
     #[test]
     fn the_legend_follows_the_row() {
+        let _ja = i18n::scoped(i18n::Lang::Ja);
         let mut p = popup(8);
         let names = |p: &PracticePopup| p.hints().iter().map(|h| h.1).collect::<Vec<_>>();
         assert!(names(&p).contains(&"練習を始める（Enter）"));

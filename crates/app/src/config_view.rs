@@ -31,7 +31,7 @@ use winit::keyboard::KeyCode;
 
 use crate::config::{Config, MASTER_VOLUME_STEP};
 use crate::gfx::{Canvas, Gfx};
-use crate::inputs::{KEYBOARD, LaneSource, lane_label};
+use crate::inputs::{LaneSource, keyboard, lane_label};
 use crate::settings::{self, Group, Kind};
 use crate::settings_ui::{self as ui, Icon, Pad};
 use crate::sfx::Se;
@@ -1096,7 +1096,7 @@ pub fn lane_value(sources: &[LaneSource]) -> String {
     sources
         .iter()
         .map(|s| {
-            if s.source == KEYBOARD {
+            if s.source == keyboard() {
                 format!("キー {}", s.inputs.join(" "))
             } else {
                 s.inputs.join(" ")
@@ -1119,9 +1119,13 @@ pub fn rows(page: Page, info: &ConfigInfo<'_>) -> Vec<Row> {
             if info.song {
                 let mut practice = action(
                     ItemId::PracticeSong,
-                    "この曲を区間練習",
+                    t("Practice This Song", "この曲を区間練習"),
                     String::new(),
-                    "選んでいる曲の、区間と速度を選ぶ板を開きます（キーボードなら P）。".to_owned(),
+                    t(
+                        "Opens the panel to choose a section and speed for this song (P on the keyboard).",
+                        "選んでいる曲の、区間と速度を選ぶ板を開きます（キーボードなら P）。",
+                    )
+                    .to_owned(),
                     None,
                 );
                 practice.tone = Tone::Strong;
@@ -1174,10 +1178,13 @@ pub fn rows(page: Page, info: &ConfigInfo<'_>) -> Vec<Row> {
             if practice {
                 r.push(action(
                     ItemId::Reselect,
-                    "区間・速度を選び直す",
+                    t("Change Section / Speed", "区間・速度を選び直す"),
                     String::new(),
-                    "練習をやめて、区間と速度を選ぶ板を開きます。ここまでの周は記録に残します。"
-                        .to_owned(),
+                    t(
+                        "Stops practice and opens the section and speed panel. Loops so far stay in your records.",
+                        "練習をやめて、区間と速度を選ぶ板を開きます。ここまでの周は記録に残します。",
+                    )
+                    .to_owned(),
                     None,
                 ));
                 r.push(quit_row(practice));
@@ -1502,15 +1509,21 @@ fn quit_row(practice: bool) -> Row {
     let mut quit = action(
         ItemId::Quit,
         if practice {
-            "練習をやめる"
+            t("Quit Practice", "練習をやめる")
         } else {
-            "演奏をやめる"
+            t("Quit Song", "演奏をやめる")
         },
         String::new(),
         if practice {
-            "練習をやめて、結果の画面へ。"
+            t(
+                "Stop practicing and go to the results.",
+                "練習をやめて、結果の画面へ。",
+            )
         } else {
-            "演奏をやめて、結果の画面へ（ここまでの記録になります）。"
+            t(
+                "Stop playing and go to the results (your play so far is recorded).",
+                "演奏をやめて、結果の画面へ（ここまでの記録になります）。",
+            )
         }
         .to_owned(),
         None,
@@ -2305,7 +2318,7 @@ fn hints_for(view: &ConfigView, row: Option<&Row>) -> Vec<ui::Hint<'static>> {
     }
     v.push((&[Pad::CY, Pad::RD], decide));
     let back = match (view.panel && view.stack.len() == 1, view.page()) {
-        (true, Page::Pause) => "続ける（Esc）",
+        (true, Page::Pause) => t("Resume (Esc)", "続ける（Esc）"),
         (true, _) => "閉じる（Esc）",
         _ => "戻る（Esc）",
     };
@@ -3150,7 +3163,7 @@ fn preview_kit(
         let sources = info.lanes.get(&lane).map_or(&[][..], Vec::as_slice);
         let notes = sources
             .iter()
-            .filter(|s| s.source != KEYBOARD)
+            .filter(|s| s.source != keyboard())
             .flat_map(|s| s.inputs.iter().cloned())
             .collect::<Vec<_>>()
             .join(",");
@@ -3481,7 +3494,7 @@ mod tests {
                         inputs: vec!["38".to_owned(), "40".to_owned()],
                     },
                     LaneSource {
-                        source: KEYBOARD.to_owned(),
+                        source: keyboard().to_owned(),
                         inputs: vec!["D".to_owned()],
                     },
                 ],
@@ -3562,6 +3575,7 @@ mod tests {
 
     #[test]
     fn monitor_row_follows_display_mode_and_lists_the_screens() {
+        let _ja = i18n::scoped(i18n::Lang::Ja);
         let mut c = Config::default();
         let list = screens();
         let with_screens = ConfigInfo {
@@ -3659,6 +3673,7 @@ mod tests {
 
     #[test]
     fn the_song_offset_and_advice_follow_the_input_offset() {
+        let _ja = i18n::scoped(i18n::Lang::Ja);
         let c = Config {
             input_offset_ms: 3.0,
             ..Default::default()
@@ -3866,6 +3881,7 @@ mod tests {
 
     #[test]
     fn lanes_are_assigned_by_hitting_after_decide() {
+        let _ja = i18n::scoped(i18n::Lang::Ja);
         let config = Config::default();
         let info = info(&config);
         let input = rows(Page::Cat(Cat::Input), &info);
