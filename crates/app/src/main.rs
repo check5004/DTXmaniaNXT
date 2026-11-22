@@ -32,6 +32,7 @@ mod lane_layout;
 mod loading;
 mod logging;
 mod midi;
+mod movie;
 mod nx_import;
 mod play_view;
 mod practice;

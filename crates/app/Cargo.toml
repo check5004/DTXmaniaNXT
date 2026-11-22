@@ -13,6 +13,7 @@ engine = { path = "../engine" }
 library = { path = "../library" }
 records = { path = "../records" }
 nx = { path = "../nx" }
+video = { path = "../video" }
 anyhow = "1"
 cpal = "0.18"
 egui = "0.37"

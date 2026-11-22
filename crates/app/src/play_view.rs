@@ -20,6 +20,7 @@ use crate::game::{Fx, GaugeRule, Play};
 use crate::gfx::{Canvas, Gfx, Glyphs, Opt, Src, Tex, fit_scale, src};
 use crate::lag_view::HitErrorBar;
 use crate::lane_layout::{LANES, LANES_LEFT, Lane, Layout};
+use crate::movie::Movies;
 use crate::rim_look::{CHIP_H, CHIP_W, PAD_SIZE, RimLook, rim_chips, rim_ring};
 use crate::text::Style;
 
@@ -502,6 +503,8 @@ pub struct PlayView {
     looks: Looks,
     /// スコアの下のずれのバー（出さない設定でも印は集めておく。一時停止で ON にしたらすぐ出す）
     hit_error: HitErrorBar,
+    /// 譜面の動画（無い・流さないなら None）
+    movies: Option<Movies>,
 }
 
 /// 判定のずれの数字の出し方（NX の `ShowLagTime` と `ShowLagTimeColor`）
@@ -634,6 +637,10 @@ pub struct Looks {
     pub lbd: LbdLook,
     /// スネアのリムの音符の出し方
     pub rim: RimLook,
+    /// 譜面の動画を流す（上流 `bAVIEnabled`）
+    pub movie: bool,
+    /// レーンの板の不透明度（0〜1。上流 `nMovieAlpha` から）
+    pub lane_alpha: f32,
 }
 
 impl Default for Looks {
@@ -695,6 +702,8 @@ impl Looks {
                 3 => RimLook::Off,
                 _ => RimLook::Ears,
             },
+            movie: v.flag(s::AVI),
+            lane_alpha: 1.0 - v.number(s::MOVIE_ALPHA) as f32 / 100.0,
         }
     }
 
@@ -824,6 +833,7 @@ impl PlayView {
             lag_digits,
             looks,
             hit_error: HitErrorBar::new(play.judge.windows()),
+            movies: if looks.movie { Movies::new(play) } else { None },
         }
     }
 
@@ -1033,6 +1043,9 @@ impl PlayView {
             Some(t) => c.draw(&t, 0.0, 0.0),
             None => c.cover(Color32::from_rgb(8, 8, 14)),
         }
+        if let Some(m) = &mut self.movies {
+            m.draw(c, play.chart_ms(now_ms));
+        }
         self.draw_jacket(c, g, play);
         self.draw_lanes(c, g, now);
         self.draw_lines(c, g, play, now_ms, px_per_ms);
@@ -1150,18 +1163,34 @@ impl PlayView {
             "Graphics/7_Paret.png"
         };
         let layout = self.looks.layout;
-        if let Some(t) = g.skin.tex(paret) {
+        // 動画を透かすなら薄く（上流 MovieAlpha）
+        let alpha = self.looks.lane_alpha;
+        let panel = |t: &Tex, x: f32, s: Src| {
+            c.draw_opt(
+                t,
+                x,
+                0.0,
+                Opt {
+                    src: Some(s),
+                    alpha,
+                    ..Default::default()
+                },
+            );
+        };
+        if let Some(t) = g.skin.tex(paret)
+            && alpha > 0.0
+        {
             for (l, sx, w) in PANEL {
                 if l == Lane::LBD {
                     // 足した左バスドラムのレーン（LP の枠を水色に）
                     if layout.left_bass_lane
                         && let Some(t) = g.skin.tex_made(paret, "left_bass", left_bass_panel)
                     {
-                        c.part(&t, layout.panel[l.i()], 0.0, src(0.0, 0.0, w, 720.0));
+                        panel(&t, layout.panel[l.i()], src(0.0, 0.0, w, 720.0));
                     }
                     continue;
                 }
-                c.part(&t, layout.panel[l.i()], 0.0, src(sx, 0.0, w, 720.0));
+                panel(&t, layout.panel[l.i()], src(sx, 0.0, w, 720.0));
             }
         }
         let (flush, reverse) = (self.looks.lane_flush, self.looks.reverse);
