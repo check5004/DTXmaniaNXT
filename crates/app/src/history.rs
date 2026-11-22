@@ -9,9 +9,11 @@ use engine::analysis::{
     section_weakness, tendencies, weak_phrases,
 };
 use engine::practice::Section;
+use library::Stats;
 use records::{BestScore, ChartKey, ClearRecord, PlayScore, Records, SessionKind};
 
 use crate::game::{Play, WeakMap};
+use crate::result_view::Rank;
 
 /// 結果の画面に出す苦手フレーズの数
 const TOP_PHRASES: usize = 5;
@@ -101,6 +103,34 @@ impl History {
             .best_score(&path.to_string_lossy(), before)
             .map_err(|e| log::warn!("cannot read the records: {e}"))
             .ok()
+    }
+
+    /// 譜面ごとの記録（選曲画面の並べ替え、ランプ、ランク、スキル）。記録が読めなければ空
+    pub fn chart_stats(&self) -> Stats {
+        let mut out = Stats::new();
+        let Some(records) = self.records.as_ref() else {
+            return out;
+        };
+        match records.last_played() {
+            Ok(rows) => {
+                for (path, at) in rows {
+                    out.entry(PathBuf::from(path)).or_default().last_played = Some(at);
+                }
+            }
+            Err(e) => log::warn!("cannot read the records: {e}"),
+        }
+        match records.cleared_plays() {
+            Ok(rows) => {
+                for p in rows {
+                    let s = out.entry(PathBuf::from(&p.chart_path)).or_default();
+                    s.best_rate = Some(s.best_rate.map_or(p.rate, |r| r.max(p.rate)));
+                    let rank = Rank::of(&p.tally).number();
+                    s.best_rank = Some(s.best_rank.map_or(rank, |r| r.min(rank)));
+                }
+            }
+            Err(e) => log::warn!("cannot read the records: {e}"),
+        }
+        out
     }
 
     /// 苦手な小節。記録から出し、記録が読めなければ `fallback`（今回のプレイ）から出す。
