@@ -442,7 +442,7 @@ impl PerfView {
 /// 小さく: 右上の隅に 1 行
 fn draw_compact(c: &Canvas, r: &Readout) {
     let s = c.scale();
-    let mut job = Job::new(15.0 * s);
+    let mut job = Job::new(13.5 * s);
     match r.frames {
         Some(f) => {
             job.num(&format!("{:.0}", f.fps), fps_color(f.hitches));
@@ -470,8 +470,9 @@ fn draw_compact(c: &Canvas, r: &Readout) {
         None => job.label("—"),
     }
     let galley = c.painter().layout_job(job.job);
-    let pad = vec2(8.0, 3.0) * s;
-    let right_top = c.pos(1280.0 - 6.0, 5.0);
+    // 一時停止の板と簡易設定の板（上端 y 24）にかからない高さに収める
+    let pad = vec2(8.0, 1.5) * s;
+    let right_top = c.pos(1280.0 - 4.0, 2.0);
     let rect = Rect::from_min_size(
         right_top - vec2(galley.size().x + pad.x * 2.0, 0.0),
         galley.size() + pad * 2.0,

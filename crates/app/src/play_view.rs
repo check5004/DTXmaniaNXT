@@ -605,7 +605,7 @@ pub enum LbdLook {
     Own,
 }
 
-/// 譜面の見た目の設定（設定の表の「譜面の見た目」から）
+/// 譜面の見た目の設定（設定の表の「譜面」から）
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Looks {
     /// 判定ラインを下から上げるドット（上流 `nJudgeLine`。Reverse では上から下げる）

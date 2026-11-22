@@ -51,32 +51,37 @@ const FLOW_GUARD: Duration = Duration::from_millis(300);
 /// 画面の下の短い知らせを出しておく時間
 const TOAST_FOR: Duration = Duration::from_millis(2500);
 
-/// 分類（左の列）
+/// 分類（左の列）。NX v2.0 と同じく「システム」と「ドラム」の 2 段に分け、中は普通のゲームの名前で小分けにする
+/// （2026-11-22 ユーザーが見本 https://claude.ai/artifact/YbxwgG4eTJDfHoxcAUbGN8 から案 A を選んだ）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Cat {
     /// よく使う（選曲の簡易設定と同じ並び）
     Fav,
-    Play,
-    View,
-    Timing,
+    Display,
     Sound,
-    Input,
+    Play,
     Songs,
-    Practice,
     App,
+    View,
+    Pads,
+    Timing,
+    Input,
+    Practice,
 }
 
 /// 左の列の並び
-pub const CATS: [Cat; 9] = [
+pub const CATS: [Cat; 11] = [
     Cat::Fav,
-    Cat::Play,
-    Cat::View,
-    Cat::Timing,
+    Cat::Display,
     Cat::Sound,
-    Cat::Input,
+    Cat::Play,
     Cat::Songs,
-    Cat::Practice,
     Cat::App,
+    Cat::View,
+    Cat::Pads,
+    Cat::Timing,
+    Cat::Input,
+    Cat::Practice,
 ];
 
 impl Cat {
@@ -84,14 +89,16 @@ impl Cat {
     fn group(self) -> Option<Group> {
         match self {
             Cat::Fav => None,
-            Cat::Play => Some(Group::Play),
-            Cat::View => Some(Group::View),
-            Cat::Timing => Some(Group::Timing),
+            Cat::Display => Some(Group::Display),
             Cat::Sound => Some(Group::Sound),
-            Cat::Input => Some(Group::Input),
+            Cat::Play => Some(Group::Play),
             Cat::Songs => Some(Group::Songs),
-            Cat::Practice => Some(Group::Practice),
             Cat::App => Some(Group::App),
+            Cat::View => Some(Group::View),
+            Cat::Pads => Some(Group::Pads),
+            Cat::Timing => Some(Group::Timing),
+            Cat::Input => Some(Group::Input),
+            Cat::Practice => Some(Group::Practice),
         }
     }
 
@@ -99,33 +106,52 @@ impl Cat {
         self.group().map_or("よく使う", Group::label)
     }
 
+    /// 左の列でこの分類の上に出す見出し（`Some("")` は線だけ）
+    pub fn heading(self) -> Option<&'static str> {
+        match self {
+            Cat::Display => Some("システム"),
+            Cat::View => Some("ドラム"),
+            Cat::Practice => Some(""),
+            _ => None,
+        }
+    }
+
+    /// 見出しの下の分類（左の列で少し右に寄せる）
+    fn indented(self) -> bool {
+        !matches!(self, Cat::Fav | Cat::Practice)
+    }
+
     pub fn desc(self) -> &'static str {
         match self {
-            Cat::Fav => "よく変える項目です。",
-            Cat::Play => "ゲームの決まり（STAGE FAILED、自動演奏、判定）。",
-            Cat::View => "譜面の流れ方と、画面に出すもの。",
-            Cat::Timing => "叩いた時刻と表示の補正。",
+            Cat::Fav => "よく変える項目です。選曲で RD を叩いて開く簡易設定と同じ並びです。",
+            Cat::Display => "窓の出し方と、画面の描き方、譜面の動画。",
             Cat::Sound => "音量と、鳴らすもの。",
-            Cat::Input => "パッドとキーの割り当てと、MIDI 機器ごとの設定。",
+            Cat::Play => "ゲームの決まり（STAGE FAILED、ゲージ）、判定の幅、ずれの表示、記録。",
             Cat::Songs => "曲のフォルダと、曲の探し直し。",
+            Cat::App => "更新など、アプリ全体のこと。",
+            Cat::View => "譜面の速さと流れ方、見えにくくする、レーンとチップ、画面の部品。",
+            Cat::Pads => "自動演奏、叩き分け（Group）、共通にしたときに鳴らす音（Priority）。",
+            Cat::Timing => "叩いた時刻・表示・BGM の補正。",
+            Cat::Input => "パッドとキーの割り当てと、MIDI 機器ごとの設定。",
             Cat::Practice => {
                 "区間練習の決めごとの既定です。選曲の練習のポップアップで変えたものも、ここに残ります。"
             }
-            Cat::App => "更新など、アプリ全体のこと。",
         }
     }
 
     pub fn icon(self) -> Icon {
         match self {
             Cat::Fav => Icon::Star,
-            Cat::Play => Icon::Stick,
-            Cat::View => Icon::Lanes,
-            Cat::Timing => Icon::Metronome,
+            Cat::Display => Icon::Monitor,
             Cat::Sound => Icon::Speaker,
-            Cat::Input => Icon::Midi,
+            Cat::Play => Icon::Flag,
             Cat::Songs => Icon::Folder,
-            Cat::Practice => Icon::Loop,
             Cat::App => Icon::Gear,
+            Cat::View => Icon::Lanes,
+            Cat::Pads => Icon::Stick,
+            Cat::Timing => Icon::Metronome,
+            Cat::Input => Icon::Midi,
+            Cat::Practice => Icon::Loop,
         }
     }
 }
@@ -1104,19 +1130,28 @@ pub fn rows(page: Page, info: &ConfigInfo<'_>) -> Vec<Row> {
             quit.tone = Tone::Danger;
             r.push(quit);
         }
+        Page::Cat(Cat::Display) => s.table(Group::Display, v),
         Page::Cat(Cat::Play) => {
             s.at("演奏の決まり")
                 .push(value_row(Setting::StageFailed, c));
-            s.table(Group::Play, v);
-            s.at("判定").push(value_row(Setting::ShowLagHitCount, c));
-        }
-        Page::Cat(Cat::View) => {
-            s.at("流れ方").push(value_row(Setting::ScrollSpeed, c));
+            // 小見出しの並びを先に決めておく（表の並びは分類ごとではないので）
+            for sec in ["判定の幅", "判定の幅（ペダル）"] {
+                s.at(sec);
+            }
             let lag = s.at("ずれの表示");
             lag.push(value_row(Setting::ShowLagTime, c));
             lag.push(value_row(Setting::ShowLagTimeColor, c));
+            s.at("記録");
+            s.table(Group::Play, v);
+            s.at("ずれの表示")
+                .push(value_row(Setting::ShowLagHitCount, c));
+        }
+        Page::Cat(Cat::View) => {
+            s.at("流れ方").push(value_row(Setting::ScrollSpeed, c));
+            s.at("見えにくくする");
             s.table(Group::View, v);
         }
+        Page::Cat(Cat::Pads) => s.table(Group::Pads, v),
         Page::Cat(Cat::Timing) => {
             let r = s.at("");
             r.push(value_row(Setting::InputAdjust, c));
@@ -1247,7 +1282,7 @@ pub fn rows(page: Page, info: &ConfigInfo<'_>) -> Vec<Row> {
                     desc.push_str(if sources.is_empty() {
                         "割り当てが無いので、バスドラムで左バスドラムの音符も取れます（ペダルの叩き分けが BD-2 なら左ペダルで）。別のパッドやキーで踏むときだけ足します。\n"
                     } else {
-                        "左バスドラムをバスドラムでも取るかは、演奏の「ペダルの叩き分け」で決めます。\n"
+                        "左バスドラムをバスドラムでも取るかは、ドラムの「自動・叩き分け」の「ペダルの叩き分け」で決めます。\n"
                     });
                 } else if sources.is_empty() {
                     desc.push_str("割り当てがありません。\n");
@@ -1391,7 +1426,7 @@ fn seek_row(p: PlayPos, skip_ms: i64) -> Row {
         "曲の位置",
         format!("{} / {}", clock(at), clock(end)),
         format!(
-            "◀▶ で {step} 秒ずつ巻き戻し・早送りします（幅は「アプリ」の「早送り・巻き戻しの幅」）。\n飛んだプレイは記録に残しません。"
+            "◀▶ で {step} 秒ずつ巻き戻し・早送りします（幅は「ゲームプレイ」の「早送り・巻き戻しの幅」）。\n飛んだプレイは記録に残しません。"
         ),
         Ctl::Number {
             at,
@@ -2000,6 +2035,51 @@ const HEADING_H: f32 = 30.0;
 const GAP_H: f32 = 12.0;
 const HEAD_H: f32 = 46.0;
 
+/// 左の列の 1 行目の上端
+const RAIL_Y: f32 = 104.0;
+/// 左の列の行の間隔と、選んだ行の枠の高さ
+const RAIL_STEP: f32 = 44.0;
+const RAIL_BOX: f32 = 40.0;
+/// 見出し（「システム」「ドラム」）と、線だけの区切りの高さ
+const RAIL_HEAD_H: f32 = 26.0;
+const RAIL_RULE_H: f32 = 14.0;
+/// 左の列の見出しの色（NX v2.0 の設定の左のメニューの水色に寄せる）
+const RAIL_HEADING: Color32 = Color32::from_rgb(110, 205, 240);
+
+/// 左の列の 1 行
+struct RailRow {
+    cat: Cat,
+    /// 行の上端
+    y: f32,
+    /// 行の上に出す見出しの名前と上端
+    heading: Option<(&'static str, f32)>,
+}
+
+/// 左の列の並び
+fn rail_layout() -> Vec<RailRow> {
+    let mut y = RAIL_Y;
+    CATS.iter()
+        .map(|&cat| {
+            let heading = cat.heading().map(|name| {
+                let hy = y + 4.0;
+                y += if name.is_empty() {
+                    RAIL_RULE_H
+                } else {
+                    RAIL_HEAD_H
+                };
+                (name, hy)
+            });
+            let at = y;
+            y += RAIL_STEP;
+            RailRow {
+                cat,
+                y: at,
+                heading,
+            }
+        })
+        .collect()
+}
+
 fn row_height(r: &Row) -> f32 {
     match r.ctl {
         Ctl::Heading if r.name.trim().is_empty() => GAP_H,
@@ -2216,10 +2296,23 @@ impl ConfigView {
         }
     }
 
-    /// 左の列（分類）
+    /// 左の列（分類）。「システム」「ドラム」の見出しの下の分類は少し右に寄せる
     fn draw_rail(&self, c: &Canvas, g: &mut Gfx) {
-        for (i, cat) in CATS.iter().enumerate() {
-            let y = 112.0 + i as f32 * 54.0;
+        for (i, RailRow { cat, y, heading }) in rail_layout().into_iter().enumerate() {
+            if let Some((name, hy)) = heading {
+                let tw = if name.is_empty() {
+                    0.0
+                } else {
+                    ui::text(c, g, name, 40.0, hy, &ui::bold(14.0, RAIL_HEADING), 120.0) + 10.0
+                };
+                c.fill(
+                    40.0 + tw,
+                    hy + if name.is_empty() { 4.0 } else { 9.0 },
+                    224.0 - tw,
+                    1.0,
+                    Color32::from_rgba_unmultiplied(110, 205, 240, 90),
+                );
+            }
             let on = i == self.cat;
             if on {
                 ui::selection(
@@ -2227,7 +2320,7 @@ impl ConfigView {
                     32.0,
                     y,
                     232.0,
-                    46.0,
+                    RAIL_BOX,
                     if self.focus_list { 0.45 } else { 1.0 },
                 );
             }
@@ -2236,16 +2329,25 @@ impl ConfigView {
             } else {
                 Color32::from_rgb(216, 212, 230)
             };
-            ui::icon(c, cat.icon(), 46.0, y + 10.0, 26.0, color);
+            let x = if cat.indented() { 52.0 } else { 44.0 };
+            ui::icon(c, cat.icon(), x, y + 9.0, 22.0, color);
             let style = if on {
-                ui::glow(20.0)
+                ui::glow(19.0)
             } else {
                 Style {
                     edge: Some((Color32::BLACK, 2.0)),
-                    ..ui::bold(20.0, Color32::from_rgb(233, 229, 243))
+                    ..ui::bold(19.0, Color32::from_rgb(233, 229, 243))
                 }
             };
-            ui::text(c, g, cat.name(), 86.0, y + 11.0, &style, 170.0);
+            ui::text(
+                c,
+                g,
+                cat.name(),
+                x + 36.0,
+                y + 9.0,
+                &style,
+                264.0 - x - 40.0,
+            );
         }
     }
 
@@ -3488,14 +3590,17 @@ mod tests {
             ItemId::Value(Setting::ScrollSpeed),
         );
         assert_eq!(v.input(ConfigInput::Up, &list), Response::default());
-        // 小見出し「ずれの表示」を飛ばす
-        let heading = list.iter().position(|r| r.name == "ずれの表示").unwrap();
+        // 小見出し「見えにくくする」を飛ばす
+        let heading = list
+            .iter()
+            .position(|r| r.name == "見えにくくする")
+            .unwrap();
         assert_eq!(list[heading].ctl, Ctl::Heading);
         *v.cursor_mut() = heading - 1;
         v.input(ConfigInput::Down, &list);
         assert_eq!(
             list[v.level().cursor].id,
-            Some(ItemId::Value(Setting::ShowLagTime))
+            Some(ItemId::Table(settings::HID_SUD))
         );
         let last = list.iter().rposition(Row::selectable).unwrap();
         *v.cursor_mut() = last;
@@ -3543,13 +3648,13 @@ mod tests {
     }
 
     #[test]
-    fn auto_play_is_in_favorites_and_play() {
+    fn auto_play_is_in_favorites_and_pads() {
         let mut config = Config::default();
         let fav = rows(Page::Cat(Cat::Fav), &info(&config));
         let auto = ItemId::Table(settings::AUTO_ALL);
         let i = find(&fav, auto);
         assert_eq!(fav[i].value, "OFF");
-        let play = rows(Page::Cat(Cat::Play), &info(&config));
+        let play = rows(Page::Cat(Cat::Pads), &info(&config));
         let names: Vec<&str> = play.iter().map(|r| r.name.as_str()).collect();
         let at_auto = names.iter().position(|n| *n == "自動で叩く").unwrap();
         assert_eq!(play[at_auto].ctl, Ctl::Heading);
@@ -3748,7 +3853,7 @@ mod tests {
         let list = rows(v.page(), &info);
         assert_eq!(v.input(ConfigInput::Up, &list), Response::default());
         v.input(ConfigInput::Down, &list);
-        assert_eq!(v.page(), Page::Cat(Cat::Play));
+        assert_eq!(v.page(), Page::Cat(Cat::Display));
         v.input(ConfigInput::Right, &list);
         assert!(v.focus_list);
         let list = rows(v.page(), &info);
@@ -3760,6 +3865,49 @@ mod tests {
         );
         // 出ると決めたあとは動かない
         assert_eq!(v.input(ConfigInput::Down, &list), Response::default());
+    }
+
+    #[test]
+    fn categories_follow_nx_system_and_drums() {
+        let config = Config::default();
+        let info = info(&config);
+        let in_cat =
+            |cat: Cat, id: ItemId| rows(Page::Cat(cat), &info).iter().any(|r| r.id == Some(id));
+        // 普通のゲームと同じく、全画面と垂直同期は「画面」に
+        assert!(in_cat(Cat::Display, ItemId::Table(settings::DISPLAY_MODE)));
+        assert!(in_cat(Cat::Display, ItemId::Table(settings::VSYNC)));
+        // NX の Drums の叩き分けと、共通にしたときの音は隣どうし
+        assert!(in_cat(Cat::Pads, ItemId::Table(settings::HH_GROUP)));
+        assert!(in_cat(Cat::Pads, ItemId::Table(settings::HH_PRIORITY)));
+        assert!(in_cat(Cat::Pads, ItemId::Table(settings::MUTING_LP)));
+        // ずれの設定はゲームプレイにまとめる
+        for id in [
+            ItemId::Value(Setting::ShowLagTime),
+            ItemId::Value(Setting::ShowLagHitCount),
+            ItemId::Table(settings::HIT_ERROR_BAR),
+        ] {
+            assert!(in_cat(Cat::Play, id), "{id:?}");
+        }
+        // 音は音量が先頭
+        let sound = rows(Page::Cat(Cat::Sound), &info);
+        assert_eq!(sound[0].name, "音量");
+        assert_eq!(sound[1].id, Some(ItemId::Value(Setting::MasterVolume)));
+        // 左の列は システム（画面〜アプリ）、ドラム（譜面〜入力）、線、練習
+        let heads: Vec<(Cat, &str)> = CATS
+            .iter()
+            .filter_map(|&c| c.heading().map(|h| (c, h)))
+            .collect();
+        assert_eq!(
+            heads,
+            [
+                (Cat::Display, "システム"),
+                (Cat::View, "ドラム"),
+                (Cat::Practice, "")
+            ]
+        );
+        // 左の列は下の帯にかからない
+        let last = rail_layout().last().unwrap().y;
+        assert!(last + RAIL_BOX <= LIST_Y + LIST_H, "{last}");
     }
 
     fn ids(rows: &[Row]) -> Vec<ItemId> {

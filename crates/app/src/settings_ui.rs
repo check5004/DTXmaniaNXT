@@ -257,6 +257,10 @@ pub enum Icon {
     Folder,
     Loop,
     Gear,
+    /// 画面（モニター）
+    Monitor,
+    /// ゲームプレイ（旗）
+    Flag,
 }
 
 /// 分類の絵を (x, y) を左上に、`size` の四角に描く（線で描く。24 の升目で考えた形）
@@ -358,6 +362,24 @@ pub fn icon(c: &Canvas, kind: Icon, x: f32, y: f32, size: f32, color: Color32) {
             ));
             painter.add(PathShape::line(
                 vec![p(6.0, 19.5), p(5.4, 15.4), p(9.4, 15.1)],
+                PathStroke::new(w, color),
+            ));
+        }
+        Icon::Monitor => {
+            poly(&[(3.0, 4.5), (21.0, 4.5), (21.0, 16.5), (3.0, 16.5)]);
+            line((12.0, 16.5), (12.0, 20.5), w);
+            line((8.0, 20.5), (16.0, 20.5), w);
+        }
+        Icon::Flag => {
+            line((5.0, 3.0), (5.0, 21.0), w);
+            painter.add(PathShape::line(
+                vec![
+                    p(5.0, 4.0),
+                    p(19.0, 4.0),
+                    p(16.0, 8.0),
+                    p(19.0, 12.0),
+                    p(5.0, 12.0),
+                ],
                 PathStroke::new(w, color),
             ));
         }
