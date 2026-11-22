@@ -68,6 +68,11 @@ impl Chart {
     pub fn wav(&self, id: u16) -> Option<&str> {
         self.field(&format!("WAV{}", to_base36x2(id)))
     }
+
+    /// `#AVIzz` の動画のファイル名
+    pub fn avi(&self, id: u16) -> Option<&str> {
+        self.field(&format!("AVI{}", to_base36x2(id)))
+    }
 }
 
 pub(crate) fn to_base36x2(n: u16) -> String {
@@ -231,6 +236,17 @@ mod tests {
             }
         );
         assert_eq!(c.bar_lengths.get(&1), Some(&0.75));
+    }
+
+    #[test]
+    fn movies() {
+        let c = parse("#AVI01: movie.mp4\n#AVIPAN01: 0 0\n#00054: 0001\n");
+        assert_eq!(c.avi(1), Some("movie.mp4"));
+        assert_eq!(c.chips[0].channel, crate::ch::MOVIE);
+        assert_eq!(
+            (c.chips[0].pos, c.chips[0].div, c.chips[0].value),
+            (1, 2, 1)
+        );
     }
 
     #[test]

@@ -23,6 +23,10 @@ pub mod ch {
     pub const BAR_LENGTH: u8 = 0x02;
     pub const BPM: u8 = 0x03;
     pub const BPM_EX: u8 = 0x08;
+    /// 動画（`#AVIzz`）をこの時刻から流す（上流 `EChannel.Movie`）
+    pub const MOVIE: u8 = 0x54;
+    /// 動画を画面いっぱいに流す（上流 `EChannel.MovieFull`。NXT は 0x54 と同じに扱う）
+    pub const MOVIE_FULL: u8 = 0x5A;
 }
 
 /// バイト列を読んで譜面にする（文字コードの判定から）

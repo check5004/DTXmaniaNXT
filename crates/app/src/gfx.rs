@@ -10,6 +10,7 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, channel};
 
 use egui::{Color32, Mesh, Pos2, Rect, Vec2, pos2, vec2};
@@ -44,6 +45,23 @@ impl Tex {
             w: w as f32,
             h: h as f32,
         }
+    }
+
+    /// 何度も描き替える絵（譜面の動画）を GPU に載せる。縮めないので、GPU が扱える大きさで渡す
+    pub fn shared(ctx: &egui::Context, name: &str, image: Arc<egui::ColorImage>) -> Self {
+        let [w, h] = image.size;
+        Self {
+            handle: ctx.load_texture(name, image, egui::TextureOptions::LINEAR),
+            w: w as f32,
+            h: h as f32,
+        }
+    }
+
+    /// 絵を差し替える
+    pub fn set(&mut self, image: Arc<egui::ColorImage>) {
+        let [w, h] = image.size;
+        self.handle.set(image, egui::TextureOptions::LINEAR);
+        (self.w, self.h) = (w as f32, h as f32);
     }
 
     pub fn id(&self) -> egui::TextureId {

@@ -18,6 +18,7 @@ use engine::judge::{Judgement, Tally};
 use crate::game::{Fx, GaugeRule, Play};
 use crate::gfx::{Canvas, Gfx, Glyphs, Opt, Src, Tex, fit_scale, src};
 use crate::lane_layout::{Lane, Layout};
+use crate::movie::Movies;
 use crate::text::Style;
 
 /// 判定の線の y（上流 `nJudgeLinePosY.Drums` の既定）
@@ -316,6 +317,8 @@ pub struct PlayView {
     late: u32,
     lag_digits: LagDigits,
     looks: Looks,
+    /// 譜面の動画（無い・流さないなら None）
+    movies: Option<Movies>,
 }
 
 /// 判定のずれの数字の出し方（NX の `ShowLagTime` と `ShowLagTimeColor`）
@@ -440,6 +443,10 @@ pub struct Looks {
     pub layout: Layout,
     pub hho: HhoLook,
     pub lbd: LbdLook,
+    /// 譜面の動画を流す（上流 `bAVIEnabled`）
+    pub movie: bool,
+    /// レーンの板の不透明度（0〜1。上流 `nMovieAlpha` から）
+    pub lane_alpha: f32,
 }
 
 impl Default for Looks {
@@ -492,6 +499,8 @@ impl Looks {
                 1 => LbdLook::Own,
                 _ => LbdLook::SameAsLp,
             },
+            movie: v.flag(s::AVI),
+            lane_alpha: 1.0 - v.number(s::MOVIE_ALPHA) as f32 / 100.0,
         }
     }
 
@@ -606,6 +615,7 @@ impl PlayView {
             late: 0,
             lag_digits,
             looks,
+            movies: if looks.movie { Movies::new(play) } else { None },
         }
     }
 
@@ -793,6 +803,9 @@ impl PlayView {
             Some(t) => c.draw(&t, 0.0, 0.0),
             None => c.cover(Color32::from_rgb(8, 8, 14)),
         }
+        if let Some(m) = &mut self.movies {
+            m.draw(c, play.chart_ms(now_ms));
+        }
         self.draw_jacket(c, g, play);
         self.draw_lanes(c, g, now);
         self.draw_lines(c, g, play, now_ms, px_per_ms);
@@ -905,13 +918,20 @@ impl PlayView {
         } else {
             "Graphics/7_Paret.png"
         };
-        if let Some(t) = g.skin.tex(paret) {
+        // 動画を透かすなら薄く（上流 MovieAlpha）
+        if let Some(t) = g.skin.tex(paret)
+            && self.looks.lane_alpha > 0.0
+        {
             for (l, sx, w) in PANEL {
-                c.part(
+                c.draw_opt(
                     &t,
                     self.looks.layout.panel[l.i()],
                     0.0,
-                    src(sx, 0.0, w, 720.0),
+                    Opt {
+                        src: Some(src(sx, 0.0, w, 720.0)),
+                        alpha: self.looks.lane_alpha,
+                        ..Default::default()
+                    },
                 );
             }
         }

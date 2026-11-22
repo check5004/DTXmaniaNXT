@@ -227,6 +227,8 @@ pub struct Play {
     pub last_chip_ms: f64,
     /// ジャケットの画像（`#PREIMAGE`。無ければ None）
     pub preimage: Option<PathBuf>,
+    /// 譜面の動画（`#AVI`）を流し始める曲の時刻とファイル（時刻の順。ファイルが無いものは入れない）
+    pub movies: Vec<(f64, PathBuf)>,
     pub last_input: Option<LastInput>,
     pub hh_pedal: Option<u8>,
     /// 叩けた音符のずれ（ミリ秒）
@@ -425,6 +427,7 @@ impl Play {
             bpm: 60_000.0 / (tempo.beat_to_ms(1.0) - tempo.beat_to_ms(0.0)).max(1.0),
             last_chip_ms,
             preimage: preimage_path(&chart, path),
+            movies: movie_cues(&chart, &tempo, path),
             last_input: None,
             hh_pedal: None,
             hit_offsets: Vec::new(),
@@ -600,6 +603,13 @@ impl Play {
 
     pub fn now_ms(&self) -> f64 {
         self.song_ms_at(host_us())
+    }
+
+    /// 画面の時刻 `now_ms` の、譜面の中の時刻。練習は周の速さと並びをほどく（ふつうはそのまま）
+    pub fn chart_ms(&self, now_ms: f64) -> f64 {
+        self.practice
+            .as_ref()
+            .map_or(now_ms, |p| p.chart_ms(now_ms))
     }
 
     /// 曲が終わった（練習は自分でやめるまで終わらない）
@@ -1150,6 +1160,33 @@ fn preimage_path(chart: &Chart, path: &Path) -> Option<PathBuf> {
     nx::find_file(path.parent()?, name).filter(|p| p.is_file())
 }
 
+/// 動画を流し始めるチップ（0x54 と 0x5A。上流 `EChannel.Movie`・`MovieFull`）の時刻と、`#AVIzz` のファイル。
+/// ファイルが無いチップは飛ばす（前の動画が流れたまま）
+fn movie_cues(chart: &Chart, tempo: &TempoMap, path: &Path) -> Vec<(f64, PathBuf)> {
+    let Some(dir) = path.parent() else {
+        return Vec::new();
+    };
+    let mut found: HashMap<u16, Option<PathBuf>> = HashMap::new();
+    let mut cues: Vec<(f64, PathBuf)> = chart
+        .chips
+        .iter()
+        .filter(|c| matches!(c.channel, dtx::ch::MOVIE | dtx::ch::MOVIE_FULL))
+        .filter_map(|c| {
+            let file = found.entry(c.value).or_insert_with(|| {
+                let name = chart.avi(c.value)?.trim();
+                let file = nx::find_file(dir, name).filter(|p| !name.is_empty() && p.is_file());
+                if file.is_none() {
+                    log::warn!("{}: 動画 {name} がありません", path.display());
+                }
+                file
+            });
+            Some((tempo.chip_ms(c), file.clone()?))
+        })
+        .collect();
+    cues.sort_by(|a, b| a.0.total_cmp(&b.0));
+    cues
+}
+
 /// 今の UNIX 秒
 fn unix_now() -> i64 {
     std::time::SystemTime::now()
@@ -1188,6 +1225,28 @@ fn load_sounds(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn movie_cues_find_the_files() {
+        let dir = std::env::temp_dir().join(format!("nxt-movies-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("Movie.MP4"), b"").unwrap();
+        let path = dir.join("chart.dtx");
+        // BPM 120 で 1 小節 2 秒。2 小節目の頭と半ばで流し直し、無いファイルのチップは飛ばす
+        let text = "#BPM 120\n#AVI01: movie.mp4\n#AVI02: missing.avi\n#00154: 0102\n#00254: 01\n#0025A: 0001\n";
+        std::fs::write(&path, text).unwrap();
+        let play = Play::load(&path, 0.0, false, &Rules::default()).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        let file = dir.join("Movie.MP4");
+        assert_eq!(
+            play.movies,
+            [
+                (2000.0, file.clone()),
+                (4000.0, file.clone()),
+                (5000.0, file)
+            ]
+        );
+    }
 
     /// 譜面 `text` を一時ファイルに書いて読む（音は鳴らさない）
     fn load_text(name: &str, text: &str, rules: &Rules) -> Play {
