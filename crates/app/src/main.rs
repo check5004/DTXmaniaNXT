@@ -518,6 +518,14 @@ const APPLY_SHOW: Duration = Duration::from_millis(1500);
 /// MIDI の機器がつながったか外れたかを調べる間
 const PORT_CHECK_EVERY: Duration = Duration::from_secs(2);
 
+/// 設定の音量（全体と、ミキサーの系統ごと）を出力に渡す。鳴っている音にもすぐ効く
+fn apply_volumes(config: &Config) {
+    audio::set_master_volume(config.master_volume());
+    for (bus, key) in audio::Bus::ALL.into_iter().zip(settings::VOLUMES) {
+        audio::set_bus_volume(bus, config.settings.number(key) as u8);
+    }
+}
+
 /// 2 回叩きと見なす間（上流と同じ 0.5 秒）
 const DOUBLE_HIT_US: i64 = 500_000;
 
@@ -529,7 +537,7 @@ impl App {
         }
         let midi = open_midi(&config);
         // 最初の音（タイトルの音）から設定の音量で鳴らす
-        audio::set_master_volume(config.master_volume());
+        apply_volumes(&config);
         let mut pending = None;
         // 引数がフォルダなら曲のフォルダに足し、譜面ならすぐ遊ぶ
         if let Some(p) = arg {
@@ -842,10 +850,8 @@ impl App {
             hit_sounds: HitSoundRule {
                 pad_first: v.pad_sound_first(),
                 muting_lp: v.flag(settings::MUTING_LP),
-                volume: v.number(settings::CHIP_VOLUME) as f32 / 100.0,
             },
             auto_mix: AutoMix {
-                gain: v.number(settings::AUTO_VOLUME) as f32 / 100.0,
                 bgm: v.flag(settings::BGM_SOUND),
                 shift_ms: v.number(settings::BGM_ADJUST) as f64,
             },
@@ -1680,7 +1686,7 @@ impl App {
             ItemId::Value(s) => {
                 config_view::set(s, &mut self.config, v);
                 match s {
-                    Setting::MasterVolume => audio::set_master_volume(self.config.master_volume()),
+                    Setting::MasterVolume => apply_volumes(&self.config),
                     Setting::Update => self.updater.set_mode(self.config.update_mode()),
                     _ => {}
                 }
@@ -1695,6 +1701,9 @@ impl App {
             }
             ItemId::Table(key) => {
                 self.config.settings.set_raw(key, v);
+                if settings::VOLUMES.contains(&key) {
+                    apply_volumes(&self.config);
+                }
                 self.config.save();
             }
             ItemId::Practice(d) => {
