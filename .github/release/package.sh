@@ -72,7 +72,7 @@ ls -l dist/
 {
   echo "## ダウンロード"
   echo
-  echo "- **Windows（64 ビット）**: [DTXmaniaNXT-Setup.exe]($download/DTXmaniaNXT-Setup.exe)。Windows はこれ 1 つだけです。ダブルクリックするとインストールして起動します（管理者の権限は要りません）。次からはスタートメニューかデスクトップの DTXmaniaNXT から起動します。新しい版は起動したときに自動で落とし、終了したときに入れ替わります。"
+  echo "- **Windows（64 ビット）**: [DTXmaniaNXT-Setup.exe]($download/DTXmaniaNXT-Setup.exe)。Windows はこれ 1 つだけです。ダブルクリックするとインストールして起動します（管理者の権限は要りません）。次からはスタートメニューかデスクトップの DTXmaniaNXT から起動します。新しい版が出ると、タイトルのメニューの下に知らせが出て、そこから更新できます。"
   if [ -f "dist/DTXmaniaNXT-$tag-macos-arm64.tar.gz" ]; then
     echo "- macOS（Apple シリコン）: [DTXmaniaNXT-$tag-macos-arm64.tar.gz]($download/DTXmaniaNXT-$tag-macos-arm64.tar.gz)"
   fi
