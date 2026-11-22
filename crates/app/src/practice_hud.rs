@@ -2,21 +2,24 @@
 //!
 //! 叩いているあいだは、レーンの上に何も重ねない（2026-11-22 のデザインの決まり）。
 //!
-//! - スコアの場所（左上）に周と速度を、スコアの数字（`7_score numbersGD.png`）で
-//! - その下の欄に、区間・つなぎ方・合格の基準と、直近の周の合否とわけ
-//! - 右のジャケットの場所に、段階アップのはしご（今の速度、あと何回の合格で上がるか、下がるまでの不合格）。
-//!   周の合否は、その欄の見出しを少しのあいだ塗り替えて知らせる
+//! - スコアの場所（左上）に、このセットの何周目かと速度を、スコアの数字（`7_score numbersGD.png`）で
+//! - その下の欄に、このセットの直近の周の中身（ノーミスか、落とした拍）
+//! - 右のジャケットの場所に、セットの周の丸、落とした所の地図（1 マスが 1 拍）、速度の段、セットのあとの決まり
 //! - 進み具合のバー（`CActPerfProgressBar` の場所）に、曲の中の区間と今叩いている位置
-//! - 速度が変わる周とクリアのあとの助走（判定の音符が落ちてくる前）だけ、レーンの真ん中で知らせる
+//! - セットの始めと速度を変えた周の助走（判定の音符が落ちてくる前）だけ、レーンの真ん中で知らせる
+//! - セットの合間（音符が落ちてこない）は、レーンの上にまとめと次の一手の選択肢を出す
 //! - 助走のカウントを、レーンの真ん中にコンボの数字（`ScreenPlayDrums combo.png`）で大きく
 
 use egui::{Color32, Stroke, StrokeKind};
-use engine::practice::{FAILS_TO_DOWN, LADDER_UP, PASSES_TO_UP, SpeedPlan, speed_percent};
+use engine::practice::{
+    BeatSlot, Choice, SET_SPEED_STEP, Section, SetKind, SetReport, speed_percent,
+};
 
 use crate::gfx::{Canvas, Gfx, Opt, src};
 use crate::play_view::JUDGE_LINE_Y;
 use crate::practice::{
-    Cue, LapState, LapSummary, Practice, lap_reason, rule_pass_label, section_label, style_label,
+    Cue, LapState, Practice, beat_label, beat_short, lanes_label, lap_reason, rule_detail,
+    rule_label, section_label, style_label,
 };
 use crate::text::Style;
 
@@ -37,10 +40,15 @@ const RECENT_LAPS: usize = 4;
 
 /// 右の欄（ジャケットの場所）
 const CARD: (f32, f32, f32, f32) = (918.0, 296.0, 352.0, 330.0);
-/// 周の合否を欄の見出しに出しておく時間
-const VERDICT_MS: f64 = 1500.0;
-/// はしごの、今より遅い済んだ段を出す数の上限（段が多すぎると読めないので）
-const DONE_STEPS: usize = 2;
+/// 周の中身を欄の見出しに出しておく時間
+const LAP_FLASH_MS: f64 = 1500.0;
+/// セットの合間のまとめ（レーンの上）
+const BREAK: (f32, f32, f32, f32) = (304.0, 40.0, 542.0, 560.0);
+/// 合間の選択肢の行の間隔
+const CHOICE_PITCH: f32 = 42.0;
+/// 合間に出すクリアのバッジ（`7_Excellent.png` の中の高さ）と縮め方
+const BADGE_H: f32 = 177.0;
+const BADGE_SCALE: f32 = 0.3;
 
 /// 進み具合のバー（play_view の `draw_progress` と同じ）
 const BAR_X: f32 = 855.0;
@@ -52,10 +60,9 @@ const BAR_H: f32 = 540.0;
 const LANES_X: f32 = 296.0;
 const LANES_W: f32 = 558.0;
 const LANES_CX: f32 = LANES_X + LANES_W / 2.0;
-/// 知らせの帯の上の端（Reverse では下の端から同じだけ離す）と高さ（クリアは大きく）
+/// 知らせの帯の上の端（Reverse では下の端から同じだけ離す）と高さ
 const BANNER_Y: f32 = 96.0;
 const BANNER_H: f32 = 150.0;
-const CLEAR_H: f32 = 200.0;
 /// 知らせが出る・消える速さ（ミリ秒）
 const BANNER_FADE_IN_MS: f64 = 150.0;
 const BANNER_FADE_OUT_MS: f64 = 200.0;
@@ -66,9 +73,11 @@ const COUNT_Y: f32 = 390.0;
 const COUNT_POP_MS: f64 = 180.0;
 
 const SECTION_COLOR: Color32 = Color32::from_rgb(0x40, 0xC8, 0xFF);
-const PASS_COLOR: Color32 = Color32::from_rgb(0x70, 0xE0, 0x90);
-const FAIL_COLOR: Color32 = Color32::from_rgb(0xF0, 0x80, 0x60);
-/// 今の速度（はしごの段と、上げる知らせ）
+/// ノーミス・うっかり（1 回きり）・苦手（同じ拍を何度も）
+const OK_COLOR: Color32 = Color32::from_rgb(0x70, 0xE0, 0x90);
+const SLIP_COLOR: Color32 = Color32::from_rgb(0xF0, 0xD0, 0x50);
+const WEAK_COLOR: Color32 = Color32::from_rgb(0xFF, 0x60, 0x50);
+/// 今の速度（速度の段と、選んでいる選択肢）
 const CURRENT_COLOR: Color32 = Color32::from_rgb(0xFF, 0xB8, 0x40);
 const DOWN_COLOR: Color32 = SECTION_COLOR;
 const GREY: Color32 = Color32::from_gray(200);
@@ -87,10 +96,11 @@ pub fn draw(
 ) {
     draw_progress(c, p, now, last_chip_ms);
     draw_lap_and_speed(c, g, p, now);
-    draw_recent(c, g, p, now);
+    draw_recent(c, g, p);
     draw_card(c, g, p, now);
     draw_banner(c, g, p, now, px_per_ms, reverse);
     draw_count_in(c, g, p, now, reverse);
+    draw_break(c, g, p, now);
 }
 
 /// 高さ `h` の知らせの帯の上の端（チップが出てくる側から `BANNER_Y` 離す）
@@ -182,21 +192,11 @@ fn round_frame(c: &Canvas, (x, y, w, h): (f32, f32, f32, f32), r: f32, color: Co
     );
 }
 
-/// 丸（合格の印）
+/// 丸（周の印）
 fn dot(c: &Canvas, cx: f32, cy: f32, r: f32, fill: Color32, edge: Color32) {
     let p = c.painter();
     p.circle_filled(c.pos(cx, cy), r * c.scale(), fill);
     p.circle_stroke(c.pos(cx, cy), r * c.scale(), Stroke::new(1.5, edge));
-}
-
-/// チェックの印（字の形に頼らず線で）
-fn check(c: &Canvas, x: f32, cy: f32, size: f32, color: Color32) {
-    let stroke = Stroke::new(2.0 * c.scale(), color);
-    let a = c.pos(x, cy);
-    let b = c.pos(x + size * 0.35, cy + size * 0.35);
-    let d = c.pos(x + size, cy - size * 0.45);
-    c.painter().line_segment([a, b], stroke);
-    c.painter().line_segment([b, d], stroke);
 }
 
 /// スコアの数字で `text`（数字と %）を描き、右の端を返す。スキンに無ければふつうの文字で
@@ -276,19 +276,29 @@ fn score_digits_width(g: &Gfx, text: &str, scale: f32) -> f32 {
 
 // ---- 左上：周と速度 ----
 
-/// 今の周の番号（1 から）。助走のあいだは 1 周目
-fn lap_number(p: &Practice, now: f64) -> usize {
-    p.current_lap(now).map_or(1, |i| i + 1)
+/// 今のセットの何周目か（1 から）。セットの合間はセットの周の数
+fn lap_in_set(p: &Practice, now: f64) -> usize {
+    if p.between.is_some() {
+        return p.set_laps();
+    }
+    let started = p
+        .set_laps_so_far()
+        .iter()
+        .filter(|l| l.plan.audio.at_ms <= now)
+        .count();
+    started.clamp(1, p.set_laps())
 }
 
-/// 今鳴っている周の速度（助走中は 1 周目の速度）
+/// 今鳴っている周の速度（助走中や合間は次の周の速度）
 fn current_speed(p: &Practice, now: f64) -> u32 {
-    p.current_lap(now)
-        .or((!p.laps.is_empty()).then_some(0))
-        .map_or(p.ladder().speed(), |i| speed_percent(p.laps[i].plan.speed))
+    match p.current_lap(now) {
+        Some(i) if p.between.is_none() => speed_percent(p.laps[i].plan.speed),
+        _ if p.between.is_some() => p.between.as_ref().map_or(p.speed(), |b| b.report.speed),
+        _ => p.speed(),
+    }
 }
 
-/// 周と速度（スコアの場所）。見出しは日本語で
+/// 周（このセットの何周目か / セットの周の数）と速度（スコアの場所）。見出しは日本語で
 fn draw_lap_and_speed(c: &Canvas, g: &mut Gfx, p: &Practice, now: f64) {
     let head = bold(22.0, Color32::WHITE);
     put(c, g, "周", &head, LAP_X, LABEL_Y, Align::Left, 100.0, 1.0);
@@ -303,26 +313,122 @@ fn draw_lap_and_speed(c: &Canvas, g: &mut Gfx, p: &Practice, now: f64) {
         100.0,
         1.0,
     );
-    let lap = lap_number(p, now).min(999).to_string();
-    score_digits(c, g, &lap, LAP_X, DIGIT_Y, 1.0, 1.0);
+    let lap = lap_in_set(p, now).min(99).to_string();
+    let right = score_digits(c, g, &lap, LAP_X - 10.0, DIGIT_Y, 1.0, 1.0);
+    put(
+        c,
+        g,
+        &format!("/{}", p.set_laps()),
+        &bold(22.0, Color32::WHITE),
+        right + 2.0,
+        DIGIT_Y + 24.0,
+        Align::Left,
+        SPEED_X - right - 8.0,
+        1.0,
+    );
     let speed = format!("{}%", current_speed(p, now));
     score_digits(c, g, &speed, SPEED_X, DIGIT_Y, 1.0, 1.0);
 }
 
-// ---- 左の欄：区間と直近の周 ----
+// ---- 左の欄：直近の周（合間はセットのまとめ） ----
 
-/// 区間、つなぎ方と合格の基準、直近の周の合否とわけ
-fn draw_recent(c: &Canvas, g: &mut Gfx, p: &Practice, now: f64) {
+/// 周の色。ノーミスは緑、苦手の拍を落とした周は赤、うっかりだけなら黄
+fn lap_color(l: &LapState, weak: &[BeatSlot]) -> Color32 {
+    if l.clean() {
+        OK_COLOR
+    } else if l.misses.iter().any(|(b, _)| weak.contains(b)) {
+        WEAK_COLOR
+    } else {
+        SLIP_COLOR
+    }
+}
+
+/// 左の欄。叩いているあいだはこのセットの直近の周の中身、合間はセットのまとめ
+fn draw_recent(c: &Canvas, g: &mut Gfx, p: &Practice) {
     let (x, y, w, h) = INFO;
     c.fill(x, y, w, h, Color32::from_black_alpha(190));
     c.frame(x, y, w, h, Color32::from_white_alpha(60));
-    let o = p.options;
     let left = x + 8.0;
     let right = x + w - 8.0;
+    let line = |c: &Canvas, g: &mut Gfx, k: usize, text: &str, color: Color32| {
+        put(
+            c,
+            g,
+            text,
+            &edged(13.0, color),
+            left,
+            y + 30.0 + k as f32 * 22.0,
+            Align::Left,
+            right - left,
+            1.0,
+        );
+    };
+    if let Some(b) = &p.between {
+        let r = &b.report;
+        put(
+            c,
+            g,
+            &format!("セット {} の周", r.index + 1),
+            &edged(14.0, Color32::WHITE),
+            left,
+            y + 6.0,
+            Align::Left,
+            right - left,
+            1.0,
+        );
+        line(
+            c,
+            g,
+            0,
+            &format!(
+                "ノーミス {} 周 / ミスあり {} 周",
+                r.clean_laps,
+                r.laps - r.clean_laps
+            ),
+            Color32::WHITE,
+        );
+        let weak = r.weak();
+        let mut k = 1;
+        for (slot, spot) in weak.iter().take(2) {
+            line(
+                c,
+                g,
+                k,
+                &format!(
+                    "苦手: {}（{}、{} 周で {} 回）",
+                    beat_label(*slot),
+                    lanes_label(&spot.lanes),
+                    r.laps,
+                    spot.laps
+                ),
+                WEAK_COLOR,
+            );
+            k += 1;
+        }
+        let slips: Vec<String> = r
+            .spots
+            .spots()
+            .filter(|(_, s)| s.laps < r.weak_times)
+            .map(|(b, _)| beat_short(b))
+            .collect();
+        if k < 4 && !slips.is_empty() {
+            let more = if slips.len() > 3 { " ほか" } else { "" };
+            line(
+                c,
+                g,
+                k,
+                &format!("うっかり: {}{more}", slips[..slips.len().min(3)].join("、")),
+                SLIP_COLOR,
+            );
+        } else if weak.is_empty() && slips.is_empty() {
+            line(c, g, 1, "全部の周をノーミスで叩けました", OK_COLOR);
+        }
+        return;
+    }
     let title_w = put(
         c,
         g,
-        &section_label(o.section),
+        &section_label(p.set_section()),
         &edged(16.0, Color32::WHITE),
         left,
         y + 5.0,
@@ -333,7 +439,11 @@ fn draw_recent(c: &Canvas, g: &mut Gfx, p: &Practice, now: f64) {
     put(
         c,
         g,
-        &format!("{} / {}", style_label(o.style), rule_pass_label(o.rule)),
+        &format!(
+            "{} / 苦手の見方 {}",
+            style_label(p.options.style),
+            rule_label(p.options.rule)
+        ),
         &edged(12.0, GREY),
         right,
         y + 9.0,
@@ -341,121 +451,40 @@ fn draw_recent(c: &Canvas, g: &mut Gfx, p: &Practice, now: f64) {
         right - left - title_w - 10.0,
         1.0,
     );
-    put(
-        c,
-        g,
-        "直近の周",
-        &edged(12.0, Color32::from_gray(150)),
-        left,
-        y + 30.0,
-        Align::Left,
-        200.0,
-        1.0,
-    );
-    let done: Vec<LapSummary> = p
-        .summaries(now)
-        .into_iter()
-        .filter(|l| l.completed)
+    let set = p.set_laps_so_far();
+    let done: Vec<(usize, &LapState)> = set
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| l.complete() && !l.notes.is_empty())
         .collect();
     if done.is_empty() {
-        put(
+        line(c, g, 0, "直近の周", Color32::from_gray(150));
+        line(
             c,
             g,
-            "まだ終わった周はありません",
-            &edged(13.0, Color32::from_gray(170)),
-            left,
-            y + 50.0,
-            Align::Left,
-            w - 16.0,
-            1.0,
+            1,
+            "このセットはまだ叩き終えた周がありません",
+            Color32::from_gray(170),
         );
         return;
     }
-    let style = |color| edged(13.0, color);
-    for (k, l) in done.iter().rev().take(RECENT_LAPS).enumerate() {
-        let ry = y + 50.0 + k as f32 * 22.0;
-        let plain = Color32::from_gray(210);
-        put(
+    let weak: Vec<BeatSlot> = p.report().weak().iter().map(|(b, _)| *b).collect();
+    for (k, (i, l)) in done.iter().rev().take(RECENT_LAPS + 1).enumerate() {
+        let color = lap_color(l, &weak);
+        line(
             c,
             g,
-            &format!("{} 周目", l.index + 1),
-            &style(plain),
-            left,
-            ry,
-            Align::Left,
-            60.0,
-            1.0,
-        );
-        put(
-            c,
-            g,
-            &format!("{}%", speed_percent(l.speed)),
-            &style(plain),
-            left + 64.0,
-            ry,
-            Align::Left,
-            44.0,
-            1.0,
-        );
-        let ok = l.passed == Some(true);
-        let color = if ok { PASS_COLOR } else { FAIL_COLOR };
-        put(
-            c,
-            g,
-            if ok { "合格" } else { "不合格" },
-            &style(color),
-            left + 108.0,
-            ry,
-            Align::Left,
-            50.0,
-            1.0,
-        );
-        put(
-            c,
-            g,
-            &lap_reason(l, o.rule),
-            &style(if ok { Color32::WHITE } else { FAIL_COLOR }),
-            left + 162.0,
-            ry,
-            Align::Left,
-            right - left - 162.0,
-            1.0,
+            k,
+            &format!("{} 周目　{}", i + 1, lap_reason(&l.summary())),
+            color,
         );
     }
 }
 
-// ---- 右の欄：段階アップのはしご ----
+// ---- 右の欄：セット（周の丸、落とした所の地図、速度の段） ----
 
-/// はしごの段（下から）。済んだ段は今に近いものだけ。固定なら今の速度だけ
-fn shown_steps(p: &Practice) -> Vec<u32> {
-    let ladder = p.ladder();
-    let steps = ladder.steps();
-    if steps.is_empty() {
-        return vec![ladder.speed()];
-    }
-    let below = steps.iter().filter(|&&s| s < ladder.speed()).count();
-    steps[below.saturating_sub(DONE_STEPS)..].to_vec()
-}
-
-/// 固定の速度で、終わりから続けて合格した周の数と、合格の数・終わった周の数
-fn fixed_tally(p: &Practice, now: f64) -> (usize, usize, usize) {
-    let done: Vec<LapSummary> = p
-        .summaries(now)
-        .into_iter()
-        .filter(|l| l.completed)
-        .collect();
-    let streak = done
-        .iter()
-        .rev()
-        .take_while(|l| l.passed == Some(true))
-        .count();
-    let passed = done.iter().filter(|l| l.passed == Some(true)).count();
-    (streak, passed, done.len())
-}
-
-/// 右の欄。見出し（周の合否が出たら少しのあいだ塗り替える）、はしご、あと何をすればよいか
-fn draw_card(c: &Canvas, g: &mut Gfx, p: &Practice, now: f64) {
-    let (x, y, w, _) = CARD;
+/// 欄の枠
+fn card_frame(c: &Canvas) {
     round_fill(
         c,
         CARD,
@@ -463,29 +492,53 @@ fn draw_card(c: &Canvas, g: &mut Gfx, p: &Practice, now: f64) {
         Color32::from_rgba_unmultiplied(8, 10, 22, 242),
     );
     round_frame(c, CARD, 8.0, Color32::from_white_alpha(70));
-    match p.just_settled(now, VERDICT_MS) {
-        Some(l) => draw_verdict(c, g, p, &l),
+}
+
+/// 右の欄。叩いているあいだはこのセット、合間はこれまでのセット
+fn draw_card(c: &Canvas, g: &mut Gfx, p: &Practice, now: f64) {
+    card_frame(c);
+    if p.between.is_some() {
+        draw_history(c, g, p, now);
+    } else {
+        draw_set(c, g, p, now);
+    }
+}
+
+/// 叩いているセット
+fn draw_set(c: &Canvas, g: &mut Gfx, p: &Practice, now: f64) {
+    let (x, y, w, _) = CARD;
+    let report = p.report();
+    let weak: Vec<BeatSlot> = report.weak().iter().map(|(b, _)| *b).collect();
+    let set = p.set_laps_so_far();
+    // 見出し。周の音符をすべて判定したら、少しのあいだその周の中身に塗り替える
+    let flash = p
+        .just_settled(now, LAP_FLASH_MS)
+        .filter(|l| l.set == p.set_index());
+    match flash {
+        Some(l) => draw_lap_flash(c, g, p, l, &weak),
         None => {
+            let title = match p.kind() {
+                SetKind::Whole => format!("セット {}", p.set_index() + 1),
+                SetKind::Focus(_) => "苦手の所だけ".to_owned(),
+            };
             let title_w = put(
                 c,
                 g,
-                "区間練習",
+                &title,
                 &bold(19.0, Color32::WHITE),
                 x + 14.0,
                 y + 10.0,
                 Align::Left,
-                120.0,
+                150.0,
                 1.0,
             );
-            let o = p.options;
             put(
                 c,
                 g,
                 &format!(
-                    "{}　{} / {}",
-                    section_label(o.section),
-                    style_label(o.style),
-                    rule_pass_label(o.rule)
+                    "{}　{} 周で 1 セット",
+                    section_label(p.set_section()),
+                    p.set_laps()
                 ),
                 &edged(12.0, GREY),
                 x + w - 14.0,
@@ -496,51 +549,187 @@ fn draw_card(c: &Canvas, g: &mut Gfx, p: &Practice, now: f64) {
             );
         }
     }
-    draw_ladder(c, g, p);
-    draw_next_step(c, g, p, now);
+    // 周の丸
+    let n = p.set_laps();
+    let playing = set
+        .iter()
+        .position(|l| !l.complete() && l.plan.audio.at_ms <= now);
+    let gap = ((w - 100.0) / n as f32).min(30.0);
+    let r = (gap * 0.32).clamp(5.0, 9.0);
+    for k in 0..n {
+        let cx = x + 16.0 + r + k as f32 * gap;
+        let cy = y + 52.0;
+        match set.get(k) {
+            Some(l) if l.complete() => {
+                let col = lap_color(l, &weak);
+                dot(c, cx, cy, r, col, col);
+            }
+            _ if playing == Some(k) || (playing.is_none() && k == set.len().min(n - 1)) => {
+                dot(
+                    c,
+                    cx,
+                    cy,
+                    r,
+                    CURRENT_COLOR.gamma_multiply(0.75),
+                    CURRENT_COLOR,
+                );
+            }
+            _ => dot(
+                c,
+                cx,
+                cy,
+                r,
+                Color32::TRANSPARENT,
+                Color32::from_white_alpha(90),
+            ),
+        }
+    }
+    put(
+        c,
+        g,
+        &format!("{}/{n} 周", lap_in_set(p, now)),
+        &edged(14.0, Color32::WHITE),
+        x + w - 14.0,
+        y + 44.0,
+        Align::Right,
+        80.0,
+        1.0,
+    );
+    put(
+        c,
+        g,
+        "落とした所（このセット）",
+        &edged(12.0, GREY),
+        x + 14.0,
+        y + 70.0,
+        Align::Left,
+        w - 28.0,
+        1.0,
+    );
+    let dim = match p.kind() {
+        SetKind::Whole => None,
+        SetKind::Focus(f) => Some(f),
+    };
+    draw_map(c, g, p, &report, (x + 12.0, y + 90.0, w - 24.0, 124.0), dim);
+    // 苦手
+    let (line, color) = match report.weak().first() {
+        Some((slot, spot)) => (
+            format!(
+                "苦手: {}（{}）",
+                beat_label(*slot),
+                lanes_label(&spot.lanes)
+            ),
+            WEAK_COLOR,
+        ),
+        None if report.laps == 0 => (String::new(), GREY),
+        None if report.spots.spots().next().is_none() => ("ここまでノーミス".to_owned(), OK_COLOR),
+        None => (
+            "苦手なし（1 回きりのミスはうっかり）".to_owned(),
+            SLIP_COLOR,
+        ),
+    };
+    put(
+        c,
+        g,
+        &line,
+        &bold(15.0, color),
+        x + 14.0,
+        y + 220.0,
+        Align::Left,
+        w - 28.0,
+        1.0,
+    );
+    draw_steps(c, g, p, y + 248.0);
+    let (next, color) = match (p.pending_speed(now), p.kind(), p.plan().goal()) {
+        (Some(s), _, _) => (format!("次の周のあと {s}% に変えます"), CURRENT_COLOR),
+        (None, SetKind::Focus(_), _) => (
+            format!(
+                "落とさずに回れたら{}に戻る",
+                section_label(p.options.section)
+            ),
+            Color32::WHITE,
+        ),
+        (None, SetKind::Whole, Some(goal)) if p.speed() < goal => (
+            format!(
+                "セットのあと: 苦手が無ければ {}% へ",
+                (p.speed() + SET_SPEED_STEP).min(goal)
+            ),
+            Color32::WHITE,
+        ),
+        (None, SetKind::Whole, Some(_)) => (
+            "セットのあと: 苦手が無ければクリア".to_owned(),
+            Color32::WHITE,
+        ),
+        (None, SetKind::Whole, None) => (
+            "セットのあと: 落とした所と次の一手を出します".to_owned(),
+            Color32::WHITE,
+        ),
+    };
+    put(
+        c,
+        g,
+        &next,
+        &bold(15.0, color),
+        x + 14.0,
+        y + 282.0,
+        Align::Left,
+        w - 28.0,
+        1.0,
+    );
+    put(
+        c,
+        g,
+        &format!(
+            "1 回きりのミスは数えません。{}",
+            rule_detail(p.options.rule)
+        ),
+        &edged(12.0, GREY),
+        x + 14.0,
+        y + 306.0,
+        Align::Left,
+        w - 28.0,
+        1.0,
+    );
 }
 
-/// 周の合否（欄の見出しを塗り替える）
-fn draw_verdict(c: &Canvas, g: &mut Gfx, p: &Practice, l: &LapSummary) {
+/// 周の中身を見出しに（ノーミスなら FULL COMBO の絵も）
+fn draw_lap_flash(c: &Canvas, g: &mut Gfx, p: &Practice, l: &LapState, weak: &[BeatSlot]) {
     let (x, y, w, _) = CARD;
-    let ok = l.passed == Some(true);
-    let color = if ok { PASS_COLOR } else { FAIL_COLOR };
+    let color = lap_color(l, weak);
     let [r, gr, b, _] = color.to_array();
     round_fill(
         c,
-        (x + 1.0, y + 1.0, w - 2.0, 40.0),
+        (x + 1.0, y + 1.0, w - 2.0, 34.0),
         8.0,
         Color32::from_rgba_unmultiplied(r / 4, gr / 4, b / 4, 250),
     );
-    c.fill(x + 1.0, y + 39.0, w - 2.0, 2.0, color);
-    let head = format!(
-        "{} 周目　{}",
-        l.index + 1,
-        if ok { "合格！" } else { "不合格" }
-    );
+    let k = p
+        .set_laps_so_far()
+        .iter()
+        .position(|s| std::ptr::eq(s, l))
+        .map_or(l.plan.index + 1, |i| i + 1);
+    let head = format!("{k} 周目　{}", if l.clean() { "ノーミス！" } else { "" });
     let head_w = put(
         c,
         g,
-        &head,
-        &bold(20.0, color),
+        head.trim_end(),
+        &bold(18.0, color),
         x + 14.0,
         y + 8.0,
         Align::Left,
         200.0,
         1.0,
     );
-    let full = l.tally.miss == 0 && l.tally.poor == 0;
-    if ok
-        && full
+    if l.clean()
         && let Some(t) = g.skin.tex("Graphics/7_FullCombo.png")
     {
         // バッジの部分だけ（1280×720 の絵の中の 490×167）
-        let s = 0.27;
+        let s = 0.22;
         let (bw, bh) = (490.0, 167.0);
         c.draw_opt(
             &t,
             x + w - 12.0 - bw * s,
-            y + 21.0 - bh * s / 2.0,
+            y + 18.0 - bh * s / 2.0,
             Opt {
                 src: Some(src(397.0, 282.0, bw, bh)),
                 sx: s,
@@ -548,12 +737,12 @@ fn draw_verdict(c: &Canvas, g: &mut Gfx, p: &Practice, l: &LapSummary) {
                 ..Default::default()
             },
         );
-    } else {
+    } else if !l.clean() {
         put(
             c,
             g,
-            &lap_reason(l, p.options.rule),
-            &bold(18.0, if ok { Color32::WHITE } else { color }),
+            &lap_reason(&l.summary()),
+            &bold(16.0, color),
             x + w - 14.0,
             y + 10.0,
             Align::Right,
@@ -563,202 +752,539 @@ fn draw_verdict(c: &Canvas, g: &mut Gfx, p: &Practice, l: &LapSummary) {
     }
 }
 
-/// はしご。上が目標、今の段は橙に合格の印、済んだ段は緑
-fn draw_ladder(c: &Canvas, g: &mut Gfx, p: &Practice) {
-    let (x, y, w, h) = CARD;
-    let ladder = p.ladder();
-    let current = ladder.speed();
-    let cleared = ladder.cleared();
-    let fixed = matches!(ladder.plan(), SpeedPlan::Fixed(_));
-    let target = match ladder.plan() {
-        SpeedPlan::Ladder { target, .. } => target,
-        SpeedPlan::Fixed(s) => s,
+/// 落とした所の地図。1 マスが 1 拍で、落とした周の数（1 なら黄、苦手なら赤）。
+/// `dim` があれば、その外の小節は薄く（苦手の所だけのセット）
+fn draw_map(
+    c: &Canvas,
+    g: &mut Gfx,
+    p: &Practice,
+    report: &SetReport,
+    (x, y, w, h): (f32, f32, f32, f32),
+    dim: Option<Section>,
+) {
+    let section = p.options.section;
+    let n = section.measures().max(1) as f32;
+    let row = (h / n - 4.0).clamp(4.0, 26.0);
+    let labels = row >= 11.0;
+    let label_w = if labels { 34.0 } else { 0.0 };
+    let px = (row * 0.55).clamp(9.0, 14.0);
+    for (i, m) in (section.first..=section.last).enumerate() {
+        let ry = y + i as f32 * (row + 4.0);
+        let faded = dim.is_some_and(|f| !f.contains(m));
+        if labels {
+            put_mid(
+                c,
+                g,
+                &m.to_string(),
+                &edged(px, if faded { Color32::from_gray(110) } else { GREY }),
+                x + label_w - 8.0,
+                ry + row / 2.0,
+                Align::Right,
+                label_w,
+            );
+        }
+        let beats = p.grid.beats_in(m).max(1);
+        let cw = (w - label_w) / beats as f32;
+        for b in 0..beats {
+            let cell = (x + label_w + b as f32 * cw + 2.0, ry, cw - 4.0, row);
+            if faded {
+                round_fill(c, cell, 4.0, Color32::from_white_alpha(8));
+                round_frame(c, cell, 4.0, Color32::from_white_alpha(25));
+                continue;
+            }
+            let k = report.spots.count(BeatSlot {
+                measure: m,
+                beat: b,
+            });
+            let (fill, text) = if k >= report.weak_times {
+                (WEAK_COLOR.gamma_multiply(0.9), Some(format!("×{k}")))
+            } else if k > 0 {
+                (SLIP_COLOR.gamma_multiply(0.45), Some(k.to_string()))
+            } else {
+                (Color32::from_white_alpha(22), None)
+            };
+            round_fill(c, cell, 4.0, fill);
+            if k == 0 {
+                round_frame(c, cell, 4.0, Color32::from_white_alpha(45));
+            }
+            if let (Some(t), true) = (text, labels) {
+                put_mid(
+                    c,
+                    g,
+                    &t,
+                    &edged(px, Color32::WHITE),
+                    cell.0 + cell.2 / 2.0,
+                    ry + row / 2.0,
+                    Align::Center,
+                    cell.2,
+                );
+            }
+        }
+    }
+}
+
+/// 速度の段（段階アップなら始めの速度から目標まで。苦手なしで叩けた速度は緑、今は橙）
+fn draw_steps(c: &Canvas, g: &mut Gfx, p: &Practice, y: f32) {
+    let (x, _, w, _) = CARD;
+    let current = match &p.between {
+        Some(b) => b.report.speed,
+        None => p.speed(),
     };
-    let (passes, _) = ladder.streaks();
-    let steps = shown_steps(p);
-    let top = y + 48.0;
-    let bottom = y + h - 70.0;
-    let rh = ((bottom - top) / steps.len().max(1) as f32).min(34.0);
-    let bh = rh - 6.0;
-    let px = (bh * 0.55).clamp(10.0, 14.0);
-    let bx = x + 74.0;
-    let bw = w - 88.0;
-    for (i, &s) in steps.iter().rev().enumerate() {
-        let ry = top + i as f32 * rh;
-        let cy = ry + bh / 2.0;
-        let done = cleared || s < current;
-        let now_here = s == current && !cleared;
-        // 速度
-        let label_color = if now_here {
-            CURRENT_COLOR
-        } else if done {
-            Color32::from_rgb(220, 255, 225)
-        } else {
-            Color32::from_gray(170)
-        };
-        put_mid(
-            c,
-            g,
-            &format!("{s}%"),
-            &bold(px + 3.0, label_color),
-            x + 64.0,
-            cy,
-            Align::Right,
-            60.0,
-        );
-        // 段の板
-        let bar = (bx, ry, bw, bh);
-        if now_here {
+    let mut steps = p.plan().steps();
+    if steps.is_empty() {
+        steps = vec![current];
+    }
+    let goal = p.plan().goal();
+    let done = p.clean_speeds();
+    let gap = 8.0;
+    let n = steps.len() as f32;
+    let cw = ((w - 28.0 - gap * (n - 1.0)) / n).min(120.0);
+    for (i, &s) in steps.iter().enumerate() {
+        let bx = x + 14.0 + i as f32 * (cw + gap);
+        let cell = (bx, y, cw, 24.0);
+        let (ink, label) = if s == current {
             round_fill(
                 c,
-                (bx - 3.0, ry - 3.0, bw + 6.0, bh + 6.0),
-                7.0,
-                Color32::from_rgba_unmultiplied(0xFF, 0xB8, 0x40, 70),
+                (bx - 2.0, y - 2.0, cw + 4.0, 28.0),
+                6.0,
+                CURRENT_COLOR.gamma_multiply(0.3),
             );
-            round_fill(c, bar, 5.0, CURRENT_COLOR.gamma_multiply(0.92));
-        } else if done {
-            round_fill(c, bar, 5.0, PASS_COLOR.gamma_multiply(0.6));
+            round_fill(c, cell, 5.0, CURRENT_COLOR.gamma_multiply(0.92));
+            (Color32::from_rgb(50, 30, 0), true)
+        } else if done.contains(&s) {
+            round_fill(c, cell, 5.0, OK_COLOR.gamma_multiply(0.6));
+            (Color32::WHITE, true)
         } else {
-            round_fill(c, bar, 5.0, Color32::from_white_alpha(22));
-            round_frame(c, bar, 5.0, Color32::from_white_alpha(50));
-        }
-        // 段の中身
-        let dark = |color| Style::plain(px, color);
-        if now_here {
-            let name = if fixed {
-                "固定の速度"
-            } else if s == target {
-                "いまの速度（目標）"
-            } else {
-                "いまの速度"
+            round_fill(c, cell, 5.0, Color32::from_white_alpha(22));
+            round_frame(c, cell, 5.0, Color32::from_white_alpha(60));
+            (Color32::from_gray(190), true)
+        };
+        if label {
+            let text = match goal {
+                Some(t) if s == t && cw >= 70.0 => format!("{s}%　目標"),
+                None => format!("{s}%　固定"),
+                _ => format!("{s}%"),
             };
             put_mid(
                 c,
                 g,
-                name,
-                &dark(Color32::from_rgb(50, 30, 0)),
-                bx + 10.0,
-                cy,
-                Align::Left,
-                bw - 70.0,
-            );
-            if !fixed {
-                let r = (bh / 2.0 - 3.0).clamp(3.0, 7.0);
-                for k in 0..PASSES_TO_UP {
-                    let fill = if k < passes {
-                        Color32::from_rgb(40, 120, 60)
-                    } else {
-                        Color32::from_white_alpha(90)
-                    };
-                    let cx = bx + bw - 16.0 - (PASSES_TO_UP - 1 - k) as f32 * 22.0;
-                    dot(c, cx, cy, r, fill, Color32::from_rgb(40, 25, 0));
-                }
-            }
-        } else if done {
-            let ink = Color32::from_rgb(10, 50, 20);
-            check(c, bx + 10.0, cy, px * 0.8, ink);
-            let label = if cleared && s == current {
-                "クリア"
-            } else {
-                "合格 2 回"
-            };
-            put_mid(
-                c,
-                g,
-                label,
-                &dark(ink),
-                bx + 14.0 + px,
-                cy,
-                Align::Left,
-                bw - 30.0,
-            );
-        } else if s == target {
-            put_mid(
-                c,
-                g,
-                &format!("目標　合格 {PASSES_TO_UP} 回でクリア"),
-                &edged(px, Color32::from_gray(230)),
-                bx + 10.0,
-                cy,
-                Align::Left,
-                bw - 20.0,
+                &text,
+                &Style::plain(13.0, ink),
+                bx + cw / 2.0,
+                y + 12.0,
+                Align::Center,
+                cw - 4.0,
             );
         }
     }
 }
 
-/// 欄の下の 2 行。あと何回の合格で何 % か、下がるまでの不合格、行き詰まったときの案内
-fn draw_next_step(c: &Canvas, g: &mut Gfx, p: &Practice, now: f64) {
-    let (x, y, w, h) = CARD;
-    let ladder = p.ladder();
-    let (passes, fails) = ladder.streaks();
-    let need = PASSES_TO_UP.saturating_sub(passes);
-    let fixed = matches!(ladder.plan(), SpeedPlan::Fixed(_));
-    let (line, color) = if fixed {
-        let (streak, passed, done) = fixed_tally(p, now);
-        (
-            format!("合格 {passed} / {done} 周（続けて {streak} 回）"),
-            Color32::WHITE,
-        )
-    } else if ladder.cleared() {
-        (
-            format!("クリア！ {}% で合格 {PASSES_TO_UP} 回", ladder.speed()),
-            PASS_COLOR,
-        )
-    } else if let Some(s) = p.pending_speed(now) {
-        (format!("次の周のあと {s}% に変えます"), CURRENT_COLOR)
-    } else if let Some(up) = ladder.next_up() {
-        (format!("あと {need} 回の合格で {up}%"), Color32::WHITE)
+/// これまでのセット（合間）
+fn draw_history(c: &Canvas, g: &mut Gfx, p: &Practice, now: f64) {
+    let (x, y, w, _) = CARD;
+    put(
+        c,
+        g,
+        "これまでのセット",
+        &bold(19.0, Color32::WHITE),
+        x + 14.0,
+        y + 10.0,
+        Align::Left,
+        200.0,
+        1.0,
+    );
+    put(
+        c,
+        g,
+        &section_label(p.options.section),
+        &edged(12.0, GREY),
+        x + w - 14.0,
+        y + 14.0,
+        Align::Right,
+        120.0,
+        1.0,
+    );
+    let shown = 3;
+    let skip = p.reports.len().saturating_sub(shown);
+    for (k, r) in p.reports.iter().skip(skip).enumerate() {
+        let ry = y + 44.0 + k as f32 * 50.0;
+        let cell = (x + 12.0, ry, w - 24.0, 44.0);
+        round_fill(c, cell, 6.0, Color32::from_white_alpha(16));
+        round_frame(c, cell, 6.0, Color32::from_white_alpha(40));
+        let what = match r.kind {
+            SetKind::Whole => String::new(),
+            SetKind::Focus(f) => format!("　{}", section_label(f)),
+        };
+        put(
+            c,
+            g,
+            &format!("セット {}　{}%{what}", r.index + 1, r.speed),
+            &edged(14.0, Color32::WHITE),
+            x + 24.0,
+            ry + 5.0,
+            Align::Left,
+            w - 130.0,
+            1.0,
+        );
+        put(
+            c,
+            g,
+            &format!("ノーミス {}/{}", r.clean_laps, r.laps),
+            &edged(12.0, GREY),
+            x + w - 24.0,
+            ry + 7.0,
+            Align::Right,
+            100.0,
+            1.0,
+        );
+        let weak = r.weak();
+        let (line, color) = match weak.first() {
+            Some((b, _)) if weak.len() == 1 => {
+                (format!("苦手 1（{}）", beat_short(*b)), WEAK_COLOR)
+            }
+            Some(_) => (format!("苦手 {} か所", weak.len()), WEAK_COLOR),
+            None if r.cleared() => ("苦手なし（クリア）".to_owned(), OK_COLOR),
+            None => ("苦手なし".to_owned(), OK_COLOR),
+        };
+        put(
+            c,
+            g,
+            &line,
+            &edged(13.0, color),
+            x + 24.0,
+            ry + 24.0,
+            Align::Left,
+            w - 48.0,
+            1.0,
+        );
+    }
+    if let Some(first) = p.laps.first() {
+        let secs = ((now - first.plan.audio.at_ms) / 1000.0).max(0.0) as u64;
+        put(
+            c,
+            g,
+            &format!("練習した時間 {} 分 {} 秒", secs / 60, secs % 60),
+            &edged(13.0, GREY),
+            x + 14.0,
+            y + 200.0,
+            Align::Left,
+            w - 28.0,
+            1.0,
+        );
+    }
+    draw_steps(c, g, p, y + 248.0);
+    let goal_line = match p.plan().goal() {
+        _ if p.cleared() => "クリアしました。続けても記録に残ります".to_owned(),
+        Some(t) => format!("クリア: {t}% で苦手の無いセット"),
+        None => "固定の速度。上げ下げは合間に選べます".to_owned(),
+    };
+    put(
+        c,
+        g,
+        &goal_line,
+        &bold(
+            15.0,
+            if p.cleared() {
+                OK_COLOR
+            } else {
+                Color32::WHITE
+            },
+        ),
+        x + 14.0,
+        y + 282.0,
+        Align::Left,
+        w - 28.0,
+        1.0,
+    );
+    put(
+        c,
+        g,
+        "セットの合間は、叩くまで止まって待ちます",
+        &edged(12.0, GREY),
+        x + 14.0,
+        y + 306.0,
+        Align::Left,
+        w - 28.0,
+        1.0,
+    );
+}
+
+// ---- レーンの上：セットの合間のまとめと選択肢 ----
+
+/// 選択肢の名前と、右に出す中身
+fn choice_text(p: &Practice, report: &SetReport, choice: Choice) -> (String, String) {
+    let n = p.set_laps();
+    match choice {
+        Choice::Quit => ("練習をやめる".to_owned(), "結果へ".to_owned()),
+        Choice::Set { kind, speed } => {
+            let section = match kind {
+                SetKind::Whole => p.options.section,
+                SetKind::Focus(f) => f,
+            };
+            let detail = format!("{}　{speed}%", section_label(section));
+            let name = match (report.kind, kind) {
+                (SetKind::Whole, SetKind::Focus(_)) => format!("苦手の所だけ {n} 周"),
+                (SetKind::Focus(_), SetKind::Whole) => "区間に戻って 1 セット".to_owned(),
+                (SetKind::Focus(_), SetKind::Focus(_)) if speed < report.speed => {
+                    "速度を下げて苦手の所".to_owned()
+                }
+                (SetKind::Focus(_), SetKind::Focus(_)) => "苦手の所をもう 1 セット".to_owned(),
+                (SetKind::Whole, SetKind::Whole) if speed > report.speed => {
+                    "速度を上げて次のセット".to_owned()
+                }
+                (SetKind::Whole, SetKind::Whole) if speed < report.speed => {
+                    "速度を下げてもう 1 セット".to_owned()
+                }
+                (SetKind::Whole, SetKind::Whole) => "区間をもう 1 セット".to_owned(),
+            };
+            (name, detail)
+        }
+    }
+}
+
+/// セットの合間。音符の無いレーンの上に、まとめと次の一手
+fn draw_break(c: &Canvas, g: &mut Gfx, p: &Practice, now: f64) {
+    let Some(b) = &p.between else {
+        return;
+    };
+    if now < b.show_from_ms {
+        return;
+    }
+    let alpha = (((now - b.show_from_ms) / BANNER_FADE_IN_MS).clamp(0.0, 1.0)) as f32;
+    let r = &b.report;
+    let cleared = r.cleared() && p.plan().goal().is_none_or(|t| r.speed >= t);
+    // 中身の高さに合わせ、BREAK の中で上下の真ん中に置く
+    let badge_h = if cleared {
+        BADGE_H * BADGE_SCALE - 6.0
     } else {
-        (format!("あと {need} 回の合格でクリア"), Color32::WHITE)
+        0.0
+    };
+    let map_h = (p.options.section.measures() as f32 * 28.0).min(116.0);
+    let content = 12.0
+        + badge_h
+        + 36.0
+        + 30.0
+        + map_h
+        + 6.0
+        + 30.0
+        + b.choices.list.len() as f32 * CHOICE_PITCH
+        + 40.0;
+    let (x, top, w, full) = BREAK;
+    let h = content.min(full);
+    let y = top + (full - h) / 2.0;
+    c.fill(
+        LANES_X,
+        0.0,
+        LANES_W,
+        625.0,
+        Color32::from_black_alpha(200).gamma_multiply(alpha),
+    );
+    let accent = if cleared { OK_COLOR } else { CURRENT_COLOR };
+    round_fill(
+        c,
+        (x, y, w, h),
+        10.0,
+        Color32::from_rgba_unmultiplied(8, 10, 22, 245).gamma_multiply(alpha),
+    );
+    c.painter().rect_stroke(
+        c.rect(x, y, w, h),
+        10.0 * c.scale(),
+        Stroke::new(2.0 * c.scale(), accent.gamma_multiply(alpha)),
+        StrokeKind::Inside,
+    );
+    let cx = x + w / 2.0;
+    let mut ty = y + 12.0;
+    if cleared && let Some(t) = g.skin.tex("Graphics/7_Excellent.png") {
+        // バッジの部分だけ（1280×720 の絵の中の 480×177）
+        let s = BADGE_SCALE;
+        let (bw, bh) = (480.0, BADGE_H);
+        c.draw_opt(
+            &t,
+            cx - bw * s / 2.0,
+            ty - 4.0,
+            Opt {
+                src: Some(src(402.0, 274.0, bw, bh)),
+                sx: s,
+                sy: s,
+                alpha,
+                ..Default::default()
+            },
+        );
+        ty += bh * s - 6.0;
+    }
+    let title = if cleared {
+        "区間クリア！".to_owned()
+    } else {
+        match r.kind {
+            SetKind::Whole => format!("セット {} おわり", r.index + 1),
+            SetKind::Focus(_) => "苦手の所だけ　おわり".to_owned(),
+        }
+    };
+    put(
+        c,
+        g,
+        &title,
+        &bold(26.0, accent),
+        cx,
+        ty,
+        Align::Center,
+        w - 20.0,
+        alpha,
+    );
+    ty += 36.0;
+    let what = match r.kind {
+        SetKind::Whole => String::new(),
+        SetKind::Focus(f) => format!("{}　", section_label(f)),
+    };
+    put(
+        c,
+        g,
+        &format!(
+            "{what}{}%　{} 周　ノーミス {} 周",
+            r.speed, r.laps, r.clean_laps
+        ),
+        &edged(16.0, Color32::WHITE),
+        cx,
+        ty,
+        Align::Center,
+        w - 20.0,
+        alpha,
+    );
+    ty += 30.0;
+    let dim = match r.kind {
+        SetKind::Whole => None,
+        SetKind::Focus(f) => Some(f),
+    };
+    draw_map(c, g, p, r, (x + 90.0, ty, w - 180.0, map_h), dim);
+    ty += map_h + 6.0;
+    let weak = r.weak();
+    let (line, color) = match weak.as_slice() {
+        [] if r.spots.spots().next().is_none() => {
+            ("全部の周をノーミスで叩けました".to_owned(), OK_COLOR)
+        }
+        [] => (
+            format!("苦手はありません（1 回きりのミスが {} か所）", r.slips()),
+            OK_COLOR,
+        ),
+        [(slot, spot)] => (
+            format!(
+                "苦手は{}（{}）。{} 周で {} 回落としました",
+                beat_label(*slot),
+                lanes_label(&spot.lanes),
+                r.laps,
+                spot.laps
+            ),
+            WEAK_COLOR,
+        ),
+        many => (
+            format!(
+                "苦手が {} か所（{} ほか）",
+                many.len(),
+                beat_label(many[0].0)
+            ),
+            WEAK_COLOR,
+        ),
     };
     put(
         c,
         g,
         &line,
-        &bold(18.0, color),
-        x + 14.0,
-        y + h - 62.0,
-        Align::Left,
-        w - 28.0,
-        1.0,
+        &edged(15.0, color),
+        cx,
+        ty,
+        Align::Center,
+        w - 24.0,
+        alpha,
     );
-    let (sub, color) = if fixed {
-        (", と . で 5% ずつ変えられます".to_owned(), GREY)
-    } else if ladder.cleared() {
-        (
-            "結果へは Esc →「練習をやめる」。続けても記録に残ります".to_owned(),
-            GREY,
-        )
-    } else if ladder.stuck() {
-        (
-            format!(
-                "この速度で不合格 {} 回。, で 5% 下げられます",
-                ladder.fails_here()
-            ),
-            CURRENT_COLOR,
-        )
-    } else if let Some(d) = ladder.next_down() {
-        (
-            format!("不合格 {fails}/{FAILS_TO_DOWN}（{FAILS_TO_DOWN} 回続くと {d}% に下げます）"),
-            GREY,
-        )
+    ty += 30.0;
+    let ready = b.ready(now);
+    for (i, &choice) in b.choices.list.iter().enumerate() {
+        let ry = ty + i as f32 * CHOICE_PITCH;
+        let cell = (x + 28.0, ry, w - 56.0, 36.0);
+        let (name, detail) = choice_text(p, r, choice);
+        let rec = i == b.choices.recommended;
+        let detail = if rec {
+            format!("{detail}　おすすめ")
+        } else {
+            detail
+        };
+        if i == b.cursor {
+            round_fill(
+                c,
+                (cell.0 - 2.0, cell.1 - 2.0, cell.2 + 4.0, cell.3 + 4.0),
+                7.0,
+                CURRENT_COLOR.gamma_multiply(0.3 * alpha),
+            );
+            round_fill(
+                c,
+                cell,
+                6.0,
+                CURRENT_COLOR.gamma_multiply(if ready { 0.92 } else { 0.55 } * alpha),
+            );
+            let ink = Color32::from_rgb(40, 25, 0);
+            put_mid(
+                c,
+                g,
+                &format!("▶ {name}"),
+                &Style {
+                    bold: true,
+                    ..Style::plain(17.0, ink)
+                },
+                cell.0 + 16.0,
+                ry + 18.0,
+                Align::Left,
+                cell.2 * 0.6,
+            );
+            put_mid(
+                c,
+                g,
+                &detail,
+                &Style::plain(14.0, Color32::from_rgb(60, 40, 0)),
+                cell.0 + cell.2 - 16.0,
+                ry + 18.0,
+                Align::Right,
+                cell.2 * 0.4,
+            );
+        } else {
+            round_fill(c, cell, 6.0, Color32::from_white_alpha(18));
+            round_frame(c, cell, 6.0, Color32::from_white_alpha(50));
+            put_mid(
+                c,
+                g,
+                &format!("　 {name}"),
+                &edged(17.0, Color32::WHITE),
+                cell.0 + 16.0,
+                ry + 18.0,
+                Align::Left,
+                cell.2 * 0.6,
+            );
+            put_mid(
+                c,
+                g,
+                &detail,
+                &edged(14.0, if rec { CURRENT_COLOR } else { GREY }),
+                cell.0 + cell.2 - 16.0,
+                ry + 18.0,
+                Align::Right,
+                cell.2 * 0.4,
+            );
+        }
+    }
+    let foot = if ready {
+        "HT / LT で選ぶ　CY で決める（↑↓ と Enter でも）"
     } else {
-        (
-            format!("不合格 {fails}/{FAILS_TO_DOWN}（始めの速度より下げません）"),
-            GREY,
-        )
+        "ひと息ついてから選んでください"
     };
     put(
         c,
         g,
-        &sub,
-        &edged(12.0, color),
-        x + 14.0,
-        y + h - 30.0,
-        Align::Left,
-        w - 28.0,
-        1.0,
+        foot,
+        &edged(13.0, GREY),
+        cx,
+        y + h - 26.0,
+        Align::Center,
+        w - 24.0,
+        alpha,
     );
 }
 
@@ -790,37 +1316,62 @@ fn banner(p: &Practice, now: f64, px_per_ms: f32) -> Option<(&LapState, Cue, f32
     Some((lap, cue, fade_in.min(fade_out) as f32))
 }
 
-/// 速度が変わる周とクリアのあとの助走で、レーンの真ん中に知らせる
+/// セットの始めと速度を変えた周の助走で、レーンの真ん中に知らせる
 fn draw_banner(c: &Canvas, g: &mut Gfx, p: &Practice, now: f64, px_per_ms: f32, reverse: bool) {
     let Some((lap, cue, alpha)) = banner(p, now, px_per_ms) else {
         return;
     };
     let top = banner_top(BANNER_H, reverse);
     let speed = speed_percent(lap.plan.speed);
-    let ladder = p.ladder();
-    if cue == Cue::Clear {
-        draw_clear(c, g, speed, alpha, reverse);
-        return;
-    }
-    let (head, color, from) = match cue {
-        Cue::Start => ("練習スタート", CURRENT_COLOR, None),
-        Cue::Up { from } => ("速度アップ", CURRENT_COLOR, Some(from)),
-        Cue::Down { from } => ("速度ダウン", DOWN_COLOR, Some(from)),
-        Cue::Manual { from } => ("速度を変えました", Color32::WHITE, Some(from)),
-        Cue::Clear => unreachable!(),
-    };
-    let sub = match cue {
-        Cue::Start => match ladder.plan() {
-            SpeedPlan::Ladder { target, .. } => {
-                format!("合格 {PASSES_TO_UP} 回ごとに {LADDER_UP}% 上げます（目標 {target}%）")
+    let n = p.set_laps();
+    let (head, color, from, sub) = match cue {
+        Cue::Start => (
+            "練習スタート".to_owned(),
+            CURRENT_COLOR,
+            None,
+            format!("{n} 周で 1 セット。セットのあとに落とした所と次の一手を出します"),
+        ),
+        Cue::Set { kind, from } => {
+            let changed = (from != speed).then_some(from);
+            match kind {
+                SetKind::Focus(f) => (
+                    "苦手の所だけ".to_owned(),
+                    CURRENT_COLOR,
+                    changed,
+                    format!(
+                        "{}　{n} 周。落とさずに回れたら区間に戻ります",
+                        section_label(f)
+                    ),
+                ),
+                SetKind::Whole => {
+                    let head = match changed {
+                        Some(f) if f < speed => "速度アップ".to_owned(),
+                        Some(_) => "速度ダウン".to_owned(),
+                        None => format!("セット {}", lap.set + 1),
+                    };
+                    let color = match changed {
+                        Some(f) if f > speed => DOWN_COLOR,
+                        _ => CURRENT_COLOR,
+                    };
+                    (
+                        head,
+                        color,
+                        changed,
+                        format!(
+                            "セット {}　{}　{n} 周",
+                            lap.set + 1,
+                            section_label(p.options.section)
+                        ),
+                    )
+                }
             }
-            SpeedPlan::Fixed(_) => "速度は固定（, と . で変えられます）".to_owned(),
-        },
-        Cue::Up { .. } => format!("合格 {PASSES_TO_UP} 回。助走のあと {speed}% で叩きます"),
-        Cue::Down { .. } => {
-            format!("不合格が {FAILS_TO_DOWN} 回続いたので、助走のあと {speed}% で叩きます")
         }
-        _ => format!("助走のあと {speed}% で叩きます"),
+        Cue::Manual { from } => (
+            "速度を変えました".to_owned(),
+            Color32::WHITE,
+            Some(from),
+            format!("このセットは {speed}% の周から数え直します"),
+        ),
     };
     c.fill(
         LANES_X,
@@ -840,7 +1391,7 @@ fn draw_banner(c: &Canvas, g: &mut Gfx, p: &Practice, now: f64, px_per_ms: f32, 
     put(
         c,
         g,
-        head,
+        &head,
         &bold(30.0, color),
         LANES_CX,
         top + 8.0,
@@ -848,7 +1399,7 @@ fn draw_banner(c: &Canvas, g: &mut Gfx, p: &Practice, now: f64, px_per_ms: f32, 
         LANES_W - 20.0,
         alpha,
     );
-    // 80% → 85%（始めは速度だけ）
+    // 80% → 90%（変えないときは速度だけ）
     let scale = 0.85;
     let to = format!("{speed}%");
     let digits_y = top + 50.0;
@@ -885,80 +1436,6 @@ fn draw_banner(c: &Canvas, g: &mut Gfx, p: &Practice, now: f64, px_per_ms: f32, 
         &edged(16.0, Color32::WHITE),
         LANES_CX,
         top + 110.0,
-        Align::Center,
-        LANES_W - 24.0,
-        alpha,
-    );
-}
-
-/// クリアの知らせ（NX の Excellent の絵で）
-fn draw_clear(c: &Canvas, g: &mut Gfx, speed: u32, alpha: f32, reverse: bool) {
-    let top = banner_top(CLEAR_H, reverse);
-    c.fill(
-        LANES_X,
-        top,
-        LANES_W,
-        CLEAR_H,
-        Color32::from_black_alpha(180).gamma_multiply(alpha),
-    );
-    c.fill(LANES_X, top, LANES_W, 3.0, PASS_COLOR.gamma_multiply(alpha));
-    c.fill(
-        LANES_X,
-        top + CLEAR_H - 3.0,
-        LANES_W,
-        3.0,
-        PASS_COLOR.gamma_multiply(alpha),
-    );
-    let mut ty = top + 10.0;
-    if let Some(t) = g.skin.tex("Graphics/7_Excellent.png") {
-        // バッジの部分だけ（1280×720 の絵の中の 480×177）
-        let s = 0.55;
-        let (bw, bh) = (480.0, 177.0);
-        c.draw_opt(
-            &t,
-            LANES_CX - bw * s / 2.0,
-            ty,
-            Opt {
-                src: Some(src(402.0, 274.0, bw, bh)),
-                sx: s,
-                sy: s,
-                alpha,
-                ..Default::default()
-            },
-        );
-        ty += bh * s + 2.0;
-    }
-    put(
-        c,
-        g,
-        "区間クリア",
-        &bold(28.0, PASS_COLOR),
-        LANES_CX,
-        ty,
-        Align::Center,
-        LANES_W - 20.0,
-        alpha,
-    );
-    ty += 36.0;
-    put(
-        c,
-        g,
-        &format!("目標の {speed}% で {PASSES_TO_UP} 回合格しました"),
-        &edged(16.0, Color32::WHITE),
-        LANES_CX,
-        ty,
-        Align::Center,
-        LANES_W - 24.0,
-        alpha,
-    );
-    ty += 22.0;
-    put(
-        c,
-        g,
-        &format!("続けて叩けば {speed}% のまま回ります。結果へは Esc →「練習をやめる」"),
-        &edged(14.0, GREY),
-        LANES_CX,
-        ty,
         Align::Center,
         LANES_W - 24.0,
         alpha,
@@ -1050,7 +1527,6 @@ mod tests {
         assert_eq!(banner_top(BANNER_H, false), BANNER_Y);
         // 下から上へ流すときは、下の端から同じだけ離す
         assert_eq!(banner_top(BANNER_H, true) + BANNER_H, 720.0 - BANNER_Y);
-        assert_eq!(banner_top(CLEAR_H, true) + CLEAR_H, 720.0 - BANNER_Y);
     }
 
     #[test]

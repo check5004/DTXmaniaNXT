@@ -10,7 +10,7 @@ use engine::analysis::{NoteResult, Tendency, WeakPhrase, mean_and_sd};
 use engine::clock::MidiTimestampMapper;
 use engine::input::{Articulation, InputEvent, MidiMessage, MidiProfile, Normalizer, Pad};
 use engine::judge::{Hit, HitWindows, Judge, JudgeEvent, Judgement, LaneGroups, Tally};
-use engine::practice::{SpeedPlan, place};
+use engine::practice::{Choice, SetReport, SpeedPlan, place};
 use records::{Lap, NoteHit, SectionClear, Session, SessionKind, StrayHit};
 
 use crate::audio::{AudioOut, Sound, click, load_sound};
@@ -44,6 +44,19 @@ const AUTO_AHEAD_MS: f64 = 1500.0;
 
 /// 自動で叩いたときのレーンの光の強さ（ベロシティ）
 const AUTO_VELOCITY: u8 = 100;
+/// すべて自動で叩くとき、セットの合間で選べるようになってから、おすすめに決めるまで（ミリ秒）
+const AUTO_CHOOSE_MS: f64 = 3000.0;
+
+/// セットの合間の操作。演奏の画面が取り出して音を鳴らし、やめるなら結果へ進む
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BreakEvent {
+    /// 選んでいる選択肢が動いた
+    Moved,
+    /// 次のセットに決めた
+    Decided,
+    /// やめるに決めた
+    Quit,
+}
 
 /// 画面の効果に使う出来事。演奏画面が毎フレーム取り出す
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -185,7 +198,9 @@ pub struct Outcome {
 pub struct PracticeOutcome {
     pub options: PracticeOptions,
     pub laps: Vec<LapSummary>,
-    /// 段階アップで目標の速度まで合格した
+    /// セットごとのまとめ（途中でやめたセットも、最後まで叩いた周があれば入れる）
+    pub sets: Vec<SetReport>,
+    /// 目標の速度で区間全体を苦手なしで叩けた
     pub cleared: bool,
     /// 空打ちが偏っているパッド（拾いすぎの疑い）
     pub strays: Option<StrayHint>,
@@ -219,6 +234,8 @@ pub struct Play {
     pub drum_sounds: bool,
     /// 画面の効果（演奏画面が取り出す）
     fx: Vec<Fx>,
+    /// セットの合間の操作（演奏画面が取り出す）
+    break_events: Vec<BreakEvent>,
     /// 小節線と拍線（時刻の順）
     pub lines: Vec<BeatLine>,
     /// 曲の頭のテンポ
@@ -382,7 +399,7 @@ impl Play {
             let from = t.run_up_ms - SECTION_MARGIN_MS;
             let to = t.tail_ms.max(t.end_ms) + SECTION_MARGIN_MS;
             let started = std::time::Instant::now();
-            let first = p.ladder().speed();
+            let first = p.speed();
             section_audio = Some(SectionAudio::new(
                 mix_bgm(&chart_sounds.auto, &sounds, a.rate(), from, to),
                 from,
@@ -421,6 +438,7 @@ impl Play {
             input_offset_ms,
             drum_sounds,
             fx: Vec::new(),
+            break_events: Vec::new(),
             lines,
             bpm: 60_000.0 / (tempo.beat_to_ms(1.0) - tempo.beat_to_ms(0.0)).max(1.0),
             last_chip_ms,
@@ -475,6 +493,53 @@ impl Play {
         std::mem::take(&mut self.fx)
     }
 
+    /// たまったセットの合間の操作を取り出す
+    pub fn take_break_events(&mut self) -> Vec<BreakEvent> {
+        std::mem::take(&mut self.break_events)
+    }
+
+    /// セットの合間で止まっている
+    pub fn in_break(&self) -> bool {
+        self.practice.as_ref().is_some_and(|p| p.between.is_some())
+    }
+
+    /// セットの合間で、選んでいる選択肢を `d`（-1 か 1）動かす。選べるようになるまでは何もしない
+    pub fn break_move(&mut self, d: i64) {
+        let now = self.now_ms();
+        if let Some(p) = self.practice.as_mut()
+            && p.between.as_ref().is_some_and(|b| b.ready(now))
+            && p.move_choice(d)
+        {
+            self.break_events.push(BreakEvent::Moved);
+        }
+    }
+
+    /// セットの合間で、選んでいる選択肢に決める。選べるようになるまでは何もしない
+    pub fn break_choose(&mut self) {
+        let now = self.now_ms();
+        let Some(p) = self.practice.as_mut() else {
+            return;
+        };
+        if !p.between.as_ref().is_some_and(|b| b.ready(now)) {
+            return;
+        }
+        match p.choose() {
+            Some(Choice::Quit) => self.break_events.push(BreakEvent::Quit),
+            Some(Choice::Set { .. }) => self.break_events.push(BreakEvent::Decided),
+            None => {}
+        }
+    }
+
+    /// セットの合間に叩いたパッドで選ぶ（ハイタムで上、ロータムで下、シンバルかライドで決める）
+    fn break_hit(&mut self, lane: DrumLane) {
+        match lane {
+            DrumLane::HT => self.break_move(-1),
+            DrumLane::LT => self.break_move(1),
+            DrumLane::CY | DrumLane::RD => self.break_choose(),
+            _ => {}
+        }
+    }
+
     fn push_fx(&mut self, fx: Fx) {
         if self.fx.len() >= MAX_FX {
             self.fx.drain(..MAX_FX / 2);
@@ -496,7 +561,7 @@ impl Play {
         let ready = self
             .section_audio
             .as_ref()
-            .is_none_or(|sa| sa.get(p.ladder().speed()).is_some());
+            .is_none_or(|sa| sa.get(p.speed()).is_some());
         if ready {
             while let Some(w) = p.withdraw_stale(now_ms) {
                 if !self.judge.truncate(w.notes_from) {
@@ -511,7 +576,16 @@ impl Play {
         let ahead = self.view_ahead_ms + LAY_MARGIN_MS;
         while p.wants_lap(now_ms, ahead) {
             // 決めた速度の音がまだできていなければ、できるまで前の周の速度で回す
-            let want = p.ladder().speed();
+            let want = p.speed();
+            // セットの始めは、選んだ速度の音ができるまで並べない（前の速度で始めると知らせと合わない）
+            if p.resume_pending()
+                && self
+                    .section_audio
+                    .as_ref()
+                    .is_some_and(|sa| sa.get(want).is_none())
+            {
+                break;
+            }
             let speed = match &self.section_audio {
                 Some(sa) if sa.get(want).is_none() => p.last_speed().unwrap_or(want),
                 _ => want,
@@ -686,6 +760,16 @@ impl Play {
             return;
         }
         let now = self.now_ms();
+        // すべて自動で叩くなら、合間はおすすめに決める（見本の動き）
+        if self.all_auto()
+            && self.practice.as_ref().is_some_and(|p| {
+                p.between
+                    .as_ref()
+                    .is_some_and(|b| b.ready(now - AUTO_CHOOSE_MS))
+            })
+        {
+            self.break_choose();
+        }
         self.lay_laps(now);
         self.lay_auto(now);
         let events = self.judge.advance(now);
@@ -771,6 +855,11 @@ impl Play {
     ) {
         // 上流と同じく、止めているあいだは叩いても何もしない
         if self.paused() {
+            return;
+        }
+        // セットの合間は叩いて次を選ぶ（判定も音もしない）
+        if self.in_break() {
+            self.break_hit(lane);
             return;
         }
         let ms = self.song_ms_at(at_us) - self.input_offset_ms;
@@ -928,7 +1017,8 @@ impl Play {
             practice: self.practice.as_ref().map(|p| PracticeOutcome {
                 options: p.options,
                 laps: p.summaries(self.now_ms()),
-                cleared: p.ladder().cleared(),
+                sets: p.set_reports(),
+                cleared: p.cleared(),
                 strays: p.stray_hint(),
                 offset: p.offset_mean(),
             }),
@@ -1018,7 +1108,7 @@ impl Play {
                 }
             };
             settings += &format!(
-                ",\"section\":[{},{}],\"style\":\"{}\",\"rule\":\"{}\",\"speed\":{},\"pitch\":\"{}\",\"metronome\":{},\"cleared\":{}",
+                ",\"section\":[{},{}],\"style\":\"{}\",\"rule\":\"{}\",\"speed\":{},\"pitch\":\"{}\",\"metronome\":{},\"set_laps\":{},\"sets\":{},\"cleared\":{}",
                 o.section.first,
                 o.section.last,
                 o.style.name(),
@@ -1026,7 +1116,9 @@ impl Play {
                 speed,
                 o.pitch.name(),
                 o.metronome,
-                p.ladder().cleared()
+                o.set_laps,
+                p.set_reports().len(),
+                p.cleared()
             );
         }
         settings.push('}');
@@ -1054,7 +1146,7 @@ impl Play {
                 .iter()
                 .filter(|l| l.complete() && !l.notes.is_empty())
                 .map(|l| {
-                    let s = l.summary(p.options.rule);
+                    let s = l.summary();
                     Lap {
                         speed: s.speed,
                         completed: s.completed,
@@ -1084,7 +1176,7 @@ impl Play {
             started_at: self.started_at,
             settings,
             laps,
-            // 等速以上で続けて合格したら、その区間をクリアとして残す（普通のプレイで克服したかを見る）
+            // 等速以上で区間全体を苦手なしで叩き終えたら、その区間をクリアとして残す（普通のプレイで克服したかを見る）
             clear: self.practice.as_ref().and_then(|p| {
                 p.clear_speed().map(|speed| SectionClear {
                     first: p.options.section.first,

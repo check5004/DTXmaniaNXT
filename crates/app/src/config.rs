@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use dtx::DrumLane;
 use engine::input::MidiProfile;
-use engine::practice::{LoopStyle, PassRule, SpeedPlan, snap_speed};
+use engine::practice::{LoopStyle, PassRule, SET_LAPS, SET_LAPS_CHOICES, SpeedPlan, snap_speed};
 use serde::{Deserialize, Serialize};
 
 use crate::practice::PracticePrefs;
@@ -39,7 +39,7 @@ pub struct Config {
     pub level: usize,
     /// 練習の周のつなぎ方（"connect" か "restart"）
     pub practice_style: String,
-    /// 練習の合格の基準（"easy"、"normal"、"strict"）
+    /// 練習の苦手の見方（"easy"、"normal"、"strict"。同じ拍を 3・2・1 回落としたら苦手）
     pub practice_rule: String,
     /// 練習の速度を段階アップで上げる（false なら固定）
     pub practice_ladder: bool,
@@ -51,6 +51,8 @@ pub struct Config {
     pub practice_pitch: String,
     /// 練習でメトロノームを鳴らす（区間の拍ごとに小さく鳴る）
     pub practice_metronome: bool,
+    /// 練習の 1 セットの周の数
+    pub practice_set_laps: u32,
     /// ゲージが尽きたら途中で終わる（STAGE FAILED）。書いていなければ ON（上流の既定）
     pub stage_failed: Option<bool>,
     /// 判定の下のずれの数字（0 は出さない、1 は出す、2 は PERFECT 以外だけ。上流 `ShowLagTime`）
@@ -150,6 +152,7 @@ impl Default for Config {
             practice_target: SpeedPlan::DEFAULT_TARGET,
             practice_pitch: Pitch::default().name().to_owned(),
             practice_metronome: true,
+            practice_set_laps: SET_LAPS,
             stage_failed: None,
             show_lag_time: 1,
             show_lag_time_color: 0,
@@ -309,7 +312,7 @@ impl Config {
         LoopStyle::from_name(&self.practice_style).unwrap_or_default()
     }
 
-    /// 練習の合格の基準（読めない値なら既定）
+    /// 練習の苦手の見方（読めない値なら既定）
     pub fn pass_rule(&self) -> PassRule {
         PassRule::from_name(&self.practice_rule).unwrap_or_default()
     }
@@ -340,6 +343,7 @@ impl Config {
             speed: self.speed_plan(),
             pitch: self.pitch(),
             metronome: self.practice_metronome,
+            set_laps: self.set_laps(),
         }
     }
 
@@ -360,6 +364,15 @@ impl Config {
         }
         self.practice_pitch = p.pitch.name().to_owned();
         self.practice_metronome = p.metronome;
+        self.practice_set_laps = p.set_laps;
+    }
+
+    /// 練習の 1 セットの周の数（選べる数のうち一番近いもの）
+    pub fn set_laps(&self) -> u32 {
+        SET_LAPS_CHOICES
+            .into_iter()
+            .min_by_key(|&n| n.abs_diff(self.practice_set_laps))
+            .unwrap_or(SET_LAPS)
     }
 
     /// 前の版の、機器を区別しないパッドの割り当て（読めないレーンの名前は飛ばす）
@@ -425,6 +438,7 @@ mod tests {
             speed: SpeedPlan::Fixed(85),
             pitch: Pitch::Tape,
             metronome: false,
+            set_laps: 6,
         };
         c.set_practice_prefs(p);
         assert_eq!(c.practice_prefs(), p);
