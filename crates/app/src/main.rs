@@ -31,6 +31,7 @@ mod result_training;
 mod result_view;
 mod select;
 mod sfx;
+mod shutter;
 mod skin;
 mod songs;
 mod stretch;
@@ -67,6 +68,7 @@ use crate::practice_popup::{Done, PopupInput, PopupMouse, PracticePopup};
 use crate::result_view::{Page, ResultInfo, ResultView};
 use crate::select::{PREVIEW_WAIT, SelectView};
 use crate::sfx::{Se, Sfx};
+use crate::shutter::Shutter;
 use crate::songs::SongList;
 use crate::time::host_us;
 use crate::title_view::{Ending, TitleItem, TitleView};
@@ -299,8 +301,10 @@ struct App {
     quit: bool,
     /// 起動できなかったわけ（ループを抜けてから知らせる）
     startup_error: Option<anyhow::Error>,
-    /// 選曲画面で決めたもの（暗くし終えたら始める）
-    decided: Option<Decided>,
+    /// 画面の切り替えのシャッター（NX v2.0 `GitaDoraTransition`）
+    shutter: Shutter,
+    /// シャッターを閉じ終えたら移る先（閉じているあいだは操作を受け付けない）
+    after_close: Option<AfterClose>,
     /// 選曲画面に重ねる、練習の決めごとのポップアップ
     popup: Option<Box<PracticePopup>>,
     /// 選曲画面のマウスホイールの、まだ 1 行に満たない分
@@ -337,12 +341,27 @@ const HIT_SOUND_KEY: KeyCode = KeyCode::F2;
 /// [`HIT_SOUND_KEY`] の表示の名前
 const HIT_SOUND_KEY_NAME: &str = "F2";
 
-/// 選曲画面で決めたもの
-enum Decided {
-    Play(PathBuf),
-    /// タイトルへ戻る
+/// シャッターを閉じ終えたら移る先
+enum AfterClose {
+    Select,
     Title,
+    /// 設定。`true` なら出たら選曲へ
+    Config(bool),
+    /// 演奏を Esc でやめた。結果の画面へ（数はやめた時刻の曲の時刻 `at_ms` までで）
+    Result {
+        at_ms: f64,
+    },
+    /// 結果の画面から練習の決めごとへ（選曲画面に開く）
+    Setup(PathBuf, Option<PracticeOptions>),
 }
+
+/// シャッターを開き始めるまでの待ち（v2 はフレームで数える。60 で割った時間にする）。
+/// 選曲は 20 フレーム、設定は 2 フレーム、設定から出てタイトルへは 150 ミリ秒
+const SELECT_OPEN_DELAY: Duration = Duration::from_millis(333);
+const CONFIG_OPEN_DELAY: Duration = Duration::from_millis(33);
+const CONFIG_LEAVE_OPEN_DELAY: Duration = Duration::from_millis(150);
+/// 読み込みを Esc でやめてから閉じ始めるまで（v2：10 フレーム）
+const LOADING_CANCEL_CLOSE_DELAY: Duration = Duration::from_millis(167);
 
 /// 電子ドラムのノート番号の割り当て。Roland の既定に、設定の画面で変えた割り当てを重ねる
 fn midi_profile(config: &Config) -> MidiProfile {
@@ -438,7 +457,8 @@ impl App {
             title: TitleView::new(),
             quit: false,
             startup_error: None,
-            decided: None,
+            shutter: Shutter::new(),
+            after_close: None,
             popup: None,
             wheel: 0.0,
             show_play_info: false,
@@ -447,12 +467,13 @@ impl App {
         }
     }
 
-    /// 選曲画面に戻る（フェードと登場のアニメから）
+    /// 選曲画面に戻る。v2 と同じく、入るたびにシャッターを開く（閉じていなければ閉じた形から）
     fn go_to_select(&mut self) {
         self.sfx.stop_title();
         self.popup = None;
         self.screen = Screen::Select;
         self.view.enter();
+        self.shutter.open(SELECT_OPEN_DELAY);
     }
 
     /// タイトルへ（白からのフェードから）
@@ -462,10 +483,36 @@ impl App {
         self.title.enter();
     }
 
-    /// 設定の画面を開く。`from_select` なら出たら選曲へ戻る
+    /// 設定の画面を開く。`from_select` なら出たら選曲へ戻る。v2 と同じくシャッターを開いて入る
     fn open_config(&mut self, from_select: bool) {
         self.sfx.preview(None);
         self.screen = Screen::Config(Box::new(ConfigView::new()), from_select);
+        self.shutter.open(CONFIG_OPEN_DELAY);
+    }
+
+    /// シャッターを閉じ、閉じ終えたら `next` へ移る（閉じているあいだは操作を受け付けない）
+    fn close_then(&mut self, next: AfterClose, delay: Duration) {
+        if self.after_close.is_none() {
+            self.after_close = Some(next);
+            self.shutter.close(delay);
+        }
+    }
+
+    /// シャッターを閉じ終えたので、決めておいた画面へ移る
+    fn closed(&mut self, next: AfterClose) {
+        match next {
+            AfterClose::Select => self.go_to_select(),
+            AfterClose::Title => {
+                self.go_to_title();
+                self.shutter.open(CONFIG_LEAVE_OPEN_DELAY);
+            }
+            AfterClose::Config(from_select) => self.open_config(from_select),
+            AfterClose::Result { at_ms } => {
+                self.finish_play(Some(at_ms));
+                self.shutter.open(shutter::OPEN_DELAY);
+            }
+            AfterClose::Setup(path, previous) => self.open_setup(path, previous),
+        }
     }
 
     /// 終わる前の画面を出す（終わりの音が鳴り終えたら閉じる）
@@ -577,6 +624,10 @@ impl App {
 
     /// 読み込みの画面を進める。読み終えた曲を受け取り、音が鳴り終えたら演奏へ
     fn pump_loading(&mut self) {
+        // Esc でやめてシャッターを閉じているあいだは、読み終えても演奏へ移らない
+        if self.after_close.is_some() {
+            return;
+        }
         let Screen::Loading(l) = &mut self.screen else {
             return;
         };
@@ -674,12 +725,12 @@ impl App {
         self.open_loading(path, Some(options));
     }
 
-    /// 曲（練習）を終える。結果の画面へ
-    fn finish_play(&mut self) {
+    /// 曲（練習）を終える。結果の画面へ。`at_ms`（曲の時刻）があればそこでやめたことにする
+    fn finish_play(&mut self, at_ms: Option<f64>) {
         let Screen::Play(p, view) = &self.screen else {
             return;
         };
-        let finish = view.finish(p, p.now_ms());
+        let finish = view.finish(p, at_ms.unwrap_or_else(|| p.now_ms()));
         let practice = p.practice.is_some();
         // Esc でやめたときも結果は出す（記録は「最後まで遊んでいない」として残す）
         let cleared = p.finished();
@@ -746,7 +797,10 @@ impl App {
     fn pump(&mut self) {
         self.songs.poll();
         let mut assigned = None;
+        let closing = self.after_close.is_some();
         match (&self.midi, &mut self.screen) {
+            // シャッターを閉じているあいだは叩いても何もしない（演奏をやめたあとの音符も数えない）
+            (Some(midi), _) if closing => drop(midi.drain()),
             (Some(midi), Screen::Play(play, _)) => {
                 for raw in midi.drain() {
                     play.on_midi(raw);
@@ -800,7 +854,9 @@ impl App {
         let stage_failed = self.stage_failed_enabled();
         let mut failed_out = false;
         let mut finished = false;
-        if let Screen::Play(play, view) = &mut self.screen {
+        if let Screen::Play(play, view) = &mut self.screen
+            && !closing
+        {
             if view.frozen_ms().is_some() {
                 // STAGE FAILED の途中は譜面を進めない
                 failed_out = view.failure_done();
@@ -826,25 +882,21 @@ impl App {
             self.save_unfinished();
             self.go_to_select();
         } else if finished {
-            self.finish_play();
+            self.finish_play(None);
         }
-        if matches!(self.screen, Screen::Select) {
-            if self.view.faded_out()
-                && let Some(d) = self.decided.take()
-            {
-                match d {
-                    Decided::Play(p) => self.start(p),
-                    Decided::Title => self.go_to_title(),
-                }
-            } else if !self.view.fading_out() {
-                // 選んでから少し待ってプレビューの音を鳴らす（上流 CActSelectPresound）
-                let preview = if self.view.settled_for(&self.songs, PREVIEW_WAIT) {
-                    self.view.preview_path(&self.songs)
-                } else {
-                    None
-                };
-                self.sfx.preview(preview);
-            }
+        if self.shutter.is_closed()
+            && let Some(next) = self.after_close.take()
+        {
+            self.closed(next);
+        }
+        if matches!(self.screen, Screen::Select) && self.after_close.is_none() {
+            // 選んでから少し待ってプレビューの音を鳴らす（上流 CActSelectPresound）
+            let preview = if self.view.settled_for(&self.songs, PREVIEW_WAIT) {
+                self.view.preview_path(&self.songs)
+            } else {
+                None
+            };
+            self.sfx.preview(preview);
         } else {
             self.sfx.preview(None);
         }
@@ -857,16 +909,6 @@ impl App {
             Screen::Title => {
                 if self.title.take_title_sound() {
                     self.sfx.play_title();
-                }
-                match self.title.faded_out() {
-                    Some(TitleItem::GameStart) => self.go_to_select(),
-                    Some(TitleItem::Config) => self.open_config(false),
-                    _ => {}
-                }
-            }
-            Screen::Config(view, _) => {
-                if let Some(a) = view.poll() {
-                    self.config_action(a);
                 }
             }
             Screen::End(e) if e.done() => self.quit = true,
@@ -890,8 +932,15 @@ impl App {
                     Se::Decide
                 };
                 self.sfx.play(se);
+                // v2 と同じく、タイトルの音を止めてシャッターを閉じる
+                self.sfx.stop_title();
+                self.close_then(AfterClose::Select, Duration::ZERO);
             }
-            Some(TitleItem::Config) => self.sfx.play(Se::Decide),
+            Some(TitleItem::Config) => {
+                self.sfx.play(Se::Decide);
+                self.sfx.stop_title();
+                self.close_then(AfterClose::Config(false), Duration::ZERO);
+            }
             Some(TitleItem::Exit) => {
                 self.sfx.play(Se::Decide);
                 self.begin_end();
@@ -911,8 +960,11 @@ impl App {
         }
     }
 
-    /// 設定の画面の操作
+    /// 設定の画面の操作（v2 と同じく、シャッターが開ききるまでは受け付けない）
     fn config_input(&mut self, input: ConfigInput) {
+        if self.shutter.animating() {
+            return;
+        }
         let Screen::Config(view, _) = &mut self.screen else {
             return;
         };
@@ -1009,16 +1061,20 @@ impl App {
             }
             ConfigAction::Leave => {
                 self.message = None;
-                if matches!(self.screen, Screen::Config(_, true)) {
-                    self.go_to_select();
+                let next = if matches!(self.screen, Screen::Config(_, true)) {
+                    AfterClose::Select
                 } else {
-                    self.go_to_title();
-                }
+                    AfterClose::Title
+                };
+                self.close_then(next, Duration::ZERO);
             }
         }
     }
 
     fn on_key(&mut self, code: KeyCode) {
+        if self.after_close.is_some() {
+            return;
+        }
         let at = host_us();
         match &mut self.screen {
             Screen::Title => self.on_title_key(code),
@@ -1034,10 +1090,10 @@ impl App {
             }
             Screen::End(_) => {}
             Screen::Loading(_) => {
-                // 上流と同じく Esc で読み込みをやめて選曲に戻る
+                // 上流と同じく Esc で読み込みをやめて選曲に戻る（v2：少し待ってシャッターを閉じる）
                 if code == KeyCode::Escape {
                     self.sfx.stop_loading();
-                    self.go_to_select();
+                    self.close_then(AfterClose::Select, LOADING_CANCEL_CLOSE_DELAY);
                 }
             }
             Screen::Play(play, _) => {
@@ -1069,7 +1125,9 @@ impl App {
         };
         let toast = match code {
             KeyCode::Escape => {
-                self.finish_play();
+                // v2 と同じくシャッターを閉じてから移る。数はここまで（閉じるあいだの音符は数えない）
+                let at_ms = play.now_ms();
+                self.close_then(AfterClose::Result { at_ms }, Duration::ZERO);
                 return;
             }
             KeyCode::KeyR => {
@@ -1144,7 +1202,7 @@ impl App {
 
     /// 選曲画面のマウス：ホイールで動かし、曲バーを押すとそこへ動く（選んでいる曲なら決める）
     fn select_mouse(&mut self, mouse: SelectMouse) {
-        if !matches!(self.screen, Screen::Select) || self.view.fading_out() {
+        if !matches!(self.screen, Screen::Select) || self.after_close.is_some() {
             self.wheel = 0.0;
             return;
         }
@@ -1172,16 +1230,14 @@ impl App {
     }
 
     fn on_select_key(&mut self, code: KeyCode) {
-        if self.view.fading_out() {
-            return;
-        }
         if self.popup.is_some() {
             self.on_popup_key(code);
             return;
         }
         if code == KeyCode::F1 {
             self.sfx.play(Se::Decide);
-            self.open_config(true);
+            self.sfx.preview(None);
+            self.close_then(AfterClose::Config(true), Duration::ZERO);
             return;
         }
         let delta = match code {
@@ -1205,10 +1261,9 @@ impl App {
                 if self.songs.back() {
                     self.view.jumped();
                 } else {
-                    // 上流と同じく一番上で Esc ならタイトルへ
+                    // 上流と同じく一番上で Esc ならタイトルへ（v2 はすぐ切り替え、タイトルが白から出る）
                     self.sfx.preview(None);
-                    self.decided = Some(Decided::Title);
-                    self.view.fade_out();
+                    self.go_to_title();
                 }
             }
             // v2 と同じく ← → で並べ替え、R でランダムに選ぶ。難易度は Tab（パッドの HH 2 回）
@@ -1250,6 +1305,9 @@ impl App {
     /// 選曲と結果の画面での電子ドラムの操作（上流と同じ割り当て）。
     /// HT で上、LT で下、CY か RD で決定、LC で戻る、HH を 2 回で難易度
     fn on_menu_pad(&mut self, lane: DrumLane, at_us: i64) {
+        if self.after_close.is_some() {
+            return;
+        }
         match &self.screen {
             Screen::Title => match lane {
                 DrumLane::HT => self.title_move(-1),
@@ -1269,9 +1327,6 @@ impl App {
             }
             Screen::End(_) => {}
             Screen::Select => {
-                if self.view.fading_out() {
-                    return;
-                }
                 if self.popup.is_some() {
                     let input = match lane {
                         DrumLane::HT => PopupInput::Up,
@@ -1369,10 +1424,10 @@ impl App {
                 let depth = self.songs.breadcrumbs().len();
                 match self.songs.enter() {
                     Some(path) => {
+                        // v2 と同じく、すぐ読み込みの画面へ切り替える
                         self.sfx.play(Se::Decide);
                         self.sfx.preview(None);
-                        self.decided = Some(Decided::Play(path));
-                        self.view.fade_out();
+                        self.start(path);
                     }
                     None => {
                         self.view.jumped();
@@ -1403,6 +1458,9 @@ impl App {
     }
 
     fn result_action(&mut self, action: ui::ResultAction) {
+        if self.after_close.is_some() {
+            return;
+        }
         let Screen::Result(o, _) = &self.screen else {
             return;
         };
@@ -1410,9 +1468,9 @@ impl App {
         let options = o.practice.as_ref().map(|p| p.options);
         match action {
             ui::ResultAction::Back => {
-                // 上流と同じく戻る音を鳴らして選曲へ
+                // 上流と同じく戻る音を鳴らして選曲へ（v2：シャッターを閉じてから）
                 self.sfx.play(Se::Cancel);
-                self.go_to_select();
+                self.close_then(AfterClose::Select, Duration::ZERO);
             }
             ui::ResultAction::Retry => match options {
                 Some(o) => self.start_practice(path, o),
@@ -1436,12 +1494,16 @@ impl App {
                     }
                     None => options,
                 };
-                self.open_setup(path, previous);
+                self.close_then(AfterClose::Setup(path, previous), Duration::ZERO);
             }
         }
     }
 
     fn on_drop(&mut self, path: PathBuf) {
+        // シャッターを閉じているあいだは次の画面が決まっているので、曲を始めない
+        if self.after_close.is_some() {
+            return;
+        }
         if path.is_dir() {
             self.add_song_dir(path);
         } else if ui::is_chart_file(&path) {
@@ -1455,10 +1517,10 @@ impl App {
     }
 
     fn redraw(&mut self) {
-        let (Some(window), Some(state)) = (&self.window, &mut self.egui_state) else {
+        let (Some(window), Some(state)) = (self.window.clone(), &mut self.egui_state) else {
             return;
         };
-        let input = state.take_egui_input(window);
+        let input = state.take_egui_input(&window);
         let ports = self
             .midi
             .as_ref()
@@ -1472,7 +1534,49 @@ impl App {
             .filter(|(_, until)| Instant::now() < *until)
             .map(|(t, _)| t.clone());
         let scanning = self.songs.scanning().is_some();
-        let output = self.egui_ctx.run_ui(input, |ui| match &mut self.screen {
+        self.shutter.update(Instant::now());
+        let egui_ctx = self.egui_ctx.clone();
+        let output = egui_ctx.run_ui(input, |ui| {
+            self.draw_screen(
+                ui,
+                &ports,
+                &toast,
+                scanning,
+                &mut mouse,
+                &mut result_actions,
+            );
+            // シャッターはどの画面のどの窓よりも上に
+            let ctx = ui.ctx().clone();
+            let top = ctx.layer_painter(egui::LayerId::new(
+                egui::Order::Debug,
+                egui::Id::unique("shutter"),
+            ));
+            self.shutter
+                .draw(&Canvas::overlay(&top, ctx.content_rect()), &mut self.gfx);
+        });
+        if let Some(state) = &mut self.egui_state {
+            state.handle_platform_output(&window, output.platform_output.clone());
+        }
+        if let Some(gpu) = &mut self.gpu {
+            gpu.render(&self.egui_ctx, output);
+        }
+        self.select_mouse(mouse);
+        for a in result_actions {
+            self.result_action(a);
+        }
+    }
+
+    /// 今の画面を描く
+    fn draw_screen(
+        &mut self,
+        ui: &mut egui::Ui,
+        ports: &[String],
+        toast: &Option<String>,
+        scanning: bool,
+        mouse: &mut SelectMouse,
+        result_actions: &mut Vec<ui::ResultAction>,
+    ) {
+        match &mut self.screen {
             Screen::Title => {
                 let ctx = ui.ctx().clone();
                 let painter = ctx.layer_painter(egui::LayerId::background());
@@ -1511,7 +1615,7 @@ impl App {
                 if let Some(m) = &self.message {
                     ui::message_overlay(&ctx, m);
                 }
-                mouse = SelectMouse::read(&ctx, &c);
+                *mouse = SelectMouse::read(&ctx, &c);
             }
             Screen::Loading(l) => {
                 let ctx = ui.ctx().clone();
@@ -1535,11 +1639,11 @@ impl App {
                     &ui::PlayOverlay {
                         play,
                         config: &self.config,
-                        midi_ports: &ports,
+                        midi_ports: ports,
                         show_info: self.show_play_info,
                     },
                 );
-                if let Some(t) = &toast {
+                if let Some(t) = toast {
                     ui::play_toast(&ctx, &c, t);
                 }
             }
@@ -1553,7 +1657,7 @@ impl App {
                     Page::Summary => view.draw_summary(&c, &mut self.gfx, o),
                     Page::Analysis => {
                         view.draw_analysis_hint(&c, &mut self.gfx);
-                        result_actions = ui::draw_result(ui, o, &self.config);
+                        *result_actions = ui::draw_result(ui, o, &self.config);
                     }
                 }
                 // フェードは egui の窓より上に
@@ -1563,14 +1667,6 @@ impl App {
                 ));
                 view.draw_fade(&Canvas::overlay(&top, ctx.content_rect()));
             }
-        });
-        state.handle_platform_output(window, output.platform_output.clone());
-        if let Some(gpu) = &mut self.gpu {
-            gpu.render(&self.egui_ctx, output);
-        }
-        self.select_mouse(mouse);
-        for a in result_actions {
-            self.result_action(a);
         }
     }
 }

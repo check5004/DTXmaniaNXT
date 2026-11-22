@@ -270,6 +270,17 @@ impl Canvas {
         self.painter.rect_filled(self.rect(x, y, w, h), 0.0, color);
     }
 
+    /// 4 つの角（NX の座標、回る向きに並べる）を結んだ四角を塗る。回した板など
+    pub fn quad(&self, corners: [(f32, f32); 4], color: Color32) {
+        let mut mesh = Mesh::default();
+        for (x, y) in corners {
+            mesh.colored_vertex(self.pos(x, y), color);
+        }
+        mesh.add_triangle(0, 1, 2);
+        mesh.add_triangle(0, 2, 3);
+        self.painter.add(mesh);
+    }
+
     /// 枠を描く
     pub fn frame(&self, x: f32, y: f32, w: f32, h: f32, color: Color32) {
         self.painter.rect_stroke(
