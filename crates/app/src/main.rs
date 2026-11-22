@@ -34,7 +34,6 @@ mod logging;
 mod midi;
 mod movie;
 mod nx_import;
-mod nx_place;
 mod play_view;
 mod practice;
 mod practice_hud;

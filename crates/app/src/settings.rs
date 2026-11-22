@@ -269,7 +269,7 @@ const RD_POSITION_CHOICES: &[Choice] = choices![
 
 /// 上流 `eHHOGraphics.Drums`
 const HHO_GRAPHICS_CHOICES: &[Choice] = choices![
-    "a" => "A（NX の絵）",
+    "a" => "A（丸あり）",
     "b" => "B（丸なし）",
     "c" => "C（クローズと同じ）",
 ];
@@ -279,8 +279,8 @@ const HHO_GRAPHICS_CHOICES: &[Choice] = choices![
 const LBD_GRAPHICS_CHOICES: &[Choice] = choices![
     "bd_lane" => "BD のレーンに水色で",
     "own_lane" => "LP の右にレーンを足す（水色）",
-    "a" => "LP のレーンに同じ絵（NX の A）",
-    "b" => "LP のレーンに紫の絵（NX の B）",
+    "a" => "LP のレーンに同じ絵",
+    "b" => "LP のレーンに紫の絵",
 ];
 
 /// スネアのリムの音符の出し方（並びは [`crate::rim_look::RimLook`] と同じ）
@@ -736,14 +736,14 @@ pub const ALL: &[Def] = &[
         VIEW_ORDER,
         "オープンハイハットの絵（HHOGraphics）",
         HHO_GRAPHICS_CHOICES,
-        "A は NX の絵、B は A のまわりの丸を消した絵、C はクローズのハイハットと同じ絵です。",
+        "A はまわりに丸のある絵、B は丸を消した絵、C はクローズのハイハットと同じ絵です。",
     ),
     view_choice(
         LBD_GRAPHICS,
         VIEW_ORDER,
         "左バスドラムの出し方（LBDGraphics）",
         LBD_GRAPHICS_CHOICES,
-        "左バスドラム（LBD）の音符を BD のレーンに水色で出すか、LP の右に足したレーン（実物のツインペダルと同じ並び）に出すか、NX と同じく LP のレーンに出すか。\n光・判定の文字・火花も、音符を出したレーンに出します。",
+        "左バスドラム（LBD）の音符を BD のレーンに水色で出すか、LP の右に足したレーン（実物のツインペダルと同じ並び）に出すか、LP のレーンに出すか。\n光・判定の文字・火花も、音符を出したレーンに出します。",
     ),
     view_choice(
         RIM_GRAPHICS,
@@ -888,7 +888,7 @@ pub const ALL: &[Def] = &[
         AUTO_VOLUME,
         "BGM の音量（AutoVolume）",
         80,
-        "曲の音の音量です。BGM のほか、譜面の効果音、自動で叩くレーンの音、選曲のプレビューも入ります（全体の音量にさらにかけます）。\nNX と同じく既定は 80 %。",
+        "曲の音の音量です。BGM のほか、譜面の効果音、自動で叩くレーンの音、選曲のプレビューも入ります（全体の音量にさらにかけます）。",
     ),
     volume(
         CHIP_VOLUME,

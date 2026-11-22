@@ -124,27 +124,15 @@ impl Cat {
     pub fn desc(self) -> &'static str {
         match self {
             Cat::Fav => "よく変える項目です。選曲で RD を叩いて開く簡易設定と同じ並びです。",
-            Cat::Display => {
-                "窓の出し方と、画面の描き方、譜面の動画。\nNX の System ＞ Graphics にあったものです。"
-            }
-            Cat::Sound => "音量と、鳴らすもの。\nNX の System ＞ Audio にあったものです。",
-            Cat::Play => {
-                "ゲームの決まり（STAGE FAILED、ゲージ）、判定の幅、ずれの表示、記録。\nNX の System ＞ Gameplay にあったものと、HAZARD・Tight です。"
-            }
+            Cat::Display => "窓の出し方と、画面の描き方、譜面の動画。",
+            Cat::Sound => "音量と、鳴らすもの。",
+            Cat::Play => "ゲームの決まり（STAGE FAILED、ゲージ）、判定の幅、ずれの表示、記録。",
             Cat::Songs => "曲のフォルダと、曲の探し直し。",
             Cat::App => "更新など、アプリ全体のこと。",
-            Cat::View => {
-                "譜面の速さと流れ方、見えにくくする、レーンとチップ、画面の部品。\nNX の Drums の ScrollSpeed から Combo までです。"
-            }
-            Cat::Pads => {
-                "自動演奏、叩き分け（Group）、共通にしたときに鳴らす音（Priority）。\nNX の Drums の AutoPlay と Group・Priority・Muting LP です。"
-            }
-            Cat::Timing => {
-                "叩いた時刻・表示・BGM の補正。\nNX の Drums ＞ InputAdjust と System ＞ Audio ＞ BGMAdjust です。"
-            }
-            Cat::Input => {
-                "パッドとキーの割り当てと、MIDI 機器ごとの設定。\nNX の Drums ＞ Input Mapping です。"
-            }
+            Cat::View => "譜面の速さと流れ方、見えにくくする、レーンとチップ、画面の部品。",
+            Cat::Pads => "自動演奏、叩き分け（Group）、共通にしたときに鳴らす音（Priority）。",
+            Cat::Timing => "叩いた時刻・表示・BGM の補正。",
+            Cat::Input => "パッドとキーの割り当てと、MIDI 機器ごとの設定。",
             Cat::Practice => {
                 "区間練習の決めごとの既定です。選曲の練習のポップアップで変えたものも、ここに残ります。"
             }
@@ -2496,14 +2484,6 @@ impl ConfigView {
             }
             ty += 30.0;
         }
-        // NX から来た人のために、NX v2.0 の設定画面でどこにあったかを見本の上に出す
-        // （説明が長くて入りきらないときは、説明を先にして出さない）
-        let nx_y = pv.1 - 30.0;
-        let desc_end =
-            ty + 6.0 + g.texts.wrap(&r.desc, desc_style.px, w - 44.0).len() as f32 * 25.0;
-        let nx =
-            r.id.and_then(crate::nx_place::of)
-                .filter(|_| desc_end <= nx_y - 4.0);
         ui::paragraph(
             c,
             g,
@@ -2512,22 +2492,9 @@ impl ConfigView {
             ty + 6.0,
             w - 44.0,
             25.0,
-            if nx.is_some() { nx_y - 4.0 } else { pv.1 - 8.0 },
+            pv.1 - 8.0,
             &desc_style,
         );
-        if let Some(place) = nx {
-            let label = ui::plain(13.0, ui::MUTED);
-            let lw = ui::text(c, g, "NX v2.0 では", x + 22.0, nx_y + 2.0, &label, 120.0);
-            ui::text(
-                c,
-                g,
-                place,
-                x + 22.0 + lw + 10.0,
-                nx_y,
-                &ui::bold(15.0, RAIL_HEADING),
-                w - 54.0 - lw,
-            );
-        }
         preview_box(c, pv);
         draw_preview(c, g, r, info, pv, self.entered);
     }
