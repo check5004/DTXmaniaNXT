@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Result, anyhow};
 use egui::Color32;
+use i18n::t;
 use library::ChartHead;
 
 use crate::game::Play;
@@ -164,9 +165,10 @@ impl<T: Send + 'static> Job<T> {
             Ok(r) => Some(r),
             Err(TryRecvError::Empty) => None,
             // 結果を送らずにスレッドが終わった（パニックか、スレッドを作れなかった）
-            Err(TryRecvError::Disconnected) => {
-                Some(Err(anyhow!("曲を読むスレッドが途中で止まりました")))
-            }
+            Err(TryRecvError::Disconnected) => Some(Err(anyhow!(t(
+                "The song loader stopped unexpectedly",
+                "曲を読むスレッドが途中で止まりました"
+            )))),
         }
     }
 }

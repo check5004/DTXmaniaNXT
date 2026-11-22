@@ -67,6 +67,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use dtx::DrumLane;
 use engine::input::{InputEvent, MidiMessage, MidiProfile, Normalizer};
+use i18n::{t, tf};
 use inputs::MidiMonitor;
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, WindowEvent};
@@ -119,26 +120,30 @@ const TIMEOUTS_BEFORE_RECONFIGURE: u32 = 3;
 impl Gpu {
     fn new(window: Arc<Window>, vsync: bool) -> Result<Self> {
         let instance = wgpu::Instance::default();
-        let surface = instance
-            .create_surface(window.clone())
-            .context("窓に描く準備（サーフェス）ができません")?;
+        let surface = instance.create_surface(window.clone()).context(t(
+            "Cannot prepare the window for drawing (surface)",
+            "窓に描く準備（サーフェス）ができません",
+        ))?;
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
             compatible_surface: Some(&surface),
             ..Default::default()
         }))
-        .context("使える GPU が見つかりません")?;
+        .context(t("No usable GPU found", "使える GPU が見つかりません"))?;
         log::info!("GPU: {:?}", adapter.get_info().name);
         // NX のスキンには縦 4080 の画像などがあるので、GPU が扱える一番大きい画像の大きさを使う
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             required_limits: wgpu::Limits::default().using_resolution(adapter.limits()),
             ..Default::default()
         }))
-        .context("GPU を使う準備ができません")?;
+        .context(t("Cannot set up the GPU", "GPU を使う準備ができません"))?;
         let size = window.inner_size();
         let mut config = surface
             .get_default_config(&adapter, size.width.max(1), size.height.max(1))
-            .context("この GPU では窓に描けません")?;
+            .context(t(
+                "This GPU cannot draw to the window",
+                "この GPU では窓に描けません",
+            ))?;
         // egui は sRGB でない形式を前提に色を作るので、選べるならそちらにする
         let caps = surface.get_capabilities(&adapter);
         if let Some(f) = caps.formats.iter().find(|f| !f.is_srgb()) {
@@ -895,7 +900,10 @@ impl App {
         // 譜面の音を切ったままだと、叩いても音が出ないわけが分からない。始めにしばらく知らせる
         if !play.drum_sounds {
             self.toast_for(
-                format!("叩いた音: 鳴らさない（{HIT_SOUND_KEY_NAME} で切り替え）"),
+                tf!(
+                    "Hit sounds: off ({HIT_SOUND_KEY_NAME} to toggle)",
+                    "叩いた音: 鳴らさない（{HIT_SOUND_KEY_NAME} で切り替え）"
+                ),
                 HIT_SOUND_NOTICE_FOR,
             );
         }
@@ -916,7 +924,7 @@ impl App {
     fn load_failed(&mut self, e: &anyhow::Error) {
         log::error!("{e:#}");
         self.sfx.stop_loading();
-        self.message = Some(format!("読み込めませんでした: {e:#}"));
+        self.message = Some(tf!("Could not load: {e:#}", "読み込めませんでした: {e:#}"));
         self.go_to_select();
     }
 
@@ -978,7 +986,7 @@ impl App {
             }
             Err(e) => {
                 log::error!("{e:#}");
-                self.message = Some(format!("読み込めませんでした: {e:#}"));
+                self.message = Some(tf!("Could not load: {e:#}", "読み込めませんでした: {e:#}"));
             }
         }
     }
@@ -1322,8 +1330,11 @@ impl App {
             return;
         };
         let text = match event {
-            update::Event::Ready(v) => format!("v{v} を落としました。終了すると入れ替わります"),
-            update::Event::Failed(v) => format!("v{v} を落とせませんでした"),
+            update::Event::Ready(v) => tf!(
+                "v{v} downloaded. It will be installed when you quit.",
+                "v{v} を落としました。終了すると入れ替わります"
+            ),
+            update::Event::Failed(v) => tf!("Could not download v{v}", "v{v} を落とせませんでした"),
         };
         match self.screen {
             // タイトルは「更新」の行が変わるので知らせない（知らせはその行と重なる）
@@ -1389,12 +1400,14 @@ impl App {
                 self.config.save();
                 self.refresh_pads();
                 self.config_toast(if added {
-                    format!(
+                    tf!(
+                        "Added note {note} to {} ({device})",
                         "ノート {note} を{}に足しました（{device}）",
                         inputs::lane_label(lane)
                     )
                 } else {
-                    format!(
+                    tf!(
+                        "Removed note {note} from {} ({device})",
                         "ノート {note} を{}から外しました（{device}）",
                         inputs::lane_label(lane)
                     )
@@ -1406,9 +1419,17 @@ impl App {
                 self.refresh_pads();
                 let key = inputs::key_label(code);
                 self.config_toast(if added {
-                    format!("キー {key} を{}に足しました", inputs::lane_label(lane))
+                    tf!(
+                        "Added key {key} to {}",
+                        "キー {key} を{}に足しました",
+                        inputs::lane_label(lane)
+                    )
                 } else {
-                    format!("キー {key} を{}から外しました", inputs::lane_label(lane))
+                    tf!(
+                        "Removed key {key} from {}",
+                        "キー {key} を{}から外しました",
+                        inputs::lane_label(lane)
+                    )
                 });
             }
             ConfigAction::AssignPad(lane, port, note) => {
@@ -1432,7 +1453,8 @@ impl App {
                 inputs::clear_lane(&mut self.config, &ports, lane);
                 self.config.save();
                 self.refresh_pads();
-                self.config_toast(format!(
+                self.config_toast(tf!(
+                    "Cleared everything assigned to {}",
                     "{}の割り当てを全部外しました",
                     inputs::lane_label(lane)
                 ));
@@ -1767,7 +1789,8 @@ impl App {
     fn config_run(&mut self, id: ItemId) {
         match id {
             ItemId::AddSongDir => {
-                if let Some(dir) = ui::pick_folder("曲のフォルダを選ぶ") {
+                if let Some(dir) = ui::pick_folder(t("Choose a Song Folder", "曲のフォルダを選ぶ"))
+                {
                     self.add_song_dir(dir);
                 }
             }
@@ -1776,7 +1799,13 @@ impl App {
                     self.config.song_dirs.remove(i);
                     self.config.save();
                     self.songs.rescan(self.config.song_dirs.clone());
-                    self.config_toast("曲のフォルダを一覧から外しました".to_owned());
+                    self.config_toast(
+                        t(
+                            "Removed the song folder from the list",
+                            "曲のフォルダを一覧から外しました",
+                        )
+                        .to_owned(),
+                    );
                 }
             }
             ItemId::Rescan => {
@@ -1804,9 +1833,11 @@ impl App {
                     && a.changes()
                 {
                     self.apply_advice(&a);
-                    self.config_toast(format!(
+                    self.config_toast(tf!(
+                        "Applied the suggested offset (global {:+} ms, this song {:+} ms)",
                         "補正をおすすめにしました（全体 {:+} ms、この曲 {:+} ms）",
-                        a.global_ms, a.song_ms
+                        a.global_ms,
+                        a.song_ms
                     ));
                 }
             }
@@ -1814,14 +1845,22 @@ impl App {
                 inputs::reset_all(&mut self.config);
                 self.config.save();
                 self.refresh_pads();
-                self.config_toast("割り当てを既定に戻しました".to_owned());
+                self.config_toast(
+                    t("Mappings reset to default", "割り当てを既定に戻しました").to_owned(),
+                );
             }
             ItemId::DeviceReset(port) => {
                 let ports = self.ports().to_vec();
                 inputs::reset_device(&mut self.config, &ports, port);
                 self.config.save();
                 self.refresh_pads();
-                self.config_toast("この機器の割り当てをプリセットに戻しました".to_owned());
+                self.config_toast(
+                    t(
+                        "This device's mappings were reset to its preset",
+                        "この機器の割り当てをプリセットに戻しました",
+                    )
+                    .to_owned(),
+                );
             }
             _ => {}
         }
@@ -1925,36 +1964,46 @@ impl App {
                 let Some(to) = play.seek(d) else {
                     return;
                 };
-                format!(
+                tf!(
+                    "{} to {:.0} s (this play won't be recorded)",
                     "{} {:.0} 秒へ（このプレイは記録に残しません）",
-                    if d < 0.0 { "巻き戻し" } else { "早送り" },
+                    if d < 0.0 {
+                        t("Rewind", "巻き戻し")
+                    } else {
+                        t("Skip", "早送り")
+                    },
                     to.max(0.0) / 1000.0
                 )
             }
             KeyCode::Comma | KeyCode::Period if play.practice.is_some() => {
                 play.nudge_speed(if code == KeyCode::Comma { -1 } else { 1 });
                 let speed = play.practice.as_ref().map_or(100, |p| p.speed());
-                format!("速度 {speed}%（次の周から、助走のあと。この段は 1 周目から数え直し）")
+                tf!(
+                    "Speed {speed}% (from the next loop, after the lead-in; this step starts over from loop 1)",
+                    "速度 {speed}%（次の周から、助走のあと。この段は 1 周目から数え直し）"
+                )
             }
             HIT_SOUND_KEY => {
                 play.drum_sounds = !play.drum_sounds;
                 self.config.drum_sounds = play.drum_sounds;
                 self.config.save();
-                format!(
-                    "叩いた音を{}",
-                    if play.drum_sounds {
-                        "鳴らす"
-                    } else {
-                        "鳴らさない"
-                    }
-                )
+                if play.drum_sounds {
+                    t("Hit sounds on", "叩いた音を鳴らす")
+                } else {
+                    t("Hit sounds off", "叩いた音を鳴らさない")
+                }
+                .to_owned()
             }
             KeyCode::Minus | KeyCode::Equal => {
                 let d = if code == KeyCode::Minus { -1.0 } else { 1.0 };
                 play.input_offset_ms += d;
                 self.config.input_offset_ms = play.input_offset_ms;
                 self.config.save();
-                format!("入力の補正 {:+.0}ms", play.input_offset_ms)
+                tf!(
+                    "Input offset {:+.0} ms",
+                    "入力の補正 {:+.0}ms",
+                    play.input_offset_ms
+                )
             }
             KeyCode::BracketLeft | KeyCode::BracketRight => {
                 let d = if code == KeyCode::BracketLeft {
@@ -1964,7 +2013,11 @@ impl App {
                 };
                 self.config.visual_offset_ms += d;
                 self.config.save();
-                format!("表示の補正 {:+.0}ms", self.config.visual_offset_ms)
+                tf!(
+                    "Visual offset {:+.0} ms",
+                    "表示の補正 {:+.0}ms",
+                    self.config.visual_offset_ms
+                )
             }
             KeyCode::ArrowUp | KeyCode::ArrowDown => {
                 let d = if code == KeyCode::ArrowUp {
@@ -1974,7 +2027,11 @@ impl App {
                 };
                 self.config.scroll_px_per_ms = (self.config.scroll_px_per_ms + d).clamp(0.1, 3.0);
                 self.config.save();
-                format!("譜面の速さ {:.2}", self.config.scroll_px_per_ms)
+                tf!(
+                    "Scroll speed {:.2}",
+                    "譜面の速さ {:.2}",
+                    self.config.scroll_px_per_ms
+                )
             }
             KeyCode::KeyI => {
                 self.show_play_info = !self.show_play_info;
@@ -2374,7 +2431,8 @@ impl App {
         } else if ui::is_chart_file(&path) {
             self.start(path);
         } else {
-            self.message = Some(format!(
+            self.message = Some(tf!(
+                "Drop a DTX file or a song folder: {}",
                 "DTX ファイルか曲のフォルダをドロップしてください: {}",
                 path.display()
             ));
@@ -2457,7 +2515,11 @@ impl App {
         }
         // 残した画面に知らせが写らないように、知らせは残したあとに出す
         if let Some(path) = saved {
-            self.toast(format!("画面を残しました（{}）", path.display()));
+            self.toast(tf!(
+                "Screenshot saved ({})",
+                "画面を残しました（{}）",
+                path.display()
+            ));
         }
         self.select_mouse(mouse);
         for a in result_actions {
@@ -2475,7 +2537,10 @@ impl App {
         }
         if let Screen::End(_) = self.screen {
             if let Some(v) = self.updater.pending_on_exit() {
-                let text = format!("終わったあと v{v} に入れ替えます");
+                let text = tf!(
+                    "v{v} will be installed after you quit",
+                    "終わったあと v{v} に入れ替えます"
+                );
                 update_view::chip(
                     c,
                     &mut self.gfx,
@@ -2494,7 +2559,10 @@ impl App {
             _ => return,
         };
         if let update::Status::Downloading { version, percent } = self.updater.status() {
-            let text = format!("v{version} を落としています {percent}%");
+            let text = tf!(
+                "Downloading v{version}… {percent}%",
+                "v{version} を落としています {percent}%"
+            );
             let p = f32::from(*percent) / 100.0;
             update_view::chip(c, &mut self.gfx, &text, Some(p), corner, since);
         }
@@ -2692,7 +2760,9 @@ impl ApplicationHandler for App {
         let window = match event_loop.create_window(attrs) {
             Ok(w) => Arc::new(w),
             Err(e) => {
-                self.startup_error = Some(anyhow::Error::new(e).context("窓を開けません"));
+                self.startup_error = Some(
+                    anyhow::Error::new(e).context(t("Cannot open the window", "窓を開けません")),
+                );
                 event_loop.exit();
                 return;
             }
@@ -2710,7 +2780,8 @@ impl ApplicationHandler for App {
         match Gpu::new(window.clone(), vsync) {
             Ok(gpu) => self.gpu = Some(gpu),
             Err(e) => {
-                self.startup_error = Some(e.context("GPU を使い始められません"));
+                self.startup_error =
+                    Some(e.context(t("Cannot start the GPU", "GPU を使い始められません")));
                 event_loop.exit();
                 return;
             }

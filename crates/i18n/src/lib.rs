@@ -138,6 +138,18 @@ pub fn t(en: &'static str, ja: &'static str) -> &'static str {
     tr(en, ja).get()
 }
 
+/// 数と単位。英語は 1 のとき単数にする。`count(3, "loop", "loops", "周")` は "3 loops" / "3 周"
+pub fn count<N>(n: N, one: &str, many: &str, ja: &str) -> String
+where
+    N: std::fmt::Display + Copy + PartialEq + From<u8>,
+{
+    match lang() {
+        Lang::En if n == N::from(1) => format!("{n} {one}"),
+        Lang::En => format!("{n} {many}"),
+        Lang::Ja => format!("{n} {ja}"),
+    }
+}
+
 /// `format!` の形で今の言語の方を作る。`tf!("{n} bars", "{n} 小節")`、`tf!("{} / {}", "{} / {}", a, b)`。
 /// 引数は両方の文で同じものを使う
 #[macro_export]
@@ -162,6 +174,10 @@ mod tests {
         assert_eq!(tr("Back", "戻る").get(), "Back");
         let n = 3;
         assert_eq!(tf!("{n} bars", "{n} 小節"), "3 bars");
+        assert_eq!(count(1usize, "loop", "loops", "周"), "1 loop");
+        assert_eq!(count(4u32, "loop", "loops", "周"), "4 loops");
+        let _ja = scoped(Lang::Ja);
+        assert_eq!(count(1i64, "loop", "loops", "周"), "1 周");
     }
 
     #[test]

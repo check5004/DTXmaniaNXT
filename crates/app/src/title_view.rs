@@ -10,6 +10,7 @@ use std::f64::consts::PI;
 use std::time::{Duration, Instant};
 
 use egui::Color32;
+use i18n::{t, tf};
 
 use crate::gfx::{Canvas, Gfx, Opt, src};
 use crate::settings_ui::{self as ui, Pad};
@@ -261,7 +262,10 @@ impl TitleView {
             update_view::chip(
                 c,
                 g,
-                &format!("v{version} を落としています {percent}%"),
+                &tf!(
+                    "Downloading v{version}… {percent}%",
+                    "v{version} を落としています {percent}%"
+                ),
                 Some(f32::from(*percent) / 100.0),
                 Corner::TopLeft(6.0, y),
                 self.since,
@@ -336,12 +340,20 @@ impl TitleView {
         let selected = self.cursor == 3;
         let (label, new) = match &self.update {
             Status::Idle => return,
-            Status::Available(v) if selected => (format!("v{v} に更新する"), false),
-            Status::Available(v) => (format!("新しい版 v{v}"), true),
-            Status::Downloading { percent, .. } => (format!("落としています {percent}%"), false),
-            Status::Ready(_) => ("再起動して入れ替える".to_owned(), false),
-            Status::Failed(_) if selected => ("もう一度落とす".to_owned(), false),
-            Status::Failed(_) => ("落とせませんでした".to_owned(), false),
+            Status::Available(v) if selected => (tf!("Update to v{v}", "v{v} に更新する"), false),
+            Status::Available(v) => (tf!("v{v} Available", "新しい版 v{v}"), true),
+            Status::Downloading { percent, .. } => (
+                tf!("Downloading… {percent}%", "落としています {percent}%"),
+                false,
+            ),
+            Status::Ready(_) => (
+                t("Restart to Update", "再起動して入れ替える").to_owned(),
+                false,
+            ),
+            Status::Failed(_) if selected => {
+                (t("Retry Download", "もう一度落とす").to_owned(), false)
+            }
+            Status::Failed(_) => (t("Download Failed", "落とせませんでした").to_owned(), false),
         };
         let style = Style {
             bold: true,
@@ -405,7 +417,14 @@ pub fn draw_scanning(c: &Canvas, g: &mut Gfx, since: Instant) {
 
 /// スキンが無いときのメニュー（「更新」の行の文字は別に描く）
 fn draw_plain_menu(c: &Canvas, g: &mut Gfx, cursor: usize) {
-    for (i, name) in ["はじめる", "設定", "終わる"].iter().enumerate() {
+    for (i, name) in [
+        t("Start", "はじめる"),
+        t("Settings", "設定"),
+        t("Quit", "終わる"),
+    ]
+    .iter()
+    .enumerate()
+    {
         let color = if i == cursor {
             Color32::from_rgb(255, 200, 0)
         } else {

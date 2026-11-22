@@ -8,6 +8,8 @@ use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
+use i18n::{t, tf};
+
 use crate::{LEVELS, Library, Node, Song, SongBox};
 
 /// 並べ替えの種類（並べ替えメニューの並び順）
@@ -140,8 +142,8 @@ pub fn sorted(lib: &Library, kind: SortKind, stats: &Stats, now: i64) -> Vec<Nod
     match kind {
         SortKind::Default => lib.nodes.clone(),
         SortKind::Box => by_box(lib),
-        SortKind::Title => by_initial(lib, |s| &s.title, "曲名なし"),
-        SortKind::Artist => by_initial(lib, |s| &s.artist, "アーティスト名なし"),
+        SortKind::Title => by_initial(lib, |s| &s.title, t("No Title", "曲名なし")),
+        SortKind::Artist => by_initial(lib, |s| &s.artist, t("No Artist", "アーティスト名なし")),
         SortKind::Difficulty => by_difficulty(lib),
         SortKind::Level => by_level(lib),
         SortKind::Player => by_player(lib, stats, now),
@@ -193,7 +195,7 @@ fn by_box(lib: &Library) -> Vec<Node> {
         .filter(|n| matches!(n, Node::Song(_)))
         .cloned()
         .collect();
-    boxes.extend(group("BOX の外の曲", loose));
+    boxes.extend(group(t("Songs Outside Boxes", "BOX の外の曲"), loose));
     boxes
 }
 
@@ -271,7 +273,7 @@ fn by_initial(lib: &Library, field: fn(&Song) -> &String, empty: &str) -> Vec<No
                 Initial::Letter(i) => char::from(b'A' + i).to_string(),
                 Initial::Kana(i) => KANA_ROWS[i as usize].to_owned(),
                 Initial::Empty => empty.to_owned(),
-                Initial::Other => "その他".to_owned(),
+                Initial::Other => t("Other", "その他").to_owned(),
             };
             group(
                 &title,
@@ -333,10 +335,10 @@ fn by_level(lib: &Library) -> Vec<Node> {
         .filter_map(|(k, mut charts)| {
             charts.sort_by(|a, b| by_chart_level(&(a.0, a.1), &(b.0, b.1)));
             let title = if k == 20 {
-                "レベルなし".to_owned()
+                t("No Level", "レベルなし").to_owned()
             } else {
                 let low = k as f64 / 2.0;
-                format!("レベル {low:.2}〜{:.2}", low + 0.49)
+                tf!("Level {low:.2}–{:.2}", "レベル {low:.2}〜{:.2}", low + 0.49)
             };
             group(
                 &title,
@@ -354,13 +356,13 @@ fn by_player(lib: &Library, stats: &Stats, now: i64) -> Vec<Node> {
     // 最後に遊んだ日
     const DAY: f64 = 86_400.0;
     let names = [
-        "今日",
-        "昨日",
-        "1 週間以内",
-        "1 か月以内",
-        "1 年以内",
-        "1 年より前",
-        "まだ遊んでいない",
+        t("Today", "今日"),
+        t("Yesterday", "昨日"),
+        t("Past Week", "1 週間以内"),
+        t("Past Month", "1 か月以内"),
+        t("Past Year", "1 年以内"),
+        t("Over a Year Ago", "1 年より前"),
+        t("Not Played Yet", "まだ遊んでいない"),
     ];
     let mut recent: Vec<Vec<(i64, &Song)>> = vec![Vec::new(); names.len()];
     for s in &songs {
@@ -422,14 +424,17 @@ fn by_player(lib: &Library, stats: &Stats, now: i64) -> Vec<Node> {
         .filter_map(|(k, mut v)| {
             v.sort_by_cached_key(|(s, i)| (name_key(&s.title), *i));
             group(
-                RANK_NAMES.get(k).copied().unwrap_or("ランクなし"),
+                RANK_NAMES
+                    .get(k)
+                    .copied()
+                    .unwrap_or(t("No Rank", "ランクなし")),
                 v.into_iter().map(|(s, i)| only_chart(s, i)).collect(),
             )
         })
         .collect();
-    group("最後に遊んだ日", recent)
+    group(t("Last Played", "最後に遊んだ日"), recent)
         .into_iter()
-        .chain(group("一番よいランク", ranks))
+        .chain(group(t("Best Rank", "一番よいランク"), ranks))
         .collect()
 }
 
@@ -456,7 +461,10 @@ pub fn skill_charts(lib: &Library, stats: &Stats) -> HashSet<PathBuf> {
 fn by_skill(lib: &Library, stats: &Stats) -> Vec<Node> {
     let top = top_songs(lib, stats);
     group(
-        &format!("スキルの上位 {SKILL_SONGS} 曲"),
+        &tf!(
+            "Top {SKILL_SONGS} Skill Songs",
+            "スキルの上位 {SKILL_SONGS} 曲"
+        ),
         top.into_iter().map(|(_, s, i)| only_chart(s, i)).collect(),
     )
     .into_iter()
@@ -467,6 +475,7 @@ fn by_skill(lib: &Library, stats: &Stats) -> Vec<Node> {
 mod tests {
     use super::*;
     use crate::{ChartHead, SongChart};
+    use i18n::Lang;
 
     fn song(title: &str, artist: &str, levels: &[(usize, Option<f64>)]) -> Song {
         let mut charts: [Option<SongChart>; LEVELS] = Default::default();
@@ -548,6 +557,7 @@ mod tests {
 
     #[test]
     fn title_groups_by_initial_and_skips_empty_boxes() {
+        let _ja = i18n::scoped(Lang::Ja);
         let t = sorted(&lib(), SortKind::Title, &Stats::new(), 0);
         assert_eq!(titles(&t), ["A", "B", "は", "その他"]);
         assert_eq!(titles(&inner(&t, "その他")), ["夜明け"]);
@@ -559,6 +569,7 @@ mod tests {
 
     #[test]
     fn level_and_difficulty_hold_single_charts() {
+        let _ja = i18n::scoped(Lang::Ja);
         let l = sorted(&lib(), SortKind::Level, &Stats::new(), 0);
         assert_eq!(
             titles(&l),
@@ -582,15 +593,21 @@ mod tests {
 
     #[test]
     fn box_sort_keeps_top_boxes_and_loose_songs() {
+        let _ja = i18n::scoped(Lang::Ja);
         let b = sorted(&lib(), SortKind::Box, &Stats::new(), 0);
         assert_eq!(titles(&b), ["Rock", "BOX の外の曲"]);
         assert_eq!(titles(&inner(&b, "BOX の外の曲")), ["Banana", "夜明け"]);
         let all = sorted(&lib(), SortKind::AllSongs, &Stats::new(), 0);
         assert_eq!(titles(&all), ["apple", "バラード", "Banana", "夜明け"]);
+        // 英語の画面では BOX の名前も英語
+        let _en = i18n::scoped(Lang::En);
+        let b = sorted(&lib(), SortKind::Box, &Stats::new(), 0);
+        assert_eq!(titles(&b), ["Rock", "Songs Outside Boxes"]);
     }
 
     #[test]
     fn player_and_skill_use_the_records() {
+        let _ja = i18n::scoped(Lang::Ja);
         let now = 1_000_000_000;
         let mut stats = Stats::new();
         stats.insert(
