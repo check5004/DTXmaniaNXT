@@ -15,6 +15,7 @@
 
 mod audio;
 mod band;
+mod chart_sound;
 mod config;
 mod config_view;
 mod fonts;
