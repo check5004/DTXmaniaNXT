@@ -120,6 +120,7 @@ pub fn round_fill(c: &Canvas, x: f32, y: f32, w: f32, h: f32, r: f32, color: Col
 }
 
 /// 角の丸い枠
+#[allow(clippy::too_many_arguments)]
 pub fn round_frame(c: &Canvas, x: f32, y: f32, w: f32, h: f32, r: f32, width: f32, color: Color32) {
     c.painter().rect_stroke(
         c.rect(x, y, w, h),
@@ -317,7 +318,13 @@ pub fn icon(c: &Canvas, kind: Icon, x: f32, y: f32, size: f32, color: Color32) {
         }
         Icon::Midi => {
             painter.circle_stroke(p(12.0, 12.0), 9.0 * k * c.scale(), stroke);
-            for (dx, dy) in [(7.5, 11.0), (16.5, 11.0), (9.0, 15.0), (15.0, 15.0), (12.0, 16.5)] {
+            for (dx, dy) in [
+                (7.5, 11.0),
+                (16.5, 11.0),
+                (9.0, 15.0),
+                (15.0, 15.0),
+                (12.0, 16.5),
+            ] {
                 painter.circle_filled(p(dx, dy), 1.1 * k * c.scale(), color);
             }
             line((10.5, 4.5), (13.5, 4.5), w);
@@ -523,9 +530,9 @@ pub fn pad_circle(
 /// レーンの配置図の位置（1280×720 の画面全体に出すときの真ん中。上流の割り当ての並びとドラムの形から）
 pub fn lane_spot(lane: DrumLane) -> (f32, f32) {
     match lane {
-        DrumLane::LC => (250.0, 330.0),
-        DrumLane::HHO => (370.0, 330.0),
-        DrumLane::HH => (370.0, 450.0),
+        DrumLane::LC => (215.0, 330.0),
+        DrumLane::HHO => (365.0, 330.0),
+        DrumLane::HH => (365.0, 450.0),
         DrumLane::LP => (430.0, 590.0),
         DrumLane::SD => (500.0, 470.0),
         DrumLane::HT => (560.0, 330.0),
@@ -541,8 +548,5 @@ pub fn lane_spot(lane: DrumLane) -> (f32, f32) {
 pub fn lane_spot_in(lane: DrumLane, x: f32, y: f32, w: f32, h: f32) -> Pos2 {
     let (lx, ly) = lane_spot(lane);
     // 配置図の範囲（左 200〜右 1060、上 260〜下 620）
-    pos2(
-        x + (lx - 200.0) / 860.0 * w,
-        y + (ly - 260.0) / 360.0 * h,
-    )
+    pos2(x + (lx - 200.0) / 860.0 * w, y + (ly - 260.0) / 360.0 * h)
 }

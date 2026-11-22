@@ -483,7 +483,7 @@ impl App {
     /// 設定の画面を開く。`from_select` なら出たら選曲へ戻る。v2 と同じくシャッターを開いて入る
     fn open_config(&mut self, from_select: bool) {
         self.sfx.preview(None);
-        self.screen = Screen::Config(Box::new(ConfigView::new()), from_select);
+        self.screen = Screen::Config(Box::default(), from_select);
         self.shutter.open(CONFIG_OPEN_DELAY);
     }
 
@@ -1069,7 +1069,11 @@ impl App {
             ConfigAction::TogglePad(lane, port, note) => {
                 let ports = self.ports().to_vec();
                 let added = inputs::toggle_note(&mut self.config, &ports, port, note, lane);
-                let device = self.midi.as_ref().map_or("MIDI", |m| m.name(port)).to_owned();
+                let device = self
+                    .midi
+                    .as_ref()
+                    .map_or("MIDI", |m| m.name(port))
+                    .to_owned();
                 log::info!(
                     "{} note {note} of {device} {} {}",
                     if added { "assigned" } else { "removed" },
@@ -1079,9 +1083,15 @@ impl App {
                 self.config.save();
                 self.refresh_pads();
                 self.config_toast(if added {
-                    format!("ノート {note} を{}に足しました（{device}）", inputs::lane_label(lane))
+                    format!(
+                        "ノート {note} を{}に足しました（{device}）",
+                        inputs::lane_label(lane)
+                    )
                 } else {
-                    format!("ノート {note} を{}から外しました（{device}）", inputs::lane_label(lane))
+                    format!(
+                        "ノート {note} を{}から外しました（{device}）",
+                        inputs::lane_label(lane)
+                    )
                 });
             }
             ConfigAction::ToggleKey(lane, code) => {

@@ -321,10 +321,7 @@ impl Row {
     /// 選択肢の名前と、今は何番目か（ON / OFF も 2 つの選択肢。混ざっていれば何番目でもない）
     pub fn options(&self) -> Option<(Vec<&'static str>, Option<usize>)> {
         match &self.ctl {
-            Ctl::Toggle { on, .. } => Some((
-                vec!["ON", "OFF"],
-                on.map(|b| if b { 0 } else { 1 }),
-            )),
+            Ctl::Toggle { on, .. } => Some((vec!["ON", "OFF"], on.map(|b| if b { 0 } else { 1 }))),
             Ctl::Choice { labels, at, .. } => Some((labels.clone(), Some(*at))),
             _ => None,
         }
@@ -616,7 +613,11 @@ fn drill_row(d: Drill, c: &Config) -> Row {
                 "速度"
             },
             at,
-            (i64::from(SPEED_MIN), i64::from(SPEED_MAX), i64::from(SPEED_STEP)),
+            (
+                i64::from(SPEED_MIN),
+                i64::from(SPEED_MAX),
+                i64::from(SPEED_STEP),
+            ),
             def,
             Fmt::Unit("%"),
             "練習の速度です（曲の速さの何 % か）。段階アップなら 1 周目の速度です。".to_owned(),
@@ -1033,7 +1034,8 @@ pub fn rows(page: Page, info: &ConfigInfo<'_>) -> Vec<Row> {
                 (0, 16, 1),
                 Some(0),
                 Fmt::Channel,
-                "受ける MIDI のチャンネルです。「すべて」ならどのチャンネルでも受けます。".to_owned(),
+                "受ける MIDI のチャンネルです。「すべて」ならどのチャンネルでも受けます。"
+                    .to_owned(),
             ));
             r.push(number(
                 ItemId::DeviceMinVelocity(i),
@@ -1237,11 +1239,7 @@ impl ConfigView {
 
     /// MIDI の機器がつながったり外れたりした（機器の番号が変わるので、機器の設定を開いていたら分類の一覧へ戻る）
     pub fn devices_changed(&mut self) {
-        if self
-            .stack
-            .iter()
-            .any(|l| matches!(l.page, Page::Device(_)))
-        {
+        if self.stack.iter().any(|l| matches!(l.page, Page::Device(_))) {
             self.stack.truncate(1);
             self.picker = None;
             self.confirm = None;
@@ -1392,7 +1390,9 @@ impl ConfigView {
                     Response::se(Se::Decide)
                 }
                 Ctl::Page(p) => self.open(*p),
-                Ctl::Action { confirm: Some(text) } => {
+                Ctl::Action {
+                    confirm: Some(text),
+                } => {
                     self.confirm = Some(Confirm {
                         id,
                         text: text.clone(),
@@ -1537,10 +1537,7 @@ impl ConfigView {
             ));
         }
         let lane = PADS[self.flow.as_ref()?.at];
-        self.advance_flow(Some(format!(
-            "キー {}",
-            crate::inputs::key_label(code)
-        )));
+        self.advance_flow(Some(format!("キー {}", crate::inputs::key_label(code))));
         Some(Response::action(
             Se::Decide,
             ConfigAction::AssignKey(lane, code),
@@ -1653,10 +1650,12 @@ fn first_visible(rows: &[Row], cursor: Option<usize>, avail: f32) -> usize {
     };
     let hs: Vec<f32> = rows.iter().map(row_height).collect();
     let bottom: f32 = hs.iter().take(cursor + 1).sum();
+    let total: f32 = hs.iter().sum();
     let margin = ROW_H * 2.5;
     let mut top = 0;
     let mut cut = 0.0;
-    while bottom - cut > avail - margin && top < cursor {
+    // 終わりの行が見えたら、それより先へは動かさない
+    while bottom - cut > avail - margin && top < cursor && total - cut > avail {
         cut += hs[top];
         top += 1;
     }
@@ -1800,12 +1799,7 @@ impl ConfigView {
         let crumb = ui::edged(20.0);
         let mut parts = vec![CATS[self.cat].name().to_owned()];
         if self.focus_list {
-            parts.extend(
-                self.stack
-                    .iter()
-                    .skip(1)
-                    .map(|l| page_title(l.page, info)),
-            );
+            parts.extend(self.stack.iter().skip(1).map(|l| page_title(l.page, info)));
         }
         for p in parts {
             ui::chevron(c, x + 4.0, 47.0, 14.0, 2.5, ui::DIM);
@@ -1820,7 +1814,14 @@ impl ConfigView {
             let y = 112.0 + i as f32 * 54.0;
             let on = i == self.cat;
             if on {
-                ui::selection(c, 32.0, y, 232.0, 46.0, if self.focus_list { 0.45 } else { 1.0 });
+                ui::selection(
+                    c,
+                    32.0,
+                    y,
+                    232.0,
+                    46.0,
+                    if self.focus_list { 0.45 } else { 1.0 },
+                );
             }
             let color = if on {
                 ui::YELLOW
@@ -1910,9 +1911,27 @@ impl ConfigView {
         let desc_style = ui::plain(16.0, Color32::from_rgb(226, 221, 239));
         let Some(r) = row else {
             let cat = CATS[self.cat];
-            ui::text(c, g, cat.name(), x + 22.0, y + 16.0, &ui::bold(24.0, Color32::WHITE), w - 44.0);
+            ui::text(
+                c,
+                g,
+                cat.name(),
+                x + 22.0,
+                y + 16.0,
+                &ui::bold(24.0, Color32::WHITE),
+                w - 44.0,
+            );
             let text = format!("{}\n\n決定か → で中へ。", cat.desc());
-            ui::paragraph(c, g, &text, x + 22.0, y + 62.0, w - 44.0, 25.0, pv.1 - 8.0, &desc_style);
+            ui::paragraph(
+                c,
+                g,
+                &text,
+                x + 22.0,
+                y + 62.0,
+                w - 44.0,
+                25.0,
+                pv.1 - 8.0,
+                &desc_style,
+            );
             preview_box(c, pv);
             ui::pad_roles(c, g, pv.0, pv.1, pv.2, pv.3);
             return;
@@ -1930,7 +1949,15 @@ impl ConfigView {
         );
         let show_value = !r.value.is_empty() && !matches!(r.ctl, Ctl::Action { .. });
         if show_value {
-            ui::text(c, g, &r.value, x + 22.0, ty + 6.0, &ui::glow(30.0), w - 44.0);
+            ui::text(
+                c,
+                g,
+                &r.value,
+                x + 22.0,
+                ty + 6.0,
+                &ui::glow(30.0),
+                w - 44.0,
+            );
             ty += 48.0;
         }
         if let Some(d) = r.default_label() {
@@ -1947,11 +1974,29 @@ impl ConfigView {
                 let chip = ui::bold(12.0, Color32::from_rgb(26, 10, 0));
                 let cw = ui::text_width(g, "変えています", &chip) + 12.0;
                 ui::round_fill(c, x + 22.0 + dw + 12.0, ty + 4.0, cw, 19.0, 3.0, ui::ORANGE);
-                ui::text(c, g, "変えています", x + 28.0 + dw + 12.0, ty + 6.0, &chip, cw);
+                ui::text(
+                    c,
+                    g,
+                    "変えています",
+                    x + 28.0 + dw + 12.0,
+                    ty + 6.0,
+                    &chip,
+                    cw,
+                );
             }
             ty += 30.0;
         }
-        ui::paragraph(c, g, &r.desc, x + 22.0, ty + 6.0, w - 44.0, 25.0, pv.1 - 8.0, &desc_style);
+        ui::paragraph(
+            c,
+            g,
+            &r.desc,
+            x + 22.0,
+            ty + 6.0,
+            w - 44.0,
+            25.0,
+            pv.1 - 8.0,
+            &desc_style,
+        );
         preview_box(c, pv);
         draw_preview(c, g, r, info, pv, self.entered);
     }
@@ -2170,9 +2215,21 @@ fn preview_scroll(
     let beat = 250.0;
     for i in 0..lanes {
         let lx = x + 20.0 + i as f32 * lw;
-        clip.fill(lx, y + 8.0, lw - 2.0, h - 16.0, Color32::from_white_alpha(10));
+        clip.fill(
+            lx,
+            y + 8.0,
+            lw - 2.0,
+            h - 16.0,
+            Color32::from_white_alpha(10),
+        );
         let color = [
-            Pad::LC, Pad::HH, Pad::SD, Pad::BD, Pad::HT, Pad::FT, Pad::CY,
+            Pad::LC,
+            Pad::HH,
+            Pad::SD,
+            Pad::BD,
+            Pad::HT,
+            Pad::FT,
+            Pad::CY,
         ][i]
             .color();
         // レーンごとにずらした拍に音符を置く
@@ -2215,7 +2272,15 @@ fn preview_lag(c: &Canvas, g: &mut Gfx, cfg: &Config, (x, y, w, h): (f32, f32, f
     ];
     for (i, (judge, lag, color)) in samples.into_iter().enumerate() {
         let cx = x + w / 6.0 + i as f32 * w / 3.0;
-        ui::text_center(c, g, judge, cx, y + 56.0, &ui::bold(19.0, color), w / 3.0 - 6.0);
+        ui::text_center(
+            c,
+            g,
+            judge,
+            cx,
+            y + 56.0,
+            &ui::bold(19.0, color),
+            w / 3.0 - 6.0,
+        );
         let shown = match cfg.show_lag_time {
             0 => false,
             2 => judge != "PERFECT",
@@ -2249,8 +2314,22 @@ fn preview_offset(
     let scale = (w / 2.0 - 30.0) / OFFSET_RANGE as f32;
     let ay = y + 100.0;
     c.fill(x + 20.0, ay, w - 40.0, 2.0, Color32::from_white_alpha(60));
-    c.fill(cx - 1.0, ay - 40.0, 2.0, 80.0, Color32::from_white_alpha(140));
-    ui::text_center(c, g, "ちょうど", cx, ay - 62.0, &ui::plain(13.0, ui::DIM), 100.0);
+    c.fill(
+        cx - 1.0,
+        ay - 40.0,
+        2.0,
+        80.0,
+        Color32::from_white_alpha(140),
+    );
+    ui::text_center(
+        c,
+        g,
+        "ちょうど",
+        cx,
+        ay - 62.0,
+        &ui::plain(13.0, ui::DIM),
+        100.0,
+    );
     let mx = cx + ms as f32 * scale;
     c.fill(mx - 2.0, ay - 30.0, 4.0, 60.0, ui::ORANGE);
     let label = if input {
@@ -2266,7 +2345,15 @@ fn preview_offset(
             m => format!("譜面を {} ms 早めて表示", -m),
         }
     };
-    ui::text_center(c, g, &label, cx, ay + 44.0, &ui::bold(16.0, Color32::WHITE), w - 24.0);
+    ui::text_center(
+        c,
+        g,
+        &label,
+        cx,
+        ay + 44.0,
+        &ui::bold(16.0, Color32::WHITE),
+        w - 24.0,
+    );
     ui::text(
         c,
         g,
@@ -2375,9 +2462,25 @@ fn draw_picker(c: &Canvas, g: &mut Gfx, r: &Row) {
     let note = ui::plain(14.0, ui::DIM);
     if let Ctl::Number { fmt, default, .. } = &r.ctl {
         ui::pick_panel(c, X, Y, W, 210.0);
-        ui::text(c, g, r.name.trim_start(), X + 20.0, Y + 14.0, &title, W - 40.0);
+        ui::text(
+            c,
+            g,
+            r.name.trim_start(),
+            X + 20.0,
+            Y + 14.0,
+            &title,
+            W - 40.0,
+        );
         ui::triangle(c, X + W / 2.0, Y + 66.0, 18.0, -2, ui::YELLOW);
-        ui::text_center(c, g, &r.value, X + W / 2.0, Y + 86.0, &ui::glow(40.0), W - 20.0);
+        ui::text_center(
+            c,
+            g,
+            &r.value,
+            X + W / 2.0,
+            Y + 86.0,
+            &ui::glow(40.0),
+            W - 20.0,
+        );
         ui::triangle(c, X + W / 2.0, Y + 150.0, 18.0, 2, ui::YELLOW);
         let text = match default {
             Some(d) => format!("既定 {}", fmt.show(*d)),
@@ -2396,7 +2499,15 @@ fn draw_picker(c: &Canvas, g: &mut Gfx, r: &Row) {
     };
     let h = 64.0 + labels.len() as f32 * 38.0;
     ui::pick_panel(c, X, Y, W, h);
-    ui::text(c, g, r.name.trim_start(), X + 20.0, Y + 14.0, &title, W - 40.0);
+    ui::text(
+        c,
+        g,
+        r.name.trim_start(),
+        X + 20.0,
+        Y + 14.0,
+        &title,
+        W - 40.0,
+    );
     for (i, label) in labels.iter().enumerate() {
         let ly = Y + 54.0 + i as f32 * 38.0;
         let sel = Some(i) == at;
@@ -2436,7 +2547,16 @@ fn draw_confirm(c: &Canvas, g: &mut Gfx, cf: &Confirm) {
         if sel {
             ui::selection(c, bx, 372.0, 180.0, 44.0, 1.0);
         } else {
-            ui::round_frame(c, bx, 372.0, 180.0, 44.0, 3.0, 1.0, Color32::from_white_alpha(77));
+            ui::round_frame(
+                c,
+                bx,
+                372.0,
+                180.0,
+                44.0,
+                3.0,
+                1.0,
+                Color32::from_white_alpha(77),
+            );
         }
         let style = if sel {
             ui::bold(18.0, ui::YELLOW)
@@ -2503,7 +2623,8 @@ fn draw_wait(c: &Canvas, g: &mut Gfx, lane: DrumLane, since: Instant, info: &Con
 
 /// 順に叩いて割り当てる画面
 fn draw_flow(c: &Canvas, g: &mut Gfx, f: &Flow, info: &ConfigInfo<'_>) {
-    c.cover(Color32::from_rgba_premultiplied(4, 2, 11, 237));
+    // 下の画面は見せない（色を混ぜるのが線形なので、少しでも透かすと思ったより透ける）
+    c.cover(Color32::from_rgb(6, 4, 14));
     let lane = PADS[f.at.min(PADS.len() - 1)];
     ui::text_center(
         c,
@@ -2563,7 +2684,13 @@ fn draw_toast(c: &Canvas, g: &mut Gfx, text: &str) {
     let style = ui::plain(18.0, Color32::WHITE);
     let w = ui::text_width(g, text, &style).min(900.0) + 40.0;
     let x = 640.0 - w / 2.0;
-    c.fill(x, 626.0, w, 40.0, Color32::from_rgba_premultiplied(10, 8, 18, 235));
+    c.fill(
+        x,
+        626.0,
+        w,
+        40.0,
+        Color32::from_rgba_premultiplied(10, 8, 18, 235),
+    );
     ui::round_frame(c, x, 626.0, w, 40.0, 2.0, 1.0, ui::ORANGE);
     ui::text_center(c, g, text, 640.0, 635.0, &style, 900.0);
 }
@@ -2720,8 +2847,10 @@ mod tests {
             v.input(ConfigInput::Right, &list).action,
             Some(ConfigAction::Set(lag, 2))
         );
-        let mut c2 = Config::default();
-        c2.show_lag_time = 2;
+        let c2 = Config {
+            show_lag_time: 2,
+            ..Config::default()
+        };
         let list2 = rows(Page::Cat(Cat::Fav), &info(&c2));
         assert_eq!(v.input(ConfigInput::Right, &list2), Response::default());
     }
@@ -2731,11 +2860,18 @@ mod tests {
         let c = Config::default();
         let list = rows(Page::Cat(Cat::View), &info(&c));
         assert_eq!(list[0].ctl, Ctl::Heading);
-        let mut v = at(Page::Cat(Cat::View), &list, ItemId::Value(Setting::ScrollSpeed));
+        let mut v = at(
+            Page::Cat(Cat::View),
+            &list,
+            ItemId::Value(Setting::ScrollSpeed),
+        );
         assert_eq!(v.input(ConfigInput::Up, &list), Response::default());
         v.input(ConfigInput::Down, &list);
         // 小見出し「ずれの表示」を飛ばす
-        assert_eq!(list[v.level().cursor].id, Some(ItemId::Value(Setting::ShowLagTime)));
+        assert_eq!(
+            list[v.level().cursor].id,
+            Some(ItemId::Value(Setting::ShowLagTime))
+        );
         let last = list.iter().rposition(Row::selectable).unwrap();
         *v.cursor_mut() = last;
         assert_eq!(v.input(ConfigInput::Down, &list), Response::default());
@@ -2945,7 +3081,14 @@ mod tests {
         let names: Vec<&str> = dev.iter().map(|r| r.name.as_str()).collect();
         assert_eq!(
             names,
-            ["状態", "使う", "プリセット", "チャンネル", "最小ベロシティ", "割り当てを戻す"]
+            [
+                "状態",
+                "使う",
+                "プリセット",
+                "チャンネル",
+                "最小ベロシティ",
+                "割り当てを戻す"
+            ]
         );
         assert_eq!(dev[2].value, "GM");
         assert_eq!(dev[3].value, "10");
@@ -3011,5 +3154,9 @@ mod tests {
         let top = first_visible(&rows, Some(20), 500.0);
         let below: f32 = (top..=20).map(|_| ROW_H).sum();
         assert!(below <= 500.0 - ROW_H * 2.5 + 0.1 && top > 0);
+        // 終わりの行を選んでも、下に空きを作らない
+        let top = first_visible(&rows, Some(29), 500.0);
+        let shown: f32 = (top..30).map(|_| ROW_H).sum();
+        assert!(shown <= 500.0 + ROW_H && shown > 500.0 - ROW_H, "{top}");
     }
 }

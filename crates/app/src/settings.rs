@@ -418,9 +418,9 @@ mod tests {
         let mut v = Values::default();
         assert_eq!(v.number(SKIP_MS), 5000);
         assert_eq!(v.label(SKIP_MS), "5000 ms");
-        v.change(SKIP_MS, 2);
+        v.set_raw(SKIP_MS, 7400);
         assert_eq!(v.number(SKIP_MS), 7000);
-        v.change(SKIP_MS, -100);
+        v.set_raw(SKIP_MS, -100);
         assert_eq!(v.number(SKIP_MS), 1000);
     }
 
