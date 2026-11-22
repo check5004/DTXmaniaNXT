@@ -214,6 +214,10 @@ pub enum ItemId {
     Quit,
     /// 曲の位置（秒。◀▶ で早送り・巻き戻し）
     Seek,
+    /// この曲の補正（ミリ秒。入力の補正（全体）に足す）
+    SongOffset,
+    /// 補正をおすすめの値にする（全体とこの曲）
+    ApplyAdvice,
 }
 
 /// 数の見せ方
@@ -515,12 +519,12 @@ fn value_row(s: Setting, c: &Config) -> Row {
         ),
         Setting::InputAdjust => number(
             id,
-            "入力の補正",
+            "入力の補正（全体）",
             at,
             (-(OFFSET_RANGE as i64), OFFSET_RANGE as i64, 1),
             Some(def),
             Fmt::Ms,
-            "叩いた時刻の補正です。結果の画面のずれがいつも遅めなら大きく、早めなら小さくします。\n演奏中は - と = キーでも変えられます。"
+            "すべての曲の、叩いた時刻の補正です。ずれがいつも遅めなら大きく、早めなら小さくします（演奏中は - と = キー）。"
                 .to_owned(),
         ),
         Setting::VisualAdjust => number(
@@ -796,6 +800,76 @@ pub struct ConfigInfo<'a> {
     pub song: bool,
     /// 演奏中（一時停止の一覧に出す、曲の位置）
     pub play: Option<PlayPos>,
+    /// 補正とおすすめ（簡易設定・一時停止・設定の画面を開いたときに記録から出す）
+    pub timing: Option<TimingInfo>,
+}
+
+/// 補正とおすすめ
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TimingInfo {
+    /// この曲の補正（ミリ秒）。曲を選んでいなければ None（全体のおすすめだけ）
+    pub song_ms: Option<i64>,
+    pub advice: engine::lag::Advice,
+}
+
+/// 入力の補正（全体）の行のうしろに、この曲の補正とおすすめの行を足し、全体のおすすめを説明に書く
+fn add_timing_rows(rows: &mut Vec<Row>, t: &TimingInfo, global_ms: i64) {
+    let Some(i) = rows
+        .iter()
+        .position(|r| r.id == Some(ItemId::Value(Setting::InputAdjust)))
+    else {
+        return;
+    };
+    let a = &t.advice;
+    if let Some((_, n)) = a.global {
+        rows[i].desc.push_str(&if a.global_ms != a.global_now {
+            format!("おすすめは {:+} ms（直近 {n} 曲のずれから）。", a.global_ms)
+        } else {
+            format!("直近 {n} 曲のずれからは、今のままでよさそうです。")
+        });
+    }
+    let mut add = Vec::new();
+    if let Some(at) = t.song_ms {
+        let r = OFFSET_RANGE as i64;
+        let mut desc = format!(
+            "この曲だけの補正（難易度はまとめて）。全体に足し、判定と譜面の流れを一緒にずらします。今は {global_ms:+} + {at:+} = {:+} ms。",
+            global_ms + at
+        );
+        match a.song {
+            Some(l) if l.enough() && a.song_ms != a.song_now => desc.push_str(&format!(
+                "おすすめは {:+} ms（直近 {} 回から）。",
+                a.song_ms, l.sessions
+            )),
+            Some(l) if l.enough() => desc.push_str(&format!(
+                "直近 {} 回からは今のままでよさそうです。",
+                l.sessions
+            )),
+            _ => {}
+        }
+        add.push(number(
+            ItemId::SongOffset,
+            "この曲の補正",
+            at,
+            (-r, r, 1),
+            Some(0),
+            Fmt::Ms,
+            desc,
+        ));
+    }
+    if let Some(text) = crate::lag_view::advice_text(a) {
+        add.push(Row {
+            tone: Tone::Strong,
+            ..action(
+                ItemId::ApplyAdvice,
+                "おすすめにする",
+                text,
+                "記録のずれから出した値にします。全体は直近の曲のずれの真ん中、この曲はこの曲のずれと全体の差です。"
+                    .to_owned(),
+                None,
+            )
+        });
+    }
+    rows.splice(i + 1..i + 1, add);
 }
 
 /// 一時停止しているところ
@@ -1210,7 +1284,16 @@ pub fn rows(page: Page, info: &ConfigInfo<'_>) -> Vec<Row> {
             ));
         }
     }
-    s.rows()
+    let mut out = s.rows();
+    if let Some(t) = &info.timing
+        && matches!(
+            page,
+            Page::Quick | Page::Pause | Page::Cat(Cat::Fav) | Page::Cat(Cat::Timing)
+        )
+    {
+        add_timing_rows(&mut out, t, get(Setting::InputAdjust, c));
+    }
+    out
 }
 
 /// よく使う項目（設定の画面の「よく使う」と、選曲の簡易設定）
@@ -3049,6 +3132,7 @@ mod tests {
             song_count: 3,
             song: true,
             play: None,
+            timing: None,
         }
     }
 
@@ -3118,6 +3202,56 @@ mod tests {
             .unwrap();
         assert_eq!(risky.value, "OFF");
         assert_eq!(risky.default_label().as_deref(), Some("OFF"));
+    }
+
+    #[test]
+    fn the_song_offset_and_advice_follow_the_input_offset() {
+        let c = Config {
+            input_offset_ms: 3.0,
+            ..Default::default()
+        };
+        let mut i = info(&c);
+        i.timing = Some(TimingInfo {
+            song_ms: Some(0),
+            advice: engine::lag::Advice {
+                global: Some((4.0, 6)),
+                song: None,
+                global_ms: 3,
+                song_ms: 10,
+                global_now: 3,
+                song_now: 0,
+            },
+        });
+        for page in [Page::Quick, Page::Pause, Page::Cat(Cat::Timing)] {
+            let rows = rows(page, &i);
+            let at = rows
+                .iter()
+                .position(|r| r.id == Some(ItemId::Value(Setting::InputAdjust)))
+                .unwrap();
+            assert_eq!(rows[at + 1].id, Some(ItemId::SongOffset), "{page:?}");
+            assert!(rows[at + 1].desc.contains("+3 + +0 = +3 ms"));
+            assert_eq!(rows[at + 2].id, Some(ItemId::ApplyAdvice));
+            assert_eq!(rows[at + 2].value, "この曲の補正 +0 → +10 ms");
+            assert!(rows[at].desc.contains("今のままでよさそうです"));
+        }
+        // 曲を選んでいなければ全体だけ。すすめるものが無ければ行も無い
+        i.timing = Some(TimingInfo {
+            song_ms: None,
+            advice: engine::lag::Advice {
+                global: Some((4.0, 6)),
+                song: None,
+                global_ms: 3,
+                song_ms: 0,
+                global_now: 3,
+                song_now: 0,
+            },
+        });
+        let rows = rows(Page::Cat(Cat::Timing), &i);
+        assert!(
+            !rows
+                .iter()
+                .any(|r| matches!(r.id, Some(ItemId::SongOffset | ItemId::ApplyAdvice)))
+        );
     }
 
     #[test]

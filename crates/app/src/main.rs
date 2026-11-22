@@ -27,6 +27,7 @@ mod gfx;
 mod history;
 mod inputs;
 mod jobs;
+mod lag_view;
 mod lane_layout;
 mod loading;
 mod logging;
@@ -78,6 +79,7 @@ use crate::config_view::{
 use crate::game::{GaugeRule, HitSoundRule, Outcome, Play, Rules};
 use crate::gfx::{Canvas, Gfx};
 use crate::history::History;
+use crate::lag_view::LagResult;
 use crate::loading::{Job, Loading};
 use crate::midi::MidiIn;
 use crate::play_view::PlayView;
@@ -317,6 +319,8 @@ fn present_mode(vsync: bool) -> wgpu::PresentMode {
 /// 曲を読むのに使う設定。読むスレッドへ渡せるように、設定から写しておく
 struct LoadSettings {
     input_offset_ms: f64,
+    /// この曲の補正（記録から）
+    song_offset_ms: f64,
     drum_sounds: bool,
     /// 自動で叩くレーン、判定の幅、ゲージの決まりなど
     rules: Rules,
@@ -335,6 +339,7 @@ impl LoadSettings {
             None => Play::load(path, self.input_offset_ms, self.drum_sounds, &self.rules)?,
         };
         p.set_inputs(self.inputs);
+        p.song_offset_ms = self.song_offset_ms;
         // 「叩いても音が出ない」と言われたとき、ログで分かるように
         log::info!(
             "loaded in {:.0}ms (hit sounds {})",
@@ -342,6 +347,24 @@ impl LoadSettings {
             if self.drum_sounds { "on" } else { "off" }
         );
         Ok(p)
+    }
+}
+
+/// 補正の行に出す、この曲の補正とおすすめ（簡易設定・一時停止・設定の画面を開いたときに記録から出す）
+struct SongTiming {
+    /// この曲の譜面（難易度すべて）。曲を選んでいなければ空
+    charts: Vec<PathBuf>,
+    /// この曲の補正（ミリ秒）
+    offset_ms: f64,
+    advice: engine::lag::Advice,
+}
+
+impl SongTiming {
+    fn info(&self) -> config_view::TimingInfo {
+        config_view::TimingInfo {
+            song_ms: (!self.charts.is_empty()).then(|| self.offset_ms.round() as i64),
+            advice: self.advice,
+        }
     }
 }
 
@@ -406,6 +429,8 @@ struct App {
     popup: Option<Box<PracticePopup>>,
     /// 選曲の簡易設定か、演奏中の一時停止の板（設定の画面と同じ行）
     quick: Option<Box<ConfigView>>,
+    /// 補正の行に出す、この曲の補正とおすすめ
+    timing: Option<SongTiming>,
     /// 選曲の画面で最後に BD を叩いた時刻（2 回で簡易設定）
     last_bd_us: Option<i64>,
     /// 選曲画面のマウスホイールの、まだ 1 行に満たない分
@@ -564,6 +589,7 @@ impl App {
             after_close: None,
             popup: None,
             quick: None,
+            timing: None,
             last_bd_us: None,
             wheel: 0.0,
             show_play_info: false,
@@ -657,6 +683,12 @@ impl App {
     fn open_config(&mut self, from_select: bool) {
         self.sfx.preview(None);
         self.quick = None;
+        let chart = if from_select {
+            self.songs.selected_chart()
+        } else {
+            None
+        };
+        self.load_timing(chart.as_deref());
         self.screen = Screen::Config(Box::default(), from_select);
         self.shutter.open(CONFIG_OPEN_DELAY);
     }
@@ -763,7 +795,7 @@ impl App {
         // 音が無いときも、読み込みの画面が一瞬で消えないように少しは出す
         let wait = self.sfx.play_loading().max(MIN_LOADING);
         // 曲は別のスレッドで読む（画面のスレッドを止めない。読み込み中も Esc がすぐ効く）
-        let settings = self.load_settings();
+        let settings = self.load_settings(&path);
         let job = {
             let path = path.clone();
             Job::spawn("chart loader", move || settings.load(&path, practice))
@@ -772,9 +804,10 @@ impl App {
     }
 
     /// 曲を読むのに使う設定（読むスレッドへ渡す）
-    fn load_settings(&self) -> LoadSettings {
+    fn load_settings(&self, path: &std::path::Path) -> LoadSettings {
         LoadSettings {
             input_offset_ms: self.config.input_offset_ms,
+            song_offset_ms: self.history.song_offset(path),
             drum_sounds: self.config.drum_sounds,
             rules: self.rules(),
             inputs: self
@@ -821,7 +854,7 @@ impl App {
 
     /// 曲をこのスレッドで読む（時間がかかる。演奏中のやり直しで使う）
     fn load_play(&self, path: &std::path::Path, practice: Option<PracticeOptions>) -> Result<Play> {
-        let mut p = self.load_settings().load(path, practice)?;
+        let mut p = self.load_settings(path).load(path, practice)?;
         self.add_weak_band(&mut p);
         Ok(p)
     }
@@ -1015,6 +1048,16 @@ impl App {
             );
             outcome.weak = Some(weak);
             outcome.tendencies = self.history.tendencies();
+            // 今回のプレイも入れて、補正のおすすめを出す
+            let charts = self.songs.song_charts(&outcome.path);
+            let advice =
+                self.history
+                    .lag_advice(&charts, self.config.input_offset_ms, p.song_offset_ms);
+            outcome.lag = Some(LagResult {
+                charts,
+                advice,
+                applied: None,
+            });
         }
         let lag_counts = self
             .config
@@ -1172,7 +1215,7 @@ impl App {
                 if stage_failed && play.practice.is_none() && !play.skipped() && view.gauge_empty()
                 {
                     // 上流と同じく、音を止めて STAGE FAILED を出し、選曲に戻る（記録は残す）
-                    view.start_failure(play.now_ms() + self.config.visual_offset_ms);
+                    view.start_failure(play.view_ms(self.config.visual_offset_ms));
                     play.silence();
                     self.sfx.play(Se::StageFailed);
                 } else {
@@ -1302,7 +1345,8 @@ impl App {
         let Screen::Config(view, _) = &mut self.screen else {
             return;
         };
-        let info = config_info(&self.config, &self.midi, &self.monitor, &self.songs);
+        let mut info = config_info(&self.config, &self.midi, &self.monitor, &self.songs);
+        info.timing = self.timing.as_ref().map(SongTiming::info);
         let rows = config_view::rows(view.page(), &info);
         let r = view.input(input, &rows);
         self.config_response(r);
@@ -1411,6 +1455,7 @@ impl App {
     fn quick_info(&self) -> ConfigInfo<'_> {
         let mut info = config_info(&self.config, &self.midi, &self.monitor, &self.songs);
         info.song = self.songs.selected_chart().is_some();
+        info.timing = self.timing.as_ref().map(SongTiming::info);
         if let Screen::Play(p, _) = &self.screen {
             info.play = Some(PlayPos {
                 practice: p.practice.is_some(),
@@ -1427,7 +1472,78 @@ impl App {
             return;
         }
         self.sfx.play(Se::Decide);
+        let chart = self.songs.selected_chart();
+        self.load_timing(chart.as_deref());
         self.quick = Some(Box::new(ConfigView::panel(config_view::Page::Quick)));
+    }
+
+    /// 補正の行に出す、この曲（`chart`）の補正とおすすめを記録から出す
+    fn load_timing(&mut self, chart: Option<&std::path::Path>) {
+        let (charts, offset_ms) = match chart {
+            Some(p) => (self.songs.song_charts(p), self.history.song_offset(p)),
+            None => (Vec::new(), 0.0),
+        };
+        let advice = self
+            .history
+            .lag_advice(&charts, self.config.input_offset_ms, offset_ms);
+        self.timing = Some(SongTiming {
+            charts,
+            offset_ms,
+            advice,
+        });
+    }
+
+    /// 補正を変えたので、おすすめを出し直す
+    fn refresh_timing(&mut self) {
+        if let Some(t) = &mut self.timing {
+            t.advice = self
+                .history
+                .lag_advice(&t.charts, self.config.input_offset_ms, t.offset_ms);
+        }
+    }
+
+    /// この曲の補正を変えて記録に残す（演奏中なら演奏にも）
+    fn set_song_offset(&mut self, offset_ms: f64) {
+        let Some(t) = &mut self.timing else {
+            return;
+        };
+        if t.charts.is_empty() {
+            return;
+        }
+        t.offset_ms = offset_ms;
+        self.history.set_song_offset(&t.charts, offset_ms);
+        if let Screen::Play(play, _) = &mut self.screen
+            && t.charts.contains(&play.path)
+        {
+            play.song_offset_ms = offset_ms;
+        }
+        self.refresh_timing();
+    }
+
+    /// 補正をおすすめの値にする。元の値（全体、この曲）を返す
+    fn apply_advice(&mut self, advice: &engine::lag::Advice) -> (f64, f64) {
+        let before = (
+            self.config.input_offset_ms,
+            self.timing.as_ref().map_or(0.0, |t| t.offset_ms),
+        );
+        self.set_offsets(advice.global_ms as f64, advice.song_ms as f64);
+        before
+    }
+
+    /// 入力の補正（全体）とこの曲の補正を変えて残す
+    fn set_offsets(&mut self, global_ms: f64, song_ms: f64) {
+        if self.config.input_offset_ms != global_ms {
+            self.config.input_offset_ms = global_ms;
+            self.config.save();
+            if let Screen::Play(play, _) = &mut self.screen {
+                play.input_offset_ms = global_ms;
+            }
+        }
+        if self.timing.as_ref().is_some_and(|t| t.offset_ms != song_ms) {
+            self.set_song_offset(song_ms);
+        } else {
+            self.refresh_timing();
+        }
     }
 
     /// 演奏を一時停止して、一時停止の板を開く（Esc・Space・Pause）
@@ -1438,7 +1554,9 @@ impl App {
         if !play.paused() {
             play.toggle_pause();
         }
+        let path = play.path.clone();
         self.sfx.play(Se::Decide);
+        self.load_timing(Some(&path));
         self.quick = Some(Box::new(ConfigView::panel(config_view::Page::Pause)));
     }
 
@@ -1482,9 +1600,10 @@ impl App {
             ConfigAction::Set(id, v) => {
                 self.config_set(id, v);
                 // 演奏が持っている値も合わせる
-                if let Screen::Play(play, _) = &mut self.screen {
+                if let Screen::Play(play, view) = &mut self.screen {
                     play.input_offset_ms = self.config.input_offset_ms;
                     play.drum_sounds = self.config.drum_sounds;
+                    view.set_hit_error(self.config.settings.flag(settings::HIT_ERROR_BAR));
                 }
             }
             ConfigAction::Run(ItemId::Resume) | ConfigAction::Leave => {
@@ -1568,6 +1687,13 @@ impl App {
                     _ => {}
                 }
                 self.config.save();
+                if s == Setting::InputAdjust {
+                    self.refresh_timing();
+                }
+            }
+            ItemId::SongOffset => {
+                let r = config_view::OFFSET_RANGE;
+                self.set_song_offset((v as f64).clamp(-r, r));
             }
             ItemId::Table(key) => {
                 self.config.settings.set_raw(key, v);
@@ -1638,6 +1764,17 @@ impl App {
                 }
             }
             ItemId::ReconnectMidi => self.reopen_midi(),
+            ItemId::ApplyAdvice => {
+                if let Some(a) = self.timing.as_ref().map(|t| t.advice)
+                    && a.changes()
+                {
+                    self.apply_advice(&a);
+                    self.config_toast(format!(
+                        "補正をおすすめにしました（全体 {:+} ms、この曲 {:+} ms）",
+                        a.global_ms, a.song_ms
+                    ));
+                }
+            }
             ItemId::ResetPads => {
                 inputs::reset_all(&mut self.config);
                 self.config.save();
@@ -1706,6 +1843,7 @@ impl App {
                 }
                 KeyCode::KeyR => self.result_action(ui::ResultAction::Retry),
                 KeyCode::KeyP => self.result_action(ui::ResultAction::Practice(None)),
+                KeyCode::KeyO => self.toggle_result_advice(),
                 _ => {}
             },
         }
@@ -2028,11 +2166,54 @@ impl App {
                 DrumLane::CY | DrumLane::RD | DrumLane::LC => {
                     self.result_action(ui::ResultAction::Back);
                 }
+                DrumLane::BD => self.toggle_result_advice(),
                 // 選曲と同じく HT と LT で動かす
                 DrumLane::HT | DrumLane::LT => self.turn_result_page(),
                 _ => {}
             },
             Screen::Loading(_) | Screen::Play(..) => {}
+        }
+    }
+
+    /// 結果の画面の「ずれ」の板のおすすめにする。もうしていれば、もとに戻す
+    fn toggle_result_advice(&mut self) {
+        // 板は 1 ページ目だけに出す
+        let Screen::Result(o, view) = &self.screen else {
+            return;
+        };
+        if view.page != Page::Summary {
+            return;
+        }
+        let Some(lag) = &o.lag else {
+            return;
+        };
+        let (advice, applied) = (lag.advice, lag.applied);
+        if applied.is_none() && !advice.changes() {
+            return;
+        }
+        let charts = lag.charts.clone();
+        let offset_ms = charts.first().map_or(0.0, |p| self.history.song_offset(p));
+        self.timing = Some(SongTiming {
+            charts,
+            offset_ms,
+            advice,
+        });
+        let applied = match applied {
+            Some((global, song)) => {
+                self.set_offsets(global, song);
+                self.sfx.play(Se::Cancel);
+                None
+            }
+            None => {
+                let before = self.apply_advice(&advice);
+                self.sfx.play(Se::Decide);
+                Some(before)
+            }
+        };
+        if let Screen::Result(o, _) = &mut self.screen
+            && let Some(lag) = &mut o.lag
+        {
+            lag.applied = applied;
         }
     }
 
@@ -2142,10 +2323,6 @@ impl App {
                 Some(o) => self.start_practice(path, o),
                 None => self.start(path),
             },
-            ui::ResultAction::SetInputOffset(ms) => {
-                self.config.input_offset_ms = ms;
-                self.config.save();
-            }
             ui::ResultAction::Practice(section) => {
                 let previous = match section {
                     Some(section) => {
@@ -2325,7 +2502,8 @@ impl App {
                 let painter = ctx.layer_painter(egui::LayerId::background());
                 let c = Canvas::new(&painter, ctx.content_rect());
                 self.gfx.begin(&c, ctx.pixels_per_point());
-                let info = config_info(&self.config, &self.midi, &self.monitor, &self.songs);
+                let mut info = config_info(&self.config, &self.midi, &self.monitor, &self.songs);
+                info.timing = self.timing.as_ref().map(SongTiming::info);
                 let rows = config_view::rows(view.page(), &info);
                 view.draw(&c, &mut self.gfx, &rows, &info);
                 if let Some(m) = &self.message {
@@ -2353,6 +2531,7 @@ impl App {
                     let mut info =
                         config_info(&self.config, &self.midi, &self.monitor, &self.songs);
                     info.song = self.songs.selected_chart().is_some();
+                    info.timing = self.timing.as_ref().map(SongTiming::info);
                     let rows = config_view::rows(q.page(), &info);
                     q.draw_panel(&c, &mut self.gfx, &rows, &info);
                 }
@@ -2375,7 +2554,7 @@ impl App {
                 self.gfx.begin(&c, ctx.pixels_per_point());
                 let now = view
                     .frozen_ms()
-                    .unwrap_or_else(|| play.now_ms() + self.config.visual_offset_ms);
+                    .unwrap_or_else(|| play.view_ms(self.config.visual_offset_ms));
                 view.draw(&c, &mut self.gfx, play, now, self.config.scroll_px_per_ms);
                 ui::draw_play_overlay(
                     &ctx,
@@ -2395,6 +2574,7 @@ impl App {
                         at_ms: play.now_ms(),
                         end_ms: play.end_ms,
                     });
+                    info.timing = self.timing.as_ref().map(SongTiming::info);
                     let rows = config_view::rows(q.page(), &info);
                     q.draw_panel(&c, &mut self.gfx, &rows, &info);
                 }
@@ -2409,7 +2589,7 @@ impl App {
                     Page::Summary => view.draw_summary(&c, &mut self.gfx, o),
                     Page::Analysis => {
                         view.draw_analysis_hint(&c, &mut self.gfx);
-                        *result_actions = ui::draw_result(ui, &mut self.gfx, o, &self.config);
+                        *result_actions = ui::draw_result(ui, &mut self.gfx, o);
                     }
                 }
                 // フェードは egui の窓より上に
@@ -2460,6 +2640,7 @@ fn config_info<'a>(
         song_count: songs.library.songs,
         song: false,
         play: None,
+        timing: None,
     }
 }
 
