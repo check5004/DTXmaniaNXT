@@ -208,6 +208,8 @@ enum Command {
     Now { sound: Sound, gain: f32, tag: u8 },
     /// `tag` の音を短いフェードで止める（選曲のプレビューの音）
     Stop(u8),
+    /// このフレームより後から鳴らす予定の音を取りやめる（練習で並べ直す周の音）
+    CancelFrom(u64),
 }
 
 /// 鳴らす音 1 つ。音の `skip` フレーム目から `len` フレームを、出力の `start` フレーム目から鳴らす
@@ -341,6 +343,7 @@ impl AudioOut {
                                 v.fade_out = true;
                             }
                         }
+                        Command::CancelFrom(frame) => voices.retain(|v| v.start < frame),
                     }
                 }
                 let n = (data.len() / channels) as u64;
@@ -428,6 +431,12 @@ impl AudioOut {
             fade_out: p.cut_end,
             tag: 0,
         }));
+    }
+
+    /// 曲の時刻 `song_ms` 以後に鳴り始める予定の音を取りやめる（もう鳴り始めた音はそのまま）
+    pub fn cancel_from(&mut self, song_ms: f64) {
+        let frame = self.frame_at(song_ms).max(0.0).round() as u64;
+        let _ = self.tx.push(Command::CancelFrom(frame));
     }
 
     pub fn play_now(&mut self, sound: &Sound, gain: f32) {

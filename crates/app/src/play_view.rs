@@ -652,7 +652,7 @@ impl PlayView {
         self.draw_judges(c, g, now);
         self.draw_fire(c, g, now);
         if let Some(p) = &play.practice {
-            crate::practice_hud::draw(c, g, p, now_ms, play.last_chip_ms);
+            crate::practice_hud::draw(c, g, p, now_ms, play.last_chip_ms, px_per_ms);
         }
         self.draw_failed(c, g, now);
         // 入ってきたときのフェード
@@ -664,6 +664,28 @@ impl PlayView {
 
     /// ジャケットと曲名（上流 `CActPerfPanelString`）
     fn draw_jacket(&self, c: &Canvas, g: &mut Gfx, play: &Play) {
+        // 練習中は、ジャケットの場所に段階アップのはしごを出す（practice_hud）。曲名は出す
+        if play.practice.is_none() {
+            self.draw_jacket_image(c, g, play);
+        }
+        let edge = |px: f32| Style {
+            px,
+            color: Color32::WHITE,
+            bold: false,
+            shadow: None,
+            edge: Some((Color32::BLACK, px / 12.0)),
+            gradient: None,
+        };
+        if let Some(t) = g.texts.get(&play.title, &edge(20.0)) {
+            t.draw_fit(c, 950.0, 630.0, 320.0);
+        }
+        if let Some(t) = g.texts.get(&play.artist, &edge(15.0)) {
+            t.draw_fit(c, 950.0, 665.0, 320.0);
+        }
+    }
+
+    /// ジャケットの板と絵
+    fn draw_jacket_image(&self, c: &Canvas, g: &mut Gfx, play: &Play) {
         if let Some(t) = g.skin.tex("Graphics/7_JacketPanel.png") {
             c.draw(&t, 915.0, 287.0);
         }
@@ -691,20 +713,6 @@ impl PlayView {
                     ..Default::default()
                 },
             );
-        }
-        let edge = |px: f32| Style {
-            px,
-            color: Color32::WHITE,
-            bold: false,
-            shadow: None,
-            edge: Some((Color32::BLACK, px / 12.0)),
-            gradient: None,
-        };
-        if let Some(t) = g.texts.get(&play.title, &edge(20.0)) {
-            t.draw_fit(c, 950.0, 630.0, 320.0);
-        }
-        if let Some(t) = g.texts.get(&play.artist, &edge(15.0)) {
-            t.draw_fit(c, 950.0, 665.0, 320.0);
         }
     }
 

@@ -48,6 +48,8 @@ pub struct Config {
     pub practice_target: u32,
     /// 遅くするときの音程（"keep" は保つ、"tape" は音程ごと遅く）
     pub practice_pitch: String,
+    /// 練習でメトロノームを鳴らす（区間の拍ごとに小さく鳴る）
+    pub practice_metronome: bool,
     /// ゲージが尽きたら途中で終わる（STAGE FAILED）。書いていなければ ON（上流の既定）
     pub stage_failed: Option<bool>,
     /// 判定の下のずれの数字（0 は出さない、1 は出す、2 は PERFECT 以外だけ。上流 `ShowLagTime`）
@@ -140,6 +142,7 @@ impl Default for Config {
             practice_speed: SpeedPlan::DEFAULT_START,
             practice_target: SpeedPlan::DEFAULT_TARGET,
             practice_pitch: Pitch::default().name().to_owned(),
+            practice_metronome: true,
             stage_failed: None,
             show_lag_time: 1,
             show_lag_time_color: 0,
@@ -306,6 +309,7 @@ impl Config {
             rule: self.pass_rule(),
             speed: self.speed_plan(),
             pitch: self.pitch(),
+            metronome: self.practice_metronome,
         }
     }
 
@@ -325,6 +329,7 @@ impl Config {
             }
         }
         self.practice_pitch = p.pitch.name().to_owned();
+        self.practice_metronome = p.metronome;
     }
 
     /// 前の版の、機器を区別しないパッドの割り当て（読めないレーンの名前は飛ばす）
@@ -389,6 +394,7 @@ mod tests {
             rule: PassRule::Strict,
             speed: SpeedPlan::Fixed(85),
             pitch: Pitch::Tape,
+            metronome: false,
         };
         c.set_practice_prefs(p);
         assert_eq!(c.practice_prefs(), p);

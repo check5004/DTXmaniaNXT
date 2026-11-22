@@ -16,7 +16,7 @@ use records::{Lap, NoteHit, SectionClear, Session, SessionKind, StrayHit};
 use crate::audio::{AudioOut, Sound, click, load_sound};
 use crate::history::OvercomeCheck;
 use crate::midi::RawMidi;
-use crate::practice::{LapSummary, Practice, PracticeOptions, count_per_measure};
+use crate::practice::{LapSummary, Practice, PracticeOptions, StrayHint, count_per_measure};
 use crate::stretch::{SectionAudio, mix_bgm};
 use crate::time::host_us;
 
@@ -28,6 +28,9 @@ const PRACTICE_LEAD_IN_MS: f64 = 1000.0;
 
 /// カウントのクリックの音量
 const CLICK_GAIN: f32 = 0.8;
+
+/// メトロノーム（周の中の拍のクリック）の音量。BGM の邪魔をしないよう、カウントより小さく
+const METRONOME_GAIN: f32 = 0.45;
 
 /// 練習の区間の BGM をまとめるとき、助走の前と着地のあとに足す余白（曲のミリ秒）。伸ばした音の端のにじみを周に入れないため
 const SECTION_MARGIN_MS: f64 = 1000.0;
@@ -108,6 +111,10 @@ pub struct PracticeOutcome {
     pub laps: Vec<LapSummary>,
     /// 段階アップで目標の速度まで合格した
     pub cleared: bool,
+    /// 空打ちが偏っているパッド（拾いすぎの疑い）
+    pub strays: Option<StrayHint>,
+    /// 最後まで叩いた周のずれの平均（ミリ秒）と打った数
+    pub offset: Option<(f64, usize)>,
 }
 
 /// 苦手な小節の地図（結果の画面に出す）
@@ -372,7 +379,24 @@ impl Play {
         if let Some(sa) = self.section_audio.as_mut() {
             sa.poll();
         }
-        p.settle(now_ms, self.judge.windows().poor);
+        p.settle(now_ms);
+        // 速度が変わったら、まだ始まっていない次の周を取り下げ、新しい速度の助走から並べ直す。
+        // 新しい速度の音ができていなければ取り下げない（前の速度で回し、できてから変える）
+        let ready = self
+            .section_audio
+            .as_ref()
+            .is_none_or(|sa| sa.get(p.ladder().speed()).is_some());
+        if ready {
+            while let Some(w) = p.withdraw_stale(now_ms) {
+                if !self.judge.truncate(w.notes_from) {
+                    log::warn!("withdrawn lap had judged notes");
+                }
+                self.note_hits.truncate(w.notes_from);
+                if let Some(a) = self.audio.as_mut() {
+                    a.cancel_from(w.audio_from_ms);
+                }
+            }
+        }
         let ahead = self.view_ahead_ms + LAY_MARGIN_MS;
         while p.wants_lap(now_ms, ahead) {
             // 決めた速度の音がまだできていなければ、できるまで前の周の速度で回す
@@ -383,8 +407,9 @@ impl Play {
             };
             let (lap, notes) = p.next_lap(speed, now_ms + ahead);
             log::info!(
-                "lap {} at {speed}%: {:.0}-{:.0}ms",
+                "lap {} at {speed}%{}: {:.0}-{:.0}ms",
                 lap.index + 1,
+                if lap.has_run_up() { " with run-up" } else { "" },
                 lap.start_ms,
                 lap.end_ms
             );
@@ -400,6 +425,11 @@ impl Play {
                 if let Some((accent, plain)) = &self.clicks {
                     for (i, &c) in lap.clicks.iter().enumerate() {
                         a.play_at(if i == 0 { accent } else { plain }, c, CLICK_GAIN);
+                    }
+                    if p.options.metronome {
+                        for &(c, bar) in &lap.beats {
+                            a.play_at(if bar { accent } else { plain }, c, METRONOME_GAIN);
+                        }
                     }
                 }
             }
@@ -606,6 +636,8 @@ impl Play {
                 options: p.options,
                 laps: p.summaries(self.now_ms()),
                 cleared: p.ladder().cleared(),
+                strays: p.stray_hint(),
+                offset: p.offset_mean(),
             }),
         }
     }
@@ -656,13 +688,14 @@ impl Play {
                 }
             };
             settings += &format!(
-                ",\"section\":[{},{}],\"style\":\"{}\",\"rule\":\"{}\",\"speed\":{},\"pitch\":\"{}\",\"cleared\":{}",
+                ",\"section\":[{},{}],\"style\":\"{}\",\"rule\":\"{}\",\"speed\":{},\"pitch\":\"{}\",\"metronome\":{},\"cleared\":{}",
                 o.section.first,
                 o.section.last,
                 o.style.name(),
                 o.rule.name(),
                 speed,
                 o.pitch.name(),
+                o.metronome,
                 p.ladder().cleared()
             );
         }

@@ -277,6 +277,21 @@ impl Judge {
         from..self.notes.len()
     }
 
+    /// 添字 `from` から後ろの音符を取り除く（練習で、まだ始まっていない周を取り下げるとき）。
+    /// そのうち 1 つでも判定済みなら何もせず false
+    pub fn truncate(&mut self, from: usize) -> bool {
+        if from >= self.notes.len() {
+            return true;
+        }
+        if self.done[from..].iter().any(|&d| d) {
+            return false;
+        }
+        self.notes.truncate(from);
+        self.done.truncate(from);
+        self.first_open = self.first_open.min(from);
+        true
+    }
+
     pub fn is_done(&self, note: usize) -> bool {
         self.done[note]
     }
@@ -396,6 +411,22 @@ mod tests {
 
     fn judge(notes: Vec<DrumNote>) -> Judge {
         Judge::new(notes, HitWindows::default(), LaneGroups::default())
+    }
+
+    #[test]
+    fn unjudged_notes_at_the_end_can_be_taken_back() {
+        let mut j = judge(vec![note(0.0, SD), note(500.0, SD)]);
+        let added = j.extend([note(1000.0, SD), note(1500.0, SD)]);
+        assert_eq!(added, 2..4);
+        j.hit(hit(0.0, SD));
+        assert!(j.truncate(2));
+        assert_eq!(j.notes().len(), 2);
+        // 判定済みの音符があれば取り除かない
+        assert!(!j.truncate(0));
+        assert_eq!(j.notes().len(), 2);
+        // 足し直せる
+        assert_eq!(j.extend([note(1200.0, SD)]), 2..3);
+        assert!(j.advance(2000.0).len() == 2);
     }
 
     #[test]
