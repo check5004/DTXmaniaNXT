@@ -183,6 +183,31 @@ fn set_note(d: &mut MidiDevice, note: u8, lane: &str) {
     });
 }
 
+/// 機器のノートを、レーンに足す。もうそのレーンに割り当ててあれば外す。足したら `true`
+pub fn toggle_note(
+    config: &mut Config,
+    ports: &[PortInfo],
+    port: usize,
+    note: u8,
+    lane: DrumLane,
+) -> bool {
+    let assigned = profiles(config, ports)
+        .get(port)
+        .and_then(|p| p.lane_notes().remove(&lane))
+        .is_some_and(|notes| notes.contains(&note));
+    if let Some(d) = device_mut(config, ports, port) {
+        set_note(d, note, if assigned { UNASSIGNED } else { lane.name() });
+    }
+    !assigned
+}
+
+/// キーを、レーンに足す。もうそのレーンに割り当ててあれば外す。足したら `true`
+pub fn toggle_key(config: &mut Config, code: KeyCode, lane: DrumLane) -> bool {
+    let assigned = keyboard_map(config).contains(&(code, lane));
+    set_key(config, code, (!assigned).then_some(lane));
+    !assigned
+}
+
 /// レーンの割り当てを、今つながっている機器とキーボードからすべて外す
 pub fn clear_lane(config: &mut Config, ports: &[PortInfo], lane: DrumLane) {
     let profiles = profiles(config, ports);
@@ -612,6 +637,25 @@ mod tests {
         assert!(keyboard_map(&c).iter().all(|(_, l)| *l != DrumLane::LP));
         // ほかのレーンはそのまま
         assert_eq!(p[1].note_lane(38), Some(DrumLane::SD));
+    }
+
+    #[test]
+    fn hitting_an_assigned_pad_again_removes_it() {
+        let mut c = Config::default();
+        let ports = [port("Finger Drum Pad", "fgdp"), port("V51", "v51")];
+        // V51（Roland）の 38 は初めからスネア。叩くと外れる
+        assert!(!toggle_note(&mut c, &ports, 1, 38, DrumLane::SD));
+        assert_eq!(profiles(&c, &ports)[1].note_lane(38), None);
+        assert!(toggle_note(&mut c, &ports, 1, 38, DrumLane::SD));
+        assert_eq!(profiles(&c, &ports)[1].note_lane(38), Some(DrumLane::SD));
+        // ほかのレーンのノートなら、このレーンへ移す
+        assert!(toggle_note(&mut c, &ports, 1, 48, DrumLane::SD));
+        assert_eq!(profiles(&c, &ports)[1].note_lane(48), Some(DrumLane::SD));
+        // キーも同じ
+        assert!(!toggle_key(&mut c, KeyCode::KeyD, DrumLane::SD));
+        assert!(!keyboard_map(&c).contains(&(KeyCode::KeyD, DrumLane::SD)));
+        assert!(toggle_key(&mut c, KeyCode::KeyD, DrumLane::SD));
+        assert!(keyboard_map(&c).contains(&(KeyCode::KeyD, DrumLane::SD)));
     }
 
     #[test]

@@ -229,11 +229,10 @@ impl Config {
         self.master_volume.min(100)
     }
 
-    /// 全体の音量を `steps` 段変える（1 段 5 %、0〜100）
-    pub fn nudge_master_volume(&mut self, steps: i32) {
-        let step = i32::from(MASTER_VOLUME_STEP);
-        let now = (i32::from(self.master_volume()) + step / 2) / step;
-        self.master_volume = ((now + steps) * step).clamp(0, 100) as u8;
+    /// 全体の音量を決める（0〜100 に収め、1 段 5 % の刻みにそろえる）
+    pub fn set_master_volume(&mut self, v: i64) {
+        let step = i64::from(MASTER_VOLUME_STEP);
+        self.master_volume = ((v.clamp(0, 100) + step / 2) / step * step).min(100) as u8;
     }
 
     /// STAGE FAILED にする（書いていなければ ON）
@@ -504,19 +503,19 @@ lane = \"LP\"
     fn master_volume_defaults_to_half_and_moves_in_steps() {
         let mut c = Config::default();
         assert_eq!(c.master_volume(), 50);
-        c.nudge_master_volume(-3);
+        c.set_master_volume(35);
         assert_eq!(c.master_volume(), 35);
-        c.nudge_master_volume(-100);
+        c.set_master_volume(-100);
         assert_eq!(c.master_volume(), 0);
-        c.nudge_master_volume(100);
+        c.set_master_volume(300);
         assert_eq!(c.master_volume(), 100);
-        // ファイルに書いた半端な値や大きすぎる値は、刻みに合わせて直す
+        // ファイルに書いた半端な値から 1 段動かすと、刻みに合わせて直す
         let mut c: Config = toml::from_str("master_volume = 42\n").unwrap();
-        c.nudge_master_volume(1);
+        c.set_master_volume(i64::from(c.master_volume()) + 5);
         assert_eq!(c.master_volume(), 45);
         let mut c: Config = toml::from_str("master_volume = 200\n").unwrap();
         assert_eq!(c.master_volume(), 100);
-        c.nudge_master_volume(-1);
+        c.set_master_volume(i64::from(c.master_volume()) - 5);
         assert_eq!(c.master_volume(), 95);
     }
 
@@ -524,7 +523,7 @@ lane = \"LP\"
     fn master_volume_is_kept_for_the_next_version() {
         // 一度下げた音量は保存して読み直しても同じ（版を上げても設定のファイルは同じ所）
         let mut c = Config::default();
-        c.nudge_master_volume(-6);
+        c.set_master_volume(20);
         let text = toml::to_string_pretty(&c).unwrap();
         assert!(text.contains("master_volume = 20"));
         let back: Config = toml::from_str(&text).unwrap();
