@@ -116,7 +116,7 @@ const AUTO_SECTION: &str = "自動で叩く";
 /// 早送り・巻き戻しの幅（ミリ秒）
 pub const SKIP_MS: &str = "skip_ms";
 /// 窓と画面の保存（上流の FullScreen、VSyncWait、AutoSaveResult）
-pub const FULLSCREEN: &str = "fullscreen";
+pub const DISPLAY_MODE: &str = "display_mode";
 pub const VSYNC: &str = "vsync";
 pub const AUTO_SAVE_RESULT: &str = "auto_save_result";
 
@@ -164,6 +164,41 @@ macro_rules! choices {
     ($($key:literal => $label:literal),+ $(,)?) => {
         &[$(Choice { key: $key, label: $label }),+]
     };
+}
+
+/// 画面の出し方（並びは [`DisplayMode`] と同じ）
+const DISPLAY_MODE_CHOICES: &[Choice] = choices![
+    "window" => "ウィンドウ",
+    "borderless" => "ボーダーレス（疑似全画面）",
+    "fullscreen" => "全画面",
+];
+
+/// 0.4.2 までの全画面の ON / OFF のキー（読むだけ。[`Values::upgrade`] で画面の出し方に写す）
+const OLD_FULLSCREEN: &str = "fullscreen";
+
+/// 画面の出し方
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DisplayMode {
+    /// 枠のある窓
+    Window,
+    /// 枠のない窓を画面いっぱいに（OS とドライバーには普通の窓）
+    Borderless,
+    /// OS の全画面（解像度は変えない）
+    Fullscreen,
+}
+
+impl DisplayMode {
+    const ALL: [Self; 3] = [Self::Window, Self::Borderless, Self::Fullscreen];
+
+    /// config.toml に書く名前
+    pub fn name(self) -> &'static str {
+        DISPLAY_MODE_CHOICES[self as usize].key
+    }
+
+    /// [`DisplayMode::name`] から（読めなければ `None`）
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|m| m.name() == name)
+    }
 }
 
 /// 上流 `nHidSud`（並びは上流と同じ）
@@ -605,12 +640,15 @@ pub const ALL: &[Def] = &[
         in_play: true,
     },
     Def {
-        key: FULLSCREEN,
+        key: DISPLAY_MODE,
         group: Group::App,
         section: "画面",
-        name: "全画面（FullScreen）",
-        kind: Kind::Toggle { default: false },
-        desc: "画面いっぱいに出します。どの画面でも Alt+Enter か F11 で切り替えられます。",
+        name: "画面の出し方（FullScreen）",
+        kind: Kind::Choice {
+            choices: DISPLAY_MODE_CHOICES,
+            default: 0,
+        },
+        desc: "ボーダーレスは枠のない窓を画面いっぱいに広げ、ほかの窓へすぐ切り替えたり上に重ねたりできます。\n全画面は絵が少し早く出ることがありますが、切り替えで画面が一瞬暗くなることがあります。どの画面でも Alt+Enter か F11 で、ウィンドウと最後に使った方を行き来します。",
         in_play: true,
     },
     Def {
@@ -1034,6 +1072,28 @@ impl Values {
         self.choice(DARK) == 2
     }
 
+    /// 画面の出し方
+    pub fn display_mode(&self) -> DisplayMode {
+        DisplayMode::ALL[self.choice(DISPLAY_MODE)]
+    }
+
+    pub fn set_display_mode(&mut self, mode: DisplayMode) {
+        self.set_raw(DISPLAY_MODE, mode as i64);
+    }
+
+    /// 前の版のキーを今のキーに写す（読んだときに 1 回）。写したら true
+    ///
+    /// - 0.4.2 までの `fullscreen = true` は、画面の出し方の「全画面」
+    pub fn upgrade(&mut self) -> bool {
+        let Some(old) = self.0.remove(OLD_FULLSCREEN) else {
+            return false;
+        };
+        if !self.0.contains_key(DISPLAY_MODE) && old.as_bool() == Some(true) {
+            self.set_display_mode(DisplayMode::Fullscreen);
+        }
+        true
+    }
+
     fn set(&mut self, key: &str, v: toml::Value) {
         self.0.insert(key.to_owned(), v);
     }
@@ -1257,6 +1317,43 @@ mod tests {
         assert!(v.flag(BGM_SOUND) && !v.flag(METRONOME));
         v.set_raw(BGM_ADJUST, -150);
         assert_eq!(v.number(BGM_ADJUST), -99);
+    }
+
+    #[test]
+    fn old_fullscreen_becomes_the_display_mode() {
+        let mut v: Values = toml::from_str("fullscreen = true\nvsync = false\n").unwrap();
+        assert!(v.upgrade());
+        assert_eq!(v.display_mode(), DisplayMode::Fullscreen);
+        assert_eq!(v.label(DISPLAY_MODE), "全画面");
+        assert!(!v.flag(VSYNC));
+        let text = toml::to_string(&v).unwrap();
+        assert!(!text.contains("fullscreen ="), "{text}");
+        assert!(text.contains("display_mode = \"fullscreen\""), "{text}");
+        // 2 回目は何もしない
+        assert!(!v.upgrade());
+
+        let mut off: Values = toml::from_str("fullscreen = false\n").unwrap();
+        assert!(off.upgrade());
+        assert_eq!(off.display_mode(), DisplayMode::Window);
+        assert!(off.is_empty());
+
+        // 新しいキーがあればそちらのまま
+        let mut both: Values =
+            toml::from_str("fullscreen = true\ndisplay_mode = \"borderless\"\n").unwrap();
+        assert!(both.upgrade());
+        assert_eq!(both.display_mode(), DisplayMode::Borderless);
+    }
+
+    #[test]
+    fn display_modes_match_their_choices() {
+        let mut v = Values::default();
+        assert_eq!(v.display_mode(), DisplayMode::Window);
+        for m in DisplayMode::ALL {
+            v.set_display_mode(m);
+            assert_eq!(v.display_mode(), m);
+            assert_eq!(DisplayMode::from_name(m.name()), Some(m));
+        }
+        assert_eq!(DisplayMode::from_name("exclusive"), None);
     }
 
     #[test]

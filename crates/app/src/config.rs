@@ -9,7 +9,7 @@ use engine::practice::{LoopStyle, PassRule, SpeedPlan, snap_speed};
 use serde::{Deserialize, Serialize};
 
 use crate::practice::PracticePrefs;
-use crate::settings::Values;
+use crate::settings::{DisplayMode, Values};
 use crate::stretch::Pitch;
 
 /// 設定の画面で全体の音量を 1 回で変える幅（%）
@@ -71,6 +71,9 @@ pub struct Config {
     pub keys: Vec<KeyBind>,
     /// 起動したときに GitHub のリリースから新しい版を落とし、終えるときに入れ替える（Setup.exe で入れたときだけ）
     pub auto_update: bool,
+    /// 最後に使った全画面の出し方（"borderless" か "fullscreen"）。Alt+Enter と F11 でウィンドウから戻る先
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub last_full_mode: String,
     /// 設定の表（[`crate::settings`]）の項目の値（config.toml の `[settings]`）。書いていないものは既定
     #[serde(skip_serializing_if = "Values::is_empty")]
     pub settings: Values,
@@ -155,6 +158,7 @@ impl Default for Config {
             midi_devices: Vec::new(),
             keys: Vec::new(),
             auto_update: true,
+            last_full_mode: String::new(),
             settings: Values::default(),
         }
     }
@@ -243,13 +247,35 @@ impl Config {
         self.stage_failed.unwrap_or(true)
     }
 
+    /// Alt+Enter と F11 でウィンドウから切り替える先（最後に使った方。初めは全画面）
+    pub fn full_mode(&self) -> DisplayMode {
+        DisplayMode::from_name(&self.last_full_mode)
+            .filter(|m| *m != DisplayMode::Window)
+            .unwrap_or(DisplayMode::Fullscreen)
+    }
+
+    /// 全画面の出し方を使ったら覚える。覚え直したら true
+    pub fn remember_full_mode(&mut self, mode: DisplayMode) -> bool {
+        if mode == DisplayMode::Window || self.last_full_mode == mode.name() {
+            return false;
+        }
+        mode.name().clone_into(&mut self.last_full_mode);
+        true
+    }
+
     pub fn load() -> Self {
         let Some(path) = Self::path() else {
             return Self::default();
         };
         match std::fs::read_to_string(&path) {
-            Ok(text) => match toml::from_str(&text) {
-                Ok(c) => c,
+            Ok(text) => match toml::from_str::<Self>(&text) {
+                Ok(mut c) => {
+                    // 前の版のキーを写したら書き直す
+                    if c.settings.upgrade() {
+                        c.save();
+                    }
+                    c
+                }
                 Err(e) => {
                     log::warn!("{}: {e}", path.display());
                     Self::default()
@@ -538,6 +564,21 @@ lane = \"LP\"
         let mut c = back;
         c.adopt_nx(&nx::NxConfig::parse("[System]\nMasterVolume=100\n"));
         assert_eq!(c.master_volume(), 20);
+    }
+
+    #[test]
+    fn f11_returns_to_the_last_full_mode() {
+        let mut c = Config::default();
+        assert_eq!(c.full_mode(), DisplayMode::Fullscreen);
+        assert!(!c.remember_full_mode(DisplayMode::Window));
+        assert!(c.remember_full_mode(DisplayMode::Borderless));
+        assert!(!c.remember_full_mode(DisplayMode::Borderless));
+        assert_eq!(c.full_mode(), DisplayMode::Borderless);
+        let back: Config = toml::from_str(&toml::to_string(&c).unwrap()).unwrap();
+        assert_eq!(back.full_mode(), DisplayMode::Borderless);
+        // 読めない名前やウィンドウは全画面に
+        c.last_full_mode = "window".into();
+        assert_eq!(c.full_mode(), DisplayMode::Fullscreen);
     }
 
     #[test]
