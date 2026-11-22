@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="960" height="420" viewBox="0 0 960 420" role="img" aria-labelledby="title desc">
 <title id="title">DTXmaniaNXT</title>
-<desc id="desc">DTX の譜面で遊べるドラムのゲーム兼練習アプリ。NX と同じレーンに音符が落ちてきて、叩くと判定が出る。</desc>
+<desc id="desc">DTX 譜面で遊べるドラムゲーム兼練習ソフト。DTXManiaNX と同じレーンにチップが流れてきて、叩くと判定が出る。</desc>
 <style>
 text{font-family:'Hiragino Sans','Hiragino Kaku Gothic ProN','Yu Gothic UI','Yu Gothic','Meiryo','Noto Sans JP','Noto Sans CJK JP',system-ui,sans-serif}
 .mono{font-family:'JetBrains Mono','SF Mono','Cascadia Mono',Consolas,Menlo,monospace}
@@ -53,10 +53,10 @@ text{font-family:'Hiragino Sans','Hiragino Kaku Gothic ProN','Yu Gothic UI','Yu 
 <rect x="1" y="1" width="958" height="418" rx="18" fill="url(#bg1)" stroke="#263247"/>
 <rect x="1" y="1" width="958" height="418" rx="18" fill="url(#rg2)"/>
 <text x="52" y="122" font-size="58" font-weight="800" fill="#E8EEF7" letter-spacing="-1">DTXmania<tspan fill="url(#tg3)">NXT</tspan></text>
-<text x="54" y="160" font-size="25" fill="#E8EEF7" font-weight="700" text-anchor="start">DTX の譜面で遊んで、</text>
-<text x="54" y="192" font-size="25" fill="#E8EEF7" font-weight="700" text-anchor="start">苦手な所を練習する。</text>
-<text x="54" y="226" font-size="15" fill="#9AA8BC" font-weight="400" text-anchor="start">Rust で一から書いたアプリ。見た目は DTXManiaNX v2.0 のまま。</text>
-<text x="54" y="248" font-size="15" fill="#9AA8BC" font-weight="400" text-anchor="start">電子ドラムのためのアプリ。Windows を主に、macOS・Linux でも。</text>
+<text x="54" y="160" font-size="25" fill="#E8EEF7" font-weight="700" text-anchor="start">DTX 譜面で遊んで、</text>
+<text x="54" y="192" font-size="25" fill="#E8EEF7" font-weight="700" text-anchor="start">苦手なフレーズを集中練習。</text>
+<text x="54" y="226" font-size="15" fill="#9AA8BC" font-weight="400" text-anchor="start">見た目は DTXManiaNX v2.0、中身は Rust でゼロから作り直し。</text>
+<text x="54" y="248" font-size="15" fill="#9AA8BC" font-weight="400" text-anchor="start">電子ドラム向け。Windows 版のほか、macOS・Linux 版もあります。</text>
 <rect x="52" y="274" width="177" height="28" rx="14" fill="#5CE1E6" fill-opacity="0.12" stroke="#5CE1E6" stroke-opacity="0.55"/>
 <circle cx="66" cy="288" r="4" fill="#5CE1E6"/>
 <text x="77" y="293" font-size="13" fill="#E8EEF7" font-weight="500" text-anchor="start">電子ドラム（MIDI）</text>
@@ -65,7 +65,7 @@ text{font-family:'Hiragino Sans','Hiragino Kaku Gothic ProN','Yu Gothic UI','Yu 
 <text x="264.0" y="293" font-size="13" fill="#E8EEF7" font-weight="500" text-anchor="start">練習モード</text>
 <rect x="348.0" y="274" width="125" height="28" rx="14" fill="#FFD54F" fill-opacity="0.12" stroke="#FFD54F" stroke-opacity="0.55"/>
 <circle cx="362.0" cy="288" r="4" fill="#FFD54F"/>
-<text x="373.0" y="293" font-size="13" fill="#E8EEF7" font-weight="500" text-anchor="start">ずれを合わせる</text>
+<text x="373.0" y="293" font-size="13" fill="#E8EEF7" font-weight="500" text-anchor="start">タイミング調整</text>
 <rect x="483.0" y="274" width="60" height="28" rx="14" fill="#C77DFF" fill-opacity="0.12" stroke="#C77DFF" stroke-opacity="0.55"/>
 <circle cx="497.0" cy="288" r="4" fill="#C77DFF"/>
 <text x="508.0" y="293" font-size="13" fill="#E8EEF7" font-weight="500" text-anchor="start">無料</text>

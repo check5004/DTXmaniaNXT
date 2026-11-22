@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="960" height="250" viewBox="0 0 960 250" role="img" aria-labelledby="title desc">
 <title id="title">遊ぶまでの 3 ステップ</title>
-<desc id="desc">1. Setup.exe を入れる 2. 曲のフォルダを足す 3. 電子ドラムをつないで遊ぶ</desc>
+<desc id="desc">1. インストール 2. 曲フォルダを追加 3. 電子ドラムをつないで遊ぶ</desc>
 <style>
 text{font-family:'Hiragino Sans','Hiragino Kaku Gothic ProN','Yu Gothic UI','Yu Gothic','Meiryo','Noto Sans JP','Noto Sans CJK JP',system-ui,sans-serif}
 .mono{font-family:'JetBrains Mono','SF Mono','Cascadia Mono',Consolas,Menlo,monospace}
@@ -44,21 +44,21 @@ text{font-family:'Hiragino Sans','Hiragino Kaku Gothic ProN','Yu Gothic UI','Yu 
 <g class="w3"><circle cx="219" cy="43" r="13" fill="#7CF29A"/><path d="M213 43 l4 4 l8 -8" stroke="#06121B" stroke-width="3" fill="none" stroke-linecap="round"/></g>
 <circle cx="42" cy="178" r="14" fill="none" stroke="#5CE1E6" stroke-width="2"/>
 <text x="42" y="183" font-size="14" fill="#5CE1E6" font-weight="800" text-anchor="middle">1</text>
-<text x="66" y="184" font-size="19" fill="#E8EEF7" font-weight="800" text-anchor="start">入れる</text>
+<text x="66" y="184" font-size="19" fill="#E8EEF7" font-weight="800" text-anchor="start">インストール</text>
 <text x="30" y="210" font-size="13" fill="#9AA8BC" font-weight="400" text-anchor="start">Setup.exe を実行するだけ。</text>
-<text x="30" y="229" font-size="13" fill="#9AA8BC" font-weight="400" text-anchor="start">管理者の権限も NX も要りません。</text>
+<text x="30" y="229" font-size="13" fill="#9AA8BC" font-weight="400" text-anchor="start">管理者権限も NX も不要です。</text>
 <rect x="327" y="7" width="304" height="236" rx="16" fill="url(#bg4)" stroke="#263247"/>
 <rect x="342" y="22" width="274" height="122" rx="10" fill="#0E1522" stroke="#1F2A3D"/>
 <rect class="w5" x="328" y="8" width="302" height="234" rx="15" fill="none" stroke="#5CE1E6" stroke-width="2"/>
 <rect x="401" y="53" width="156" height="72" rx="8" fill="none" stroke="#3A4A66" stroke-dasharray="5 5"/>
 <text x="479" y="109" font-size="11" fill="#9AA8BC" font-weight="600" text-anchor="middle" class="mono">DTXFiles</text>
 <g class="dp"><path d="M453 69 h18 l6 6 h28 v32 h-52 z" fill="#FFD54F" stroke="#B8901C"/><path d="M453 79 h52 v22 h-52 z" fill="#FFE38A"/></g>
-<g class="w6"><rect x="509" y="37" width="64" height="22" rx="11" fill="#7CF29A"/><text x="541" y="52" font-size="12" fill="#06121B" font-weight="800" text-anchor="middle">6 曲</text></g>
+<g class="w6"><rect x="509" y="37" width="64" height="22" rx="11" fill="#7CF29A"/><text x="541" y="52" font-size="12" fill="#06121B" font-weight="800" text-anchor="middle">+6 曲</text></g>
 <circle cx="360" cy="178" r="14" fill="none" stroke="#5CE1E6" stroke-width="2"/>
 <text x="360" y="183" font-size="14" fill="#5CE1E6" font-weight="800" text-anchor="middle">2</text>
-<text x="384" y="184" font-size="19" fill="#E8EEF7" font-weight="800" text-anchor="start">曲を足す</text>
-<text x="348" y="210" font-size="13" fill="#9AA8BC" font-weight="400" text-anchor="start">DTX の曲のフォルダを選ぶか、</text>
-<text x="348" y="229" font-size="13" fill="#9AA8BC" font-weight="400" text-anchor="start">窓にドロップします。</text>
+<text x="384" y="184" font-size="19" fill="#E8EEF7" font-weight="800" text-anchor="start">曲を追加</text>
+<text x="348" y="210" font-size="13" fill="#9AA8BC" font-weight="400" text-anchor="start">DTX の曲フォルダを選ぶか、</text>
+<text x="348" y="229" font-size="13" fill="#9AA8BC" font-weight="400" text-anchor="start">ウィンドウにドロップします。</text>
 <rect x="645" y="7" width="304" height="236" rx="16" fill="url(#bg7)" stroke="#263247"/>
 <rect x="660" y="22" width="274" height="122" rx="10" fill="#0E1522" stroke="#1F2A3D"/>
 <rect class="w8" x="646" y="8" width="302" height="234" rx="15" fill="none" stroke="#5CE1E6" stroke-width="2"/>
@@ -78,5 +78,5 @@ text{font-family:'Hiragino Sans','Hiragino Kaku Gothic ProN','Yu Gothic UI','Yu 
 <text x="678" y="183" font-size="14" fill="#5CE1E6" font-weight="800" text-anchor="middle">3</text>
 <text x="702" y="184" font-size="19" fill="#E8EEF7" font-weight="800" text-anchor="start">つないで遊ぶ</text>
 <text x="666" y="210" font-size="13" fill="#9AA8BC" font-weight="400" text-anchor="start">電子ドラムを USB-MIDI で</text>
-<text x="666" y="229" font-size="13" fill="#9AA8BC" font-weight="400" text-anchor="start">つなげば、自動で見つけます。</text>
+<text x="666" y="229" font-size="13" fill="#9AA8BC" font-weight="400" text-anchor="start">つなげば自動で認識します。</text>
 </svg>

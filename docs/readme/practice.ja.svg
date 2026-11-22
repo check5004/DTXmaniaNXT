@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="960" height="380" viewBox="0 0 960 380" role="img" aria-labelledby="title desc">
 <title id="title">段をのぼってクリア</title>
-<desc id="desc">区間を 70% から 100% まで 10% ずつのぼる。1 段 4 周。同じ拍で 2 回ミスしたら、その段をもう一度。</desc>
+<desc id="desc">区間のテンポを 70% から 100% まで 10% ずつ上げていく。1 段 4 周。同じ拍で 2 回ミスするとその段をやり直し。</desc>
 <style>
 text{font-family:'Hiragino Sans','Hiragino Kaku Gothic ProN','Yu Gothic UI','Yu Gothic','Meiryo','Noto Sans JP','Noto Sans CJK JP',system-ui,sans-serif}
 .mono{font-family:'JetBrains Mono','SF Mono','Cascadia Mono',Consolas,Menlo,monospace}
@@ -82,7 +82,7 @@ text{font-family:'Hiragino Sans','Hiragino Kaku Gothic ProN','Yu Gothic UI','Yu 
 <rect x="1" y="1" width="958" height="378" rx="18" fill="url(#bg1)" stroke="#263247"/>
 <rect x="1" y="1" width="958" height="378" rx="18" fill="url(#rg2)"/>
 <text x="40" y="46" font-size="22" fill="#E8EEF7" font-weight="800" text-anchor="start">段をのぼってクリア</text>
-<text x="40" y="70" font-size="13" fill="#9AA8BC" font-weight="400" text-anchor="start">練習モード・区間をくり返す</text>
+<text x="40" y="70" font-size="13" fill="#9AA8BC" font-weight="400" text-anchor="start">練習モード・区間ループ</text>
 <rect x="60" y="274" width="250" height="48" rx="8" fill="#121A29" stroke="#2A3650"/>
 <text x="76" y="305" font-size="18" fill="#E8EEF7" font-weight="800" text-anchor="start">70%</text>
 <rect x="94" y="218" width="250" height="48" rx="8" fill="#121A29" stroke="#2A3650"/>
@@ -136,7 +136,7 @@ text{font-family:'Hiragino Sans','Hiragino Kaku Gothic ProN','Yu Gothic UI','Yu 
 <g class="w28"><rect x="120" y="158" width="266" height="56" rx="10" fill="none" stroke="#FFA94D" stroke-width="2.5"/><text x="116" y="192" font-size="12" fill="#FFA94D" font-weight="800" text-anchor="end">いまここ</text></g>
 <g class="w29"><rect x="154" y="102" width="266" height="56" rx="10" fill="none" stroke="#FFA94D" stroke-width="2.5"/><text x="150" y="136" font-size="12" fill="#FFA94D" font-weight="800" text-anchor="end">いまここ</text></g>
 <rect x="470" y="96" width="450" height="250" rx="12" fill="#070A11" stroke="#20293A"/>
-<text x="494" y="128" font-size="13" fill="#9AA8BC" font-weight="700" text-anchor="start">この段でミスした所</text>
+<text x="494" y="128" font-size="13" fill="#9AA8BC" font-weight="700" text-anchor="start">この段のミス</text>
 <text x="490" y="166" font-size="11" fill="#5B6B82" font-weight="600" text-anchor="end" class="mono">24</text>
 <rect x="500" y="148" width="26" height="26" rx="4" fill="#141C2B" stroke="#25324A"/>
 <rect x="530" y="148" width="26" height="26" rx="4" fill="#141C2B" stroke="#25324A"/>
@@ -186,5 +186,5 @@ text{font-family:'Hiragino Sans','Hiragino Kaku Gothic ProN','Yu Gothic UI','Yu 
 <g class="w35"><rect x="670" y="200" width="220" height="44" rx="10" fill="#0B1220" stroke="#7CF29A" stroke-width="2"/><text x="780" y="229" font-size="18" fill="#7CF29A" font-weight="800" text-anchor="middle">OK! 次は 90%</text></g>
 <g class="w36"><rect x="670" y="200" width="220" height="44" rx="10" fill="#0B1220" stroke="#7CF29A" stroke-width="2"/><text x="780" y="229" font-size="18" fill="#7CF29A" font-weight="800" text-anchor="middle">OK! 次は 100%</text></g>
 <g class="w37"><rect x="654" y="188" width="252" height="68" rx="12" fill="#0B1220" stroke="#FFD54F" stroke-width="3"/><text x="780" y="234" font-size="34" fill="#FFD54F" font-weight="900" text-anchor="middle">クリア！</text></g>
-<text x="40" y="366" font-size="13" fill="#9AA8BC" font-weight="400" text-anchor="start">1 段 4 周 ・ 同じ拍で 2 回ミス → その段をもう一度 ・ もう一度が 2 回続いたら 1 段下げる</text>
+<text x="40" y="366" font-size="13" fill="#9AA8BC" font-weight="400" text-anchor="start">1 段 4 周 ・ 同じ拍で 2 回ミスするとやり直し ・ やり直しが 2 回続くと 1 段下がる</text>
 </svg>

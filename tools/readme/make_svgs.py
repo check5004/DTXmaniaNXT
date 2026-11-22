@@ -156,7 +156,7 @@ def hero(lang: str) -> Svg:
         "DTXmaniaNXT",
         "A drum game and practice app for DTX charts. Notes fall into the NX-style lanes and are judged as you hit."
         if en
-        else "DTX の譜面で遊べるドラムのゲーム兼練習アプリ。NX と同じレーンに音符が落ちてきて、叩くと判定が出る。",
+        else "DTX 譜面で遊べるドラムゲーム兼練習ソフト。DTXManiaNX と同じレーンにチップが流れてきて、叩くと判定が出る。",
     )
     card_bg(s, glow=("0.82", "0.35", MAGENTA))
     # 題
@@ -173,11 +173,11 @@ def hero(lang: str) -> Svg:
         s.add(text(54, 248, "Made for electronic drums. Windows first, macOS and Linux too.", 15, SUB))
         tags = [("E-drums (MIDI)", CYAN), ("Practice mode", GREEN), ("Timing tools", YELLOW), ("Free", MAGENTA)]
     else:
-        s.add(text(54, 160, "DTX の譜面で遊んで、", 25, INK, 700))
-        s.add(text(54, 192, "苦手な所を練習する。", 25, INK, 700))
-        s.add(text(54, 226, "Rust で一から書いたアプリ。見た目は DTXManiaNX v2.0 のまま。", 15, SUB))
-        s.add(text(54, 248, "電子ドラムのためのアプリ。Windows を主に、macOS・Linux でも。", 15, SUB))
-        tags = [("電子ドラム（MIDI）", CYAN), ("練習モード", GREEN), ("ずれを合わせる", YELLOW), ("無料", MAGENTA)]
+        s.add(text(54, 160, "DTX 譜面で遊んで、", 25, INK, 700))
+        s.add(text(54, 192, "苦手なフレーズを集中練習。", 25, INK, 700))
+        s.add(text(54, 226, "見た目は DTXManiaNX v2.0、中身は Rust でゼロから作り直し。", 15, SUB))
+        s.add(text(54, 248, "電子ドラム向け。Windows 版のほか、macOS・Linux 版もあります。", 15, SUB))
+        tags = [("電子ドラム（MIDI）", CYAN), ("練習モード", GREEN), ("タイミング調整", YELLOW), ("無料", MAGENTA)]
     x = 52
     for label, col in tags:
         x += pill(s, x, 274, label, col) + 10
@@ -296,13 +296,13 @@ def steps(lang: str) -> Svg:
         "3 steps to play" if en else "遊ぶまでの 3 ステップ",
         "1. Download and run Setup.exe 2. Add your song folder 3. Plug in your drums and play"
         if en
-        else "1. Setup.exe を入れる 2. 曲のフォルダを足す 3. 電子ドラムをつないで遊ぶ",
+        else "1. インストール 2. 曲フォルダを追加 3. 電子ドラムをつないで遊ぶ",
     )
     period = 6.0
     cards = [
-        ("Install" if en else "入れる", ["Run DTXmaniaNXT-Setup.exe.", "No admin rights, no NX needed."] if en else ["Setup.exe を実行するだけ。", "管理者の権限も NX も要りません。"]),
-        ("Add your songs" if en else "曲を足す", ["Pick your DTX song folder", "or drop it on the window."] if en else ["DTX の曲のフォルダを選ぶか、", "窓にドロップします。"]),
-        ("Plug in and play" if en else "つないで遊ぶ", ["Connect your e-drum by USB-MIDI.", "Found automatically."] if en else ["電子ドラムを USB-MIDI で", "つなげば、自動で見つけます。"]),
+        ("Install" if en else "インストール", ["Run DTXmaniaNXT-Setup.exe.", "No admin rights, no NX needed."] if en else ["Setup.exe を実行するだけ。", "管理者権限も NX も不要です。"]),
+        ("Add your songs" if en else "曲を追加", ["Pick your DTX song folder", "or drop it on the window."] if en else ["DTX の曲フォルダを選ぶか、", "ウィンドウにドロップします。"]),
+        ("Plug in and play" if en else "つないで遊ぶ", ["Connect your e-drum by USB-MIDI.", "Found automatically."] if en else ["電子ドラムを USB-MIDI で", "つなげば自動で認識します。"]),
     ]
     for i, (title, lines) in enumerate(cards):
         x = 8 + i * 318
@@ -337,7 +337,7 @@ def steps(lang: str) -> Svg:
                 f'<path d="M{cx - 26} {cy - 4} h52 v22 h-52 z" fill="#FFE38A"/></g>'
             )
             n = s.window(period, [(3.4, period - 0.3)], fade=0.2)
-            s.add(f'<g class="{n}"><rect x="{cx + 30}" y="{cy - 46}" width="64" height="22" rx="11" fill="{GREEN}"/>' + text(cx + 62, cy - 31, "+6 songs" if en else "6 曲", 12, "#06121B", 800, "middle") + "</g>")
+            s.add(f'<g class="{n}"><rect x="{cx + 30}" y="{cy - 46}" width="64" height="22" rx="11" fill="{GREEN}"/>' + text(cx + 62, cy - 31, "+6 songs" if en else "+6 曲", 12, "#06121B", 800, "middle") + "</g>")
         else:
             # パッドと MIDI の波
             for k, (name, dx, dy, r) in enumerate((("HH", -62, -8, 18), ("SD", -22, 18, 20), ("HT", 6, -18, 16), ("FT", 52, 18, 20), ("CY", 62, -26, 20))):
@@ -365,30 +365,30 @@ def timing(lang: str) -> Svg:
         lang,
         960,
         300,
-        "Judged by when the hit arrives" if en else "叩いた時刻で判定する",
+        "Judged by when the hit arrives" if en else "叩いた瞬間の時刻で判定",
         "Each MIDI hit is stamped the moment it arrives and compared with where the music is playing, not rounded to the next screen frame."
         if en
-        else "MIDI の打撃は届いた瞬間の時刻を付け、曲の音の再生位置と比べて判定する。画面のフレームに丸めない。",
+        else "MIDI 入力を受け取った時刻と曲の再生位置を比べて判定する。画面のフレーム単位には丸めない。",
     )
     card_bg(s)
     period = 4.0
     ms = 7.0  # 1 ms の幅
     cx = 520
     hit_ms = 3
-    s.add(text(40, 46, "Timing is measured, not guessed" if en else "画面のフレームではなく、叩いた時刻で判定", 22, INK, 800))
+    s.add(text(40, 46, "Timing is measured, not guessed" if en else "フレーム単位ではなく、叩いた瞬間で判定", 22, INK, 800))
     s.add(
         text(
             40,
             72,
             "Each MIDI hit gets a timestamp on arrival and is compared with the audio playback position."
             if en
-            else "MIDI の打撃は届いた瞬間に時刻を付け、曲の音がいま鳴っている位置と比べます。",
+            else "MIDI 入力を受け取った時刻と、曲の再生位置を比べて判定します。",
             14,
             SUB,
         )
     )
     rows = [
-        (130, "If judged per frame" if en else "フレームで見る場合", False),
+        (130, "If judged per frame" if en else "フレーム単位の判定", False),
         (226, "DTXmaniaNXT", True),
     ]
     frame_ms = 1000 / 60
@@ -399,7 +399,7 @@ def timing(lang: str) -> Svg:
         # 判定の幅（PERFECT ±34 の一部）
         s.add(f'<rect x="{cx - 34 * ms}" y="{y - 14}" width="{68 * ms}" height="28" rx="6" fill="{GREEN}" fill-opacity="0.06"/>')
         s.add(f'<line x1="{cx}" y1="{y - 22}" x2="{cx}" y2="{y + 22}" stroke="{INK}" stroke-width="2"/>')
-        s.add(text(cx, y - 28, "note" if en else "音符", 11, SUB, 600, "middle"))
+        s.add(text(cx, y - 28, "note" if en else "チップ", 11, SUB, 600, "middle"))
         if not ours:
             first = -37.0
             k = 0
@@ -410,7 +410,7 @@ def timing(lang: str) -> Svg:
             s.add(text(x1 + 12, y + 5, "frames (60 fps)" if en else "フレーム（60fps）", 11, DIM))
         else:
             s.add(f'<path d="M{x0} {y + 30} ' + " ".join(f"L{x0 + k * 4} {y + 30 + 5 * math.sin(k * 0.9) * math.sin(k * 0.13)}" for k in range(int((x1 - x0) / 4))) + f'" stroke="{MAGENTA}" stroke-opacity="0.6" fill="none"/>')
-            s.add(text(x1 + 12, y + 34, "audio position" if en else "音の再生位置", 11, MAGENTA))
+            s.add(text(x1 + 12, y + 34, "audio position" if en else "曲の再生位置", 11, MAGENTA))
     # 打撃の印（両方の行に同時に届く）
     hx = cx + hit_ms * ms
     arrive = 1.0
@@ -428,10 +428,10 @@ def timing(lang: str) -> Svg:
     yA, yB = rows[0][0], rows[1][0]
     s.add(f'<g class="{w2}"><circle cx="{fx}" cy="{yA}" r="9" fill="none" stroke="{SUB}" stroke-width="2"/>'
           f'<path d="M{hx + 8} {yA - 16} Q {(hx + fx) / 2} {yA - 30} {fx} {yA - 12}" stroke="{SUB}" fill="none" stroke-dasharray="3 3"/>'
-          + text(fx + 16, yA - 18, (f"seen at the next frame: +{next_frame:.0f} ms" if en else f"次のフレームで気づく: +{next_frame:.0f} ms"), 13, SUB, 700)
+          + text(fx + 16, yA - 18, (f"seen at the next frame: +{next_frame:.0f} ms" if en else f"次のフレームで検出: +{next_frame:.0f} ms"), 13, SUB, 700)
           + "</g>")
-    s.add(f'<g class="{w1}">' + text(hx + 16, yB - 18, (f"stamped on arrival: +{hit_ms} ms" if en else f"届いた時刻で: +{hit_ms} ms"), 14, ORANGE, 800) + "</g>")
-    s.add(text(40, 284, "Up to 16.7 ms of error at 60 fps is avoided. Window size and frame rate do not change your judgement." if en else "60fps なら最大 16.7ms の誤差が出ない所です。窓の大きさや画面の速さで判定が変わりません。", 13, DIM))
+    s.add(f'<g class="{w1}">' + text(hx + 16, yB - 18, (f"stamped on arrival: +{hit_ms} ms" if en else f"入力時刻で判定: +{hit_ms} ms"), 14, ORANGE, 800) + "</g>")
+    s.add(text(40, 284, "Up to 16.7 ms of error at 60 fps is avoided. Window size and frame rate do not change your judgement." if en else "60fps のフレーム単位の判定で生じる最大 16.7ms の誤差がありません。ウィンドウサイズやフレームレートにも左右されません。", 13, DIM))
     return s
 
 
@@ -447,7 +447,7 @@ def practice(lang: str) -> Svg:
         "Climb the steps to clear" if en else "段をのぼってクリア",
         "Practice a section from 70% speed up to 100%. Four laps per step; missing the same beat twice means trying the step again."
         if en
-        else "区間を 70% から 100% まで 10% ずつのぼる。1 段 4 周。同じ拍で 2 回ミスしたら、その段をもう一度。",
+        else "区間のテンポを 70% から 100% まで 10% ずつ上げていく。1 段 4 周。同じ拍で 2 回ミスするとその段をやり直し。",
     )
     card_bg(s, glow=("0.25", "0.9", GREEN))
     period = 16.0
@@ -471,7 +471,7 @@ def practice(lang: str) -> Svg:
     bx, by = 60, 330
     sw, sh = 250, 56
     s.add(text(40, 46, "Climb the steps to clear" if en else "段をのぼってクリア", 22, INK, 800))
-    s.add(text(40, 70, "Practice mode · A–B section loop" if en else "練習モード・区間をくり返す", 13, SUB))
+    s.add(text(40, 70, "Practice mode · A–B section loop" if en else "練習モード・区間ループ", 13, SUB))
     for k, pct in enumerate(steps_def):
         x = bx + k * 34
         y = by - (k + 1) * sh
@@ -521,7 +521,7 @@ def practice(lang: str) -> Svg:
     s.add(f'<rect x="{rx}" y="{ry}" width="{rw}" height="{rh}" rx="12" fill="#070A11" stroke="#20293A"/>')
     # ミスの地図（4 小節 × 4 拍）
     mx, my = rx + 24, ry + 52
-    s.add(text(mx, ry + 32, "Misses in this step" if en else "この段でミスした所", 13, SUB, 700))
+    s.add(text(mx, ry + 32, "Misses in this step" if en else "この段のミス", 13, SUB, 700))
     for m in range(4):
         s.add(text(mx - 4, my + m * 30 + 18, f"{m + 24}", 11, DIM, 600, "end", "mono"))
         for b in range(4):
@@ -564,7 +564,7 @@ def practice(lang: str) -> Svg:
     rule = (
         "4 laps per step · the same beat missed twice → try the step again · two agains in a row → one step down"
         if en
-        else "1 段 4 周 ・ 同じ拍で 2 回ミス → その段をもう一度 ・ もう一度が 2 回続いたら 1 段下げる"
+        else "1 段 4 周 ・ 同じ拍で 2 回ミスするとやり直し ・ やり直しが 2 回続くと 1 段下がる"
     )
     s.add(text(40, 366, rule, 13, SUB))
     return s
@@ -582,10 +582,10 @@ def hit_error(lang: str) -> Svg:
         "Hit error bar" if en else "ずれのバー",
         "Each hit leaves a line where it landed, early to the left and late to the right. The marker shows the average of the last 20 hits."
         if en
-        else "叩くたびに、ずれた所に線が出る。左が早い、右が遅い。▼ は直近 20 打の平均。",
+        else "叩くたびにずれの位置に線が出る。左が早く、右が遅い。▼ は直近 20 打の平均。",
     )
     card_bg(s)
-    s.add(text(40, 44, "See how early or late you are, while you play" if en else "叩きながら、早い・遅いが分かる", 20, INK, 800))
+    s.add(text(40, 44, "See how early or late you are, while you play" if en else "演奏中に、早い・遅いがひと目で分かる", 20, INK, 800))
     period = 8.0
     cx, y = 480, 120
     scale = 3.2
@@ -620,7 +620,7 @@ def hit_error(lang: str) -> Svg:
     s.add(f'<g class="av"><path d="M{cx - 8} {y - 34} h16 l-8 11 z" fill="#fff"/></g>')
     mean = sum(o for _, o in hits[-20:]) / 20
     s.add(text(cx, y + 50, (f"▼ average of the last 20 hits: {mean:+.0f} ms (early)" if en else f"▼ 直近 20 打の平均: {mean:+.0f} ms（早め）"), 14, INK, 700, "middle"))
-    s.add(text(cx, y + 74, "Bands = judgement windows (PERFECT / GREAT / GOOD / POOR). Shown under the score, never over the lanes." if en else "帯は判定の幅（PERFECT・GREAT・GOOD・POOR）。レーンには重ねず、左のスコアの下に出ます。", 12, SUB, 400, "middle"))
+    s.add(text(cx, y + 74, "Bands = judgement windows (PERFECT / GREAT / GOOD / POOR). Shown under the score, never over the lanes." if en else "色の帯は判定幅（PERFECT・GREAT・GOOD・POOR）。レーンには重ならず、スコアの下に表示します。", 12, SUB, 400, "middle"))
     return s
 
 
@@ -636,14 +636,14 @@ def devices(lang: str) -> Svg:
         "One setting per device" if en else "機器ごとの設定",
         "Each MIDI device keeps its own preset, channel, minimum velocity and pad mapping, and they all feed the same 10 lanes."
         if en
-        else "MIDI の機器ごとに、プリセット・チャンネル・最小ベロシティ・パッドの割り当てを持ち、同じ 10 レーンにつながる。",
+        else "MIDI 機器ごとにプリセット・チャンネル・最小ベロシティ・パッドの割り当てを設定でき、どれも同じ 10 レーンで叩ける。",
     )
     card_bg(s)
-    s.add(text(40, 44, "Every drum kit keeps its own settings" if en else "つなぐ機器ごとに、設定を分けて持てる", 20, INK, 800))
-    s.add(text(40, 68, "Devices are told apart by port, not channel. Hi-hat openness (CC4), chokes and rim hits are read." if en else "機器はチャンネルではなくポートで見分けます。ハイハットの開き具合（CC4）・チョーク・リムも読みます。", 13, SUB))
+    s.add(text(40, 44, "Every drum kit keeps its own settings" if en else "MIDI 機器ごとに別々の設定", 20, INK, 800))
+    s.add(text(40, 68, "Devices are told apart by port, not channel. Hi-hat openness (CC4), chokes and rim hits are read." if en else "機器はチャンネルではなくポートで区別。ハイハットの開き具合（CC4）、チョーク、リムショットにも対応。", 13, SUB))
     devs = [
-        ("E-drum module · USB-MIDI" if en else "電子ドラムの音源 · USB-MIDI", ["Roland", "ch 10", "min vel 8" if en else "最小 8"], CYAN),
-        ("Pad controller · USB-MIDI" if en else "パッドコントローラー · USB-MIDI", ["GM", "ch 10", "custom notes" if en else "独自の割り当て"], MAGENTA),
+        ("E-drum module · USB-MIDI" if en else "電子ドラム音源 · USB-MIDI", ["Roland", "ch 10", "min vel 8" if en else "最小ベロシティ 8"], CYAN),
+        ("Pad controller · USB-MIDI" if en else "パッドコントローラー · USB-MIDI", ["GM", "ch 10", "custom notes" if en else "ノート番号カスタム"], MAGENTA),
         ("Keyboard" if en else "キーボード", ["A S Z D G F H J K L"], YELLOW),
     ]
     lx, ly = 640, 110
@@ -692,16 +692,16 @@ def update(lang: str) -> Svg:
         lang,
         960,
         250,
-        "Updates when you choose" if en else "更新は自分のタイミングで",
+        "Updates when you choose" if en else "アップデートは好きなときに",
         "A new version appears as a row under the title menu. Choose it to download while you keep playing, then restart to switch."
         if en
-        else "新しい版はタイトルのメニューの下に行で出る。選ぶと遊びながら落とし、再起動で入れ替わる。",
+        else "新しいバージョンが出るとタイトルメニューの下に表示。選ぶと遊びながらダウンロードし、再起動で切り替わる。",
     )
     period = 8.0
     titles = (
         [("New version", "Choose the new row on the title."), ("Downloading", "Keep playing; % in the corner."), ("Restart", "Choose it to switch versions."), ("Done", "Settings and records are kept.")]
         if en
-        else [("新しい版", "タイトルの下に行が出ます。"), ("落とす", "遊びながら。隅に % が出ます。"), ("再起動", "再起動で新しい版に入れ替え。"), ("できあがり", "設定と記録はそのままです。")]
+        else [("お知らせ", "タイトルメニューの下に表示。"), ("ダウンロード", "遊んでいる間に裏で進みます。"), ("再起動", "選ぶと新しいバージョンに。"), ("完了", "設定もプレイ記録もそのまま。")]
     )
     for i, (t, sub) in enumerate(titles):
         x = 8 + i * 238
@@ -750,7 +750,7 @@ def lineage(lang: str) -> Svg:
         "Where DTXmaniaNXT comes from" if en else "DTXmaniaNXT の系譜",
         "DTXMania, DTXManiaXG verK, DTXManiaNX by limyz, DTXManiaNX v2.0 by BocuD, and DTXmaniaNXT. NXT is new code; only the v2.0 skin (images and sounds) is bundled unchanged."
         if en
-        else "DTXMania、DTXManiaXG verK、limyz 版 DTXManiaNX、BocuD 版 DTXManiaNX v2.0、DTXmaniaNXT。NXT は新しいコードで、v2.0 のスキン（画像と効果音）だけをそのまま同梱。",
+        else "DTXMania、DTXManiaXG verK、limyz 版 DTXManiaNX、BocuD 版 DTXManiaNX v2.0、DTXmaniaNXT の順。NXT のプログラムは新規で、v2.0 のスキン（画像と効果音）だけを無改変で同梱。",
     )
     card_bg(s)
     nodes = [
@@ -758,7 +758,7 @@ def lineage(lang: str) -> Svg:
         ("DTXManiaXG verK", "kairera0467", "", "#8FA3BF"),
         ("DTXManiaNX", "limyz · fisyher", "", "#8FA3BF"),
         ("DTXManiaNX v2.0", "BocuD", "", MAGENTA),
-        ("DTXmaniaNXT", "this project · Rust" if en else "このアプリ · Rust", "2026 –", CYAN),
+        ("DTXmaniaNXT", "this project · Rust" if en else "本作 · Rust", "2026 –", CYAN),
     ]
     w, gap, y = 166, 22, 92
     for i, (name, who, when, col) in enumerate(nodes):
@@ -774,8 +774,8 @@ def lineage(lang: str) -> Svg:
     # v2.0 → NXT は、スキンだけ（点線）
     x3 = 30 + 3 * (w + gap) + w
     s.add(f'<path d="M{x3 + 2} {y + 39} h{gap - 6} m-6 -5 l6 5 l-6 5" stroke="{MAGENTA}" stroke-width="2" fill="none" stroke-dasharray="4 3"/>')
-    s.add(text(40, 44, "Where it comes from" if en else "どこから来たか", 20, INK, 800))
-    s.add(text(40, 68, "Code lineage of the DTXMania family, as described in the DTXManiaNX READMEs." if en else "DTXManiaNX の README に書かれている、DTXMania の流れ。", 13, SUB))
+    s.add(text(40, 44, "Where it comes from" if en else "DTXmaniaNXT の系譜", 20, INK, 800))
+    s.add(text(40, 68, "Code lineage of the DTXMania family, as described in the DTXManiaNX READMEs." if en else "DTXManiaNX の README の記載をもとにした、DTXMania から続く派生の流れ。", 13, SUB))
     # 下の説明
     notes = (
         [
@@ -785,9 +785,9 @@ def lineage(lang: str) -> Svg:
         ]
         if en
         else [
-            ("— コード", "それぞれ、前のプロジェクトからのフォークです。", "#8FA3BF", False),
-            ("- - スキンだけ", "NXT は v2.0 の画像と効果音を変えずに同梱しています（タグ V2.0.0-20260121-5）。", MAGENTA, True),
-            ("", "NXT のコードは Rust で一から書いたもので、上流のコードは写していません。", CYAN, False),
+            ("— コード", "各プロジェクトは、左隣のプロジェクトからのフォークです。", "#8FA3BF", False),
+            ("- - スキンのみ", "NXT は v2.0 の画像と効果音を無改変で同梱しています（タグ V2.0.0-20260121-5）。", MAGENTA, True),
+            ("", "NXT のプログラムは Rust で新規に書いたもので、上流のコードは含みません。", CYAN, False),
         ]
     )
     for k, (lab, body, col, dashed) in enumerate(notes):

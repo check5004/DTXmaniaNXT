@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="960" height="210" viewBox="0 0 960 210" role="img" aria-labelledby="title desc">
 <title id="title">ずれのバー</title>
-<desc id="desc">叩くたびに、ずれた所に線が出る。左が早い、右が遅い。▼ は直近 20 打の平均。</desc>
+<desc id="desc">叩くたびにずれの位置に線が出る。左が早く、右が遅い。▼ は直近 20 打の平均。</desc>
 <style>
 text{font-family:'Hiragino Sans','Hiragino Kaku Gothic ProN','Yu Gothic UI','Yu Gothic','Meiryo','Noto Sans JP','Noto Sans CJK JP',system-ui,sans-serif}
 .mono{font-family:'JetBrains Mono','SF Mono','Cascadia Mono',Consolas,Menlo,monospace}
@@ -11,7 +11,7 @@ text{font-family:'Hiragino Sans','Hiragino Kaku Gothic ProN','Yu Gothic UI','Yu 
 </style>
 <defs><linearGradient id="bg1" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#0B1018"/><stop offset="1" stop-color="#151B2E"/></linearGradient></defs>
 <rect x="1" y="1" width="958" height="208" rx="18" fill="url(#bg1)" stroke="#263247"/>
-<text x="40" y="44" font-size="20" fill="#E8EEF7" font-weight="800" text-anchor="start">叩きながら、早い・遅いが分かる</text>
+<text x="40" y="44" font-size="20" fill="#E8EEF7" font-weight="800" text-anchor="start">演奏中に、早い・遅いがひと目で分かる</text>
 <rect x="105.59999999999997" y="106" width="748.8000000000001" height="28" rx="4" fill="#FF9800" fill-opacity="0.1"/>
 <rect x="211.2" y="106" width="537.6" height="28" rx="4" fill="#FFD54F" fill-opacity="0.12"/>
 <rect x="265.6" y="106" width="428.8" height="28" rx="4" fill="#7CF29A" fill-opacity="0.14"/>
@@ -52,5 +52,5 @@ text{font-family:'Hiragino Sans','Hiragino Kaku Gothic ProN','Yu Gothic UI','Yu 
 <rect class="tk" style="animation-delay:-0.116s" x="494.7" y="104" width="3" height="32" fill="#5CE1E6"/>
 <g class="av"><path d="M472 86 h16 l-8 11 z" fill="#fff"/></g>
 <text x="480" y="170" font-size="14" fill="#E8EEF7" font-weight="700" text-anchor="middle">▼ 直近 20 打の平均: -3 ms（早め）</text>
-<text x="480" y="194" font-size="12" fill="#9AA8BC" font-weight="400" text-anchor="middle">帯は判定の幅（PERFECT・GREAT・GOOD・POOR）。レーンには重ねず、左のスコアの下に出ます。</text>
+<text x="480" y="194" font-size="12" fill="#9AA8BC" font-weight="400" text-anchor="middle">色の帯は判定幅（PERFECT・GREAT・GOOD・POOR）。レーンには重ならず、スコアの下に表示します。</text>
 </svg>

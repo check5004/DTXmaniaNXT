@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="960" height="250" viewBox="0 0 960 250" role="img" aria-labelledby="title desc">
-<title id="title">更新は自分のタイミングで</title>
-<desc id="desc">新しい版はタイトルのメニューの下に行で出る。選ぶと遊びながら落とし、再起動で入れ替わる。</desc>
+<title id="title">アップデートは好きなときに</title>
+<desc id="desc">新しいバージョンが出るとタイトルメニューの下に表示。選ぶと遊びながらダウンロードし、再起動で切り替わる。</desc>
 <style>
 text{font-family:'Hiragino Sans','Hiragino Kaku Gothic ProN','Yu Gothic UI','Yu Gothic','Meiryo','Noto Sans JP','Noto Sans CJK JP',system-ui,sans-serif}
 .mono{font-family:'JetBrains Mono','SF Mono','Cascadia Mono',Consolas,Menlo,monospace}
@@ -38,8 +38,8 @@ text{font-family:'Hiragino Sans','Hiragino Kaku Gothic ProN','Yu Gothic UI','Yu 
 <text x="122.0" y="123" font-size="12" fill="#7CF29A" font-weight="800" text-anchor="middle">新しい版 v0.9.0</text>
 <circle cx="40" cy="172" r="13" fill="none" stroke="#5CE1E6" stroke-width="2"/>
 <text x="40" y="177" font-size="13" fill="#5CE1E6" font-weight="800" text-anchor="middle">1</text>
-<text x="62" y="178" font-size="17" fill="#E8EEF7" font-weight="800" text-anchor="start">新しい版</text>
-<text x="26" y="206" font-size="12" fill="#9AA8BC" font-weight="400" text-anchor="start">タイトルの下に行が出ます。</text>
+<text x="62" y="178" font-size="17" fill="#E8EEF7" font-weight="800" text-anchor="start">お知らせ</text>
+<text x="26" y="206" font-size="12" fill="#9AA8BC" font-weight="400" text-anchor="start">タイトルメニューの下に表示。</text>
 <rect x="247" y="7" width="226" height="236" rx="16" fill="url(#bg3)" stroke="#263247"/>
 <rect class="w4" x="248" y="8" width="224" height="234" rx="15" fill="none" stroke="#5CE1E6" stroke-width="2"/>
 <rect x="262" y="22" width="196" height="118" rx="8" fill="#0A0F18" stroke="#24314A"/>
@@ -62,8 +62,8 @@ text{font-family:'Hiragino Sans','Hiragino Kaku Gothic ProN','Yu Gothic UI','Yu 
 <text x="427" y="127" font-size="11" fill="#5CE1E6" font-weight="800" text-anchor="middle" class="w10 mono">100%</text>
 <circle cx="278" cy="172" r="13" fill="none" stroke="#5CE1E6" stroke-width="2"/>
 <text x="278" y="177" font-size="13" fill="#5CE1E6" font-weight="800" text-anchor="middle">2</text>
-<text x="300" y="178" font-size="17" fill="#E8EEF7" font-weight="800" text-anchor="start">落とす</text>
-<text x="264" y="206" font-size="12" fill="#9AA8BC" font-weight="400" text-anchor="start">遊びながら。隅に % が出ます。</text>
+<text x="300" y="178" font-size="17" fill="#E8EEF7" font-weight="800" text-anchor="start">ダウンロード</text>
+<text x="264" y="206" font-size="12" fill="#9AA8BC" font-weight="400" text-anchor="start">遊んでいる間に裏で進みます。</text>
 <rect x="485" y="7" width="226" height="236" rx="16" fill="url(#bg11)" stroke="#263247"/>
 <rect class="w12" x="486" y="8" width="224" height="234" rx="15" fill="none" stroke="#5CE1E6" stroke-width="2"/>
 <rect x="500" y="22" width="196" height="118" rx="8" fill="#0A0F18" stroke="#24314A"/>
@@ -75,7 +75,7 @@ text{font-family:'Hiragino Sans','Hiragino Kaku Gothic ProN','Yu Gothic UI','Yu 
 <circle cx="516" cy="172" r="13" fill="none" stroke="#5CE1E6" stroke-width="2"/>
 <text x="516" y="177" font-size="13" fill="#5CE1E6" font-weight="800" text-anchor="middle">3</text>
 <text x="538" y="178" font-size="17" fill="#E8EEF7" font-weight="800" text-anchor="start">再起動</text>
-<text x="502" y="206" font-size="12" fill="#9AA8BC" font-weight="400" text-anchor="start">再起動で新しい版に入れ替え。</text>
+<text x="502" y="206" font-size="12" fill="#9AA8BC" font-weight="400" text-anchor="start">選ぶと新しいバージョンに。</text>
 <rect x="723" y="7" width="226" height="236" rx="16" fill="url(#bg13)" stroke="#263247"/>
 <rect class="w14" x="724" y="8" width="224" height="234" rx="15" fill="none" stroke="#5CE1E6" stroke-width="2"/>
 <rect x="738" y="22" width="196" height="118" rx="8" fill="#0A0F18" stroke="#24314A"/>
@@ -86,6 +86,6 @@ text{font-family:'Hiragino Sans','Hiragino Kaku Gothic ProN','Yu Gothic UI','Yu 
 <text x="836.0" y="123" font-size="12" fill="#5CE1E6" font-weight="800" text-anchor="middle">v0.9.0 になりました</text>
 <circle cx="754" cy="172" r="13" fill="none" stroke="#5CE1E6" stroke-width="2"/>
 <text x="754" y="177" font-size="13" fill="#5CE1E6" font-weight="800" text-anchor="middle">4</text>
-<text x="776" y="178" font-size="17" fill="#E8EEF7" font-weight="800" text-anchor="start">できあがり</text>
-<text x="740" y="206" font-size="12" fill="#9AA8BC" font-weight="400" text-anchor="start">設定と記録はそのままです。</text>
+<text x="776" y="178" font-size="17" fill="#E8EEF7" font-weight="800" text-anchor="start">完了</text>
+<text x="740" y="206" font-size="12" fill="#9AA8BC" font-weight="400" text-anchor="start">設定もプレイ記録もそのまま。</text>
 </svg>
