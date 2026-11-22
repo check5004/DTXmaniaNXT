@@ -68,7 +68,6 @@ pub enum Kind {
         default: usize,
     },
     /// 数（Enter を押してから ↑↓ で `step` ずつ）
-    #[expect(dead_code, reason = "次に移す設定（判定の幅など）で使う")]
     Number {
         min: i64,
         max: i64,
@@ -112,6 +111,9 @@ const fn auto_lane(key: &'static str, name: &'static str) -> Def {
 }
 
 const AUTO_SECTION: &str = "自動で叩く";
+
+/// 早送り・巻き戻しの幅（ミリ秒）
+pub const SKIP_MS: &str = "skip_ms";
 
 /// オートのまとめての切り替え
 pub const AUTO_ALL: &str = "auto_all";
@@ -168,6 +170,21 @@ pub const ALL: &[Def] = &[
     auto_lane("auto_ft", "　フロアタム"),
     auto_lane("auto_cy", "　右シンバル"),
     auto_lane("auto_rd", "　ライド"),
+    Def {
+        key: SKIP_MS,
+        group: Group::App,
+        section: "演奏中のキー",
+        name: "早送り・巻き戻しの幅（SkipTimeMs）",
+        kind: Kind::Number {
+            min: 1000,
+            max: 20000,
+            step: 1000,
+            default: 5000,
+            unit: " ms",
+        },
+        desc: "演奏中に → で先へ、← で前へ、この幅だけ飛びます（練習では区間をずらします）。\n飛んだプレイは記録に残しません。Space か Pause で一時停止します。",
+        in_play: true,
+    },
 ];
 
 /// キーの項目。表に無いキーはプログラムの誤り
@@ -365,6 +382,17 @@ mod tests {
         // 型の違う値は既定に
         let odd: Values = toml::from_str("auto_sd = 3\n").unwrap();
         assert!(!odd.flag("auto_sd"));
+    }
+
+    #[test]
+    fn skip_width_steps_by_a_second() {
+        let mut v = Values::default();
+        assert_eq!(v.number(SKIP_MS), 5000);
+        assert_eq!(v.label(SKIP_MS), "5000 ms");
+        v.change(SKIP_MS, 2);
+        assert_eq!(v.number(SKIP_MS), 7000);
+        v.change(SKIP_MS, -100);
+        assert_eq!(v.number(SKIP_MS), 1000);
     }
 
     #[test]

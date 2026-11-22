@@ -385,6 +385,19 @@ impl Judge {
         out
     }
 
+    /// 曲の時刻 `ms` へ飛ぶ（早送り・巻き戻し。上流 `tJumpInSong`）。`ms` より前のまだ判定していない音符は
+    /// 数えずに済んだことにし、`ms` から後の音符はもう一度叩けるようにする。集計はそのまま（飛んだプレイは記録しない）
+    pub fn jump_to(&mut self, ms: f64) {
+        let at = self.notes.partition_point(|n| n.ms < ms);
+        for d in &mut self.done[..at] {
+            *d = true;
+        }
+        for d in &mut self.done[at..] {
+            *d = false;
+        }
+        self.first_open = at;
+    }
+
     fn close(&mut self, i: usize, j: Judgement) {
         self.done[i] = true;
         self.tally.add(j);
@@ -607,6 +620,37 @@ mod tests {
         assert_eq!(ev.iter().map(|e| e.note).collect::<Vec<_>>(), vec![2]);
         assert_eq!(j.tally().perfect, 3);
         assert_eq!(j.tally().miss, 0);
+    }
+
+    #[test]
+    fn jumping_skips_or_reopens_notes() {
+        let mut j = Judge::new(
+            vec![note(1000.0, SD), note(2000.0, SD), note(3000.0, SD)],
+            HitWindows::default(),
+            LaneGroups::default(),
+        );
+        // 早送り: 飛ばした音符は見逃しにも数えない
+        j.jump_to(2500.0);
+        assert!(j.is_done(0) && j.is_done(1) && !j.is_done(2));
+        assert!(j.advance(2600.0).is_empty());
+        assert_eq!(j.tally().miss, 0);
+        j.hit(Hit {
+            ms: 3000.0,
+            lane: SD,
+            velocity: 100,
+        });
+        // 巻き戻し: 先の音符をもう一度叩ける
+        j.jump_to(1500.0);
+        assert!(j.is_done(0) && !j.is_done(1) && !j.is_done(2));
+        assert_eq!(
+            j.hit(Hit {
+                ms: 2000.0,
+                lane: SD,
+                velocity: 100
+            })[0]
+                .note,
+            1
+        );
     }
 
     #[test]
