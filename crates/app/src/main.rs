@@ -26,6 +26,7 @@ mod gfx;
 mod history;
 mod inputs;
 mod jobs;
+mod lane_layout;
 mod loading;
 mod logging;
 mod midi;
