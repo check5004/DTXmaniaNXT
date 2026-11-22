@@ -1,5 +1,5 @@
 //! 画面の効果音（スキンの `Sounds` の ogg）と、選曲のプレビューの音。
-//! 演奏の音とは別の出力で鳴らす。
+//! 演奏の音とは別の出力で鳴らす。効果音は効果音の系統、プレビューは曲の音の系統の音量で鳴る（[`Bus`]）。
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use library::SortKind;
 
-use crate::audio::{AudioOut, Sound, load_sound, load_sound_bytes};
+use crate::audio::{AudioOut, Bus, Sound, load_sound, load_sound_bytes};
 
 /// 効果音の種類（上流 `CSkin` のシステムサウンド）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -203,7 +203,7 @@ impl Sfx {
 
     pub fn play(&mut self, se: Se) {
         if let (Some(out), Some(s)) = (&mut self.out, self.sounds.get(&se)) {
-            out.play_now(s, se.volume());
+            out.play_now(s, se.volume(), Bus::Se);
         }
     }
 
@@ -213,7 +213,7 @@ impl Sfx {
             return Duration::ZERO;
         };
         out.stop(tag);
-        out.play_tagged(s, 1.0, tag);
+        out.play_tagged(s, 1.0, tag, Bus::Se);
         Duration::from_secs_f64(s.frames() as f64 / f64::from(out.rate()))
     }
 
@@ -268,7 +268,8 @@ impl Sfx {
                 continue;
             }
             if let (Some(out), Some(s)) = (&mut self.out, sound) {
-                out.play_tagged(&s, 0.8, PREVIEW_TAG);
+                // プレビューは曲の音（BGM の音量）。前は 0.8 で決め打ちしていた（BGM の音量の既定 80 % と同じ）
+                out.play_tagged(&s, 1.0, PREVIEW_TAG, Bus::Song);
             }
         }
     }

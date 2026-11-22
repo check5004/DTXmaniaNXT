@@ -418,9 +418,15 @@ const fn priority(key: &'static str, name: &'static str, desc: &'static str) -> 
 /// 音量と鳴らすもの（上流の ChipVolume、AutoVolume、BGM Sound、BGMAdjust、Metronome）
 pub const CHIP_VOLUME: &str = "chip_volume";
 pub const AUTO_VOLUME: &str = "auto_volume";
+/// メトロノームと練習の数え始めのクリックの音量、画面の効果音の音量（NXT で足した）
+pub const METRONOME_VOLUME: &str = "metronome_volume";
+pub const SE_VOLUME: &str = "se_volume";
 pub const BGM_SOUND: &str = "bgm_sound";
 pub const BGM_ADJUST: &str = "bgm_adjust";
 pub const METRONOME: &str = "metronome";
+
+/// 音量ミキサーの系統ごとの音量（全体の音量の下に並べる順。[`crate::audio::Bus::ALL`] と同じ並び）
+pub const VOLUMES: [&str; 4] = [AUTO_VOLUME, CHIP_VOLUME, METRONOME_VOLUME, SE_VOLUME];
 
 /// 音量（0〜100 %、5 刻み）
 const fn volume(key: &'static str, name: &'static str, default: i64, desc: &'static str) -> Def {
@@ -823,16 +829,28 @@ pub const ALL: &[Def] = &[
         in_play: false,
     },
     volume(
+        AUTO_VOLUME,
+        "BGM の音量（AutoVolume）",
+        80,
+        "曲の音の音量です。BGM のほか、譜面の効果音、自動で叩くレーンの音、選曲のプレビューも入ります（全体の音量にさらにかけます）。\nNX と同じく既定は 80 %。",
+    ),
+    volume(
         CHIP_VOLUME,
         "叩いた音の音量（ChipVolume）",
         100,
-        "叩いたときに鳴らす譜面の音の音量です（全体の音量にさらにかけます）。",
+        "叩いたときに鳴らす譜面の音の音量です（全体の音量にさらにかけます）。強く叩くほど大きく鳴ります。\n電子ドラムの音源の音で叩くなら、「叩いた音」を OFF にします。",
     ),
     volume(
-        AUTO_VOLUME,
-        "自動で鳴らす音の音量（AutoVolume）",
-        80,
-        "BGM・効果音・自動で叩くレーンなど、自動で鳴らす譜面の音の音量です（全体の音量にさらにかけます）。NX と同じく既定は 80 %。",
+        METRONOME_VOLUME,
+        "メトロノームの音量",
+        100,
+        "メトロノームと、区間練習の数え始めのクリックの音量です（全体の音量にさらにかけます）。",
+    ),
+    volume(
+        SE_VOLUME,
+        "効果音の音量（SE）",
+        100,
+        "カーソルを動かす音・決定の音・結果の画面の声など、画面の効果音の音量です（全体の音量にさらにかけます）。\n譜面の効果音は BGM の音量に入ります。",
     ),
     Def {
         key: BGM_SOUND,
@@ -1330,6 +1348,25 @@ mod tests {
         assert!(v.flag(BGM_SOUND) && !v.flag(METRONOME));
         v.set_raw(BGM_ADJUST, -150);
         assert_eq!(v.number(BGM_ADJUST), -99);
+    }
+
+    #[test]
+    fn the_mixer_has_a_volume_per_bus() {
+        let mut v = Values::default();
+        // BGM は NX と同じ 80 %、ほかは 100 %
+        let all: Vec<i64> = VOLUMES.iter().map(|k| v.number(k)).collect();
+        assert_eq!(all, vec![80, 100, 100, 100]);
+        // 音の分類の「音量」の小見出しに、この順で並ぶ
+        let in_mixer: Vec<&str> = in_group(Group::Sound)
+            .filter(|d| d.section == "音量")
+            .map(|d| d.key)
+            .collect();
+        assert_eq!(in_mixer, VOLUMES);
+        // 5 % 刻みで 0〜100（刻みの間は下へそろえる）
+        v.set_raw(SE_VOLUME, 33);
+        assert_eq!(v.label(SE_VOLUME), "30 %");
+        v.set_raw(METRONOME_VOLUME, 140);
+        assert_eq!(v.number(METRONOME_VOLUME), 100);
     }
 
     #[test]
