@@ -22,7 +22,8 @@ use dtx::DrumLane;
 use egui::Color32;
 use engine::input::Preset;
 use engine::practice::{
-    LoopStyle, PassRule, SPEED_MAX, SPEED_MIN, SPEED_STEP, SpeedPlan, snap_speed,
+    FAILS_TO_DOWN, LADDER_DOWN, LADDER_UP, LoopStyle, PASSES_TO_UP, PassRule, SPEED_MAX, SPEED_MIN,
+    SPEED_STEP, SpeedPlan, snap_speed,
 };
 use library::Progress;
 use winit::keyboard::KeyCode;
@@ -167,6 +168,8 @@ pub enum Drill {
     Speed,
     Target,
     Pitch,
+    /// 区間のあいだ拍ごとのクリック
+    Metronome,
 }
 
 /// 一覧の項目
@@ -583,6 +586,7 @@ pub fn get_drill(d: Drill, c: &Config) -> i64 {
             .iter()
             .position(|&t| t == snap_speed(i64::from(c.practice_target)))),
         Drill::Pitch => at(Pitch::ALL.iter().position(|&p| p == c.pitch())),
+        Drill::Metronome => i64::from(!c.practice_metronome),
     }
 }
 
@@ -598,6 +602,7 @@ pub fn set_drill(d: Drill, c: &mut Config, v: i64) {
             c.practice_target = SpeedPlan::TARGETS[pick(SpeedPlan::TARGETS.len())];
         }
         Drill::Pitch => c.practice_pitch = Pitch::ALL[pick(2)].name().to_owned(),
+        Drill::Metronome => c.practice_metronome = v == 0,
     }
 }
 
@@ -623,7 +628,9 @@ fn drill_row(d: Drill, c: &Config) -> Row {
         Drill::Ladder => pick(
             "速度の決め方",
             &["段階アップ", "固定"],
-            "段階アップ: 合格を重ねるたびに速度を上げ、不合格が続くと下げます。\n固定: 同じ速度のまま回ります（練習中も , と . キーで 5% ずつ変えられます）。",
+            &format!(
+                "段階アップ: その速度で {PASSES_TO_UP} 回合格するたびに {LADDER_UP}% 上げ、不合格が {FAILS_TO_DOWN} 回続くと {LADDER_DOWN}% 下げます。目標の速度で {PASSES_TO_UP} 回合格したらクリア。\n固定: 同じ速度のまま回ります（練習中も , と . キーで 5% ずつ変えられます）。"
+            ),
         ),
         Drill::Speed => number(
             id,
@@ -651,6 +658,11 @@ fn drill_row(d: Drill, c: &Config) -> Row {
             "遅くしたときの音程",
             &["保つ", "一緒に下げる"],
             "保つ: 音程を保ったまま遅くします。\n一緒に下げる: 音程ごと遅くします（テープと同じ）。",
+        ),
+        Drill::Metronome => pick(
+            "メトロノーム",
+            &["オン", "オフ"],
+            "オン: 区間のあいだ拍ごとに小さくクリックを鳴らします（小節の頭は強く）。\n速度が変わる周の前の 4 拍のカウントは、オフでも鳴ります。",
         ),
     }
 }
@@ -1052,6 +1064,7 @@ pub fn rows(page: Page, info: &ConfigInfo<'_>) -> Vec<Row> {
                 Drill::Speed,
                 Drill::Target,
                 Drill::Pitch,
+                Drill::Metronome,
             ] {
                 r.push(drill_row(d, c));
             }

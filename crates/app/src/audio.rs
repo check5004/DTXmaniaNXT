@@ -213,6 +213,8 @@ enum Command {
     },
     /// `tag` の音を短いフェードで止める（選曲のプレビューの音）
     Stop(u8),
+    /// このフレームより後から鳴らす予定の音を取りやめる（練習で並べ直す周の音）
+    CancelFrom(u64),
     /// 鳴っている音と、鳴らす予定の音をすべて短いフェードで止める（早送り・巻き戻し）
     StopAll,
 }
@@ -385,6 +387,7 @@ impl AudioOut {
                                 v.fade_out = true;
                             }
                         }
+                        Command::CancelFrom(frame) => voices.retain(|v| v.start < frame),
                         Command::StopAll => {
                             // まだ始まっていない音は捨て、鳴っている音はフェードで止める
                             voices.retain(|v| v.start < frames_done);
@@ -511,6 +514,12 @@ impl AudioOut {
             fade_out: p.cut_end,
             tag: 0,
         }));
+    }
+
+    /// 曲の時刻 `song_ms` 以後に鳴り始める予定の音を取りやめる（もう鳴り始めた音はそのまま）
+    pub fn cancel_from(&mut self, song_ms: f64) {
+        let frame = self.frame_at(song_ms).max(0.0).round() as u64;
+        let _ = self.tx.push(Command::CancelFrom(frame));
     }
 
     /// 譜面の音を曲の時刻 `song_ms` に、音量 `gain` と左右 `pan` で鳴らす。`len_ms` があれば、そこで短いフェードで切る

@@ -4,7 +4,8 @@
 //! 判定の音符は周ごとに後ろへ足していくので、判定の音符の添字から「何周目か」を引けるようにしておく。
 //!
 //! 周の合否で次の周の速度を決めるので、周は判定と表示に要るぶんだけ先に並べる。
-//! つなぐときは次の周がもう落ちてきているので、決めた速度は次の次の周から。区切るときは合否が出てから次の周を並べる。
+//! つなぐときは次の周がもう落ちてきているので、速度が変わったら、まだ始まっていない次の周を取り下げ、
+//! 新しい速度の助走から並べ直す（間に合わなければ次の次の周から）。区切るときは合否が出てから次の周を並べる。
 
 use std::ops::Range;
 use std::path::{Path, PathBuf};
@@ -15,7 +16,7 @@ use engine::analysis::mean_and_sd;
 use engine::judge::{JudgeEvent, Tally};
 use engine::practice::{
     Ladder, Lap, LoopStyle, Looper, PASSES_TO_UP, PassRule, SPEED_STEP, Section, SectionTimes,
-    SpeedChange, SpeedPlan, snap_speed, speed_percent,
+    Shortfall, SpeedChange, SpeedPlan, snap_speed, speed_percent,
 };
 use records::{ClearRecord, StrayHit};
 
@@ -31,15 +32,30 @@ pub struct PracticeOptions {
     pub rule: PassRule,
     pub speed: SpeedPlan,
     pub pitch: Pitch,
+    /// 周の中も拍ごとにクリックを鳴らす（助走のカウントはいつも鳴らす）
+    pub metronome: bool,
 }
 
 /// 区間のほかの決めごと（設定に残し、次の練習でも使う）
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PracticePrefs {
     pub style: LoopStyle,
     pub rule: PassRule,
     pub speed: SpeedPlan,
     pub pitch: Pitch,
+    pub metronome: bool,
+}
+
+impl Default for PracticePrefs {
+    fn default() -> Self {
+        Self {
+            style: LoopStyle::default(),
+            rule: PassRule::default(),
+            speed: SpeedPlan::default(),
+            pitch: Pitch::default(),
+            metronome: true,
+        }
+    }
 }
 
 /// 区間を選ぶ画面
@@ -58,6 +74,7 @@ pub struct PracticeSetup {
     pub rule: PassRule,
     pub speed: SpeedPlan,
     pub pitch: Pitch,
+    pub metronome: bool,
 }
 
 /// 苦手フレーズも記録も無いときに選んでおく長さ（小節）
@@ -94,6 +111,7 @@ impl PracticeSetup {
             rule: previous.map_or(prefs.rule, |p| p.rule),
             speed: previous.map_or(prefs.speed, |p| p.speed),
             pitch: previous.map_or(prefs.pitch, |p| p.pitch),
+            metronome: previous.map_or(prefs.metronome, |p| p.metronome),
         })
     }
 
@@ -104,6 +122,7 @@ impl PracticeSetup {
             rule: self.rule,
             speed: self.speed,
             pitch: self.pitch,
+            metronome: self.metronome,
         }
     }
 
@@ -127,6 +146,7 @@ impl PracticeSetup {
             rule: self.rule,
             speed: self.speed,
             pitch: self.pitch,
+            metronome: self.metronome,
         })
     }
 
@@ -219,6 +239,21 @@ fn default_section(weak: &WeakMap, notes_per_measure: &[usize]) -> Option<Sectio
     Some(Section::new(first, last))
 }
 
+/// 周の頭の助走のあいだに、レーンの真ん中で知らせること
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Cue {
+    /// 練習の始まり
+    Start,
+    /// 合格がそろって上げた（`from` は前の速度）
+    Up { from: u32 },
+    /// 不合格が続いて下げた
+    Down { from: u32 },
+    /// 手で変えた
+    Manual { from: u32 },
+    /// 目標の速度で合格がそろった
+    Clear,
+}
+
 /// 練習中の 1 周
 #[derive(Debug, Clone)]
 pub struct LapState {
@@ -230,6 +265,10 @@ pub struct LapState {
     pub strays: Vec<StrayHit>,
     /// 判定が済んだ音符の数
     pub judged: usize,
+    /// 助走のあいだに知らせること（助走の無い周や、知らせることの無い周は None）
+    pub cue: Option<Cue>,
+    /// 合否を速度の決めに使った実時間（周の終わりの合否を少しのあいだ見せる）
+    pub settled_at_ms: Option<f64>,
 }
 
 impl LapState {
@@ -237,9 +276,19 @@ impl LapState {
         self.judged >= self.notes.len()
     }
 
+    /// 今、助走のあいだか（`now` は実時間）
+    pub fn in_run_up(&self, now: f64) -> bool {
+        self.plan.has_run_up() && now >= self.plan.audio.at_ms && now < self.plan.start_ms
+    }
+
     pub fn summary(&self, rule: PassRule) -> LapSummary {
         let (mean, sd) = mean_and_sd(&self.offsets);
         let completed = self.complete();
+        let shortfalls = if completed {
+            rule.shortfalls(&self.tally, self.notes.len())
+        } else {
+            Vec::new()
+        };
         LapSummary {
             index: self.plan.index,
             speed: self.plan.speed,
@@ -248,7 +297,8 @@ impl LapState {
             offset_mean_ms: mean,
             offset_sd_ms: sd,
             completed,
-            passed: completed.then(|| rule.passes(&self.tally, self.notes.len(), sd)),
+            passed: completed.then_some(shortfalls.is_empty()),
+            shortfalls,
         }
     }
 }
@@ -266,6 +316,8 @@ pub struct LapSummary {
     pub completed: bool,
     /// 合格か。終わっていない周は None
     pub passed: Option<bool>,
+    /// 合格に足りなかったもの（合格や終わっていない周は空）
+    pub shortfalls: Vec<Shortfall>,
 }
 
 impl LapSummary {
@@ -279,16 +331,40 @@ impl LapSummary {
     }
 }
 
-/// 速度が動いたこと（練習中の画面に少しのあいだ出す）
+/// 速度が動いたこと
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SpeedNote {
     pub change: SpeedChange,
-    /// 動いたあとの速度（%）
+    /// 動く前と後の速度（%）
+    pub from: u32,
     pub speed: u32,
     /// 決めた実時間
     pub at_ms: f64,
-    /// その速度で並べる最初の周（0 から）
-    pub from_lap: usize,
+}
+
+/// 空打ちの多いパッド（パッドが弱い振動まで拾っていないかを結果の画面で知らせる）
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct StrayHint {
+    /// 空打ちの数（すべてのパッド）
+    pub total: usize,
+    pub lane: DrumLane,
+    pub count: usize,
+    /// そのうち弱い打（強さが [`WEAK_VELOCITY`] 未満）
+    pub weak: usize,
+}
+
+/// 空打ちのうち「弱い」とみなす強さ（MIDI のベロシティ）
+pub const WEAK_VELOCITY: u8 = 30;
+/// 空打ちがこれより少なければ知らせない
+const STRAY_HINT_MIN: usize = 10;
+
+/// 取り下げた周（判定の音符と、鳴らす予定だった音を取り除く）
+#[derive(Debug, Clone, PartialEq)]
+pub struct Withdrawn {
+    /// 判定の音符の添字（ここから後ろを取り除く）
+    pub notes_from: usize,
+    /// この実時間から後に鳴らす予定だった音を取りやめる
+    pub audio_from_ms: f64,
 }
 
 /// 練習 1 回の周の並びと集計
@@ -300,6 +376,8 @@ pub struct Practice {
     settled: usize,
     /// 最後に速度が動いたこと
     pub last_change: Option<SpeedNote>,
+    /// 次に並べる周を、速度が同じでも助走から入れる（クリアしたあと、真ん中で知らせる間を作る）
+    run_up_next: bool,
     /// 曲全体の音符（曲の時刻）
     chart_notes: Vec<DrumNote>,
     pub laps: Vec<LapState>,
@@ -311,6 +389,9 @@ pub struct Practice {
     pub band: Vec<Option<f64>>,
 }
 
+/// 取り下げるには、周の音が鳴り始めるまでこれだけ余裕が要る（ミリ秒。音の出力の遅れのぶん）
+pub const WITHDRAW_MARGIN_MS: f64 = 60.0;
+
 impl Practice {
     pub fn new(options: PracticeOptions, tempo: &TempoMap, chart_notes: Vec<DrumNote>) -> Self {
         let times = SectionTimes::new(tempo, options.section);
@@ -320,6 +401,7 @@ impl Practice {
             ladder: Ladder::new(options.speed),
             settled: 0,
             last_change: None,
+            run_up_next: false,
             chart_notes,
             laps: Vec::new(),
             lap_of: Vec::new(),
@@ -364,7 +446,10 @@ impl Practice {
     /// 返すのは周と、判定に足す音符
     pub fn next_lap(&mut self, percent: u32, earliest_ms: f64) -> (Lap, Vec<DrumNote>) {
         self.looper.delay_to(earliest_ms);
-        let lap = self.looper.next_lap(f64::from(percent) / 100.0);
+        let lap = self
+            .looper
+            .next_lap(f64::from(percent) / 100.0, self.run_up_next);
+        self.run_up_next = false;
         let mut judged = Vec::new();
         for n in lap.notes(&self.chart_notes) {
             let note = &self.chart_notes[n.note];
@@ -380,30 +465,74 @@ impl Practice {
         (lap, judged)
     }
 
-    /// 成績が動かなくなった周の合否で、次の速度を決める。`poor_ms` は判定の幅の一番外
-    pub fn settle(&mut self, now_ms: f64, poor_ms: f64) {
+    /// 終わった周（音符をすべて判定した周）の合否で、次の速度を決める。合否に空打ちは使わないので、
+    /// 最後の音符を判定したらすぐ決める（そのぶん次の周を取り下げる間に合いやすい）
+    pub fn settle(&mut self, now_ms: f64) {
         while let Some(lap) = self.laps.get(self.settled) {
-            if !lap.complete() || now_ms < lap.plan.stray_until(poor_ms) {
+            if !lap.complete() {
                 break;
             }
             let passed = lap.summary(self.options.rule).passed == Some(true);
+            let from = self.ladder.speed();
             let change = self.ladder.record(speed_percent(lap.plan.speed), passed);
             if change != SpeedChange::Stay {
                 self.last_change = Some(SpeedNote {
                     change,
+                    from,
                     speed: self.ladder.speed(),
                     at_ms: now_ms,
-                    from_lap: self.laps.len(),
                 });
             }
+            if change == SpeedChange::Cleared {
+                self.run_up_next = true;
+            }
+            self.laps[self.settled].settled_at_ms = Some(now_ms);
             self.settled += 1;
         }
     }
 
+    /// 並べたがまだ始まっていない最後の周が、今決まっている速度と違う（またはクリアの知らせの間が要る）なら
+    /// 取り下げる。取り下げた周の音符と音は呼んだ側が取り除く。`now_ms` は今の実時間
+    pub fn withdraw_stale(&mut self, now_ms: f64) -> Option<Withdrawn> {
+        let lap = self.laps.last()?;
+        let index = self.laps.len() - 1;
+        let stale = speed_percent(lap.plan.speed) != self.ladder.speed()
+            || (self.run_up_next && !lap.plan.has_run_up());
+        if !stale
+            || index < self.settled
+            || index == 0
+            || lap.judged > 0
+            || !lap.strays.is_empty()
+            || lap.plan.audio.at_ms < now_ms + WITHDRAW_MARGIN_MS
+        {
+            return None;
+        }
+        if !self.looper.unlay(&lap.plan) {
+            return None;
+        }
+        let lap = self.laps.pop()?;
+        self.lap_of.truncate(lap.notes.start);
+        self.faint.retain(|f| f.0 < lap.plan.audio.at_ms);
+        log::info!(
+            "lap {} withdrawn ({}% -> {}%)",
+            lap.plan.index + 1,
+            speed_percent(lap.plan.speed),
+            self.ladder.speed()
+        );
+        Some(Withdrawn {
+            notes_from: lap.notes.start,
+            audio_from_ms: lap.plan.audio.at_ms,
+        })
+    }
+
     /// 手で速度を `steps` 刻み動かす（次に並べる周から）
     pub fn nudge_speed(&mut self, steps: i64) {
-        let s = i64::from(self.ladder.speed()) + steps * i64::from(SPEED_STEP);
+        let from = self.ladder.speed();
+        let s = i64::from(from) + steps * i64::from(SPEED_STEP);
         self.ladder.set_speed(snap_speed(s));
+        if self.ladder.speed() != from {
+            self.last_change = None;
+        }
     }
 
     /// 始め直すときの決めごと。固定の速度を手で変えていたらその速度で（段階アップは始めの速度から）
@@ -414,8 +543,8 @@ impl Practice {
         }
     }
 
-    /// 等速以上で続けて合格した一番速い速度（%）。最後まで叩いた周を順に見て、同じ速度で
-    /// [`PASSES_TO_UP`] 周続けて合格していればクリア
+    /// 等速以上で合格がそろった一番速い速度（%）。最後まで叩いた周を順に見て、同じ速度が続くあいだに
+    /// [`PASSES_TO_UP`] 回合格していればクリア（続けてでなくてよい。段階アップの決まりと同じ）
     pub fn clear_speed(&self) -> Option<u32> {
         let mut best = None;
         let mut run: Option<(u32, u32)> = None;
@@ -425,11 +554,10 @@ impl Practice {
             .filter(|l| l.complete() && !l.notes.is_empty())
         {
             let speed = speed_percent(l.plan.speed);
-            let passed = l.summary(self.options.rule).passed == Some(true);
-            run = match (passed, run) {
-                (false, _) => None,
-                (true, Some((s, n))) if s == speed => Some((s, n + 1)),
-                (true, _) => Some((speed, 1)),
+            let passed = u32::from(l.summary(self.options.rule).passed == Some(true));
+            run = match run {
+                Some((s, n)) if s == speed => Some((s, n + passed)),
+                _ => Some((speed, passed)),
             };
             if let Some((s, n)) = run
                 && s >= 100
@@ -441,12 +569,16 @@ impl Practice {
         best
     }
 
-    /// 先に作っておく速度（%）。次の速度と、その上下
+    /// 先に作っておく速度（%）。次の速度と、上げる先・下げる先
     pub fn speeds_to_prepare(&self) -> Vec<u32> {
         let s = self.ladder.speed();
         let mut v = vec![s];
-        for d in [1, -1] {
-            let n = snap_speed(i64::from(s) + d * i64::from(SPEED_STEP));
+        let near = [
+            self.ladder.next_up(),
+            self.ladder.next_down(),
+            Some(snap_speed(i64::from(s) - i64::from(SPEED_STEP))),
+        ];
+        for n in near.into_iter().flatten() {
             if !v.contains(&n) {
                 v.push(n);
             }
@@ -457,6 +589,28 @@ impl Practice {
     /// 並べた周を覚える。`notes` は判定に足した音符の添字の範囲
     pub fn push_lap(&mut self, plan: Lap, notes: Range<usize>) {
         let index = self.laps.len();
+        let speed = speed_percent(plan.speed);
+        let cue = if index == 0 {
+            Some(Cue::Start)
+        } else if !plan.has_run_up() {
+            None
+        } else {
+            let prev = self.last_speed().unwrap_or(speed);
+            match self.last_change {
+                _ if prev == speed => self
+                    .ladder
+                    .cleared()
+                    .then_some(Cue::Clear)
+                    .filter(|_| !self.laps.iter().any(|l| l.cue == Some(Cue::Clear))),
+                Some(c) if c.speed == speed && c.change == SpeedChange::Up => {
+                    Some(Cue::Up { from: prev })
+                }
+                Some(c) if c.speed == speed && c.change == SpeedChange::Down => {
+                    Some(Cue::Down { from: prev })
+                }
+                _ => Some(Cue::Manual { from: prev }),
+            }
+        };
         self.lap_of.resize(notes.end, index);
         self.laps.push(LapState {
             plan,
@@ -465,6 +619,8 @@ impl Practice {
             offsets: Vec::new(),
             strays: Vec::new(),
             judged: 0,
+            cue,
+            settled_at_ms: None,
         });
     }
 
@@ -505,7 +661,7 @@ impl Practice {
             .collect()
     }
 
-    /// 今叩いている周の番号（0 から）。助走の間は None
+    /// 今叩いている周の番号（0 から）。1 周目の助走の間は None
     pub fn current_lap(&self, now_ms: f64) -> Option<usize> {
         self.laps
             .iter()
@@ -513,31 +669,126 @@ impl Practice {
             .filter(|&i| i > 0 || now_ms >= self.laps[0].plan.start_ms - 1.0)
     }
 
-    /// 連続で合格した周の数（最後に終わった周から数える）
-    pub fn pass_streak(&self) -> usize {
-        self.laps
-            .iter()
-            .filter(|l| l.complete())
-            .rev()
-            .take_while(|l| l.summary(self.options.rule).passed == Some(true))
-            .count()
+    /// 速度を決め直したが、前の速度で並べた周がまだ始まらずに残っていて、その周のあとから変わるとき、
+    /// その速度（%）。取り下げられる周は毎フレーム取り下げるので、残っていれば取り下げられない周
+    pub fn pending_speed(&self, now_ms: f64) -> Option<u32> {
+        let next = self.ladder.speed();
+        let last = self.laps.last()?;
+        (last.plan.start_ms > now_ms && speed_percent(last.plan.speed) != next).then_some(next)
     }
 
-    /// 速度が動いたことを今も出しておくか。決めてから少しのあいだと、その速度の周が始まって少しのあいだ
-    pub fn speed_note(&self, now_ms: f64) -> Option<SpeedNote> {
-        const SHOW_MS: f64 = 3000.0;
-        self.last_change.filter(|c| {
-            now_ms - c.at_ms < SHOW_MS
-                || self
-                    .laps
-                    .get(c.from_lap)
-                    .is_none_or(|l| now_ms < l.plan.start_ms + SHOW_MS)
-        })
+    /// 合否が出たばかりの周（`window_ms` のあいだ見せる）
+    pub fn just_settled(&self, now_ms: f64, window_ms: f64) -> Option<LapSummary> {
+        let l = self.laps[..self.settled]
+            .iter()
+            .rev()
+            .find(|l| l.settled_at_ms.is_some())?;
+        let at = l.settled_at_ms?;
+        (now_ms - at < window_ms).then(|| l.summary(self.options.rule))
+    }
+
+    /// 空打ちが一つのパッドに偏っていて、その多くが弱い打なら、そのパッド（拾いすぎの疑い）
+    pub fn stray_hint(&self) -> Option<StrayHint> {
+        let mut lanes: Vec<(DrumLane, usize, usize)> = Vec::new();
+        let mut total = 0;
+        for st in self.laps.iter().flat_map(|l| &l.strays) {
+            total += 1;
+            let weak = usize::from(st.velocity < WEAK_VELOCITY);
+            match lanes.iter_mut().find(|e| e.0 == st.lane) {
+                Some(e) => {
+                    e.1 += 1;
+                    e.2 += weak;
+                }
+                None => lanes.push((st.lane, 1, weak)),
+            }
+        }
+        let &(lane, count, weak) = lanes.iter().max_by_key(|e| e.1)?;
+        (total >= STRAY_HINT_MIN && count * 2 >= total && weak * 10 >= count * 6).then_some(
+            StrayHint {
+                total,
+                lane,
+                count,
+                weak,
+            },
+        )
+    }
+
+    /// 最後まで叩いた周の、ずれの平均（ミリ秒。- は早い）と打った数
+    pub fn offset_mean(&self) -> Option<(f64, usize)> {
+        let all: Vec<f64> = self
+            .laps
+            .iter()
+            .filter(|l| l.complete())
+            .flat_map(|l| l.offsets.iter().copied())
+            .collect();
+        let (mean, _) = mean_and_sd(&all);
+        Some((mean?, all.len()))
     }
 
     /// 古い薄い音符を捨てる
     pub fn forget_before(&mut self, ms: f64) {
         self.faint.retain(|f| f.0 >= ms);
+    }
+}
+
+/// つなぎ方の名前
+pub fn style_label(s: LoopStyle) -> &'static str {
+    match s {
+        LoopStyle::Connect => "切れ目なく",
+        LoopStyle::Restart => "毎回区切る",
+    }
+}
+
+/// 合格の基準の短い名前（何がそろえば合格か）
+pub fn rule_label(r: PassRule) -> &'static str {
+    match r {
+        PassRule::Easy => "MISS 0",
+        PassRule::Normal => "フルコンボ",
+        PassRule::Strict => "PERFECT 8 割",
+    }
+}
+
+/// 「フルコンボで合格」の形の合格の基準
+pub fn rule_pass_label(r: PassRule) -> String {
+    let name = rule_label(r);
+    if name.ends_with(|c: char| c.is_ascii_alphanumeric()) {
+        format!("{name} で合格")
+    } else {
+        format!("{name}で合格")
+    }
+}
+
+/// 区間の名前（「小節 3〜6」）
+pub fn section_label(s: Section) -> String {
+    if s.first == s.last {
+        format!("小節 {}", s.first)
+    } else {
+        format!("小節 {}〜{}", s.first, s.last)
+    }
+}
+
+/// 周の合否のわけ。合格ならそろったもの、不合格なら足りなかったもの（「MISS 1 / POOR 2」）
+pub fn lap_reason(l: &LapSummary, rule: PassRule) -> String {
+    match l.passed {
+        Some(true) => {
+            let full = l.tally.miss == 0 && l.tally.poor == 0;
+            match rule {
+                PassRule::Strict => format!("PERFECT {:.0}%", l.perfect_rate() * 100.0),
+                _ if full => "フルコンボ".to_owned(),
+                _ => "MISS 0".to_owned(),
+            }
+        }
+        Some(false) => l
+            .shortfalls
+            .iter()
+            .map(|s| match *s {
+                Shortfall::Miss(n) => format!("MISS {n}"),
+                Shortfall::Poor(n) => format!("POOR {n}"),
+                Shortfall::Perfect { rate, .. } => format!("PERFECT {:.0}%", rate * 100.0),
+            })
+            .collect::<Vec<_>>()
+            .join(" / "),
+        None => "途中".to_owned(),
     }
 }
 
@@ -569,6 +820,7 @@ mod tests {
                 rule: PassRule::Normal,
                 speed,
                 pitch: Pitch::Keep,
+                metronome: true,
             },
             &tempo,
             notes,
@@ -618,7 +870,9 @@ mod tests {
         assert_eq!((s[1].tally.great, s[1].tally.miss), (3, 1));
         assert_eq!(s[1].passed, Some(false));
         assert_eq!(s[1].offset_mean_ms, Some(50.0));
-        assert_eq!(p.pass_streak(), 0);
+        // 合否のわけ（フルコンボで合格の基準）
+        assert_eq!(lap_reason(&s[0], PassRule::Normal), "フルコンボ");
+        assert_eq!(lap_reason(&s[1], PassRule::Normal), "MISS 1");
     }
 
     #[test]
@@ -668,7 +922,7 @@ mod tests {
             assert_eq!(ev[0].judgement, Judgement::Perfect);
             p.on_events(&ev);
         }
-        assert_eq!(p.pass_streak(), 1);
+        assert_eq!(p.laps[0].summary(PassRule::Normal).passed, Some(true));
         // 2 周目の助走は 1 周目の音の終わり（着地の 2 拍あと）から
         assert_eq!(p.current_lap(p.laps[1].plan.audio.at_ms + 1.0), Some(1));
     }
@@ -695,6 +949,7 @@ mod tests {
             rule: PassRule::Normal,
             speed: SpeedPlan::default(),
             pitch: Pitch::Keep,
+            metronome: true,
         };
         assert_eq!(s.notes_in(Section::new(2, 5)), 15);
         s.shift(5);
@@ -728,6 +983,7 @@ mod tests {
             rule: PassRule::Normal,
             speed: SpeedPlan::default(),
             pitch: Pitch::Keep,
+            metronome: true,
         };
         s.nudge_speed(-1);
         assert_eq!(
@@ -792,28 +1048,31 @@ mod tests {
             Judge::with_groups(Vec::new(), HitWindows::default(), LaneGroups::default());
         // 70% なら助走（1 小節 = 2000ms）は 2857ms
         assert!((p.first_audio_ms() + 2000.0 / 0.7).abs() < 1e-6);
-        assert_eq!(p.speeds_to_prepare(), vec![70, 75, 65]);
+        // 上げる先は 10% 上、始めの速度より下には下げない
+        assert_eq!(p.speeds_to_prepare(), vec![70, 80, 65]);
         for _ in 0..2 {
             let speed = p.ladder().speed();
             let i = play_lap(&mut p, &mut judge, speed, true);
-            let end = p.laps[i].plan.end_ms;
-            // 周の終わりまでは決めない（空打ちを数え終えるまで）
-            p.settle(end - 200.0, 117.0);
-            p.settle(end, 117.0);
+            // 合否に空打ちは使わないので、最後の音符を判定したらすぐ決める
+            let start = p.laps[i].plan.start_ms;
+            p.settle(start);
         }
-        assert_eq!(p.ladder().speed(), 75);
+        assert_eq!(p.ladder().speed(), 80);
         assert_eq!(
-            p.last_change.map(|c| (c.change, c.speed)),
-            Some((SpeedChange::Up, 75))
+            p.last_change.map(|c| (c.change, c.from, c.speed)),
+            Some((SpeedChange::Up, 70, 80))
         );
-        let i = play_lap(&mut p, &mut judge, 75, true);
-        assert!((p.laps[i].plan.speed - 0.75).abs() < 1e-9);
-        // 3 周目は 75%: 区間（2000ms）は 2667ms
+        let i = play_lap(&mut p, &mut judge, 80, true);
+        assert!((p.laps[i].plan.speed - 0.8).abs() < 1e-9);
+        // 速度が変わった周は助走から入り、真ん中で上がったことを知らせる
+        assert!(p.laps[i].plan.has_run_up());
+        assert_eq!(p.laps[i].cue, Some(Cue::Up { from: 70 }));
+        // 3 周目は 80%: 区間（2000ms）は 2500ms
         let l = &p.laps[i].plan;
-        assert!((l.end_ms - l.start_ms - 2000.0 / 0.75).abs() < 1e-6);
+        assert!((l.end_ms - l.start_ms - 2000.0 / 0.8).abs() < 1e-6);
         // 手で下げる。始め直すときは始めの速度から
         p.nudge_speed(-2);
-        assert_eq!(p.ladder().speed(), 65);
+        assert_eq!(p.ladder().speed(), 70);
         assert_eq!(p.restart_options(), p.options);
         // 固定なら手で変えた速度で始め直す
         let mut f = practice_at(LoopStyle::Connect, SpeedPlan::Fixed(80));
@@ -830,7 +1089,7 @@ mod tests {
         let i = play_lap(&mut p, &mut judge, 100, false);
         assert!(!p.wants_lap(0.0, 2000.0));
         let end = p.laps[i].plan.end_ms;
-        p.settle(end + 117.0, 117.0);
+        p.settle(end + 117.0);
         assert!(p.wants_lap(end + 117.0, 2000.0));
         // 助走は合否が出てから 2000ms 先（音の終わりの 3000 より後）
         let (lap, _) = p.next_lap(100, end + 117.0 + 2000.0);
@@ -838,14 +1097,14 @@ mod tests {
     }
 
     #[test]
-    fn two_passes_in_a_row_at_full_speed_clear_the_section() {
+    fn two_passes_at_full_speed_clear_the_section() {
         let mut judge =
             Judge::with_groups(Vec::new(), HitWindows::default(), LaneGroups::default());
         let mut p = practice_at(LoopStyle::Connect, SpeedPlan::Fixed(100));
         play_lap(&mut p, &mut judge, 100, true);
         play_lap(&mut p, &mut judge, 100, false);
-        play_lap(&mut p, &mut judge, 100, true);
         assert_eq!(p.clear_speed(), None);
+        // 合格は続けてでなくてよい（段階アップの決まりと同じ）
         play_lap(&mut p, &mut judge, 100, true);
         assert_eq!(p.clear_speed(), Some(100));
         // 遅い速度で続けて合格してもクリアではない
@@ -861,6 +1120,86 @@ mod tests {
         assert_eq!(p.clear_speed(), None);
         play_lap(&mut p, &mut judge, 105, true);
         assert_eq!(p.clear_speed(), Some(105));
+    }
+
+    #[test]
+    fn a_new_speed_takes_back_the_next_lap_and_starts_with_a_run_up() {
+        let mut p = practice_at(
+            LoopStyle::Connect,
+            SpeedPlan::Ladder {
+                start: 70,
+                target: 100,
+            },
+        );
+        let mut judge =
+            Judge::with_groups(Vec::new(), HitWindows::default(), LaneGroups::default());
+        play_lap(&mut p, &mut judge, 70, true);
+        play_lap(&mut p, &mut judge, 70, true);
+        // 3 周目は前もって 70% で並べてある（まだ始まっていない）
+        let (lap, notes) = p.next_lap(70, f64::MIN);
+        let range = judge.extend(notes);
+        p.push_lap(lap, range);
+        assert_eq!(p.laps[2].cue, None);
+        let next_audio = p.laps[2].plan.audio.at_ms;
+        let now = p.laps[1].plan.end_ms - 500.0;
+        p.settle(now);
+        assert_eq!(p.ladder().speed(), 80);
+        assert_eq!(p.pending_speed(now), Some(80));
+        // 音が鳴り始める間際の周は取り下げない
+        assert!(p.withdraw_stale(next_audio - 10.0).is_none());
+        let w = p.withdraw_stale(now).expect("the next lap is taken back");
+        assert!(judge.truncate(w.notes_from));
+        assert_eq!(judge.notes().len(), w.notes_from);
+        assert_eq!(w.audio_from_ms, next_audio);
+        assert_eq!((p.laps.len(), p.pending_speed(now)), (2, None));
+        // 並べ直す周は 80% の 1 小節（2500ms）の助走から
+        let (lap, notes) = p.next_lap(80, f64::MIN);
+        assert!(lap.has_run_up());
+        assert!((lap.audio.at_ms - next_audio).abs() < 1e-6);
+        assert!((lap.start_ms - lap.audio.at_ms - 2500.0).abs() < 1e-6);
+        let range = judge.extend(notes);
+        p.push_lap(lap, range);
+        assert_eq!(p.laps[2].cue, Some(Cue::Up { from: 70 }));
+        // 一度取り下げたら、同じ速度のあいだはもう取り下げない
+        assert!(p.withdraw_stale(now).is_none());
+    }
+
+    #[test]
+    fn weak_strays_on_one_pad_are_pointed_out() {
+        let mut p = practice(LoopStyle::Connect);
+        let mut judge =
+            Judge::with_groups(Vec::new(), HitWindows::default(), LaneGroups::default());
+        let (lap, notes) = p.next_lap(100, f64::MIN);
+        let range = judge.extend(notes);
+        p.push_lap(lap, range);
+        let stray = |lane, velocity| StrayHit {
+            at_ms: 1000.0,
+            lane,
+            velocity,
+            articulation: None,
+            hh_pedal: None,
+        };
+        for _ in 0..8 {
+            p.on_stray(stray(DrumLane::HHO, 12), 117.0);
+        }
+        assert_eq!(p.stray_hint(), None);
+        for _ in 0..4 {
+            p.on_stray(stray(DrumLane::BD, 100), 117.0);
+        }
+        assert_eq!(
+            p.stray_hint(),
+            Some(StrayHint {
+                total: 12,
+                lane: DrumLane::HHO,
+                count: 8,
+                weak: 8,
+            })
+        );
+        // 強く叩いた空打ちなら、拾いすぎではない
+        for _ in 0..12 {
+            p.on_stray(stray(DrumLane::SD, 100), 117.0);
+        }
+        assert_eq!(p.stray_hint(), None);
     }
 
     #[test]
@@ -889,6 +1228,7 @@ mod tests {
             rule: PassRule::Normal,
             speed: SpeedPlan::default(),
             pitch: Pitch::Keep,
+            metronome: true,
         };
         s.clears = vec![
             clear(5, 6, 1.0, false),
