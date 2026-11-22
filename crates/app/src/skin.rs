@@ -1,6 +1,6 @@
-//! アプリに入れた DTXManiaNX のスキン（画像と音）。
+//! アプリに入れた DTXManiaNX v2.0 のスキン（画像と音）。
 //!
-//! 中身はリポジトリの `assets/skin`（上流 limyz/DTXmaniaNX の `Runtime/System`。出どころと扱いは `assets/README.md`）。
+//! 中身はリポジトリの `assets/skin`（上流 BocuD/DTXmaniaNX v2.0 の `Runtime/System`。出どころと扱いは `assets/README.md`）。
 //! リリースのビルドでは exe に埋め込むので、exe 1 つで NX と同じ画面になる。
 //! 開発中のビルド（debug）は `assets/skin` のフォルダから読む。
 //!

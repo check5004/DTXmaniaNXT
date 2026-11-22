@@ -12,7 +12,7 @@ DTX 形式の譜面で遊べる、ドラムのゲーム兼練習アプリです�
 
 ### ダウンロード
 
-[リリース](https://github.com/check5004/DTXmaniaNXT/releases/latest)から、Windows は [DTXmaniaNXT.exe](https://github.com/check5004/DTXmaniaNXT/releases/latest/download/DTXmaniaNXT.exe)（いつも最新の版）をダウンロードし、好きなフォルダに置いて起動します。Windows はこの exe 1 つだけで、インストールは要りません。画面の画像と効果音（DTXManiaNX のスキン）も exe に入っているので、DTXManiaNX が無くても NX と同じ見た目で遊べます。macOS（Apple シリコン）と Linux（x86_64）の版も同じページにあります。
+[リリース](https://github.com/check5004/DTXmaniaNXT/releases/latest)から、Windows は [DTXmaniaNXT.exe](https://github.com/check5004/DTXmaniaNXT/releases/latest/download/DTXmaniaNXT.exe)（いつも最新の版）をダウンロードし、好きなフォルダに置いて起動します。Windows はこの exe 1 つだけで、インストールは要りません。画面の画像と効果音（DTXManiaNX v2.0 のスキン）も exe に入っているので、DTXManiaNX が無くても NX v2.0 と同じ見た目で遊べます。macOS（Apple シリコン）と Linux（x86_64）の版も同じページにあります。
 
 - 署名をしていないので、Windows で「Windows によって PC が保護されました」と出たら「詳細情報」→「実行」を押します。
 - 新しい版は exe を置き換えるだけです。設定と記録は別のフォルダ（下の `%APPDATA%\DTXmaniaNXT`）にあるので引き継がれます。
@@ -25,7 +25,7 @@ DTX 形式の譜面で遊べる、ドラムのゲーム兼練習アプリです�
    - 設定の画面は NX と同じ配置です（左のメニュー、右の項目、説明のパネル）。↑↓ で選び、Enter で決め、Esc で戻ります。数の項目は Enter で値を変える状態になり、↑↓ で変えて Enter で戻ります。電子ドラムでは HT / LT で選び、CY か RD で決め、LC で戻ります。選曲の画面から F1 でも開けます。
    - System：曲のフォルダ（Add Song Folder で足し、各フォルダは Enter で一覧から外す）、曲の探し直し、MasterVolume（全体の音量。0〜100 で、初めは 50）、StageFailed（ON / OFF）、ShowLagTime（判定のずれの数字。OFF / ON / GREAT- は PERFECT 以外だけ）、ShowLagTimeColor（ずれの数字の色）、ShowLagHitCount（結果の画面に早かった数と遅かった数）、MIDI の入力のつなぎ直し。
    - Drums：スクロールの速さ、入力の補正、表示の補正、叩いたときの譜面の音、Drums Keys（パッドの割り当て）。Drums Keys でパッドを選んで Enter を押し、そのパッドを叩くと、そのノート番号がそのパッドに割り当たります（`config.toml` の `pad_notes` に残し、Roland の既定より優先します。Reset Keys で消せます）。
-2. GAME START で選曲の画面になります。↑↓ で曲を選び、←→ で難易度、Enter で始めます。BOX は Enter で入り、Backspace か Esc で出ます（一番上で Esc を押すとタイトルに戻ります。タイトルで Esc か EXIT を選ぶと終わります）。マウスのホイールでも動かせ、曲バーを押すとそこへ動きます（選んでいる曲を押すと始めます）。始めると NX と同じ読み込みの画面が「Now loading」の音が鳴り終わるまで出て、演奏の画面になります（読み込みの画面で Esc を押すと選曲に戻ります）。
+2. GAME START で選曲の画面になります（NX v2.0 と同じ配置）。↑↓ で曲を選び、Tab で難易度、Enter で始めます。←→ で右上の並べ替え（フォルダのまま、BOX、曲名、アーティスト、難易度、レベル、遊んだ記録、全曲、スキルの高い 50 曲）を変え、R で今いる BOX の中からランダムに選びます。BOX は Enter で入り、Backspace か Esc で出ます（一番上で Esc を押すとタイトルに戻ります。タイトルで Esc か EXIT を選ぶと終わります）。マウスのホイールでも動かせ、曲の帯を押すとそこへ動きます（選んでいる曲を押すと始めます。並べ替えのアイコンも押せます）。電子ドラムは HT / LT で選び、SD / FT で並べ替え、HH を 2 回で難易度、CY か RD で決め、LC で戻ります。曲の帯の左のランプはクリアした一番上の難易度の色、上の帯は曲別スキルで、右下の難易度のパネルには難易度ごとのランクと達成率を出します。始めると NX と同じ読み込みの画面が「Now loading」の音が鳴り終わるまで出て、演奏の画面になります（読み込みの画面で Esc を押すと選曲に戻ります）。
 3. 電子ドラムは、つないでおけば起動したときに見つけます。無ければキーボードで叩けます（A S Z D G F H J K L、Q で HH オープン）。
 4. 演奏の画面は NX と同じ配置です（スコア、判定の数と達成率・曲別スキル、ゲージ、コンボ、判定の文字とずれ、進み具合のバー、ジャケット）。遊んでいる間は - / = で入力の補正、[ / ] で表示の補正、↑↓ で速さ、M で譜面の音、R でやり直し、Esc で終わって結果へ。I で設定と入力の情報（音の出力、MIDI の入力、最後に叩いたパッドとハイハットの開き具合）を出します。ゲージが尽きると、NX と同じく STAGE FAILED で選曲に戻ります（設定の StageFailed を OFF にすると終わらなくなります。練習では終わりません）。判定の下のずれの数字は設定の ShowLagTime と ShowLagTimeColor に従います。
 5. 最後まで叩くと、NX と同じ結果の画面になります（ランク、Excellent・フルコンボ・ステージクリア、判定の数と割合、スコア、達成率と曲別スキル、今回と自己ベストの進み具合のバー、達成率が自己ベストを超えたら New Record、それぞれの音）。設定の ShowLagHitCount が ON なら、早かった数と遅かった数も出します。← → で 2 ページ目（このアプリの分析）と切り替え、Enter か Esc で選曲へ、R でもう一度、P で区間を練習します。電子ドラムは CY か RD か LC で選曲へ、HT か LT でページを切り替えます。
@@ -76,11 +76,11 @@ cargo test --all
 | --- | --- |
 | `crates/dtx` | DTX の読み込み（文字コード判定、ヘッダ、チップ、BPM と小節長から時刻を計算） |
 | `crates/engine` | 判定、音と MIDI の時計、電子ドラムの入力の正規化、記録からの苦手・克服・叩き方のくせの分析、練習の区間ループの並べ方と段階アップ |
-| `crates/library` | 曲のフォルダの探し方（set.def・box.def・DTXFiles.*） |
+| `crates/library` | 曲のフォルダの探し方（set.def・box.def・DTXFiles.*）と、選曲の並べ替え（`sort.rs`） |
 | `crates/nx` | DTXManiaNX のフォルダの読み方（0.1 の設定の引き継ぎに使う Config.ini、大文字・小文字を区別しないファイル探し） |
 | `crates/records` | 遊んだ記録（SQLite）の読み書き |
-| `crates/app` | アプリ本体（winit + wgpu + egui、cpal、midir）。NX のスキンの画像を上流と同じ座標で描く（スキンの読み込み `skin.rs`、`gfx.rs`、タイトル `title_view.rs`、設定 `config_view.rs`、選曲 `select.rs`、読み込み `loading.rs`、演奏 `play_view.rs`、結果 `result_view.rs`） |
-| `assets/skin` | DTXManiaNX のスキン（画像と効果音）。リリースのビルドでは exe に埋め込み、開発中のビルドはこのフォルダから読みます。出どころと扱いは [`assets/README.md`](assets/README.md) |
+| `crates/app` | アプリ本体（winit + wgpu + egui、cpal、midir）。NX のスキンの画像を上流と同じ座標で描く（スキンの読み込み `skin.rs`、`gfx.rs`、タイトル `title_view.rs`、設定 `config_view.rs`、選曲 `select.rs`（並べ替えは `crates/library` の `sort.rs`）、読み込み `loading.rs`、演奏 `play_view.rs`、結果 `result_view.rs`） |
+| `assets/skin` | DTXManiaNX v2.0（BocuD 版）のスキン（画像と効果音）。リリースのビルドでは exe に埋め込み、開発中のビルドはこのフォルダから読みます。出どころと扱いは [`assets/README.md`](assets/README.md) |
 | `testdata/charts` | テスト譜面と手計算の正解。DTX Web Editor と共有する予定 |
 
 ## リリースの出し方
@@ -94,7 +94,7 @@ cargo test --all
 ## 上流について
 
 このリポジトリは [limyz/DTXmaniaNX](https://github.com/limyz/DTXmaniaNX) のフォークです。
-`main` ブランチは上流の履歴を持たない新しい実装で、上流のコードは含みません。画面の画像と効果音（`assets/skin`）だけは、上流の `Runtime/System` をそのまま入れています（出どころと扱いは [`assets/README.md`](assets/README.md)）。上流の C# 版は `master` ブランチに参考として残しています。
+`main` ブランチは上流の履歴を持たない新しい実装で、上流のコードは含みません。画面の画像と効果音（`assets/skin`）だけは、上流（NX v2.0 の BocuD 版）の `Runtime/System` をそのまま入れています（出どころと扱いは [`assets/README.md`](assets/README.md)）。上流の C# 版は `master` ブランチに参考として残しています。
 
 ## ライセンス
 

@@ -215,6 +215,15 @@ pub struct BestScore {
     pub progress: Option<String>,
 }
 
+/// 最後まで遊んだ普通のプレイ 1 回（選曲画面のランクとスキルに使う）
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClearedPlay {
+    pub chart_path: String,
+    /// 達成率（0〜100）
+    pub rate: f64,
+    pub tally: Tally,
+}
+
 /// 練習でクリアした区間
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SectionClear {
@@ -397,6 +406,45 @@ impl Records {
             score,
             progress,
         })
+    }
+
+    /// 最後まで遊んだ普通のプレイ。すべての譜面の
+    pub fn cleared_plays(&self) -> Result<Vec<ClearedPlay>> {
+        let mut q = self.conn.prepare(
+            "SELECT c.path, p.rate, l.perfect, l.great, l.good, l.poor, l.miss, l.max_combo
+             FROM play_scores p
+             JOIN sessions s ON s.id = p.session_id
+             JOIN charts c ON c.id = s.chart_id
+             JOIN laps l ON l.session_id = s.id AND l.lap = 0
+             WHERE p.cleared",
+        )?;
+        q.query_map([], |row| {
+            Ok(ClearedPlay {
+                chart_path: row.get(0)?,
+                rate: row.get(1)?,
+                tally: Tally {
+                    perfect: row.get(2)?,
+                    great: row.get(3)?,
+                    good: row.get(4)?,
+                    poor: row.get(5)?,
+                    miss: row.get(6)?,
+                    max_combo: row.get(7)?,
+                    ..Default::default()
+                },
+            })
+        })?
+        .collect()
+    }
+
+    /// 譜面ごとの最後に遊んだ時刻（UNIX 秒。練習も含む）
+    pub fn last_played(&self) -> Result<Vec<(String, i64)>> {
+        let mut q = self.conn.prepare(
+            "SELECT c.path, MAX(s.started_at)
+             FROM sessions s JOIN charts c ON c.id = s.chart_id
+             GROUP BY c.id",
+        )?;
+        q.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect()
     }
 
     /// 譜面のクリアの記録。古い順
@@ -1019,6 +1067,44 @@ mod tests {
         assert_eq!(b.rate, None);
         // スコアの無い練習やほかの譜面は数えない
         assert_eq!(r.best_score("other.dtx", None).unwrap().score, None);
+    }
+
+    #[test]
+    fn cleared_plays_and_last_played_cover_every_chart() {
+        let mut r = Records::open_in_memory().unwrap();
+        let all = "2".repeat(64);
+        let mut good = scored(100, 900_000, 95.5, &all, true);
+        good.laps[0].tally = Tally {
+            perfect: 90,
+            great: 10,
+            max_combo: 100,
+            ..Default::default()
+        };
+        r.save(&chart(1), &good).unwrap();
+        r.save(&chart(1), &scored(300, 10_000, 5.0, &all, false))
+            .unwrap();
+        let other = ChartKey {
+            path: "songs/b/basic.dtx",
+            ..chart(2)
+        };
+        let mut practice = play(200, 1.0, vec![]);
+        practice.kind = SessionKind::Practice;
+        r.save(&other, &practice).unwrap();
+        let cleared = r.cleared_plays().unwrap();
+        assert_eq!(cleared.len(), 1);
+        assert_eq!(cleared[0].chart_path, "songs/a/master.dtx");
+        assert_eq!(cleared[0].rate, 95.5);
+        assert_eq!(cleared[0].tally.great, 10);
+        assert_eq!(cleared[0].tally.max_combo, 100);
+        let mut last = r.last_played().unwrap();
+        last.sort();
+        assert_eq!(
+            last,
+            vec![
+                ("songs/a/master.dtx".to_owned(), 300),
+                ("songs/b/basic.dtx".to_owned(), 200)
+            ]
+        );
     }
 
     #[test]

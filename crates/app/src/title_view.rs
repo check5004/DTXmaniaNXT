@@ -1,5 +1,5 @@
 //! タイトルの画面（上流 `CStageTitle`）と、終わるときの画面（上流 `CStageEnd`）。
-//! スキンの 2_ の画像で、背景とメニュー（GAME START / CONFIGURATION / EXIT）を出す。
+//! スキンの 2_ の画像で、背景とロゴとメニュー（GAME START / CONFIGURATION / EXIT）を出す。
 //! 曲を探しているあいだは左上に「曲を探しています」の画像を明滅させる（上流 `CActEnumSongs`）。
 
 use std::f64::consts::PI;
@@ -136,6 +136,10 @@ impl TitleView {
         match g.skin.tex("Graphics/2_background.jpg") {
             Some(t) => c.draw(&t, 0.0, 0.0),
             None => c.cover(Color32::from_rgb(20, 24, 40)),
+        }
+        // ロゴ（NX v2.0 は背景の動画の上に透明な 2_background.png を重ねる。動画の代わりは上の静止画）
+        if let Some(t) = g.skin.tex_optional("Graphics/2_background.png") {
+            c.draw(&t, 0.0, 0.0);
         }
         // 版（上流は左上 (2, 2) に白い文字で出す）
         let version = concat!("DTXmaniaNXT ", env!("CARGO_PKG_VERSION"));

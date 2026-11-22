@@ -70,6 +70,11 @@ impl Rank {
         }
     }
 
+    /// 番号（0 が SS、6 が E。スキンの `Rank/rank_{番号}.png`）
+    pub fn number(self) -> u8 {
+        self as u8
+    }
+
     fn name(self) -> &'static str {
         match self {
             Self::SS => "SS",

@@ -405,6 +405,8 @@ impl App {
         let mut sfx = Sfx::new();
         sfx.load();
         let menu_input = Normalizer::new(midi_profile(&config));
+        let history = History::open();
+        songs.set_stats(history.chart_stats());
         Self {
             window: None,
             gpu: None,
@@ -414,7 +416,7 @@ impl App {
             screen: Screen::Title,
             songs,
             config,
-            history: History::open(),
+            history,
             pending,
             message: None,
             menu_input,
@@ -659,6 +661,7 @@ impl App {
         // Esc でやめたときも結果は出す（記録は「最後まで遊んでいない」として残す）
         let cleared = p.finished();
         let session = self.history.save(p, Some(play_score(&finish, cleared)));
+        let stats = self.history.chart_stats();
         // New Record と前回のベストのバーは、今回より前のプレイと比べる
         let best = self.history.best_score(&p.path, session);
         let mut outcome = p.outcome();
@@ -696,6 +699,7 @@ impl App {
             lag_counts,
         });
         self.screen = Screen::Result(Box::new(outcome), Box::new(view));
+        self.songs.set_stats(stats);
     }
 
     /// 遊んでいる途中の曲があれば、そこまでの記録を残す（STAGE FAILED や、途中でやめたとき）
@@ -704,6 +708,7 @@ impl App {
             let now = view.frozen_ms().unwrap_or_else(|| p.now_ms());
             let finish = view.finish(p, now);
             self.history.save(p, Some(play_score(&finish, false)));
+            self.songs.set_stats(self.history.chart_stats());
         }
     }
 
@@ -1138,6 +1143,9 @@ impl App {
             Some(d) => self.move_cursor(d),
             None => {}
         }
+        if let Some(d) = mouse.clicked_sort {
+            self.change_sort(d);
+        }
     }
 
     fn on_select_key(&mut self, code: KeyCode) {
@@ -1180,8 +1188,11 @@ impl App {
                     self.view.fade_out();
                 }
             }
-            KeyCode::ArrowLeft => self.change_level(-1),
-            KeyCode::ArrowRight => self.change_level(1),
+            // v2 と同じく ← → で並べ替え、R でランダムに選ぶ。難易度は Tab（パッドの HH 2 回）
+            KeyCode::ArrowLeft => self.change_sort(-1),
+            KeyCode::ArrowRight => self.change_sort(1),
+            KeyCode::KeyR => self.pick_random(),
+            KeyCode::Tab => self.cycle_level(),
             KeyCode::F5 => self.select_action(ui::SelectAction::Rescan),
             KeyCode::KeyP => self.select_action(ui::SelectAction::Practice),
             _ => {}
@@ -1252,18 +1263,16 @@ impl App {
                 match lane {
                     DrumLane::HT => self.move_cursor(-1),
                     DrumLane::LT => self.move_cursor(1),
+                    // v2 と同じく SD と FT で並べ替え
+                    DrumLane::SD => self.change_sort(-1),
+                    DrumLane::FT => self.change_sort(1),
                     DrumLane::CY | DrumLane::RD => self.select_action(ui::SelectAction::Enter),
                     // 一番上で LC を叩いてもアプリは終わらない
                     DrumLane::LC => self.select_action(ui::SelectAction::Back),
                     DrumLane::HH | DrumLane::HHO => {
                         if self.last_hh_us.is_some_and(|t| at_us - t <= DOUBLE_HIT_US) {
                             self.last_hh_us = None;
-                            let before = self.songs.level;
-                            self.songs.cycle_level();
-                            if self.songs.level != before {
-                                self.sfx.play(Se::Change);
-                            }
-                            self.remember_level();
+                            self.cycle_level();
                         } else {
                             self.last_hh_us = Some(at_us);
                         }
@@ -1291,13 +1300,36 @@ impl App {
         }
     }
 
-    fn change_level(&mut self, delta: isize) {
+    /// 難易度をひとつ上へ（v2 と同じく、BASIC〜MASTER はそれぞれの声で知らせる）
+    fn cycle_level(&mut self) {
         let before = self.songs.level;
-        self.songs.change_level(delta);
+        self.songs.cycle_level();
         if self.songs.level != before {
-            self.sfx.play(Se::Change);
+            self.sfx.play(Se::level(self.songs.level));
         }
         self.remember_level();
+    }
+
+    /// 並べ替えを `delta` 個となりへ（v2 の ← → とパッドの SD・FT、アイコンを押す）
+    fn change_sort(&mut self, delta: isize) {
+        if delta == 0 {
+            return;
+        }
+        let kind = self.songs.sort().step(delta);
+        self.songs.set_sort(kind);
+        self.view.sorted(delta);
+        self.sfx.play(Se::Move);
+        self.sfx.play(Se::Sort(kind));
+    }
+
+    /// 今いる BOX の中から 1 つを選ぶ（v2 の R）
+    fn pick_random(&mut self) {
+        if self.songs.len() == 0 {
+            return;
+        }
+        self.songs.pick_random();
+        self.view.jumped();
+        self.sfx.play(Se::Move);
     }
 
     fn remember_level(&mut self) {
@@ -1639,8 +1671,10 @@ impl ApplicationHandler for App {
 struct SelectMouse {
     /// ホイールを回した行数（上が正）
     wheel: f32,
-    /// 押した曲バーが、選んでいる曲から何本先か
+    /// 押した曲の帯が、選んでいる曲から何本先か
     clicked_row: Option<isize>,
+    /// 押した並べ替えのアイコンが、選んでいるものから何個先か
+    clicked_sort: Option<isize>,
     /// 練習のポップアップへのマウスの操作
     popup: PopupMouse,
 }
@@ -1660,12 +1694,14 @@ impl SelectMouse {
                     _ => 0.0,
                 })
                 .sum();
-            let clicked_row = i
+            let clicked = i
                 .pointer
                 .primary_clicked()
                 .then(|| i.pointer.interact_pos())
                 .flatten()
-                .and_then(|p| SelectView::row_at(c.to_nx(p)));
+                .map(|p| c.to_nx(p));
+            let clicked_row = clicked.and_then(SelectView::row_at);
+            let clicked_sort = clicked.and_then(SelectView::sort_at);
             let popup = PopupMouse {
                 pressed: i
                     .pointer
@@ -1679,6 +1715,7 @@ impl SelectMouse {
             Self {
                 wheel,
                 clicked_row,
+                clicked_sort,
                 popup,
             }
         })
