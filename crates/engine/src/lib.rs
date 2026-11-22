@@ -6,6 +6,7 @@
 //! - [`analysis`] は記録から苦手な小節とフレーズを出す
 //! - [`lag`] は記録のずれから補正の値をすすめる
 //! - [`practice`] は練習の区間を周回ぶん並べ、セットごとに苦手の拍を数えて次の一手を決める
+//! - [`stroke`] はスネアのヘッドとリムの打ち分けを見る
 
 pub mod analysis;
 pub mod clock;
@@ -13,5 +14,6 @@ pub mod input;
 pub mod judge;
 pub mod lag;
 pub mod practice;
+pub mod stroke;
 
 pub use dtx::DrumLane;
