@@ -42,6 +42,9 @@ const LAY_MARGIN_MS: f64 = 500.0;
 /// 自動で鳴らす音（BGM・効果音など）を、今よりこれだけ先の分まで出力に渡しておく（ミリ秒）
 const AUTO_AHEAD_MS: f64 = 1500.0;
 
+/// 自動で叩いたときのレーンの光の強さ（ベロシティ）
+const AUTO_VELOCITY: u8 = 100;
+
 /// 画面の効果に使う出来事。演奏画面が毎フレーム取り出す
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Fx {
@@ -200,8 +203,14 @@ impl Play {
             .collect();
     }
 
-    pub fn load(path: &Path, input_offset_ms: f64, drum_sounds: bool) -> Result<Self> {
-        Self::open(path, input_offset_ms, drum_sounds, None)
+    /// `auto` は自動で叩くレーン（上流の AutoPlay）
+    pub fn load(
+        path: &Path,
+        input_offset_ms: f64,
+        drum_sounds: bool,
+        auto: &[DrumLane],
+    ) -> Result<Self> {
+        Self::open(path, input_offset_ms, drum_sounds, auto, None)
     }
 
     /// 区間を練習する
@@ -209,15 +218,17 @@ impl Play {
         path: &Path,
         input_offset_ms: f64,
         drum_sounds: bool,
+        auto: &[DrumLane],
         options: PracticeOptions,
     ) -> Result<Self> {
-        Self::open(path, input_offset_ms, drum_sounds, Some(options))
+        Self::open(path, input_offset_ms, drum_sounds, auto, Some(options))
     }
 
     fn open(
         path: &Path,
         input_offset_ms: f64,
         drum_sounds: bool,
+        auto: &[DrumLane],
         practice: Option<PracticeOptions>,
     ) -> Result<Self> {
         let bytes =
@@ -235,10 +246,17 @@ impl Play {
             .map(|c| tempo.chip_ms(c))
             .fold(0.0, f64::max);
         let end_ms = last_chip_ms + 2000.0;
-        let chart_sounds = ChartSounds::new(&chart, &tempo);
+        let mut chart_sounds = ChartSounds::new(&chart, &tempo);
+        // 自動で叩くレーンの音は、BGM と同じく時刻を決めて鳴らす（叩いた音の設定に関わらず）
+        chart_sounds.add_auto_notes(
+            notes
+                .iter()
+                .filter(|n| auto.contains(&n.lane))
+                .map(|n| (n.ms, n.wav)),
+        );
         // 叩き分けの寄せ方は曲全体の音符で決める（練習の区間によって判定が変わらないように）
         let groups = LaneGroups::default().effective_for(&notes);
-        let (judge, practice) = match practice {
+        let (mut judge, practice) = match practice {
             None => (
                 Judge::with_groups(notes, HitWindows::default(), groups),
                 None,
@@ -248,6 +266,7 @@ impl Play {
                 Some(Practice::new(options, &tempo, notes)),
             ),
         };
+        judge.set_auto(auto);
         let start_ms = practice
             .as_ref()
             .map_or(-LEAD_IN_MS, |p| p.first_audio_ms() - PRACTICE_LEAD_IN_MS);
@@ -498,9 +517,19 @@ impl Play {
         let now = self.now_ms();
         self.lay_laps(now);
         self.lay_auto(now);
-        let misses = self.judge.advance(now);
-        self.record(&misses, None, None);
-        self.show(&misses);
+        let events = self.judge.advance(now);
+        // 自動で叩いた音符は、叩いたときと同じくレーンを光らせる（音は時刻を決めて鳴らしてある）
+        for e in &events {
+            let lane = self.judge.notes()[e.note].lane;
+            if e.offset_ms.is_none() && self.judge.is_auto(lane) {
+                self.push_fx(Fx::Hit {
+                    lane,
+                    velocity: AUTO_VELOCITY,
+                });
+            }
+        }
+        self.record(&events, None, None);
+        self.show(&events);
     }
 
     /// ポートから届いた MIDI（`msgs` は `raw.bytes` を読んだもの）
@@ -549,24 +578,6 @@ impl Play {
         self.section_audio = None;
     }
 
-    /// 時刻の来た音符を自動で叩く（画面を確かめるための開発用。`DTXMANIANXT_AUTOPLAY=1` で起動）
-    pub fn autoplay(&mut self) {
-        let at = host_us();
-        let now = self.song_ms_at(at) - self.input_offset_ms;
-        let notes = self.judge.notes();
-        let from = notes.partition_point(|n| n.ms < now - 100.0);
-        let due: Vec<DrumLane> = notes[from..]
-            .iter()
-            .enumerate()
-            .take_while(|(_, n)| n.ms <= now)
-            .filter(|&(i, _)| !self.judge.is_done(from + i))
-            .map(|(_, n)| n.lane)
-            .collect();
-        for lane in due {
-            self.hit(lane, 100, at, None, None);
-        }
-    }
-
     pub fn on_key(&mut self, lane: DrumLane, at_us: i64) {
         self.last_input = Some(LastInput {
             source: crate::inputs::KEYBOARD.into(),
@@ -590,7 +601,8 @@ impl Play {
         let ms = self.song_ms_at(at_us) - self.input_offset_ms;
         self.push_fx(Fx::Hit { lane, velocity });
         let events = self.judge.hit(Hit { ms, lane, velocity });
-        if events.is_empty() {
+        // 自動で叩くレーンを叩いても空打ちには数えない
+        if events.is_empty() && !self.judge.is_auto(lane) {
             let stray = StrayHit {
                 at_ms: ms,
                 lane,
@@ -647,6 +659,21 @@ impl Play {
         }
     }
 
+    /// 自動で叩くレーンがある（ベストの記録には入れない）
+    pub fn has_auto(&self) -> bool {
+        self.judge.has_auto()
+    }
+
+    /// 譜面の音符をすべて自動で叩く
+    fn all_auto(&self) -> bool {
+        self.judge.has_auto()
+            && self
+                .judge
+                .notes()
+                .iter()
+                .all(|n| self.judge.is_auto(n.lane))
+    }
+
     /// 今までの成績
     pub fn outcome(&self) -> Outcome {
         let (mean, sd) = mean_and_sd(&self.hit_offsets);
@@ -696,6 +723,10 @@ impl Play {
         }
         for e in events {
             let note = &self.judge.notes()[e.note];
+            // 自動で叩いた音符は、苦手やくせを出す記録に入れない
+            if self.judge.is_auto(note.lane) {
+                continue;
+            }
             let beat_pos = self
                 .measure_beats
                 .get(note.at.measure as usize)
@@ -713,14 +744,26 @@ impl Play {
         }
     }
 
-    /// 記録に残す形にする。何も叩かず何も過ぎていなければ None（すぐやめたときは残さない）
+    /// 記録に残す形にする。何も叩かず何も過ぎていなければ None（すぐやめたときは残さない）。
+    /// 音符をすべて自動で叩いたときも残さない（上流と同じ）
     pub fn session(&self) -> Option<Session> {
+        if self.all_auto() {
+            return None;
+        }
         let w = self.judge.windows();
         // 設定は JSON で残す（数は有限なので Display のままで JSON の数になる）
         let mut settings = format!(
             "{{\"input_offset_ms\":{},\"windows_ms\":[{},{},{},{}],\"drum_sounds\":{}",
             self.input_offset_ms, w.perfect, w.great, w.good, w.poor, self.drum_sounds
         );
+        let auto: Vec<String> = DrumLane::ALL
+            .into_iter()
+            .filter(|&l| self.judge.is_auto(l))
+            .map(|l| format!("\"{}\"", l.name()))
+            .collect();
+        if !auto.is_empty() {
+            settings += &format!(",\"auto\":[{}]", auto.join(","));
+        }
         if let Some(p) = &self.practice {
             let o = p.options;
             let speed = match o.speed {

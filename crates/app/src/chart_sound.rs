@@ -66,6 +66,28 @@ impl ChartSounds {
         sounds
     }
 
+    /// 自動で叩くレーンの音符（時刻、音）を、自動で鳴らす音に足す（音量と左右はその音のもの）
+    pub fn add_auto_notes(&mut self, notes: impl IntoIterator<Item = (f64, u16)>) {
+        let added: Vec<AutoVoice> = notes
+            .into_iter()
+            .map(|(ms, wav)| {
+                let (gain, pan) = self.gain_pan(wav);
+                AutoVoice {
+                    ms,
+                    wav,
+                    gain,
+                    pan,
+                    len_ms: None,
+                }
+            })
+            .collect();
+        if added.is_empty() {
+            return;
+        }
+        self.auto.extend(added);
+        self.auto.sort_by(|a, b| a.ms.total_cmp(&b.ms));
+    }
+
     /// 読んでおく音（自動で鳴らす音、空打ちの音、見えない音符）
     pub fn wavs(&self) -> impl Iterator<Item = u16> + '_ {
         self.auto
@@ -140,6 +162,17 @@ mod tests {
             ]
         );
         assert_eq!(s.gain_pan(9), (1.0, 0.0));
+    }
+
+    #[test]
+    fn auto_notes_join_in_time_order() {
+        let mut s = sounds("#BPM 120\n#VOLUME05 50\n#00101: 01\n#00201: 02\n#00112: 0005\n");
+        s.add_auto_notes([(3000.0, 5)]);
+        let order: Vec<(f64, u16, f32)> = s.auto.iter().map(|a| (a.ms, a.wav, a.gain)).collect();
+        assert_eq!(
+            order,
+            vec![(2000.0, 1, 1.0), (3000.0, 5, 0.5), (4000.0, 2, 1.0)]
+        );
     }
 
     #[test]

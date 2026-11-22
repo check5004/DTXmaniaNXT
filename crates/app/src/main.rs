@@ -33,6 +33,7 @@ mod practice_popup;
 mod result_training;
 mod result_view;
 mod select;
+mod settings;
 mod sfx;
 mod shutter;
 mod skin;
@@ -237,6 +238,8 @@ impl Gpu {
 struct LoadSettings {
     input_offset_ms: f64,
     drum_sounds: bool,
+    /// 自動で叩くレーン
+    auto: Vec<DrumLane>,
     /// MIDI のポートごとの名前と割り当て（[`MidiIn::ports`] と同じ並び）
     inputs: Vec<(String, MidiProfile)>,
 }
@@ -246,8 +249,10 @@ impl LoadSettings {
     fn load(self, path: &std::path::Path, practice: Option<PracticeOptions>) -> Result<Play> {
         let started = Instant::now();
         let mut p = match practice {
-            Some(o) => Play::load_practice(path, self.input_offset_ms, self.drum_sounds, o)?,
-            None => Play::load(path, self.input_offset_ms, self.drum_sounds)?,
+            Some(o) => {
+                Play::load_practice(path, self.input_offset_ms, self.drum_sounds, &self.auto, o)?
+            }
+            None => Play::load(path, self.input_offset_ms, self.drum_sounds, &self.auto)?,
         };
         p.set_inputs(self.inputs);
         // 「叩いても音が出ない」と言われたとき、ログで分かるように
@@ -325,7 +330,7 @@ struct App {
     show_play_info: bool,
     /// 演奏中の短い知らせ（消す時刻）
     toast: Option<(String, Instant)>,
-    /// 音符を自動で叩く（開発用。`DTXMANIANXT_AUTOPLAY=1`）
+    /// 音符をすべて自動で叩く（開発用。`DTXMANIANXT_AUTOPLAY=1`。設定の自動演奏より優先）
     autoplay: bool,
     /// 新しい版を探して落とし、終えるときに入れ替える
     updater: update::Updater,
@@ -596,6 +601,12 @@ impl App {
         LoadSettings {
             input_offset_ms: self.config.input_offset_ms,
             drum_sounds: self.config.drum_sounds,
+            // 開発用の DTXMANIANXT_AUTOPLAY=1 なら全部
+            auto: if self.autoplay {
+                DrumLane::ALL.to_vec()
+            } else {
+                self.config.settings.auto_lanes()
+            },
             inputs: self
                 .ports()
                 .iter()
@@ -775,8 +786,12 @@ impl App {
         let cleared = p.finished();
         let session = self.history.save(p, Some(play_score(&finish, cleared)));
         let stats = self.history.chart_stats();
-        // New Record と前回のベストのバーは、今回より前のプレイと比べる
-        let best = self.history.best_score(&p.path, session);
+        // New Record と前回のベストのバーは、今回より前のプレイと比べる。自動で叩くレーンがあれば比べない
+        let best = if p.has_auto() {
+            None
+        } else {
+            self.history.best_score(&p.path, session)
+        };
         let mut outcome = p.outcome();
         if !practice {
             let weak = self.history.weak_map(
@@ -921,9 +936,6 @@ impl App {
             } else {
                 // 判定の線より上に見えている時間
                 play.view_ahead_ms = play_view::view_ahead_ms(self.config.scroll_px_per_ms);
-                if self.autoplay {
-                    play.autoplay();
-                }
                 play.update();
                 view.feed(play);
                 if stage_failed && play.practice.is_none() && view.gauge_empty() {
@@ -1101,6 +1113,10 @@ impl App {
                     _ => return,
                 }
                 c.save();
+            }
+            ConfigAction::Change(key, delta) => {
+                self.config.settings.change(key, delta);
+                self.config.save();
             }
             ConfigAction::AssignPad(lane, port, note) => {
                 let ports = self.ports().to_vec();
