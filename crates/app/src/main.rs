@@ -787,8 +787,9 @@ impl App {
         let cleared = p.finished();
         let session = self.history.save(p, Some(play_score(&finish, cleared)));
         let stats = self.history.chart_stats();
-        // New Record と前回のベストのバーは、今回より前のプレイと比べる。自動で叩くレーンがあれば比べない
-        let best = if p.has_auto() {
+        // New Record と前回のベストのバーは、今回より前のプレイと比べる。自動で叩くレーンがあるときと、
+        // 早送りか巻き戻しをしたときは比べない
+        let best = if p.has_auto() || p.skipped() {
             None
         } else {
             self.history.best_score(&p.path, session)
@@ -945,7 +946,8 @@ impl App {
                 play.view_ahead_ms = play_view::view_ahead_ms(self.config.scroll_px_per_ms);
                 play.update();
                 view.feed(play);
-                if stage_failed && play.practice.is_none() && view.gauge_empty() {
+                if stage_failed && play.practice.is_none() && !play.skipped() && view.gauge_empty()
+                {
                     // 上流と同じく、音を止めて STAGE FAILED を出し、選曲に戻る（記録は残す）
                     view.start_failure(play.now_ms() + self.config.visual_offset_ms);
                     play.silence();
@@ -1152,6 +1154,10 @@ impl App {
                 self.config.settings.set_raw(key, v);
                 self.config.save();
             }
+            ItemId::Practice(d) => {
+                config_view::set_drill(d, &mut self.config, v);
+                self.config.save();
+            }
             ItemId::DeviceUse(port) => {
                 let ports = self.ports().to_vec();
                 if let Some(d) = inputs::device_mut(&mut self.config, &ports, port) {
@@ -1311,6 +1317,28 @@ impl App {
                     self.restart(path, Some(o));
                 }
                 return;
+            }
+            // 上流 Pause（NX の既定は Pause キー）
+            KeyCode::Space | KeyCode::Pause => {
+                play.toggle_pause();
+                return;
+            }
+            KeyCode::ArrowLeft | KeyCode::ArrowRight => {
+                // 上流 SkipForward / SkipBackward
+                let width = self.config.settings.number(settings::SKIP_MS) as f64;
+                let d = if code == KeyCode::ArrowLeft {
+                    -width
+                } else {
+                    width
+                };
+                let Some(to) = play.seek(d) else {
+                    return;
+                };
+                format!(
+                    "{} {:.0} 秒へ（このプレイは記録に残しません）",
+                    if d < 0.0 { "巻き戻し" } else { "早送り" },
+                    to.max(0.0) / 1000.0
+                )
             }
             KeyCode::Comma | KeyCode::Period if play.practice.is_some() => {
                 play.nudge_speed(if code == KeyCode::Comma { -1 } else { 1 });
@@ -1813,6 +1841,9 @@ impl App {
                         show_info: self.show_play_info,
                     },
                 );
+                if play.paused() {
+                    ui::pause_overlay(&ctx, &c, play.practice.is_some());
+                }
                 if let Some(t) = toast {
                     ui::play_toast(&ctx, &c, t);
                 }

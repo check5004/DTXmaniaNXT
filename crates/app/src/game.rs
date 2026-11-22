@@ -184,6 +184,10 @@ pub struct Play {
     /// 音が出ないときの時計の起点（ホスト時刻）。この時刻が時間軸の `start_ms`
     fallback_origin_us: i64,
     start_ms: f64,
+    /// 一時停止しているなら、止めた曲の時刻
+    paused_ms: Option<f64>,
+    /// 早送りか巻き戻しをした（上流の練習扱い。記録に残さず、STAGE FAILED にもしない）
+    skipped: bool,
 }
 
 impl Play {
@@ -353,6 +357,8 @@ impl Play {
             mappers: HashMap::new(),
             fallback_origin_us: host_us(),
             start_ms,
+            paused_ms: None,
+            skipped: false,
         };
         play.lay_laps(start_ms);
         play.lay_auto(start_ms);
@@ -465,8 +471,11 @@ impl Play {
         &self.notes_per_measure
     }
 
-    /// ホスト時刻 `host_us` の曲の時刻
+    /// ホスト時刻 `host_us` の曲の時刻（一時停止しているあいだは止めた時刻）
     pub fn song_ms_at(&self, at_us: i64) -> f64 {
+        if let Some(ms) = self.paused_ms {
+            return ms;
+        }
         self.audio
             .as_ref()
             .and_then(|a| a.song_ms_at(at_us))
@@ -482,8 +491,84 @@ impl Play {
         self.practice.is_none() && self.now_ms() > self.end_ms
     }
 
+    /// 一時停止する・つづける（上流 Pause）。止めているあいだは音も曲の時刻も止まり、叩いても数えない。
+    /// 止めたら true
+    pub fn toggle_pause(&mut self) -> bool {
+        match self.paused_ms.take() {
+            Some(ms) => {
+                if let Some(a) = &self.audio {
+                    a.set_paused(false);
+                }
+                // 音が出ないときの時計は、止めていたぶん起点を後ろへずらす
+                self.fallback_origin_us = host_us() - ((ms - self.start_ms) * 1000.0) as i64;
+                false
+            }
+            None => {
+                let ms = self.now_ms();
+                if let Some(a) = &self.audio {
+                    a.set_paused(true);
+                }
+                self.paused_ms = Some(ms);
+                true
+            }
+        }
+    }
+
+    pub fn paused(&self) -> bool {
+        self.paused_ms.is_some()
+    }
+
+    /// 早送りか巻き戻しをした
+    pub fn skipped(&self) -> bool {
+        self.skipped
+    }
+
+    /// 曲の時刻を `delta_ms` だけ先へ（マイナスなら前へ）飛ぶ（上流 SkipForward / SkipBackward）。
+    /// 練習では使わない（None）。飛んだプレイは上流と同じく練習扱いで、記録に残さない。飛んだ先の時刻を返す
+    pub fn seek(&mut self, delta_ms: f64) -> Option<f64> {
+        if self.practice.is_some() {
+            return None;
+        }
+        let now = self.now_ms();
+        let to = (now + delta_ms).clamp(self.start_ms, self.end_ms.max(self.start_ms));
+        let d = to - now;
+        self.skipped = true;
+        if d == 0.0 {
+            return Some(to);
+        }
+        if let Some(a) = self.audio.as_mut() {
+            a.seek(d);
+        }
+        self.fallback_origin_us -= (d * 1000.0) as i64;
+        if self.paused_ms.is_some() {
+            self.paused_ms = Some(to);
+        }
+        self.judge.jump_to(to);
+        // 飛んだ先でまだ鳴っているはずの自動の音（長い BGM など）は途中から鳴らし直し、その先は `lay_auto` に任せる
+        self.auto_next = self.chart_sounds.auto.partition_point(|v| v.ms < to);
+        if let Some(a) = self.audio.as_mut() {
+            let rate = f64::from(a.rate());
+            for v in &self.chart_sounds.auto[..self.auto_next] {
+                let Some(s) = self.sounds.get(&v.wav) else {
+                    continue;
+                };
+                let len =
+                    (s.frames() as f64 / rate * 1000.0).min(v.len_ms.unwrap_or(f64::INFINITY));
+                if v.ms + len > to {
+                    a.play_chip(s, v.ms, v.len_ms, v.gain, v.pan);
+                }
+            }
+        }
+        self.lay_auto(to);
+        log::info!("jumped from {now:.0}ms to {to:.0}ms");
+        Some(to)
+    }
+
     /// 時間を進め、見逃しを判定する
     pub fn update(&mut self) {
+        if self.paused() {
+            return;
+        }
         let now = self.now_ms();
         self.lay_laps(now);
         self.lay_auto(now);
@@ -568,6 +653,10 @@ impl Play {
         articulation: Option<Articulation>,
         hh_pedal: Option<u8>,
     ) {
+        // 上流と同じく、止めているあいだは叩いても何もしない
+        if self.paused() {
+            return;
+        }
         let ms = self.song_ms_at(at_us) - self.input_offset_ms;
         self.push_fx(Fx::Hit { lane, velocity });
         let events = self.judge.hit(Hit { ms, lane, velocity });
@@ -713,9 +802,9 @@ impl Play {
     }
 
     /// 記録に残す形にする。何も叩かず何も過ぎていなければ None（すぐやめたときは残さない）。
-    /// 音符をすべて自動で叩いたときも残さない（上流と同じ）
+    /// 音符をすべて自動で叩いたときと、早送りか巻き戻しをしたときも残さない（上流と同じ）
     pub fn session(&self) -> Option<Session> {
-        if self.all_auto() {
+        if self.all_auto() || self.skipped {
             return None;
         }
         let w = self.judge.windows();

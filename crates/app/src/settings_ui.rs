@@ -242,6 +242,7 @@ pub enum Icon {
     Speaker,
     Midi,
     Folder,
+    Loop,
     Gear,
 }
 
@@ -329,6 +330,18 @@ pub fn icon(c: &Canvas, kind: Icon, x: f32, y: f32, size: f32, color: Color32) {
             (21.0, 19.0),
             (3.0, 19.0),
         ]),
+        Icon::Loop => {
+            arc(12.0, 12.0, 7.0, 150.0, 330.0);
+            arc(12.0, 12.0, 7.0, -30.0, 150.0);
+            painter.add(PathShape::line(
+                vec![p(18.0, 4.5), p(18.6, 8.6), p(14.6, 8.9)],
+                PathStroke::new(w, color),
+            ));
+            painter.add(PathShape::line(
+                vec![p(6.0, 19.5), p(5.4, 15.4), p(9.4, 15.1)],
+                PathStroke::new(w, color),
+            ));
+        }
         Icon::Gear => {
             painter.circle_stroke(p(12.0, 12.0), 3.0 * k * c.scale(), stroke);
             for (a, b) in [

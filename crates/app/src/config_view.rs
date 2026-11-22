@@ -21,6 +21,9 @@ use std::time::{Duration, Instant};
 use dtx::DrumLane;
 use egui::Color32;
 use engine::input::Preset;
+use engine::practice::{
+    LoopStyle, PassRule, SPEED_MAX, SPEED_MIN, SPEED_STEP, SpeedPlan, snap_speed,
+};
 use library::Progress;
 use winit::keyboard::KeyCode;
 
@@ -30,6 +33,7 @@ use crate::inputs::{KEYBOARD, LaneSource, lane_label};
 use crate::settings::{self, Group, Kind};
 use crate::settings_ui::{self as ui, Icon, Pad};
 use crate::sfx::Se;
+use crate::stretch::Pitch;
 use crate::text::Style;
 use crate::title_view::draw_scanning;
 
@@ -56,11 +60,12 @@ pub enum Cat {
     Sound,
     Input,
     Songs,
+    Practice,
     App,
 }
 
-/// 左の列の並び。「練習」は練習のポップアップの作り直し（0.4.0）を取り込んでから足す
-pub const CATS: [Cat; 8] = [
+/// 左の列の並び
+pub const CATS: [Cat; 9] = [
     Cat::Fav,
     Cat::Play,
     Cat::View,
@@ -68,6 +73,7 @@ pub const CATS: [Cat; 8] = [
     Cat::Sound,
     Cat::Input,
     Cat::Songs,
+    Cat::Practice,
     Cat::App,
 ];
 
@@ -82,6 +88,7 @@ impl Cat {
             Cat::Sound => Some(Group::Sound),
             Cat::Input => Some(Group::Input),
             Cat::Songs => Some(Group::Songs),
+            Cat::Practice => Some(Group::Practice),
             Cat::App => Some(Group::App),
         }
     }
@@ -99,6 +106,9 @@ impl Cat {
             Cat::Sound => "音量と、鳴らすもの。",
             Cat::Input => "パッドとキーの割り当てと、MIDI 機器ごとの設定。",
             Cat::Songs => "曲のフォルダと、曲の探し直し。",
+            Cat::Practice => {
+                "区間練習の決めごとの既定です。選曲の練習のポップアップで変えたものも、ここに残ります。"
+            }
             Cat::App => "更新など、アプリ全体のこと。",
         }
     }
@@ -112,6 +122,7 @@ impl Cat {
             Cat::Sound => Icon::Speaker,
             Cat::Input => Icon::Midi,
             Cat::Songs => Icon::Folder,
+            Cat::Practice => Icon::Loop,
             Cat::App => Icon::Gear,
         }
     }
@@ -142,12 +153,26 @@ pub enum Setting {
     AutoUpdate,
 }
 
+/// 練習の決めごと（練習のポップアップと同じ項目。区間のほか）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Drill {
+    Style,
+    Rule,
+    /// 速度の決め方（段階アップか固定か）
+    Ladder,
+    Speed,
+    Target,
+    Pitch,
+}
+
 /// 一覧の項目
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ItemId {
     Value(Setting),
     /// 設定の表（[`crate::settings`]）の項目（キー）
     Table(&'static str),
+    /// 練習の決めごとの既定
+    Practice(Drill),
     AddSongDir,
     SongDir(usize),
     Rescan,
@@ -529,6 +554,86 @@ fn value_row(s: Setting, c: &Config) -> Row {
     }
 }
 
+/// 練習の決めごとを一覧の数にする（選択肢は何番目か。段階アップは 0、固定は 1）
+pub fn get_drill(d: Drill, c: &Config) -> i64 {
+    let at = |i: Option<usize>| i.unwrap_or(0) as i64;
+    match d {
+        Drill::Style => at(LoopStyle::ALL.iter().position(|&s| s == c.loop_style())),
+        Drill::Rule => at(PassRule::ALL.iter().position(|&r| r == c.pass_rule())),
+        Drill::Ladder => i64::from(!c.practice_ladder),
+        Drill::Speed => i64::from(snap_speed(i64::from(c.practice_speed))),
+        Drill::Target => at(SpeedPlan::TARGETS
+            .iter()
+            .position(|&t| t == snap_speed(i64::from(c.practice_target)))),
+        Drill::Pitch => at(Pitch::ALL.iter().position(|&p| p == c.pitch())),
+    }
+}
+
+/// [`get_drill`] の形の値を設定に書く
+pub fn set_drill(d: Drill, c: &mut Config, v: i64) {
+    let pick = |n: usize| v.clamp(0, n as i64 - 1) as usize;
+    match d {
+        Drill::Style => c.practice_style = LoopStyle::ALL[pick(2)].name().to_owned(),
+        Drill::Rule => c.practice_rule = PassRule::ALL[pick(3)].name().to_owned(),
+        Drill::Ladder => c.practice_ladder = v == 0,
+        Drill::Speed => c.practice_speed = snap_speed(v),
+        Drill::Target => {
+            c.practice_target = SpeedPlan::TARGETS[pick(SpeedPlan::TARGETS.len())];
+        }
+        Drill::Pitch => c.practice_pitch = Pitch::ALL[pick(2)].name().to_owned(),
+    }
+}
+
+/// 練習の決めごとの行
+fn drill_row(d: Drill, c: &Config) -> Row {
+    let id = ItemId::Practice(d);
+    let at = get_drill(d, c);
+    let def = Some(get_drill(d, &Config::default()));
+    let pick = |name: &str, labels: &[&'static str], desc: &str| {
+        choice(id, name, labels, at as usize, def.map(|v| v as usize), desc)
+    };
+    match d {
+        Drill::Style => pick(
+            "つなぎ方",
+            &["切れ目なく", "毎回区切る"],
+            "切れ目なく: 区間の終わりから切れ目なく頭へ戻ります（ビート向き）。\n毎回区切る: 次の小節の頭の 1 打まで叩き、助走からやり直します（フィル向き）。",
+        ),
+        Drill::Rule => pick(
+            "合格の基準",
+            &["Easy", "Normal", "Strict"],
+            "Easy: MISS が 0 なら合格。\nNormal: フルコンボ（MISS と POOR が 0）で合格。\nStrict: フルコンボで、PERFECT が 8 割以上なら合格。",
+        ),
+        Drill::Ladder => pick(
+            "速度の決め方",
+            &["段階アップ", "固定"],
+            "段階アップ: 合格を重ねるたびに速度を上げ、不合格が続くと下げます。\n固定: 同じ速度のまま回ります（練習中も , と . キーで 5% ずつ変えられます）。",
+        ),
+        Drill::Speed => number(
+            id,
+            if c.practice_ladder {
+                "始めの速度"
+            } else {
+                "速度"
+            },
+            at,
+            (i64::from(SPEED_MIN), i64::from(SPEED_MAX), i64::from(SPEED_STEP)),
+            def,
+            Fmt::Unit("%"),
+            "練習の速度です（曲の速さの何 % か）。段階アップなら 1 周目の速度です。".to_owned(),
+        ),
+        Drill::Target => pick(
+            "目標の速度",
+            &["100%", "105%", "110%"],
+            "段階アップの目標の速度です。100% より上にすると、本番に余裕ができます。固定のときは使いません。",
+        ),
+        Drill::Pitch => pick(
+            "遅くしたときの音程",
+            &["保つ", "一緒に下げる"],
+            "保つ: 音程を保ったまま遅くします。\n一緒に下げる: 音程ごと遅くします（テープと同じ）。",
+        ),
+    }
+}
+
 /// 設定の表の項目の行
 fn table_row(d: &'static settings::Def, v: &settings::Values) -> Row {
     let id = ItemId::Table(d.key);
@@ -821,6 +926,20 @@ pub fn rows(page: Page, info: &ConfigInfo<'_>) -> Vec<Row> {
                 None,
             ));
             s.table(Group::Songs, v);
+        }
+        Page::Cat(Cat::Practice) => {
+            let r = s.at("");
+            for d in [
+                Drill::Style,
+                Drill::Rule,
+                Drill::Ladder,
+                Drill::Speed,
+                Drill::Target,
+                Drill::Pitch,
+            ] {
+                r.push(drill_row(d, c));
+            }
+            s.table(Group::Practice, v);
         }
         Page::Cat(Cat::App) => {
             s.at("").push(value_row(Setting::AutoUpdate, c));
