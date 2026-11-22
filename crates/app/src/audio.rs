@@ -245,6 +245,9 @@ fn apply_master(data: &mut [f32], channels: usize, from: f32, to: f32) {
     }
 }
 
+/// 同じ音を同時に鳴らせる数（上流の PolyphonicSounds の既定）。これを超えると、同じ音の一番古いものを止める
+pub const MAX_OVERLAP: usize = 4;
+
 /// 叩いてから音が鳴るまでの時刻（ホスト時刻、マイクロ秒）。FPS と遅延の表示に使う
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HitTiming {
@@ -280,22 +283,41 @@ pub struct OutputLatency {
 enum Command {
     /// 決めたフレームから鳴らす（曲の BGM など）
     At(Voice),
-    /// できるだけ早く鳴らす（叩いた音）。`tag` で後から止められる。
-    /// `timing` があれば、鳴らし始めた時刻を入れて知らせ返す
+    /// できるだけ早く鳴らす（叩いた音）。`tag` で後から止められる
     Now {
         sound: Sound,
         gain: f32,
         pan: f32,
         tag: u8,
         bus: Bus,
+        /// 同じ音の重なりを [`MAX_OVERLAP`] までにする（譜面の音）
+        limit: bool,
+        /// 叩いた時刻。あれば、鳴らし始めた時刻を入れて知らせ返す（FPS と遅延の表示）
         timing: Option<HitTiming>,
     },
-    /// `tag` の音を短いフェードで止める（選曲のプレビューの音）。鳴らす予定でまだ鳴り始めていない音は取りやめる
+    /// `tag` と同じビットを持つ音を短いフェードで止める（選曲のプレビューの音、メトロノーム）。
+    /// 鳴らす予定でまだ鳴り始めていない音は取りやめる
     Stop(u8),
-    /// このフレームより後から鳴らす予定の音を取りやめる（練習で並べ直す周の音）
+    /// `tag` と同じビットを持つ、もう鳴り始めた音だけを短いフェードで止める（ハイハット、チョーク。
+    /// 先に鳴らす予定の自動の音は残す）
+    StopRinging(u8),
+    /// 決めたフレームで、`tag` と同じビットを持ち、そのときまでに鳴り始めた音を止める（自動で叩く左ペダルなど）
+    StopAt { frame: u64, tag: u8 },
+    /// このフレームより後から鳴らす予定の音と止める予定を取りやめる（練習で並べ直す周の音）
     CancelFrom(u64),
     /// 鳴っている音と、鳴らす予定の音をすべて短いフェードで止める（早送り・巻き戻し）
     StopAll,
+}
+
+/// 同じ音の重なりの数え方
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Overlap {
+    /// 数えない（練習の周の BGM、クリック、画面の効果音）
+    Free,
+    /// 鳴り始めたら、同じ音の重なりを数える
+    Pending,
+    /// 数えた（後から鳴る同じ音の重なりに入る）
+    Counted,
 }
 
 /// 鳴らす音 1 つ。音の `skip` フレーム目から `len` フレームを、出力の `start` フレーム目から鳴らす
@@ -311,10 +333,12 @@ struct Voice {
     fade_in: bool,
     /// 途中で切るので終わりにフェードをかける
     fade_out: bool,
-    /// 止めるときの目印（0 は止めない）
+    /// 止めるときの目印（ビットの組。0 は止めない）
     tag: u8,
     /// 音量をかける系統
     bus: Bus,
+    /// 同じ音の重なりの数え方
+    overlap: Overlap,
 }
 
 impl Voice {
@@ -331,11 +355,21 @@ impl Voice {
             fade_out: false,
             tag: 0,
             bus,
+            overlap: Overlap::Free,
         }
     }
 
     fn end(&self) -> u64 {
         self.start + self.len
+    }
+
+    /// 出力の `at` フレーム目から `fade` フレームのフェードで止める（もっと前に終わるならそのまま）
+    fn cut(&mut self, at: u64, fade: u64) {
+        let len = at.saturating_sub(self.start) + fade;
+        if len < self.len {
+            self.len = len;
+            self.fade_out = true;
+        }
     }
 
     /// 出力の `frames_done` フレーム目から `n` フレームぶん（`data`）に足す。`fade` はフェードのフレーム数。
@@ -365,6 +399,128 @@ impl Voice {
             if channels > 1 {
                 data[dst + 1] += self.sound.0[src + 1] * g * right;
             }
+        }
+    }
+}
+
+/// 出力のコールバックの中で持つ、鳴らす音と止める予定
+struct Mixer {
+    voices: Vec<Voice>,
+    /// 決めたフレームで止める予定（フレーム、目印）
+    stops: Vec<(u64, u8)>,
+    /// 同じ音の重なりを数えるときの作業用（コールバックの中で毎回確保しないように使い回す）
+    ringing: Vec<usize>,
+    /// 止めるときのフェードのフレーム数
+    fade: u64,
+}
+
+impl Mixer {
+    fn new(fade: u64) -> Self {
+        Self {
+            voices: Vec::with_capacity(1024),
+            stops: Vec::with_capacity(256),
+            ringing: Vec::with_capacity(16),
+            fade,
+        }
+    }
+
+    /// 命令を 1 つ受ける。`now` はこれから混ぜるバッファの頭のフレーム
+    fn command(&mut self, cmd: Command, now: u64) {
+        match cmd {
+            Command::At(v) => self.voices.push(v),
+            Command::Now {
+                sound,
+                gain,
+                pan,
+                tag,
+                bus,
+                limit,
+                ..
+            } => {
+                let mut v = Voice::whole(sound, now, gain, bus);
+                v.pan = pan;
+                v.tag = tag;
+                if limit {
+                    v.overlap = Overlap::Pending;
+                }
+                self.voices.push(v);
+            }
+            Command::Stop(tag) => {
+                // まだ鳴り始めていない音は捨て、鳴っている音はフェードで止める
+                self.voices.retain(|v| v.tag & tag == 0 || v.start < now);
+                for v in self.voices.iter_mut().filter(|v| v.tag & tag != 0) {
+                    v.cut(now, self.fade);
+                }
+            }
+            Command::StopRinging(tag) => {
+                for v in self
+                    .voices
+                    .iter_mut()
+                    .filter(|v| v.tag & tag != 0 && v.start <= now)
+                {
+                    v.cut(now, self.fade);
+                }
+            }
+            Command::StopAt { frame, tag } => self.stops.push((frame, tag)),
+            Command::CancelFrom(frame) => {
+                self.voices.retain(|v| v.start < frame);
+                self.stops.retain(|&(f, _)| f < frame);
+            }
+            Command::StopAll => {
+                // まだ始まっていない音は捨て、鳴っている音はフェードで止める
+                self.voices.retain(|v| v.start < now);
+                for v in self.voices.iter_mut() {
+                    v.cut(now, self.fade);
+                }
+                self.stops.clear();
+            }
+        }
+    }
+
+    /// `now` から `n` フレームのバッファを混ぜる前に、そこで来る止める予定を当て、
+    /// 鳴り始める譜面の音ごとに同じ音の重なりを [`MAX_OVERLAP`] までにする
+    fn prepare(&mut self, now: u64, n: u64) {
+        let end = now + n;
+        let mut i = 0;
+        while i < self.stops.len() {
+            let (frame, tag) = self.stops[i];
+            if frame < end {
+                self.stops.swap_remove(i);
+                let at = frame.max(now);
+                for v in self
+                    .voices
+                    .iter_mut()
+                    .filter(|v| v.tag & tag != 0 && v.start < frame)
+                {
+                    v.cut(at, self.fade);
+                }
+            } else {
+                i += 1;
+            }
+        }
+        // 鳴り始める音を早いものから 1 つずつ数える
+        while let Some(i) = (0..self.voices.len())
+            .filter(|&i| self.voices[i].overlap == Overlap::Pending && self.voices[i].start < end)
+            .min_by_key(|&i| self.voices[i].start)
+        {
+            let start = self.voices[i].start;
+            let voices = &self.voices;
+            self.ringing.clear();
+            self.ringing.extend((0..voices.len()).filter(|&j| {
+                let o = &voices[j];
+                o.overlap == Overlap::Counted
+                    && o.end() > start
+                    && Arc::ptr_eq(&o.sound.0, &voices[i].sound.0)
+            }));
+            if self.ringing.len() >= MAX_OVERLAP {
+                self.ringing.sort_by_key(|&j| voices[j].start);
+                let over = self.ringing.len() - MAX_OVERLAP;
+                for k in 0..=over {
+                    let j = self.ringing[k];
+                    self.voices[j].cut(start, self.fade);
+                }
+            }
+            self.voices[i].overlap = Overlap::Counted;
         }
     }
 }
@@ -454,11 +610,11 @@ impl AudioOut {
         let cb_paused = paused.clone();
         // 前のバッファを止めていたか（止める・動かす切れ目にフェードをかける）
         let mut was_paused = false;
-        let mut voices: Vec<Voice> = Vec::with_capacity(1024);
+        let fade = (f64::from(rate) * FADE_SECONDS) as u64;
+        let mut mixer = Mixer::new(fade);
         let mut frames_done: u64 = 0;
         let mut master = master_gain();
         let mut buses = bus_gains();
-        let fade = (f64::from(rate) * FADE_SECONDS) as u64;
         let stream = device.build_output_stream(
             config,
             move |data: &mut [f32], info: &cpal::OutputCallbackInfo| {
@@ -471,48 +627,17 @@ impl AudioOut {
                     .buffer_frames
                     .store((data.len() / channels.max(1)) as u32, Ordering::Relaxed);
                 while let Ok(cmd) = rx.pop() {
-                    match cmd {
-                        Command::At(v) => voices.push(v),
-                        Command::Now {
-                            sound,
-                            gain,
-                            pan,
-                            tag,
-                            bus,
-                            timing,
-                        } => {
-                            let mut v = Voice::whole(sound, frames_done, gain, bus);
-                            v.pan = pan;
-                            v.tag = tag;
-                            voices.push(v);
-                            // このバッファの頭から鳴る
-                            if let Some(t) = timing {
-                                let _ = timing_tx.push(HitTiming {
-                                    sound_us: Some(play_us),
-                                    ..t
-                                });
-                            }
-                        }
-                        Command::Stop(tag) => {
-                            // まだ鳴り始めていない音は捨て、鳴っている音はフェードで止める
-                            voices.retain(|v| v.tag != tag || v.start < frames_done);
-                            for v in voices.iter_mut().filter(|v| v.tag == tag) {
-                                let played = frames_done.saturating_sub(v.start);
-                                v.len = v.len.min(played + fade);
-                                v.fade_out = true;
-                            }
-                        }
-                        Command::CancelFrom(frame) => voices.retain(|v| v.start < frame),
-                        Command::StopAll => {
-                            // まだ始まっていない音は捨て、鳴っている音はフェードで止める
-                            voices.retain(|v| v.start < frames_done);
-                            for v in voices.iter_mut() {
-                                let played = frames_done - v.start;
-                                v.len = v.len.min(played + fade);
-                                v.fade_out = true;
-                            }
-                        }
+                    // 叩いた音はこのバッファの頭から鳴る
+                    if let Command::Now {
+                        timing: Some(t), ..
+                    } = &cmd
+                    {
+                        let _ = timing_tx.push(HitTiming {
+                            sound_us: Some(play_us),
+                            ..*t
+                        });
                     }
+                    mixer.command(cmd, frames_done);
                 }
                 let n = (data.len() / channels) as u64;
                 data.fill(0.0);
@@ -524,8 +649,9 @@ impl AudioOut {
                     }
                     return;
                 }
+                mixer.prepare(frames_done, n);
                 let to_buses = bus_gains();
-                for v in &voices {
+                for v in &mixer.voices {
                     let b = v.bus.index();
                     v.mix(
                         data,
@@ -536,7 +662,7 @@ impl AudioOut {
                     );
                 }
                 buses = to_buses;
-                voices.retain(|v| v.end() > frames_done + n);
+                mixer.voices.retain(|v| v.end() > frames_done + n);
                 let to = master_gain();
                 apply_master(data, channels, master, to);
                 master = to;
@@ -623,7 +749,7 @@ impl AudioOut {
         self.play_at_tagged(sound, song_ms, gain, 0, bus);
     }
 
-    /// 曲の時刻 `song_ms` に鳴らし、止めるときの目印 `tag`（0 は止めない）を付ける。
+    /// 曲の時刻 `song_ms` に鳴らし、止めるときの目印 `tag`（ビットの組。0 は止めない）を付ける。
     /// `stop` で、まだ鳴り始めていなければ取りやめ、鳴っていれば止める（メトロノーム）
     pub fn play_at_tagged(&mut self, sound: &Sound, song_ms: f64, gain: f32, tag: u8, bus: Bus) {
         let frame = self.frame_at(song_ms).max(0.0) as u64;
@@ -662,6 +788,7 @@ impl AudioOut {
             fade_out: p.cut_end,
             tag: 0,
             bus,
+            overlap: Overlap::Free,
         }));
     }
 
@@ -672,19 +799,23 @@ impl AudioOut {
     }
 
     /// 譜面の音を曲の時刻 `song_ms` に、音量 `gain` と左右 `pan` で、系統 `bus` に鳴らす。
-    /// `len_ms` があれば、そこで短いフェードで切る（次の音で前の音を止めるチャンネル）
+    /// `len_ms` があれば、そこで短いフェードで切る（次の音で前の音を止めるチャンネル）。
+    /// `tag`（0 は付けない）を付けると、[`stop`](Self::stop) と [`stop_at`](Self::stop_at) で止められる。
+    /// 同じ音の重なりは [`MAX_OVERLAP`] まで
     pub fn play_chip(
         &mut self,
         sound: &Sound,
         song_ms: f64,
         len_ms: Option<f64>,
         (gain, pan): (f32, f32),
-        bus: Bus,
+        (bus, tag): (Bus, u8),
     ) {
         let frame = self.frame_at(song_ms);
         let rate = f64::from(self.rate);
         let mut v = Voice::whole(sound.clone(), frame.max(0.0) as u64, gain, bus);
         v.pan = pan;
+        v.tag = tag;
+        v.overlap = Overlap::Pending;
         // 出力を始める前の部分は飛ばす
         if frame < 0.0 {
             v.skip = (-frame).round() as u64;
@@ -709,39 +840,55 @@ impl AudioOut {
         self.play_tagged(sound, gain, 0, bus);
     }
 
-    /// すぐ鳴らす。左右 `pan` と、止めるときの目印 `tag`（0 は止めない）を付ける
-    pub fn play_now_panned(&mut self, sound: &Sound, (gain, pan): (f32, f32), tag: u8, bus: Bus) {
-        let _ = self.tx.push(Command::Now {
-            sound: sound.clone(),
-            gain,
-            pan,
-            tag,
-            bus,
-            timing: None,
-        });
-    }
-
-    /// 叩いた音をすぐ鳴らす（[`AudioOut::play_now_panned`] と同じ）。鳴らし始めた時刻を `timing` に入れて、
+    /// 叩いた音をすぐ鳴らす。左右 `pan` と、止めるときの目印 `tag`（ビットの組。0 は止めない）を付ける。
+    /// 同じ音の重なりは [`MAX_OVERLAP`] まで。鳴らし始めた時刻を `timing` に入れて、
     /// [`AudioOut::take_timings`] で知らせ返す
-    pub fn play_hit(&mut self, sound: &Sound, (gain, pan): (f32, f32), tag: u8, timing: HitTiming) {
+    pub fn play_hit(
+        &mut self,
+        sound: &Sound,
+        (gain, pan): (f32, f32),
+        tag: u8,
+        timing: Option<HitTiming>,
+    ) {
         let _ = self.tx.push(Command::Now {
             sound: sound.clone(),
             gain,
             pan,
             tag,
             bus: Bus::Hits,
-            timing: Some(timing),
+            limit: true,
+            timing,
         });
     }
 
-    /// すぐ鳴らし、`tag`（1 以上）を付けておく。`stop` で止められる
+    /// すぐ鳴らし、`tag`（ビットの組。1 以上）を付けておく。`stop` で止められる
     pub fn play_tagged(&mut self, sound: &Sound, gain: f32, tag: u8, bus: Bus) {
-        self.play_now_panned(sound, (gain, 0.0), tag, bus);
+        let _ = self.tx.push(Command::Now {
+            sound: sound.clone(),
+            gain,
+            pan: 0.0,
+            tag,
+            bus,
+            limit: false,
+            timing: None,
+        });
     }
 
-    /// `tag` を付けて鳴らした音を止める（鳴らす予定でまだ鳴り始めていない音は取りやめる）
+    /// `tag` と同じビットを持つ音を止める（鳴らす予定でまだ鳴り始めていない音は取りやめる）
     pub fn stop(&mut self, tag: u8) {
         let _ = self.tx.push(Command::Stop(tag));
+    }
+
+    /// `tag` と同じビットを持つ、もう鳴り始めた音だけを止める（鳴らす予定の先の音は残す）
+    pub fn stop_ringing(&mut self, tag: u8) {
+        let _ = self.tx.push(Command::StopRinging(tag));
+    }
+
+    /// 曲の時刻 `song_ms` に、`tag` と同じビットを持ち、そのときまでに鳴り始めた音を止める
+    /// （同じ時刻に [`play_chip`](Self::play_chip) で鳴らす音は止めない。フレームの丸め方をそろえてある）
+    pub fn stop_at(&mut self, tag: u8, song_ms: f64) {
+        let frame = self.frame_at(song_ms).max(0.0) as u64;
+        let _ = self.tx.push(Command::StopAt { frame, tag });
     }
 }
 
@@ -814,6 +961,7 @@ mod tests {
             fade_out: false,
             tag: 0,
             bus: Bus::Song,
+            overlap: Overlap::Free,
         };
         let mut out = vec![0.0; 6 * 2];
         v.mix(&mut out, 2, (0, 6), 0, (1.0, 1.0));
@@ -822,6 +970,110 @@ mod tests {
         let mut out = vec![0.0; 2 * 2];
         v.mix(&mut out, 2, (3, 2), 0, (1.0, 1.0));
         assert_eq!(out, vec![4., 4., 0., 0.]);
+    }
+
+    /// `frames` フレームの無音の音
+    fn silence(frames: usize) -> Sound {
+        Sound(Arc::from(vec![0.0f32; frames * 2]))
+    }
+
+    fn voice(sound: &Sound, start: u64, tag: u8) -> Voice {
+        let mut v = Voice::whole(sound.clone(), start, 1.0, Bus::Song);
+        v.tag = tag;
+        v
+    }
+
+    fn lens(m: &Mixer) -> Vec<u64> {
+        m.voices.iter().map(|v| v.len).collect()
+    }
+
+    #[test]
+    fn stopping_ringing_voices_keeps_the_ones_to_come() {
+        let s = silence(1000);
+        let mut m = Mixer::new(10);
+        m.command(Command::At(voice(&s, 0, 1)), 0);
+        // 先で鳴らす予定の音は止めない
+        m.command(Command::At(voice(&s, 500, 1)), 0);
+        m.command(Command::At(voice(&s, 0, 2)), 0);
+        m.command(Command::At(voice(&s, 0, 1 | 4)), 0);
+        m.command(Command::StopRinging(1), 100);
+        assert_eq!(lens(&m), vec![110, 1000, 1000, 110]);
+        assert!(m.voices[0].fade_out && !m.voices[1].fade_out);
+    }
+
+    #[test]
+    fn stop_also_drops_the_voices_to_come() {
+        let s = silence(1000);
+        let mut m = Mixer::new(10);
+        m.command(Command::At(voice(&s, 0, 2)), 0);
+        m.command(Command::At(voice(&s, 500, 2)), 0);
+        m.command(Command::At(voice(&s, 500, 1)), 0);
+        m.command(Command::Stop(2), 100);
+        assert_eq!(lens(&m), vec![110, 1000]);
+        assert_eq!(m.voices[1].tag, 1);
+    }
+
+    #[test]
+    fn a_scheduled_stop_cuts_what_started_before_it() {
+        let s = silence(1000);
+        let mut m = Mixer::new(10);
+        m.command(Command::At(voice(&s, 0, 1)), 0);
+        m.command(Command::StopAt { frame: 300, tag: 1 }, 0);
+        // 止める予定の前に叩いた音も止まり、止める時刻ちょうどから後の音は止まらない
+        m.command(
+            Command::Now {
+                sound: s.clone(),
+                gain: 1.0,
+                pan: 0.0,
+                tag: 1,
+                bus: Bus::Hits,
+                limit: false,
+                timing: None,
+            },
+            200,
+        );
+        m.command(Command::At(voice(&s, 300, 1)), 200);
+        m.command(Command::At(voice(&s, 400, 1)), 200);
+        m.command(Command::At(voice(&s, 0, 2)), 200);
+        m.prepare(0, 256);
+        assert_eq!(lens(&m), vec![1000; 5]);
+        m.prepare(256, 256);
+        assert_eq!(lens(&m), vec![310, 110, 1000, 1000, 1000]);
+        assert!(m.stops.is_empty());
+    }
+
+    #[test]
+    fn cancelling_and_seeking_drop_scheduled_stops() {
+        let mut m = Mixer::new(10);
+        m.command(Command::StopAt { frame: 300, tag: 1 }, 0);
+        m.command(Command::StopAt { frame: 600, tag: 1 }, 0);
+        m.command(Command::CancelFrom(500), 0);
+        assert_eq!(m.stops, vec![(300, 1)]);
+        m.command(Command::StopAll, 0);
+        assert!(m.stops.is_empty());
+    }
+
+    #[test]
+    fn a_fifth_overlap_of_the_same_chip_cuts_the_oldest() {
+        let s = silence(1000);
+        let other = silence(1000);
+        let mut m = Mixer::new(10);
+        for start in [0, 10, 20, 30, 40] {
+            let mut v = voice(&s, start, 0);
+            v.overlap = Overlap::Pending;
+            m.command(Command::At(v), 0);
+        }
+        // 別の音と、数えない音（クリックなど）は数に入れない
+        let mut v = voice(&other, 5, 0);
+        v.overlap = Overlap::Pending;
+        m.command(Command::At(v), 0);
+        m.command(Command::At(voice(&s, 15, 0)), 0);
+        m.prepare(0, 35);
+        // 4 つまでは止めない（40 フレーム目の音はまだ鳴り始めていない）
+        assert_eq!(lens(&m), vec![1000; 7]);
+        m.prepare(35, 35);
+        assert_eq!(lens(&m), vec![50, 1000, 1000, 1000, 1000, 1000, 1000]);
+        assert!(m.voices.iter().all(|v| v.overlap != Overlap::Pending));
     }
 
     #[test]

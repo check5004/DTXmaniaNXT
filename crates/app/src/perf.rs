@@ -323,29 +323,29 @@ impl PerfView {
         match r.frames {
             Some(f) => {
                 job.num(&format!("{:.0}", f.fps), fps_color(f.hitches));
-                job.label(" fps　落ちたフレーム ");
+                job.label(i18n::t(" fps   Dropped ", " fps　落ちたフレーム "));
                 job.num(&f.hitches.to_string(), fps_color(f.hitches));
-                job.label("（直近 1 秒）");
+                job.label(i18n::t(" (last 1 s)", "（直近 1 秒）"));
             }
-            None => job.label("測っています…"),
+            None => job.label(i18n::t("Measuring…", "測っています…")),
         }
         job.paint(c, left, line_y, Align2::LEFT_TOP);
         line_y += row;
         if let Some(f) = r.frames {
             let small = 12.5 * s;
             let mut job = Job::new(small);
-            job.label("フレームの間隔 ");
+            job.label(i18n::t("Frame Interval ", "フレームの間隔 "));
             job.num(
                 &format!("{:.1} / {:.1}", f.interval_avg, f.interval_max),
                 LABEL,
             );
-            job.label(" ms（平均 / 最大）");
+            job.label(i18n::t(" ms (avg / max)", " ms（平均 / 最大）"));
             job.paint(c, left, line_y, Align2::LEFT_TOP);
             line_y += row - 3.0;
             let mut job = Job::new(small);
-            job.label("画面を作る ");
+            job.label(i18n::t("Build ", "画面を作る "));
             job.num(&format!("{:.1} / {:.1}", f.build_avg, f.build_max), LABEL);
-            job.label("　GPU へ ");
+            job.label(i18n::t("   GPU ", "　GPU へ "));
             job.num(&format!("{:.1} / {:.1}", f.work_avg, f.work_max), LABEL);
             job.label(" ms");
             job.paint(c, left, line_y, Align2::LEFT_TOP);
@@ -360,7 +360,7 @@ impl PerfView {
         // 叩いた音
         let dim = r.hits_stale;
         let mut job = Job::new(px * s);
-        job.label("叩いた音 ");
+        job.label(i18n::t("Hit Latency ", "叩いた音 "));
         match r.hits {
             Some(HitStats {
                 total_avg: Some(avg),
@@ -372,22 +372,31 @@ impl PerfView {
                     &format!("{avg:.0}"),
                     if dim { DIM } else { total_color(avg) },
                 );
-                job.label(" ms（最大 ");
+                job.label(i18n::t(" ms (max ", " ms（最大 "));
                 job.num(&format!("{max:.0}"), if dim { DIM } else { LABEL });
-                job.label(&format!(" ms、直近 {hits} 打）"));
+                job.label(&i18n::tf!(
+                    " ms, last {hits} hits)",
+                    " ms、直近 {hits} 打）"
+                ));
             }
-            Some(_) => job.label("—（叩いた音を鳴らしていません）"),
-            None => job.label("—（演奏で叩くと出ます）"),
+            Some(_) => job.label(i18n::t(
+                "— (hit sounds are off)",
+                "—（叩いた音を鳴らしていません）",
+            )),
+            None => job.label(i18n::t(
+                "— (hit a pad while playing)",
+                "—（演奏で叩くと出ます）",
+            )),
         }
         job.paint(c, left, line_y, Align2::LEFT_TOP);
         line_y += row;
         if let Some(hs) = r.hits {
             let mut job = Job::new(12.5 * s);
-            job.label("　MIDI の揺れ ");
+            job.label(i18n::t("  MIDI Jitter ", "　MIDI の揺れ "));
             job.num(&format!("{:.1}", hs.midi_avg), LABEL);
-            job.label("　処理待ち ");
+            job.label(i18n::t("   Queue ", "　処理待ち "));
             job.num(&format!("{:.1}", hs.wait_avg), LABEL);
-            job.label("　出力 ");
+            job.label(i18n::t("   Output ", "　出力 "));
             job.num(
                 &hs.out_avg.map_or("—".to_owned(), |v| format!("{v:.1}")),
                 LABEL,
@@ -398,20 +407,23 @@ impl PerfView {
         line_y += row;
         // 音の出力
         let mut job = Job::new(px * s);
-        job.label("音の出力 ");
+        job.label(i18n::t("Audio Output ", "音の出力 "));
         match r.output {
             Some(o) => {
                 job.num(&format!("{:.0}", o.latency_ms), output_color(o.latency_ms));
-                job.label(" ms（バッファ ");
+                job.label(i18n::t(" ms (buffer ", " ms（バッファ "));
                 job.num(&format!("{:.1}", o.buffer_ms), LABEL);
-                job.label(&format!(" ms、{} Hz）", o.rate));
+                job.label(&i18n::tf!(" ms, {} Hz)", " ms、{} Hz）", o.rate));
             }
-            None => job.label("—（音が出ていません）"),
+            None => job.label(i18n::t("— (no audio output)", "—（音が出ていません）")),
         }
         job.paint(c, left, line_y, Align2::LEFT_TOP);
         line_y += row;
         let mut job = Job::new(11.5 * s);
-        job.label("判定は叩いた時刻で行うので、これらの遅れは判定に入りません");
+        job.label(i18n::t(
+            "Judgement uses the hit time, so these delays don't affect it",
+            "判定は叩いた時刻で行うので、これらの遅れは判定に入りません",
+        ));
         job.paint(c, left, line_y + 1.0, Align2::LEFT_TOP);
     }
 
@@ -450,7 +462,7 @@ fn draw_compact(c: &Canvas, r: &Readout) {
         }
         None => job.label("— fps"),
     }
-    job.label("　叩いた音 ");
+    job.label(i18n::t("   Hit Latency ", "　叩いた音 "));
     match r.hits.and_then(|h| h.total_avg) {
         Some(ms) => {
             job.num(
@@ -461,7 +473,7 @@ fn draw_compact(c: &Canvas, r: &Readout) {
         }
         None => job.label("—"),
     }
-    job.label("　出力 ");
+    job.label(i18n::t("   Output ", "　出力 "));
     match r.output {
         Some(o) => {
             job.num(&format!("{:.0}", o.latency_ms), output_color(o.latency_ms));
