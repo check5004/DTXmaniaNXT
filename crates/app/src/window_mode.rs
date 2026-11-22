@@ -9,6 +9,7 @@
 //! - 全画面とボーダーレスは、設定の「出すモニター」で選んだモニターに出す（選んでいなければ、
 //!   見つからなければ窓のあるモニター）。ウィンドウのときは、起動したときにそのモニターの真ん中に開く。
 
+use i18n::{t, tf};
 use serde::{Deserialize, Serialize};
 use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
 use winit::monitor::MonitorHandle;
@@ -106,12 +107,12 @@ impl MonitorInfo {
             None if self.name.is_empty() => (index + 1).to_string(),
             None => self.name.clone(),
         };
-        let mut s = format!("{id}：{}×{}", self.rect.w, self.rect.h);
+        let mut s = tf!("{id}: {}×{}", "{id}：{}×{}", self.rect.w, self.rect.h);
         if let Some(hz) = self.hz {
             s.push_str(&format!(" {hz}Hz"));
         }
         if let Some(place) = self.place(all) {
-            s.push_str(&format!("（{place}）"));
+            s.push_str(&tf!(" ({place})", "（{place}）"));
         }
         s
     }
@@ -119,21 +120,21 @@ impl MonitorInfo {
     /// メインのモニターから見た向き（メインが分からなければ `None`）
     fn place(&self, all: &[MonitorInfo]) -> Option<&'static str> {
         if self.primary {
-            return Some("メイン");
+            return Some(t("Main", "メイン"));
         }
         let main = all.iter().find(|m| m.primary)?;
         let ((x, y), (mx, my)) = (self.rect.center(), main.rect.center());
         let (dx, dy) = (x - mx, y - my);
         Some(if dx.abs() >= dy.abs() {
             if dx >= 0 {
-                "メインの右"
+                t("Right of Main", "メインの右")
             } else {
-                "メインの左"
+                t("Left of Main", "メインの左")
             }
         } else if dy >= 0 {
-            "メインの下"
+            t("Below Main", "メインの下")
         } else {
-            "メインの上"
+            t("Above Main", "メインの上")
         })
     }
 }
@@ -568,6 +569,7 @@ mod tests {
 
     #[test]
     fn monitor_labels_show_number_size_and_place() {
+        let ja = i18n::scoped(i18n::Lang::Ja);
         let all = [
             info(r"\\.\DISPLAY3", -1920, 180, 1920, 1080, false),
             MonitorInfo {
@@ -599,6 +601,10 @@ mod tests {
             ..info("", 0, 0, 1280, 720, false)
         };
         assert_eq!(bare.label(1, &[]), "2：1280×720");
+        drop(ja);
+        let _en = i18n::scoped(i18n::Lang::En);
+        assert_eq!(all[2].label(2, &all), "2: 1920×1080 60Hz (Right of Main)");
+        assert_eq!(all[1].label(1, &all), "1: 2560×1440 165Hz (Main)");
     }
 
     #[test]

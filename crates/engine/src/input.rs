@@ -12,6 +12,7 @@
 use std::collections::BTreeMap;
 
 use dtx::DrumLane;
+use i18n::t;
 
 /// MIDI のメッセージ（ドラムに要るものだけ）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -211,7 +212,7 @@ impl Preset {
         match self {
             Self::Roland => "Roland",
             Self::GeneralMidi => "GM",
-            Self::Empty => "なし",
+            Self::Empty => t("None", "なし"),
         }
     }
 

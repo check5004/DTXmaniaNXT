@@ -31,7 +31,7 @@ use winit::keyboard::KeyCode;
 
 use crate::config::{Config, MASTER_VOLUME_STEP};
 use crate::gfx::{Canvas, Gfx};
-use crate::inputs::{KEYBOARD, LaneSource, lane_label};
+use crate::inputs::{LaneSource, keyboard, lane_label};
 use crate::settings::{self, Group, Kind};
 use crate::settings_ui::{self as ui, Icon, Pad};
 use crate::sfx::Se;
@@ -1094,7 +1094,7 @@ pub fn lane_value(sources: &[LaneSource]) -> String {
     sources
         .iter()
         .map(|s| {
-            if s.source == KEYBOARD {
+            if s.source == keyboard() {
                 format!("キー {}", s.inputs.join(" "))
             } else {
                 s.inputs.join(" ")
@@ -3126,7 +3126,7 @@ fn preview_kit(
         let sources = info.lanes.get(&lane).map_or(&[][..], Vec::as_slice);
         let notes = sources
             .iter()
-            .filter(|s| s.source != KEYBOARD)
+            .filter(|s| s.source != keyboard())
             .flat_map(|s| s.inputs.iter().cloned())
             .collect::<Vec<_>>()
             .join(",");
@@ -3457,7 +3457,7 @@ mod tests {
                         inputs: vec!["38".to_owned(), "40".to_owned()],
                     },
                     LaneSource {
-                        source: KEYBOARD.to_owned(),
+                        source: keyboard().to_owned(),
                         inputs: vec!["D".to_owned()],
                     },
                 ],
@@ -3538,6 +3538,7 @@ mod tests {
 
     #[test]
     fn monitor_row_follows_display_mode_and_lists_the_screens() {
+        let _ja = i18n::scoped(i18n::Lang::Ja);
         let mut c = Config::default();
         let list = screens();
         let with_screens = ConfigInfo {
@@ -3635,6 +3636,7 @@ mod tests {
 
     #[test]
     fn the_song_offset_and_advice_follow_the_input_offset() {
+        let _ja = i18n::scoped(i18n::Lang::Ja);
         let c = Config {
             input_offset_ms: 3.0,
             ..Default::default()
@@ -3842,6 +3844,7 @@ mod tests {
 
     #[test]
     fn lanes_are_assigned_by_hitting_after_decide() {
+        let _ja = i18n::scoped(i18n::Lang::Ja);
         let config = Config::default();
         let info = info(&config);
         let input = rows(Page::Cat(Cat::Input), &info);

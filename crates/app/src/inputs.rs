@@ -11,29 +11,32 @@ use std::time::{Duration, Instant};
 
 use dtx::DrumLane;
 use engine::input::{MidiMessage, MidiProfile, Normalizer, Preset};
+use i18n::{t, tf};
 use winit::keyboard::KeyCode;
 
 use crate::config::{Config, KeyBind, MidiDevice, PadNote, UNASSIGNED, note_overrides};
 use crate::midi::{PortInfo, base_name};
 
 /// キーボードの入力の名前（設定の画面に出す）
-pub const KEYBOARD: &str = "キーボード";
+pub fn keyboard() -> &'static str {
+    t("Keyboard", "キーボード")
+}
 
 /// レーンの画面に出す名前（設定の画面の割り当てや、結果の分析に出す）
 pub fn lane_label(lane: DrumLane) -> &'static str {
     match lane {
-        DrumLane::LC => "左シンバル",
-        DrumLane::HH => "ハイハット（閉）",
-        DrumLane::HHO => "ハイハット（開）",
-        DrumLane::SD => "スネア",
-        DrumLane::BD => "バスドラム",
-        DrumLane::HT => "ハイタム",
-        DrumLane::LT => "ロータム",
-        DrumLane::FT => "フロアタム",
-        DrumLane::CY => "右シンバル",
-        DrumLane::RD => "ライド",
-        DrumLane::LP => "左ペダル",
-        DrumLane::LBD => "左バスドラム",
+        DrumLane::LC => t("Left Cymbal", "左シンバル"),
+        DrumLane::HH => t("Hi-Hat (Closed)", "ハイハット（閉）"),
+        DrumLane::HHO => t("Hi-Hat (Open)", "ハイハット（開）"),
+        DrumLane::SD => t("Snare", "スネア"),
+        DrumLane::BD => t("Bass Drum", "バスドラム"),
+        DrumLane::HT => t("High Tom", "ハイタム"),
+        DrumLane::LT => t("Low Tom", "ロータム"),
+        DrumLane::FT => t("Floor Tom", "フロアタム"),
+        DrumLane::CY => t("Right Cymbal", "右シンバル"),
+        DrumLane::RD => t("Ride", "ライド"),
+        DrumLane::LP => t("Left Pedal", "左ペダル"),
+        DrumLane::LBD => t("Left Bass Drum", "左バスドラム"),
     }
 }
 
@@ -420,7 +423,7 @@ pub fn lane_sources(config: &Config, ports: &[PortInfo]) -> BTreeMap<DrumLane, V
     }
     for (lane, inputs) in keys {
         out.entry(lane).or_default().push(LaneSource {
-            source: KEYBOARD.to_owned(),
+            source: keyboard().to_owned(),
             inputs,
         });
     }
@@ -474,17 +477,18 @@ impl MidiMonitor {
                     (true, Some(l)) => l.name(),
                     (true, None) => "not assigned",
                 };
-                // 設定の画面に出す文は日本語で（ログは英語のまま）
+                // 設定の画面に出す文（ログは英語のまま）
                 let shown = match (accepted, lane) {
-                    (false, _) => "ほかのチャンネルなので捨てた",
-                    (true, Some(_)) if soft => "弱いので捨てた",
+                    (false, _) => t("Ignored (other channel)", "ほかのチャンネルなので捨てた"),
+                    (true, Some(_)) if soft => t("Ignored (too soft)", "弱いので捨てた"),
                     (true, Some(l)) => lane_label(l),
-                    (true, None) => "割り当てなし",
+                    (true, None) => t("Not assigned", "割り当てなし"),
                 };
                 self.last.insert(
                     port,
                     (
-                        format!(
+                        tf!(
+                            "ch{} note {note} velocity {velocity} → {shown}",
                             "ch{} ノート {note} ベロシティ {velocity} → {shown}",
                             channel + 1
                         ),
@@ -694,7 +698,7 @@ mod tests {
         assert_eq!(lp[0].source, "Finger Drum Pad");
         assert!(lp[0].inputs.contains(&"3".to_owned()));
         assert_eq!(lp[1].source, "V51");
-        assert_eq!(lp.last().unwrap().source, KEYBOARD);
+        assert_eq!(lp.last().unwrap().source, keyboard());
         assert_eq!(lp.last().unwrap().inputs, vec!["Z".to_owned()]);
         // 開いていない機器は出さない
         ports[0].open = false;
@@ -708,6 +712,7 @@ mod tests {
 
     #[test]
     fn monitor_shows_the_last_hit_and_its_lane() {
+        let _ja = i18n::scoped(i18n::Lang::Ja);
         let mut m = MidiMonitor::default();
         let p = MidiProfile::general_midi();
         let on = |note| MidiMessage::NoteOn {

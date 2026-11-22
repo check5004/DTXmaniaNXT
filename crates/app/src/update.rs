@@ -11,6 +11,7 @@
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
 
+use i18n::t;
 use velopack::sources::GithubSource;
 use velopack::{UpdateCheck, UpdateInfo, UpdateManager, VelopackApp};
 
@@ -47,9 +48,9 @@ impl UpdateMode {
     /// 設定の画面の表示
     pub fn label(self) -> &'static str {
         match self {
-            UpdateMode::Notify => "知らせる",
-            UpdateMode::Auto => "自動",
-            UpdateMode::Off => "確かめない",
+            UpdateMode::Notify => t("Notify", "知らせる"),
+            UpdateMode::Auto => t("Automatic", "自動"),
+            UpdateMode::Off => t("Off", "確かめない"),
         }
     }
 }
