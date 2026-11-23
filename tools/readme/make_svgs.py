@@ -14,7 +14,7 @@ from pathlib import Path
 
 OUT = Path(__file__).resolve().parents[2] / "docs" / "readme"
 # 更新の絵に出す版の見本（実際の版とは関係ない）
-SAMPLE_VERSION = "v0.9.0"
+SAMPLE_VERSION = "v0.10.0"
 
 # DTX Web Editor の README と同じ色（レーンの色・背景）
 LANE = {
