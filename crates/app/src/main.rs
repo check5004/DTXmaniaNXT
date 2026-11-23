@@ -21,6 +21,7 @@ mod chart_picture;
 mod chart_sound;
 mod config;
 mod config_view;
+mod credits;
 mod editor;
 mod fonts;
 mod frames;
@@ -2094,6 +2095,27 @@ impl App {
                         "Couldn't open a browser. Please open {} yourself.",
                         "ブラウザを開けませんでした。{} を開いてください",
                         editor::URL
+                    ));
+                }
+            },
+            ItemId::OpenCredits => match credits::open() {
+                Ok(editor::Opened::Opened) => {
+                    log::info!("opened the credits: {}", credits::URL);
+                    self.config_toast(
+                        t(
+                            "Opened the credits in your browser",
+                            "ブラウザでクレジットを開きました",
+                        )
+                        .to_owned(),
+                    );
+                }
+                Ok(editor::Opened::Recently) => {}
+                Err(e) => {
+                    log::warn!("could not open the credits: {e}");
+                    self.config_toast(tf!(
+                        "Couldn't open a browser. Please open {} yourself.",
+                        "ブラウザを開けませんでした。{} を開いてください",
+                        credits::URL
                     ));
                 }
             },

@@ -144,8 +144,8 @@ impl Cat {
                 "曲のフォルダと、曲の探し直し、譜面エディタ。",
             ),
             Cat::App => t(
-                "Updates and other app-wide settings.",
-                "更新など、アプリ全体のこと。",
+                "Language, updates, and credits.",
+                "言語と更新、クレジット。",
             ),
             Cat::View => t(
                 "Scroll speed and direction, note hiding, lanes and notes, and screen elements.",
@@ -267,6 +267,8 @@ pub enum ItemId {
     ReconnectMidi,
     /// 譜面エディタ（Web アプリ）をブラウザで開く
     OpenEditor,
+    /// クレジットの一覧をブラウザで開く
+    OpenCredits,
     /// 簡易設定から、選んでいる曲の区間練習へ
     PracticeSong,
     /// 簡易設定から、設定の画面へ
@@ -1456,6 +1458,17 @@ pub fn rows(page: Page, info: &ConfigInfo<'_>) -> Vec<Row> {
             s.at("").push(value_row(Setting::Language, c));
             s.at("").push(value_row(Setting::Update, c));
             s.table(Group::App, v);
+            s.at(" ").push(action(
+                ItemId::OpenCredits,
+                t("Credits", "クレジット"),
+                crate::credits::VOICE.to_owned(),
+                tf!(
+                    "Voice: {}\nMusic: made with Google Lyria 3\nSkin art and sounds: DTXmaniaNXT (CC BY 4.0). Some parts still come from DTXManiaNX v2.0.\nSelect to open the full list in your browser.",
+                    "声: {}\n曲: Google の Lyria 3 で作成\nスキンの絵と音: DTXmaniaNXT（CC BY 4.0）。一部は DTXManiaNX v2.0 のままです。\n決定で、くわしい一覧をブラウザで開きます。",
+                    crate::credits::VOICE
+                ),
+                None,
+            ));
         }
         Page::Lanes => {
             s.at("").push(Row {
@@ -3857,7 +3870,9 @@ mod tests {
                         ),
                         Lang::En => {
                             for text in [&r.name, &r.value, &r.desc] {
-                                assert!(!japanese(text), "{text}");
+                                // 声の表記は規約の書き方のまま（キャラの名前は日本語）
+                                let text = text.replace(crate::credits::VOICE, "");
+                                assert!(!japanese(&text), "{text}");
                             }
                         }
                         _ => {}
@@ -4254,6 +4269,21 @@ mod tests {
         assert_eq!(
             v.input(ConfigInput::Decide, &songs).action,
             Some(ConfigAction::Run(ItemId::OpenEditor))
+        );
+    }
+
+    #[test]
+    fn the_credits_name_the_voice() {
+        // 声の規約で、ユーザーが探して見つけられる場所に表記する（アプリの分類の最後）
+        let c = Config::default();
+        let app = rows(Page::Cat(Cat::App), &info(&c));
+        let i = find(&app, ItemId::OpenCredits);
+        assert_eq!(app[i].value, crate::credits::VOICE);
+        assert!(app[i].desc.contains(crate::credits::VOICE));
+        let mut v = at(Page::Cat(Cat::App), &app, ItemId::OpenCredits);
+        assert_eq!(
+            v.input(ConfigInput::Decide, &app).action,
+            Some(ConfigAction::Run(ItemId::OpenCredits))
         );
     }
 

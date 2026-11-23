@@ -60,6 +60,12 @@ mod tests {
     fn has_every_sound_the_app_plays() {
         for se in crate::sfx::Se::ALL {
             assert!(has(se.file()), "{} がない", se.file());
+            // 作り直した音も読めること（ogg は Vorbis、並べ替えの読み上げは wav）
+            let bytes = read(se.file()).unwrap();
+            let ext = se.file().rsplit('.').next();
+            let s = crate::audio::load_sound_bytes(bytes, ext, 48_000)
+                .unwrap_or_else(|e| panic!("{}: {e:#}", se.file()));
+            assert!(s.frames() > 0, "{} が空", se.file());
         }
     }
 }
