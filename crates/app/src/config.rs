@@ -15,10 +15,6 @@ use crate::stretch::Pitch;
 use crate::update::UpdateMode;
 use crate::window_mode::{MonitorPick, Placement};
 
-/// 言語を選べるようにする。英語版の文が揃うまでは false にして、設定の「言語」を出さず日本語で動かす
-/// （途中の版で英語と日本語が混ざった画面を出さないため）。揃えたら true にする
-pub const LANGUAGE_READY: bool = false;
-
 /// 設定の画面で全体の音量を 1 回で変える幅（%）
 pub const MASTER_VOLUME_STEP: u8 = 5;
 
@@ -340,15 +336,6 @@ impl Config {
     /// 設定に書いた言語（読めない値なら英語）
     pub fn lang(&self) -> Lang {
         Lang::from_code(&self.language).unwrap_or_default()
-    }
-
-    /// 画面に使う言語（[`LANGUAGE_READY`] までは日本語）
-    pub fn ui_lang(&self) -> Lang {
-        if LANGUAGE_READY {
-            self.lang()
-        } else {
-            Lang::Ja
-        }
     }
 
     pub fn set_lang(&mut self, lang: Lang) {

@@ -1008,16 +1008,17 @@ fn add_timing_rows(rows: &mut Vec<Row>, t: &TimingInfo, global_ms: i64) {
     };
     let a = &t.advice;
     if let Some((_, n)) = a.global {
+        let songs = count(n, "song", "songs", "曲");
         rows[i].desc.push_str(&if a.global_ms != a.global_now {
             tf!(
-                " Suggested: {:+} ms (from your last {n} songs).",
-                "おすすめは {:+} ms（直近 {n} 曲のずれから）。",
+                " Suggested: {:+} ms (based on your last {songs}).",
+                "おすすめは {:+} ms（直近 {songs}のずれから）。",
                 a.global_ms
             )
         } else {
             tf!(
-                " Based on your last {n} songs, the current value looks right.",
-                "直近 {n} 曲のずれからは、今のままでよさそうです。"
+                " Based on your last {songs}, the current value looks right.",
+                "直近 {songs}のずれからは、今のままでよさそうです。"
             )
         });
     }
@@ -1031,15 +1032,15 @@ fn add_timing_rows(rows: &mut Vec<Row>, t: &TimingInfo, global_ms: i64) {
         );
         match a.song {
             Some(l) if l.enough() && a.song_ms != a.song_now => desc.push_str(&tf!(
-                " Suggested: {:+} ms (from your last {} plays).",
-                "おすすめは {:+} ms（直近 {} 回から）。",
+                " Suggested: {:+} ms (based on {}).",
+                "おすすめは {:+} ms（直近 {}から）。",
                 a.song_ms,
-                l.sessions
+                count(l.sessions, "play", "plays", "回")
             )),
             Some(l) if l.enough() => desc.push_str(&tf!(
-                " Based on your last {} plays, the current value looks right.",
-                "直近 {} 回からは今のままでよさそうです。",
-                l.sessions
+                " Based on {}, the current value looks right.",
+                "直近 {}からは今のままでよさそうです。",
+                count(l.sessions, "play", "plays", "回")
             )),
             _ => {}
         }
@@ -1452,9 +1453,7 @@ pub fn rows(page: Page, info: &ConfigInfo<'_>) -> Vec<Row> {
             s.table(Group::Practice, v);
         }
         Page::Cat(Cat::App) => {
-            if crate::config::LANGUAGE_READY {
-                s.at("").push(value_row(Setting::Language, c));
-            }
+            s.at("").push(value_row(Setting::Language, c));
             s.at("").push(value_row(Setting::Update, c));
             s.table(Group::App, v);
         }
@@ -3866,6 +3865,20 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn the_language_comes_first_in_general() {
+        let mut c = Config::default();
+        let r = &rows(Page::Cat(Cat::App), &info(&c))[0];
+        assert_eq!(r.id, Some(ItemId::Value(Setting::Language)));
+        assert_eq!(r.value, "English");
+        // どちらの言語の画面でも、言語の名前はその言語の綴り
+        c.set_lang(Lang::Ja);
+        let _ja = i18n::scoped(Lang::Ja);
+        let r = &rows(Page::Cat(Cat::App), &info(&c))[0];
+        assert_eq!(r.value, "日本語");
+        assert!(r.name.contains("Language"), "{}", r.name);
     }
 
     #[test]

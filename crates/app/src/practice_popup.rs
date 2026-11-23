@@ -784,19 +784,16 @@ fn weak_source(s: &PracticeSetup) -> String {
         (0, 0) => t("no records yet", "まだ記録がありません").to_owned(),
         (p, 0) => {
             let p = count(p, "play", "plays", "回");
-            tf!("from your last {p}", "直近のプレイ {p}から")
+            tf!("based on {p}", "直近のプレイ {p}から")
         }
         (0, l) => {
             let l = count(l, "practice loop", "practice loops", "周");
-            tf!("from your last {l}", "直近の練習 {l}から")
+            tf!("based on {l}", "直近の練習 {l}から")
         }
         (p, l) => {
             let p = count(p, "play", "plays", "回");
             let l = count(l, "practice loop", "practice loops", "周");
-            tf!(
-                "from your last {p} and {l}",
-                "直近のプレイ {p}と練習 {l}から"
-            )
+            tf!("based on {p} and {l}", "直近のプレイ {p}と練習 {l}から")
         }
     }
 }
