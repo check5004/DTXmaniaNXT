@@ -36,6 +36,7 @@ mod logging;
 mod midi;
 mod movie;
 mod nx_import;
+mod perf;
 mod play_view;
 mod practice;
 mod practice_hud;
@@ -469,8 +470,8 @@ struct App {
     applying: Option<(String, Instant)>,
     /// 更新の印の回る輪の起点
     update_since: Instant,
-    /// フレームの時間（F9 で出す）
-    frames: frames::FrameStats,
+    /// FPS と遅延の表示（設定か F9）
+    perf: perf::PerfView,
     /// 押している Alt などのキー（Alt+Enter で全画面）
     modifiers: winit::keyboard::ModifiersState,
     /// 窓に当てた画面の出し方・垂直同期・出すモニター・ウィンドウの大きさ（変わったら当て直す）
@@ -548,8 +549,8 @@ const HIT_SOUND_KEY: KeyCode = KeyCode::F2;
 /// [`HIT_SOUND_KEY`] の表示の名前
 const HIT_SOUND_KEY_NAME: &str = "F2";
 
-/// フレームの時間を画面の右上に出し入れするキー（どの画面でも）
-const FRAME_STATS_KEY: KeyCode = KeyCode::F9;
+/// FPS と遅延の表示を切り替えるキー（どの画面でも。出さない → 小さく → 詳しく）
+const MONITOR_KEY: KeyCode = KeyCode::F9;
 
 /// シャッターを閉じ終えたら移る先
 enum AfterClose {
@@ -603,7 +604,7 @@ const DOUBLE_HIT_US: i64 = 500_000;
 impl App {
     fn new(arg: Option<PathBuf>) -> Self {
         let mut config = Config::load();
-        i18n::set_lang(config.ui_lang());
+        i18n::set_lang(config.lang());
         if config.take_over_nx() {
             config.save();
         }
@@ -679,7 +680,7 @@ impl App {
             updater,
             applying: None,
             update_since: Instant::now(),
-            frames: frames::FrameStats::default(),
+            perf: perf::PerfView::default(),
             modifiers: winit::keyboard::ModifiersState::empty(),
             applied_window: None,
             window_placement: None,
@@ -689,6 +690,29 @@ impl App {
             focused: true,
             next_frame: Instant::now(),
         }
+    }
+
+    /// FPS と遅延の表示を次の大きさにし、設定に残す（F9）
+    fn cycle_monitor(&mut self) {
+        let next = perf::Mode::from_index(self.config.settings.choice(settings::MONITOR)).next();
+        self.config
+            .settings
+            .set_raw(settings::MONITOR, next.index() as i64);
+        self.config.save();
+        self.perf.set_mode(next);
+        log::info!("monitor: {next:?}");
+    }
+
+    /// FPS と遅延の表示へ、今の音の出力の遅れと、演奏で叩いた時刻を渡す
+    fn feed_perf(&mut self) {
+        let (output, hits) = match &mut self.screen {
+            Screen::Play(play, _) => (
+                play.audio.as_ref().and_then(audio::AudioOut::latency),
+                play.take_hit_timings(),
+            ),
+            _ => (self.sfx.latency(), Vec::new()),
+        };
+        self.perf.feed(output, hits);
     }
 
     /// 画面の出し方・垂直同期・出すモニター・ウィンドウの大きさを設定に合わせる（設定の画面で変えたときも、ここで当てる）
@@ -1952,7 +1976,7 @@ impl App {
                     Setting::MasterVolume => apply_volumes(&self.config),
                     Setting::Update => self.updater.set_mode(self.config.update_mode()),
                     Setting::Language => {
-                        i18n::set_lang(self.config.ui_lang());
+                        i18n::set_lang(self.config.lang());
                         // BOX の名前（並べ替えで作るもの）を今の言語で作り直す
                         self.songs.relabel();
                     }
@@ -2708,7 +2732,10 @@ impl App {
         let (Some(window), Some(state)) = (self.window.clone(), &mut self.egui_state) else {
             return;
         };
-        self.frames.begin();
+        self.perf.set_mode(perf::Mode::from_index(
+            self.config.settings.choice(settings::MONITOR),
+        ));
+        self.perf.frames.begin();
         let input = state.take_egui_input(&window);
         let ports = self
             .midi
@@ -2723,6 +2750,7 @@ impl App {
             .filter(|(_, until)| Instant::now() < *until)
             .map(|(t, _)| t.clone());
         let scanning = self.songs.scanning().is_some();
+        self.feed_perf();
         let paused_panel = self.quick.is_some() && matches!(self.screen, Screen::Play(..));
         self.poll_update();
         self.title.set_update(self.updater.status());
@@ -2772,9 +2800,9 @@ impl App {
             ));
             self.shutter
                 .draw(&Canvas::overlay(&top, ctx.content_rect()), &mut self.gfx);
-            self.frames.draw(&top, ctx.content_rect());
+            self.perf.draw(&Canvas::overlay(&top, ctx.content_rect()));
         });
-        self.frames.built();
+        self.perf.frames.built();
         if let Some(state) = &mut self.egui_state {
             state.handle_platform_output(&window, output.platform_output.clone());
         }
@@ -2784,7 +2812,7 @@ impl App {
             .as_mut()
             .and_then(|gpu| gpu.render(&self.egui_ctx, output));
         if let Some(gpu) = &self.gpu {
-            self.frames.end(gpu.waited);
+            self.perf.frames.end(gpu.waited);
         }
         // 残した画面に知らせが写らないように、知らせは残したあとに出す
         if let Some(path) = saved {
@@ -3161,9 +3189,9 @@ impl ApplicationHandler for App {
                 if event.state == ElementState::Pressed
                     && let PhysicalKey::Code(code) = event.physical_key
                 {
-                    if code == FRAME_STATS_KEY {
+                    if code == MONITOR_KEY {
                         if !event.repeat {
-                            self.frames.toggle();
+                            self.cycle_monitor();
                         }
                         return;
                     }

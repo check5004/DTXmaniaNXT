@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 
 use dtx::DrumLane;
 use engine::judge::{BdGroup, CyGroup, FtGroup, HhGroup, HitWindows, LaneGroups};
+use i18n::{EMPTY, Tr, tr};
 use serde::{Deserialize, Serialize};
 
 /// 分類（設定の画面の左の列。名前は [`Group::label`]）。
@@ -40,18 +41,19 @@ pub enum Group {
 
 impl Group {
     pub fn label(self) -> &'static str {
-        match self {
-            Self::Display => "画面",
-            Self::Sound => "音",
-            Self::Play => "ゲームプレイ",
-            Self::Songs => "曲",
-            Self::App => "アプリ",
-            Self::View => "譜面",
-            Self::Pads => "自動・叩き分け",
-            Self::Timing => "タイミング",
-            Self::Input => "入力",
-            Self::Practice => "練習",
-        }
+        let label = match self {
+            Self::Display => tr("Display", "画面"),
+            Self::Sound => tr("Sound", "音"),
+            Self::Play => tr("Gameplay", "ゲームプレイ"),
+            Self::Songs => tr("Songs", "曲"),
+            Self::App => tr("General", "アプリ"),
+            Self::View => tr("Chart", "譜面"),
+            Self::Pads => tr("Auto & Grouping", "自動・叩き分け"),
+            Self::Timing => tr("Timing", "タイミング"),
+            Self::Input => tr("Input", "入力"),
+            Self::Practice => tr("Practice", "練習"),
+        };
+        label.get()
     }
 }
 
@@ -61,7 +63,7 @@ pub struct Choice {
     /// config.toml に書く名前
     pub key: &'static str,
     /// 画面に出す名前
-    pub label: &'static str,
+    pub label: Tr,
 }
 
 /// 項目の種類
@@ -80,9 +82,9 @@ pub enum Kind {
         max: i64,
         step: i64,
         default: i64,
-        unit: &'static str,
+        unit: Tr,
         /// 0 のときに数の代わりに出す名前（Risky の「OFF」など）
-        zero: Option<&'static str>,
+        zero: Option<Tr>,
     },
     /// ほかの ON / OFF をまとめて切り替える。値は全部 ON なら ON、全部 OFF なら OFF、混ざっていれば「-」
     /// （上流の三つの状態の項目 `CItemThreeState`）
@@ -96,18 +98,18 @@ pub struct Def {
     pub key: &'static str,
     pub group: Group,
     /// 分類の中の小見出し（無ければ空）
-    pub section: &'static str,
+    pub section: Tr,
     /// 画面に出す名前
-    pub name: &'static str,
+    pub name: Tr,
     pub kind: Kind,
     /// 説明のパネルに出す文
-    pub desc: &'static str,
+    pub desc: Tr,
     /// 演奏中に変えてよいか
     pub in_play: bool,
 }
 
 /// 自動演奏のレーン 1 つ
-const fn auto_lane(key: &'static str, name: &'static str) -> Def {
+const fn auto_lane(key: &'static str, name: Tr) -> Def {
     Def {
         key,
         group: Group::Pads,
@@ -119,7 +121,7 @@ const fn auto_lane(key: &'static str, name: &'static str) -> Def {
     }
 }
 
-const AUTO_SECTION: &str = "自動で叩く";
+const AUTO_SECTION: Tr = tr("Auto Play", "自動で叩く");
 
 /// 早送り・巻き戻しの幅（ミリ秒）
 pub const SKIP_MS: &str = "skip_ms";
@@ -132,6 +134,8 @@ pub const WINDOW_SIZE: &str = "window_size";
 pub const FPS_LIMIT: &str = "fps_limit";
 /// ほかの窓を使っているあいだ、描く回数を下げる（演奏中は除く）
 pub const BACKGROUND_FPS: &str = "background_fps";
+/// FPS と遅延の表示（このアプリで足したもの。並びは [`crate::perf::Mode`] と同じ）
+pub const MONITOR: &str = "monitor";
 pub const AUTO_SAVE_RESULT: &str = "auto_save_result";
 
 /// ゲージの減り方（MISS の減りにかける数を選ぶ）
@@ -180,16 +184,16 @@ pub const MOVIE_ALPHA: &str = "movie_alpha";
 
 /// 選択肢の表を `[key, label]` の並びから作る
 macro_rules! choices {
-    ($($key:literal => $label:literal),+ $(,)?) => {
+    ($($key:literal => $label:expr),+ $(,)?) => {
         &[$(Choice { key: $key, label: $label }),+]
     };
 }
 
 /// 画面の出し方（並びは [`DisplayMode`] と同じ）
 const DISPLAY_MODE_CHOICES: &[Choice] = choices![
-    "window" => "ウィンドウ",
-    "borderless" => "ボーダーレス（疑似全画面）",
-    "fullscreen" => "全画面",
+    "window" => tr("Windowed", "ウィンドウ"),
+    "borderless" => tr("Borderless Window", "ボーダーレス（疑似全画面）"),
+    "fullscreen" => tr("Fullscreen", "全画面"),
 ];
 
 /// 0.4.2 までの全画面の ON / OFF のキー（読むだけ。[`Values::upgrade`] で画面の出し方に写す）
@@ -197,9 +201,9 @@ const OLD_FULLSCREEN: &str = "fullscreen";
 
 /// 垂直同期の選び方（並びは [`Vsync`] と同じ）。0.8 までは ON / OFF だけ（[`Values::upgrade`] で写す）
 const VSYNC_CHOICES: &[Choice] = choices![
-    "on" => "ON",
-    "low_latency" => "低遅延（裂けない）",
-    "off" => "OFF",
+    "on" => tr("ON", "ON"),
+    "low_latency" => tr("Low Latency (no tearing)", "低遅延（裂けない）"),
+    "off" => tr("OFF", "OFF"),
 ];
 
 /// 垂直同期
@@ -219,11 +223,11 @@ impl Vsync {
 
 /// ウィンドウの大きさの選び方。先頭は前回の大きさ、あとは窓の中の大きさ（ドット）
 const WINDOW_SIZE_CHOICES: &[Choice] = choices![
-    "last" => "前回のまま",
-    "1280x720" => "1280×720",
-    "1600x900" => "1600×900",
-    "1920x1080" => "1920×1080",
-    "2560x1440" => "2560×1440",
+    "last" => tr("Last Used", "前回のまま"),
+    "1280x720" => tr("1280×720", "1280×720"),
+    "1600x900" => tr("1600×900", "1600×900"),
+    "1920x1080" => tr("1920×1080", "1920×1080"),
+    "2560x1440" => tr("2560×1440", "2560×1440"),
 ];
 
 /// [`WINDOW_SIZE_CHOICES`] の 2 つめからの大きさ
@@ -231,12 +235,12 @@ const WINDOW_SIZES: [(u32, u32); 4] = [(1280, 720), (1600, 900), (1920, 1080), (
 
 /// フレームレートの上限の選び方（並びは [`FPS_LIMITS`] と同じ。先頭は無制限）
 const FPS_LIMIT_CHOICES: &[Choice] = choices![
-    "off" => "無制限",
-    "60" => "60",
-    "120" => "120",
-    "144" => "144",
-    "240" => "240",
-    "360" => "360",
+    "off" => tr("Unlimited", "無制限"),
+    "60" => tr("60", "60"),
+    "120" => tr("120", "120"),
+    "144" => tr("144", "144"),
+    "240" => tr("240", "240"),
+    "360" => tr("360", "360"),
 ];
 
 /// [`FPS_LIMIT_CHOICES`] の 2 つめからの回数
@@ -244,12 +248,12 @@ const FPS_LIMITS: [u32; 5] = [60, 120, 144, 240, 360];
 
 /// ほかの窓を見ているときの選び方
 const BACKGROUND_FPS_CHOICES: &[Choice] = choices![
-    "keep" => "そのまま",
-    "low" => "描く回数を下げる",
+    "keep" => tr("Full Rate", "そのまま"),
+    "low" => tr("Lower Frame Rate", "描く回数を下げる"),
 ];
 
 /// 画面の「なめらかさと遅れ」の小見出し
-const DISPLAY_SMOOTH: &str = "なめらかさと遅れ";
+const DISPLAY_SMOOTH: Tr = tr("Smoothness & Latency", "なめらかさと遅れ");
 
 /// 画面の出し方
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -276,96 +280,98 @@ impl DisplayMode {
     }
 }
 
+/// FPS と遅延の表示（並びは [`crate::perf::Mode`] と同じ）
+const MONITOR_CHOICES: &[Choice] = choices![
+    "off" => tr("Off", "出さない"),
+    "compact" => tr("Compact", "小さく"),
+    "detail" => tr("Detailed", "詳しく"),
+];
+
 /// 上流 `nHidSud`（並びは上流と同じ）
 pub const HID_SUD_CHOICES: &[Choice] = choices![
-    "off" => "OFF",
-    "hidden" => "HIDDEN（途中から消える）",
-    "sudden" => "SUDDEN（途中から出る）",
-    "hid_sud" => "HID-SUD（途中だけ見える）",
-    "stealth" => "STEALTH（見えない）",
+    "off" => tr("OFF", "OFF"),
+    "hidden" => tr("HIDDEN (notes vanish partway)", "HIDDEN（途中から消える）"),
+    "sudden" => tr("SUDDEN (notes appear late)", "SUDDEN（途中から出る）"),
+    "hid_sud" => tr("HID-SUD (visible only midway)", "HID-SUD（途中だけ見える）"),
+    "stealth" => tr("STEALTH (invisible)", "STEALTH（見えない）"),
 ];
 
 /// 上流 `EDarkMode`
 const DARK_CHOICES: &[Choice] = choices![
-    "off" => "OFF",
-    "half" => "HALF",
-    "full" => "FULL",
+    "off" => tr("OFF", "OFF"),
+    "half" => tr("HALF", "HALF"),
+    "full" => tr("FULL", "FULL"),
 ];
 
 /// 上流 `nLaneDisp`
 pub const LANE_DISP_CHOICES: &[Choice] = choices![
-    "all_on" => "全部出す",
-    "lane_off" => "レーンを暗く",
-    "line_off" => "小節線を消す",
-    "all_off" => "両方",
+    "all_on" => tr("Show All", "全部出す"),
+    "lane_off" => tr("Dim Lanes", "レーンを暗く"),
+    "line_off" => tr("Hide Bar Lines", "小節線を消す"),
+    "all_off" => tr("Both", "両方"),
 ];
 
 /// 上流 `eAttackEffect`
 pub const ATTACK_EFFECT_CHOICES: &[Choice] = choices![
-    "all_on" => "全部出す",
-    "chip_off" => "飛ぶチップを消す",
-    "effect_only" => "火花だけ",
-    "all_off" => "全部消す",
+    "all_on" => tr("Show All", "全部出す"),
+    "chip_off" => tr("Hide Flying Chips", "飛ぶチップを消す"),
+    "effect_only" => tr("Sparks Only", "火花だけ"),
+    "all_off" => tr("Hide All", "全部消す"),
 ];
 
 /// 上流 `JudgementStringPosition`
 pub const JUDGE_POSITION_CHOICES: &[Choice] = choices![
-    "lane" => "レーンの上",
-    "below" => "判定ラインの下",
-    "off" => "出さない",
+    "lane" => tr("On the Lanes", "レーンの上"),
+    "below" => tr("Below the Judge Line", "判定ラインの下"),
+    "off" => tr("Off", "出さない"),
 ];
 
 /// 上流 `eLaneType.Drums`（名前は HH と LT のあいだの並び）
 const LANE_TYPE_CHOICES: &[Choice] = choices![
-    "a" => "A（LP SD HT BD）",
-    "b" => "B（SD LP BD HT）",
-    "c" => "C（LP SD BD HT）",
-    "d" => "D（SD HT LP BD）",
+    "a" => tr("A (LP SD HT BD)", "A（LP SD HT BD）"),
+    "b" => tr("B (SD LP BD HT)", "B（SD LP BD HT）"),
+    "c" => tr("C (LP SD BD HT)", "C（LP SD BD HT）"),
+    "d" => tr("D (SD HT LP BD)", "D（SD HT LP BD）"),
 ];
 
 /// 上流 `eRDPosition`（並びは上流と逆で、既定の RCRD が先）
 const RD_POSITION_CHOICES: &[Choice] = choices![
-    "right" => "CY RD（右端が RD）",
-    "left_of_cy" => "RD CY（右端が CY）",
+    "right" => tr("CY RD (RD at far right)", "CY RD（右端が RD）"),
+    "left_of_cy" => tr("RD CY (CY at far right)", "RD CY（右端が CY）"),
 ];
 
 /// 上流 `eHHOGraphics.Drums`
 const HHO_GRAPHICS_CHOICES: &[Choice] = choices![
-    "a" => "A（丸あり）",
-    "b" => "B（丸なし）",
-    "c" => "C（クローズと同じ）",
+    "a" => tr("A (with ring)", "A（丸あり）"),
+    "b" => tr("B (no ring)", "B（丸なし）"),
+    "c" => tr("C (same as closed)", "C（クローズと同じ）"),
 ];
 
 /// 左バスドラムの出し方。先頭の 2 つは NXT のもの（BD のレーンに水色で出す、LP の右に水色のレーンを足す）、
 /// あとの 2 つは上流 `eLBDGraphics.Drums`
 const LBD_GRAPHICS_CHOICES: &[Choice] = choices![
-    "bd_lane" => "BD のレーンに水色で",
-    "own_lane" => "LP の右にレーンを足す（水色）",
-    "a" => "LP のレーンに同じ絵",
-    "b" => "LP のレーンに紫の絵",
+    "bd_lane" => tr("BD Lane (light blue)", "BD のレーンに水色で"),
+    "own_lane" => tr("Own Lane Beside LP", "LP の右にレーンを足す（水色）"),
+    "a" => tr("LP Lane (same look)", "LP のレーンに同じ絵"),
+    "b" => tr("LP Lane (purple)", "LP のレーンに紫の絵"),
 ];
 
 /// スネアのリムの音符の出し方（並びは [`crate::rim_look::RimLook`] と同じ）
 const RIM_GRAPHICS_CHOICES: &[Choice] = choices![
-    "ears" => "両はしに印",
-    "hollow" => "縁だけ",
-    "white" => "白",
-    "off" => "出さない",
+    "ears" => tr("Marks on Both Ends", "両はしに印"),
+    "hollow" => tr("Outline Only", "縁だけ"),
+    "white" => tr("White", "白"),
+    "off" => tr("Off", "出さない"),
 ];
 
-const VIEW_LANES: &str = "画面の部品";
-const VIEW_ORDER: &str = "レーンとチップ";
-const VIEW_HIDE: &str = "見えにくくする";
+const VIEW_LANES: Tr = tr("Screen Elements", "画面の部品");
+const VIEW_ORDER: Tr = tr("Lanes & Notes", "レーンとチップ");
+const VIEW_HIDE: Tr = tr("Note Hiding", "見えにくくする");
 /// 画面の「動画」（NX v2.0 では System ＞ Graphics）
-const DISPLAY_MOVIE: &str = "動画";
+const DISPLAY_MOVIE: Tr = tr("Video", "動画");
 
 /// 0〜100 の数（判定ラインの高さ、シャッター）
-const fn percent(
-    key: &'static str,
-    section: &'static str,
-    name: &'static str,
-    desc: &'static str,
-) -> Def {
+const fn percent(key: &'static str, section: Tr, name: Tr, desc: Tr) -> Def {
     Def {
         key,
         group: Group::View,
@@ -376,7 +382,7 @@ const fn percent(
             max: 100,
             step: 1,
             default: 0,
-            unit: "",
+            unit: EMPTY,
             zero: None,
         },
         desc,
@@ -385,7 +391,7 @@ const fn percent(
 }
 
 /// 譜面の見た目の ON / OFF（既定は ON）
-const fn view_toggle(key: &'static str, name: &'static str, desc: &'static str) -> Def {
+const fn view_toggle(key: &'static str, name: Tr, desc: Tr) -> Def {
     Def {
         key,
         group: Group::View,
@@ -400,10 +406,10 @@ const fn view_toggle(key: &'static str, name: &'static str, desc: &'static str) 
 /// 譜面の見た目の選択肢
 const fn view_choice(
     key: &'static str,
-    section: &'static str,
-    name: &'static str,
+    section: Tr,
+    name: Tr,
     choices: &'static [Choice],
-    desc: &'static str,
+    desc: Tr,
 ) -> Def {
     Def {
         key,
@@ -432,45 +438,40 @@ pub const CY_PRIORITY: &str = "cy_priority";
 /// 閉じたハイハットと左ペダルで、鳴っているハイハットの音を止める（上流の Muting LP）
 pub const MUTING_LP: &str = "muting_lp";
 
-const GROUP_SECTION: &str = "叩き分け";
+const GROUP_SECTION: Tr = tr("Pad Grouping", "叩き分け");
 /// 叩き分けを共通にしたとき鳴らす音（NX では Group の隣）
-const PRIORITY_SECTION: &str = "共通にしたときの音";
+const PRIORITY_SECTION: Tr = tr("Sound When Grouped", "共通にしたときの音");
 
 /// 上流 `EHHGroup` の並び
 const HH_GROUP_CHOICES: &[Choice] = choices![
-    "hh0" => "HH-0（全部叩き分ける）",
-    "hh1" => "HH-1（左シンバルはハイハットと共通）",
-    "hh2" => "HH-2（ハイハットの開閉は共通）",
-    "hh3" => "HH-3（全部共通）",
+    "hh0" => tr("HH-0 (all separate)", "HH-0（全部叩き分ける）"),
+    "hh1" => tr("HH-1 (left cymbal = hi-hat)", "HH-1（左シンバルはハイハットと共通）"),
+    "hh2" => tr("HH-2 (open = closed hi-hat)", "HH-2（ハイハットの開閉は共通）"),
+    "hh3" => tr("HH-3 (all grouped)", "HH-3（全部共通）"),
 ];
 const FT_GROUP_CHOICES: &[Choice] = choices![
-    "ft0" => "FT-0（叩き分ける）",
-    "ft1" => "FT-1（ロータムと共通）",
+    "ft0" => tr("FT-0 (separate)", "FT-0（叩き分ける）"),
+    "ft1" => tr("FT-1 (grouped with low tom)", "FT-1（ロータムと共通）"),
 ];
 const CY_GROUP_CHOICES: &[Choice] = choices![
-    "cy0" => "CY-0（叩き分ける）",
-    "cy1" => "CY-1（ライドと共通）",
+    "cy0" => tr("CY-0 (separate)", "CY-0（叩き分ける）"),
+    "cy1" => tr("CY-1 (grouped with ride)", "CY-1（ライドと共通）"),
 ];
 /// 上流 `EBDGroup` の並び
 const BD_GROUP_CHOICES: &[Choice] = choices![
-    "bd0" => "BD-0（全部叩き分ける）",
-    "bd1" => "BD-1（左バスドラムは右と共通）",
-    "bd2" => "BD-2（左ペダルと左バスドラムが共通）",
-    "bd3" => "BD-3（全部共通）",
+    "bd0" => tr("BD-0 (all separate)", "BD-0（全部叩き分ける）"),
+    "bd1" => tr("BD-1 (left bass = bass drum)", "BD-1（左バスドラムは右と共通）"),
+    "bd2" => tr("BD-2 (left pedal = left bass)", "BD-2（左ペダルと左バスドラムが共通）"),
+    "bd3" => tr("BD-3 (all grouped)", "BD-3（全部共通）"),
 ];
 /// 上流 `EPlaybackPriority`
 const PRIORITY_CHOICES: &[Choice] = choices![
-    "chip" => "C>P（譜面の音）",
-    "pad" => "P>C（叩いたパッドの音）",
+    "chip" => tr("C>P (chart's sound)", "C>P（譜面の音）"),
+    "pad" => tr("P>C (pad's sound)", "P>C（叩いたパッドの音）"),
 ];
 
 /// 叩き分けの選択肢
-const fn group_choice(
-    key: &'static str,
-    name: &'static str,
-    choices: &'static [Choice],
-    desc: &'static str,
-) -> Def {
+const fn group_choice(key: &'static str, name: Tr, choices: &'static [Choice], desc: Tr) -> Def {
     Def {
         key,
         group: Group::Pads,
@@ -486,7 +487,7 @@ const fn group_choice(
 }
 
 /// 鳴らす音の優先
-const fn priority(key: &'static str, name: &'static str, desc: &'static str) -> Def {
+const fn priority(key: &'static str, name: Tr, desc: Tr) -> Def {
     Def {
         key,
         group: Group::Pads,
@@ -515,18 +516,18 @@ pub const METRONOME: &str = "metronome";
 pub const VOLUMES: [&str; 4] = [AUTO_VOLUME, CHIP_VOLUME, METRONOME_VOLUME, SE_VOLUME];
 
 /// 音量（0〜100 %、5 刻み）
-const fn volume(key: &'static str, name: &'static str, default: i64, desc: &'static str) -> Def {
+const fn volume(key: &'static str, name: Tr, default: i64, desc: Tr) -> Def {
     Def {
         key,
         group: Group::Sound,
-        section: "音量",
+        section: tr("Volume", "音量"),
         name,
         kind: Kind::Number {
             min: 0,
             max: 100,
             step: 5,
             default,
-            unit: " %",
+            unit: tr(" %", " %"),
             zero: None,
         },
         desc,
@@ -534,21 +535,21 @@ const fn volume(key: &'static str, name: &'static str, default: i64, desc: &'sta
     }
 }
 
-const RULE_SECTION: &str = "演奏の決まり";
+const RULE_SECTION: Tr = tr("Rules", "演奏の決まり");
 
 /// ゲージの減り方の選択肢（上流 `EDamageLevel`。並びは MISS の減りにかける数 [`DAMAGE_FACTORS`] と同じ）
 const DAMAGE_CHOICES: &[Choice] = &[
     Choice {
         key: "small",
-        label: "少ない",
+        label: tr("Low", "少ない"),
     },
     Choice {
         key: "normal",
-        label: "ふつう",
+        label: tr("Normal", "ふつう"),
     },
     Choice {
         key: "large",
-        label: "多い",
+        label: tr("High", "多い"),
     },
 ];
 
@@ -556,13 +557,7 @@ const DAMAGE_CHOICES: &[Choice] = &[
 const DAMAGE_FACTORS: [f64; 3] = [0.25, 0.5, 0.75];
 
 /// 判定の幅 1 つ（上流 Config.ini の `[HitRange]`。上流は 0〜999）
-const fn hit_window(
-    key: &'static str,
-    section: &'static str,
-    name: &'static str,
-    default: i64,
-    desc: &'static str,
-) -> Def {
+const fn hit_window(key: &'static str, section: Tr, name: Tr, default: i64, desc: Tr) -> Def {
     Def {
         key,
         group: Group::Play,
@@ -573,7 +568,7 @@ const fn hit_window(
             max: 500,
             step: 1,
             default,
-            unit: " ms",
+            unit: tr(" ms", " ms"),
             zero: None,
         },
         desc,
@@ -581,8 +576,14 @@ const fn hit_window(
     }
 }
 
-const HIT_DESC: &str = "音符の時刻から前後この幅までに叩くと、この判定になります（既定は PERFECT 34、GREAT 67、GOOD 84、POOR 117）。\nPOOR の幅の外は空打ちです。狭い判定の幅が広い判定を越えたら、広い判定もそこまで広げて使います。";
-const PEDAL_HIT_DESC: &str = "バスドラム・左ペダル・左バスドラムだけの判定の幅です（既定はほかのレーンと同じ PERFECT 34、GREAT 67、GOOD 84、POOR 117）。\nほかのレーンと同じく、狭い判定の幅が広い判定を越えたら、広い判定もそこまで広げて使います。";
+const HIT_DESC: Tr = tr(
+    "A hit within this many ms before or after a note gets this judgment (defaults: PERFECT 34, GREAT 67, GOOD 84, POOR 117).\nHits outside the POOR window are stray hits. If a narrower window is set wider than a broader one, the broader one is widened to match.",
+    "音符の時刻から前後この幅までに叩くと、この判定になります（既定は PERFECT 34、GREAT 67、GOOD 84、POOR 117）。\nPOOR の幅の外は空打ちです。狭い判定の幅が広い判定を越えたら、広い判定もそこまで広げて使います。",
+);
+const PEDAL_HIT_DESC: Tr = tr(
+    "Judgment windows for the bass drum, left pedal and left bass drum only (defaults match the other lanes: PERFECT 34, GREAT 67, GOOD 84, POOR 117).\nAs with the other lanes, if a narrower window is set wider than a broader one, the broader one is widened to match.",
+    "バスドラム・左ペダル・左バスドラムだけの判定の幅です（既定はほかのレーンと同じ PERFECT 34、GREAT 67、GOOD 84、POOR 117）。\nほかのレーンと同じく、狭い判定の幅が広い判定を越えたら、広い判定もそこまで広げて使います。",
+);
 
 /// オートのまとめての切り替え
 pub const AUTO_ALL: &str = "auto_all";
@@ -613,7 +614,10 @@ const AUTO_KEYS: [&str; 11] = {
     keys
 };
 
-const AUTO_LANE_DESC: &str = "ON にすると、このレーンの音符を自動で叩きます（音も鳴らします）。ほかのレーンの練習に。\n自動のレーンがあるプレイは、ベストの記録に入れません（ハイハットは閉と開の両方）。";
+const AUTO_LANE_DESC: Tr = tr(
+    "When ON, notes in this lane are played for you, sound included. Handy for working on the other lanes.\nPlays with any auto lane don't count toward your best records (Hi-Hat covers both closed and open).",
+    "ON にすると、このレーンの音符を自動で叩きます（音も鳴らします）。ほかのレーンの練習に。\n自動のレーンがあるプレイは、ベストの記録に入れません（ハイハットは閉と開の両方）。",
+);
 
 /// すべての項目（設定の画面の並び）
 pub const ALL: &[Def] = &[
@@ -621,453 +625,650 @@ pub const ALL: &[Def] = &[
         key: AUTO_ALL,
         group: Group::Pads,
         section: AUTO_SECTION,
-        name: "自動演奏",
+        name: tr("Auto Play", "自動演奏"),
         kind: Kind::All {
             members: &AUTO_KEYS,
         },
-        desc: "ドラムのすべてのレーンの自動演奏を、まとめて ON / OFF にします。下の各レーンで 1 つずつも選べます。\n全部を自動にしたプレイは記録に残しません。",
+        desc: tr(
+            "Turns auto play ON or OFF for every drum lane at once. You can also set lanes one by one below.\nPlays with every lane on auto are not recorded.",
+            "ドラムのすべてのレーンの自動演奏を、まとめて ON / OFF にします。下の各レーンで 1 つずつも選べます。\n全部を自動にしたプレイは記録に残しません。",
+        ),
         in_play: false,
     },
-    auto_lane("auto_lc", "　左シンバル"),
-    auto_lane("auto_hh", "　ハイハット"),
-    auto_lane("auto_lp", "　左ペダル"),
-    auto_lane("auto_lbd", "　左バスドラム"),
-    auto_lane("auto_sd", "　スネア"),
-    auto_lane("auto_bd", "　バスドラム"),
-    auto_lane("auto_ht", "　ハイタム"),
-    auto_lane("auto_lt", "　ロータム"),
-    auto_lane("auto_ft", "　フロアタム"),
-    auto_lane("auto_cy", "　右シンバル"),
-    auto_lane("auto_rd", "　ライド"),
+    auto_lane("auto_lc", tr("　Left Cymbal", "　左シンバル")),
+    auto_lane("auto_hh", tr("　Hi-Hat", "　ハイハット")),
+    auto_lane("auto_lp", tr("　Left Pedal", "　左ペダル")),
+    auto_lane("auto_lbd", tr("　Left Bass Drum", "　左バスドラム")),
+    auto_lane("auto_sd", tr("　Snare", "　スネア")),
+    auto_lane("auto_bd", tr("　Bass Drum", "　バスドラム")),
+    auto_lane("auto_ht", tr("　High Tom", "　ハイタム")),
+    auto_lane("auto_lt", tr("　Low Tom", "　ロータム")),
+    auto_lane("auto_ft", tr("　Floor Tom", "　フロアタム")),
+    auto_lane("auto_cy", tr("　Right Cymbal", "　右シンバル")),
+    auto_lane("auto_rd", tr("　Ride", "　ライド")),
     Def {
         key: DAMAGE_LEVEL,
         group: Group::Play,
         section: RULE_SECTION,
-        name: "ゲージの減り方",
+        name: tr("Gauge Damage", "ゲージの減り方"),
         kind: Kind::Choice {
             choices: DAMAGE_CHOICES,
             default: 1,
         },
-        desc: "見逃したとき（MISS）にゲージがどれだけ減るかを選びます。\nミスの許容数（Risky）を使うときは効きません。",
+        desc: tr(
+            "How much the gauge drops when you miss a note (MISS).\nHas no effect while Risky is in use.",
+            "見逃したとき（MISS）にゲージがどれだけ減るかを選びます。\nミスの許容数（Risky）を使うときは効きません。",
+        ),
         in_play: false,
     },
     Def {
         key: RISKY,
         group: Group::Play,
         section: RULE_SECTION,
-        name: "ミスの許容数（Risky）",
+        name: tr("Risky", "ミスの許容数（Risky）"),
         kind: Kind::Number {
             min: 0,
             max: 10,
             step: 1,
             default: 0,
-            unit: " 回",
-            zero: Some("OFF"),
+            unit: tr(" misses", " 回"),
+            zero: Some(tr("OFF", "OFF")),
         },
-        desc: "POOR と MISS がこの回数になると、ゲージが尽きて STAGE FAILED になります（STAGE FAILED が ON のとき）。\nゲージは満タンから始まり、ミスのたびに同じだけ減ります。OFF ならふつうのゲージです。",
+        desc: tr(
+            "Once your POORs and MISSes reach this count, the gauge runs out and you get STAGE FAILED (when STAGE FAILED is ON).\nThe gauge starts full and drops by the same amount on every miss. OFF uses the normal gauge.",
+            "POOR と MISS がこの回数になると、ゲージが尽きて STAGE FAILED になります（STAGE FAILED が ON のとき）。\nゲージは満タンから始まり、ミスのたびに同じだけ減ります。OFF ならふつうのゲージです。",
+        ),
         in_play: false,
     },
     Def {
         key: HAZARD,
         group: Group::Play,
         section: RULE_SECTION,
-        name: "GREAT・GOOD でも減る（HAZARD）",
+        name: tr("HAZARD", "GREAT・GOOD でも減る（HAZARD）"),
         kind: Kind::Toggle { default: false },
-        desc: "GREAT と GOOD でも、MISS と同じだけゲージが減ります（Risky なら残りの回数が減ります）。\nPERFECT だけを狙うときに。",
+        desc: tr(
+            "GREAT and GOOD drain the gauge as much as a MISS (with Risky, they use up your remaining misses).\nFor when you're going for nothing but PERFECTs.",
+            "GREAT と GOOD でも、MISS と同じだけゲージが減ります（Risky なら残りの回数が減ります）。\nPERFECT だけを狙うときに。",
+        ),
         in_play: false,
     },
     Def {
         key: TIGHT,
         group: Group::Play,
         section: RULE_SECTION,
-        name: "空打ちをミスに（Tight）",
+        name: tr("Tight", "空打ちをミスに（Tight）"),
         kind: Kind::Toggle { default: false },
-        desc: "音符の無いところを叩くと MISS を出し、コンボが切れてゲージが減ります（MISS の数には入れません）。\n区間の練習では効きません。",
+        desc: tr(
+            "Hitting where there's no note gives a MISS: your combo breaks and the gauge drops (it isn't added to the MISS count).\nNot used in section practice.",
+            "音符の無いところを叩くと MISS を出し、コンボが切れてゲージが減ります（MISS の数には入れません）。\n区間の練習では効きません。",
+        ),
         in_play: false,
     },
     group_choice(
         HH_GROUP,
-        "ハイハットの叩き分け",
+        tr("Hi-Hat Grouping", "ハイハットの叩き分け"),
         HH_GROUP_CHOICES,
-        "左シンバル・ハイハット（閉）・ハイハット（開）を叩き分けるかを選びます。共通にしたものは、どれを叩いても取れます。\n譜面に無いレーンは、叩き分けようがないので共通にします。",
+        tr(
+            "Whether the left cymbal, closed hi-hat and open hi-hat count as separate pads. Grouped lanes accept a hit on any of them.\nLanes the chart doesn't use are always grouped, since there's nothing to tell apart.",
+            "左シンバル・ハイハット（閉）・ハイハット（開）を叩き分けるかを選びます。共通にしたものは、どれを叩いても取れます。\n譜面に無いレーンは、叩き分けようがないので共通にします。",
+        ),
     ),
     group_choice(
         FT_GROUP,
-        "フロアタムの叩き分け",
+        tr("Floor Tom Grouping", "フロアタムの叩き分け"),
         FT_GROUP_CHOICES,
-        "ロータムとフロアタムを叩き分けるかを選びます。",
+        tr(
+            "Whether the low tom and floor tom count as separate pads.",
+            "ロータムとフロアタムを叩き分けるかを選びます。",
+        ),
     ),
     group_choice(
         CY_GROUP,
-        "シンバルの叩き分け",
+        tr("Cymbal Grouping", "シンバルの叩き分け"),
         CY_GROUP_CHOICES,
-        "右シンバルとライドを叩き分けるかを選びます。譜面にライドが無ければ共通にします。",
+        tr(
+            "Whether the right cymbal and ride count as separate pads. If the chart has no ride, they are grouped.",
+            "右シンバルとライドを叩き分けるかを選びます。譜面にライドが無ければ共通にします。",
+        ),
     ),
     group_choice(
         BD_GROUP,
-        "ペダルの叩き分け",
+        tr("Pedal Grouping", "ペダルの叩き分け"),
         BD_GROUP_CHOICES,
-        "左ペダル・左バスドラム・バスドラムを叩き分けるかを選びます。\n左バスドラムにパッドもキーも割り当てていなければ、BD-0 でもバスドラムで左バスドラムを取れます。",
+        tr(
+            "Whether the left pedal, left bass drum and bass drum count as separate pads.\nIf no pad or key is assigned to the left bass drum, the bass drum can hit left bass drum notes even with BD-0.",
+            "左ペダル・左バスドラム・バスドラムを叩き分けるかを選びます。\n左バスドラムにパッドもキーも割り当てていなければ、BD-0 でもバスドラムで左バスドラムを取れます。",
+        ),
     ),
     Def {
         key: CYMBAL_FREE,
         group: Group::Pads,
         section: GROUP_SECTION,
-        name: "シンバルフリー",
+        name: tr("Cymbal Free", "シンバルフリー"),
         kind: Kind::Toggle { default: false },
-        desc: "左シンバルと右シンバルを叩き分けません（どちらで叩いても取れます）。\nライドも共通にするかは、シンバルの叩き分けに従います。",
+        desc: tr(
+            "The left and right cymbals count as one (either can hit notes for both).\nWhether the ride joins them follows Cymbal Grouping.",
+            "左シンバルと右シンバルを叩き分けません（どちらで叩いても取れます）。\nライドも共通にするかは、シンバルの叩き分けに従います。",
+        ),
         in_play: false,
     },
     Def {
         key: SKIP_MS,
         group: Group::Play,
-        section: "演奏中のキー",
-        name: "早送り・巻き戻しの幅",
+        section: tr("Keys During Play", "演奏中のキー"),
+        name: tr("Skip Length", "早送り・巻き戻しの幅"),
         kind: Kind::Number {
             min: 1000,
             max: 20000,
             step: 1000,
             default: 5000,
-            unit: " ms",
+            unit: tr(" ms", " ms"),
             zero: None,
         },
-        desc: "演奏中に → で先へ、← で前へ、この幅だけ飛びます（練習では区間をずらします）。\n飛んだプレイは記録に残しません。Space か Pause で一時停止します。",
+        desc: tr(
+            "During play, → skips ahead and ← skips back by this much (in practice they shift the section instead).\nPlays you skip through aren't recorded. Space or Pause pauses the game.",
+            "演奏中に → で先へ、← で前へ、この幅だけ飛びます（練習では区間をずらします）。\n飛んだプレイは記録に残しません。Space か Pause で一時停止します。",
+        ),
         in_play: true,
     },
     Def {
         key: DISPLAY_MODE,
         group: Group::Display,
-        section: "",
-        name: "画面の出し方",
+        section: EMPTY,
+        name: tr("Display Mode", "画面の出し方"),
         kind: Kind::Choice {
             choices: DISPLAY_MODE_CHOICES,
             default: 0,
         },
-        desc: "ボーダーレスは枠のない窓を画面いっぱいに広げ、ほかの窓へすぐ切り替えたり上に重ねたりできます。\n全画面は絵が少し早く出ることがありますが、切り替えで画面が一瞬暗くなることがあります。どの画面でも Alt+Enter か F11 で、ウィンドウと最後に使った方を行き来します。",
+        desc: tr(
+            "Borderless fills the screen with a frameless window, so you can switch to other windows or show them on top instantly.\nFullscreen can get frames on screen slightly sooner, but the screen may go black for a moment when switching. Alt+Enter or F11 toggles between windowed and the full mode you used last, on any screen.",
+            "ボーダーレスは枠のない窓を画面いっぱいに広げ、ほかの窓へすぐ切り替えたり上に重ねたりできます。\n全画面は絵が少し早く出ることがありますが、切り替えで画面が一瞬暗くなることがあります。どの画面でも Alt+Enter か F11 で、ウィンドウと最後に使った方を行き来します。",
+        ),
         in_play: true,
     },
     Def {
         key: WINDOW_SIZE,
         group: Group::Display,
-        section: "",
-        name: "ウィンドウの大きさ",
+        section: EMPTY,
+        name: tr("Window Size", "ウィンドウの大きさ"),
         kind: Kind::Choice {
             choices: WINDOW_SIZE_CHOICES,
             default: 0,
         },
-        desc: "ウィンドウのときの大きさです。選ぶとその場で変わります。\n前回のまま: 手で変えた大きさで次も開きます。\n位置はどれでも前回のところに開きます。",
+        desc: tr(
+            "Window size in windowed mode. It changes as soon as you pick it.\nLast Used: opens at the size you last resized it to.\nThe window always opens where it was last time.",
+            "ウィンドウのときの大きさです。選ぶとその場で変わります。\n前回のまま: 手で変えた大きさで次も開きます。\n位置はどれでも前回のところに開きます。",
+        ),
         in_play: false,
     },
     Def {
         key: VSYNC,
         group: Group::Display,
         section: DISPLAY_SMOOTH,
-        name: "垂直同期",
+        name: tr("V-Sync", "垂直同期"),
         kind: Kind::Choice {
             choices: VSYNC_CHOICES,
             default: 0,
         },
-        desc: "ON: モニターの書き換えに合わせて出します。\n低遅延: 合わせたまま待たずに一番新しい絵を出すので、ON より早く、裂けません（使えない GPU では ON と同じ）。\nOFF: いちばん早いですが、横に裂けることがあります。",
+        desc: tr(
+            "ON: syncs frames to the monitor's refresh.\nLow Latency: stays synced but shows the newest frame without waiting, so it's quicker than ON with no tearing (same as ON on GPUs that don't support it).\nOFF: fastest, but the picture may tear.",
+            "ON: モニターの書き換えに合わせて出します。\n低遅延: 合わせたまま待たずに一番新しい絵を出すので、ON より早く、裂けません（使えない GPU では ON と同じ）。\nOFF: いちばん早いですが、横に裂けることがあります。",
+        ),
         in_play: true,
     },
     Def {
         key: FPS_LIMIT,
         group: Group::Display,
         section: DISPLAY_SMOOTH,
-        name: "フレームレートの上限",
+        name: tr("Frame Rate Limit", "フレームレートの上限"),
         kind: Kind::Choice {
             choices: FPS_LIMIT_CHOICES,
             default: 0,
         },
-        desc: "1 秒に描く回数の上限です。垂直同期が低遅延か OFF のとき、下げると GPU の熱とファンの音が減ります。\n叩いた音と判定は遅れません。",
+        desc: tr(
+            "The most frames drawn per second. With V-Sync on Low Latency or OFF, a lower limit means less GPU heat and fan noise.\nHit sounds and judgment are never delayed.",
+            "1 秒に描く回数の上限です。垂直同期が低遅延か OFF のとき、下げると GPU の熱とファンの音が減ります。\n叩いた音と判定は遅れません。",
+        ),
         in_play: true,
     },
     Def {
         key: BACKGROUND_FPS,
         group: Group::Display,
         section: DISPLAY_SMOOTH,
-        name: "ほかの窓を見ているとき",
+        name: tr("When in Background", "ほかの窓を見ているとき"),
         kind: Kind::Choice {
             choices: BACKGROUND_FPS_CHOICES,
             default: 0,
         },
-        desc: "ほかの窓を使っているあいだ、1 秒に 30 回だけ描いて GPU を休ませます。\n演奏と練習の最中は下げません。",
+        desc: tr(
+            "While you're using another window, draws only 30 frames per second to give the GPU a rest.\nNever lowered during play or practice.",
+            "ほかの窓を使っているあいだ、1 秒に 30 回だけ描いて GPU を休ませます。\n演奏と練習の最中は下げません。",
+        ),
         in_play: false,
+    },
+    Def {
+        key: MONITOR,
+        group: Group::Display,
+        section: DISPLAY_SMOOTH,
+        name: tr("Performance Overlay", "FPS と遅延の表示"),
+        kind: Kind::Choice {
+            choices: MONITOR_CHOICES,
+            default: 0,
+        },
+        desc: tr(
+            "Shows FPS and the time from a hit to its sound in the top-right corner. F9 also cycles it.\nJudgement uses the hit time, so this delay doesn't affect it.",
+            "右上の隅に FPS と、叩いてから音が鳴るまでの時間を出します。F9 でも変えられます。\n判定は叩いた時刻で行うので、この遅れは判定に入りません。",
+        ),
+        in_play: true,
     },
     Def {
         key: AUTO_SAVE_RESULT,
         group: Group::Play,
-        section: "記録",
-        name: "記録を更新した結果を画像で残す",
+        section: tr("Records", "記録"),
+        name: tr(
+            "Save New Record Screenshots",
+            "記録を更新した結果を画像で残す",
+        ),
         kind: Kind::Toggle { default: true },
-        desc: "記録を更新したとき、結果の画面を譜面と同じフォルダに PNG で残します（譜面の名前.日時_DRUMS_ランク.png）。\nF12 ではいつでも画面を「ピクチャ」の DTXmaniaNXT に残せます。",
+        desc: tr(
+            "When you set a new record, the result screen is saved as a PNG in the chart's folder (chart name.date_DRUMS_rank.png).\nF12 saves a screenshot to DTXmaniaNXT in your Pictures folder at any time.",
+            "記録を更新したとき、結果の画面を譜面と同じフォルダに PNG で残します（譜面の名前.日時_DRUMS_ランク.png）。\nF12 ではいつでも画面を「ピクチャ」の DTXmaniaNXT に残せます。",
+        ),
         in_play: false,
     },
     percent(
         JUDGE_LINE_POS,
-        "流れ方",
-        "判定ラインの高さ",
-        "判定ラインを下から何ドット上げるか（0〜100）。チップと小節線、火花も一緒に動きます。",
+        tr("Scrolling", "流れ方"),
+        tr("Judge Line Height", "判定ラインの高さ"),
+        tr(
+            "How far to raise the judge line from the bottom, in dots (0–100). Notes, bar lines and sparks move with it.",
+            "判定ラインを下から何ドット上げるか（0〜100）。チップと小節線、火花も一緒に動きます。",
+        ),
     ),
     Def {
         key: REVERSE,
         group: Group::View,
-        section: "流れ方",
-        name: "下から上へ流す（Reverse）",
+        section: tr("Scrolling", "流れ方"),
+        name: tr("Reverse", "下から上へ流す（Reverse）"),
         kind: Kind::Toggle { default: false },
-        desc: "判定ラインを上に置き、チップを下から上へ流します。判定ラインの高さは下げる向きに。\nシャッターは、チップが出てくる側（下）が「上のシャッター」の値になります。",
+        desc: tr(
+            "Puts the judge line at the top and scrolls notes upward. Judge Line Height then moves it down.\nThe shutter on the side notes come from (the bottom) uses the Top Shutter value.",
+            "判定ラインを上に置き、チップを下から上へ流します。判定ラインの高さは下げる向きに。\nシャッターは、チップが出てくる側（下）が「上のシャッター」の値になります。",
+        ),
         in_play: false,
     },
     view_choice(
         LANE_TYPE,
         VIEW_ORDER,
-        "レーンの並び",
+        tr("Lane Order", "レーンの並び"),
         LANE_TYPE_CHOICES,
-        "HH と LT のあいだの並び。B はペダルとタム、C はタムをまとめ、D は左右対称。\nCY と RD は「RD の位置」で決まり、パッドや判定の文字も一緒に動きます。",
+        tr(
+            "The order of the lanes between HH and LT. B keeps pedals and toms together, C keeps the toms together, and D is symmetrical.\nCY and RD follow RD Position. Pads and judgment text move with their lanes.",
+            "HH と LT のあいだの並び。B はペダルとタム、C はタムをまとめ、D は左右対称。\nCY と RD は「RD の位置」で決まり、パッドや判定の文字も一緒に動きます。",
+        ),
     ),
     view_choice(
         RD_POSITION,
         VIEW_ORDER,
-        "RD の位置",
+        tr("RD Position", "RD の位置"),
         RD_POSITION_CHOICES,
-        "ライドシンバルのレーンを右端に置くか、シンバル（CY）の左に置くか。",
+        tr(
+            "Whether the ride lane sits at the far right or to the left of the cymbal (CY).",
+            "ライドシンバルのレーンを右端に置くか、シンバル（CY）の左に置くか。",
+        ),
     ),
     view_choice(
         HHO_GRAPHICS,
         VIEW_ORDER,
-        "オープンハイハットの絵",
+        tr("Open Hi-Hat Look", "オープンハイハットの絵"),
         HHO_GRAPHICS_CHOICES,
-        "A はまわりに丸のある絵、B は丸を消した絵、C はクローズのハイハットと同じ絵です。",
+        tr(
+            "A has a ring around the note, B has no ring, and C looks the same as a closed hi-hat.",
+            "A はまわりに丸のある絵、B は丸を消した絵、C はクローズのハイハットと同じ絵です。",
+        ),
     ),
     view_choice(
         LBD_GRAPHICS,
         VIEW_ORDER,
-        "左バスドラムの出し方",
+        tr("Left Bass Drum Lane", "左バスドラムの出し方"),
         LBD_GRAPHICS_CHOICES,
-        "左バスドラム（LBD）の音符を BD のレーンに水色で出すか、LP の右に足したレーン（実物のツインペダルと同じ並び）に出すか、LP のレーンに出すか。\n光・判定の文字・火花も、音符を出したレーンに出します。",
+        tr(
+            "Shows left bass drum (LBD) notes in light blue on the BD lane, on an extra lane to the right of LP (laid out like a real double pedal), or on the LP lane.\nLane flashes, judgment text and sparks appear on whichever lane shows the note.",
+            "左バスドラム（LBD）の音符を BD のレーンに水色で出すか、LP の右に足したレーン（実物のツインペダルと同じ並び）に出すか、LP のレーンに出すか。\n光・判定の文字・火花も、音符を出したレーンに出します。",
+        ),
     ),
     view_choice(
         RIM_GRAPHICS,
         VIEW_ORDER,
-        "スネアのリムの音符",
+        tr("Snare Rim Notes", "スネアのリムの音符"),
         RIM_GRAPHICS_CHOICES,
-        "音の名前が Rim や SideStick のスネアの音符を、リムの音符として見分けて出します。\n出さないにすると、普通の音符と同じ絵です。",
+        tr(
+            "Snare notes whose sound is named something like Rim or SideStick are shown as rim notes.\nWith Off, they look like normal notes.",
+            "音の名前が Rim や SideStick のスネアの音符を、リムの音符として見分けて出します。\n出さないにすると、普通の音符と同じ絵です。",
+        ),
     ),
     view_choice(
         HID_SUD,
         VIEW_HIDE,
-        "見えにくくする",
+        tr("Note Hiding", "見えにくくする"),
         HID_SUD_CHOICES,
-        "HIDDEN は判定ラインの近くでチップが消え、SUDDEN は判定ラインの近くまで来てから出ます。\nHID-SUD は両方、STEALTH はずっと見えません（譜面を覚える練習に）。",
+        tr(
+            "HIDDEN makes notes vanish as they near the judge line; SUDDEN keeps them hidden until they get close.\nHID-SUD does both, and STEALTH hides them the whole way (for practicing from memory).",
+            "HIDDEN は判定ラインの近くでチップが消え、SUDDEN は判定ラインの近くまで来てから出ます。\nHID-SUD は両方、STEALTH はずっと見えません（譜面を覚える練習に）。",
+        ),
     ),
     percent(
         SHUTTER_IN,
         VIEW_HIDE,
-        "上のシャッター",
-        "チップが出てくる側（上）をシャッターでどこまで隠すか（0〜100。100 で画面の高さ全部）。",
+        tr("Top Shutter", "上のシャッター"),
+        tr(
+            "How much of the side notes come from (the top) the shutter covers (0–100; 100 is the full screen height).",
+            "チップが出てくる側（上）をシャッターでどこまで隠すか（0〜100。100 で画面の高さ全部）。",
+        ),
     ),
     percent(
         SHUTTER_OUT,
         VIEW_HIDE,
-        "下のシャッター",
-        "判定ラインの側（下）をシャッターでどこまで隠すか（0〜100。100 で画面の高さ全部）。",
+        tr("Bottom Shutter", "下のシャッター"),
+        tr(
+            "How much of the judge line side (the bottom) the shutter covers (0–100; 100 is the full screen height).",
+            "判定ラインの側（下）をシャッターでどこまで隠すか（0〜100。100 で画面の高さ全部）。",
+        ),
     ),
     view_choice(
         DARK,
         VIEW_LANES,
-        "暗くする（Dark）",
+        tr("Dark", "暗くする（Dark）"),
         DARK_CHOICES,
-        "下の 3 つをまとめて切り替えます。HALF はレーンを暗くし、FULL はさらに小節線・判定ライン・レーンの光・進み具合のバーを消します。\n選んだあとで下の 3 つを 1 つずつ変えることもできます。",
+        tr(
+            "Sets the three options below at once. HALF dims the lanes; FULL also hides bar lines, the judge line, lane flashes and the progress bar.\nYou can still change the three below one by one afterwards.",
+            "下の 3 つをまとめて切り替えます。HALF はレーンを暗くし、FULL はさらに小節線・判定ライン・レーンの光・進み具合のバーを消します。\n選んだあとで下の 3 つを 1 つずつ変えることもできます。",
+        ),
     ),
     view_choice(
         LANE_DISP,
         VIEW_LANES,
-        "レーンと小節線",
+        tr("Lanes & Bar Lines", "レーンと小節線"),
         LANE_DISP_CHOICES,
-        "レーンの背景を暗くするか、小節線と拍線を消すかを選びます。",
+        tr(
+            "Whether to dim the lane background and whether to hide bar and beat lines.",
+            "レーンの背景を暗くするか、小節線と拍線を消すかを選びます。",
+        ),
     ),
-    view_toggle(JUDGE_LINE_DISP, "判定ライン", "判定ラインを出すかどうか。"),
+    view_toggle(
+        JUDGE_LINE_DISP,
+        tr("Judge Line", "判定ライン"),
+        tr(
+            "Whether to show the judge line.",
+            "判定ラインを出すかどうか。",
+        ),
+    ),
     view_toggle(
         LANE_FLUSH,
-        "レーンの光",
-        "叩いたときにレーンを光らせるかどうか。",
+        tr("Lane Flash", "レーンの光"),
+        tr(
+            "Whether lanes light up when you hit.",
+            "叩いたときにレーンを光らせるかどうか。",
+        ),
     ),
     view_choice(
         ATTACK_EFFECT,
         VIEW_LANES,
-        "叩いたときの効果",
+        tr("Hit Effects", "叩いたときの効果"),
         ATTACK_EFFECT_CHOICES,
-        "音符を取ったときの火花・星・飛び散るチップをどこまで出すか。",
+        tr(
+            "How much of the sparks, stars and flying chips to show when you hit a note.",
+            "音符を取ったときの火花・星・飛び散るチップをどこまで出すか。",
+        ),
     ),
     view_choice(
         JUDGE_POSITION,
         VIEW_LANES,
-        "判定の文字の位置",
+        tr("Judgment Position", "判定の文字の位置"),
         JUDGE_POSITION_CHOICES,
-        "PERFECT などの文字を、レーンの上か、判定ラインの下に出します。出さないこともできます。",
+        tr(
+            "Shows PERFECT and the other judgments on the lanes or below the judge line. You can also turn them off.",
+            "PERFECT などの文字を、レーンの上か、判定ラインの下に出します。出さないこともできます。",
+        ),
     ),
-    view_toggle(COMBO_DISP, "コンボ", "コンボの数を出すかどうか。"),
+    view_toggle(
+        COMBO_DISP,
+        tr("Combo", "コンボ"),
+        tr(
+            "Whether to show your combo count.",
+            "コンボの数を出すかどうか。",
+        ),
+    ),
     Def {
         key: HIT_ERROR_BAR,
         group: Group::Play,
-        section: "ずれの表示",
-        name: "ずれのバー",
+        section: tr("Timing Display", "ずれの表示"),
+        name: tr("Hit Error Bar", "ずれのバー"),
         kind: Kind::Toggle { default: true },
-        desc: "左のスコアの下（練習では左下）に、叩いたずれを印で出します。真ん中が ±0 で、左が早く、右が遅いです。\n印の色は判定の色で、少しずつ消えます。▼ と数字は直近 20 打の平均です。",
+        desc: tr(
+            "Marks the timing of each hit under the score on the left (bottom left in practice). The center is ±0, left is early and right is late.\nMarks take the judgment's color and fade out. The ▼ and the number show the average of your last 20 hits.",
+            "左のスコアの下（練習では左下）に、叩いたずれを印で出します。真ん中が ±0 で、左が早く、右が遅いです。\n印の色は判定の色で、少しずつ消えます。▼ と数字は直近 20 打の平均です。",
+        ),
         in_play: true,
     },
     Def {
         key: MIN_COMBO,
         group: Group::View,
         section: VIEW_LANES,
-        name: "コンボを出す数",
+        name: tr("Show Combo From", "コンボを出す数"),
         kind: Kind::Number {
             min: 1,
             max: 99999,
             step: 1,
             default: 10,
-            unit: "",
+            unit: EMPTY,
             zero: None,
         },
-        desc: "コンボがこの数になったら、コンボの数を出します。",
+        desc: tr(
+            "The combo count appears once your combo reaches this number.",
+            "コンボがこの数になったら、コンボの数を出します。",
+        ),
         in_play: false,
     },
     Def {
         key: AVI,
         group: Group::Display,
         section: DISPLAY_MOVIE,
-        name: "譜面の動画",
+        name: tr("Chart Video", "譜面の動画"),
         kind: Kind::Toggle { default: true },
-        desc: "譜面の動画（#AVI）をレーンの後ろに流します。\n今は Windows だけで、MP4 や AVI を Windows の機能で読みます。",
+        desc: tr(
+            "Plays the chart's video (#AVI) behind the lanes.\nWindows only for now; MP4 and AVI files are decoded by Windows.",
+            "譜面の動画（#AVI）をレーンの後ろに流します。\n今は Windows だけで、MP4 や AVI を Windows の機能で読みます。",
+        ),
         in_play: false,
     },
     Def {
         key: MOVIE_ALPHA,
         group: Group::Display,
         section: DISPLAY_MOVIE,
-        name: "レーンの透け具合",
+        name: tr("Lane Transparency", "レーンの透け具合"),
         kind: Kind::Number {
             min: 0,
             max: 100,
             step: 10,
             default: 0,
-            unit: " %",
+            unit: tr(" %", " %"),
             zero: None,
         },
-        desc: "レーンの板をどれだけ透かすか（0〜100 %）。上げると後ろの動画や背景が見えます。",
+        desc: tr(
+            "How see-through the lane panel is (0–100 %). Raise it to see the video or background behind the lanes.",
+            "レーンの板をどれだけ透かすか（0〜100 %）。上げると後ろの動画や背景が見えます。",
+        ),
         in_play: false,
     },
     priority(
         HH_PRIORITY,
-        "ハイハットの音",
-        "ハイハットや左シンバルを共通にしたとき、別のレーンの音符を取ったら、譜面の音符の音を鳴らすか、叩いたパッドの音を鳴らすかを選びます。",
+        tr("Hi-Hat Sound", "ハイハットの音"),
+        tr(
+            "With the hi-hat or left cymbal grouped, when you hit a note with a different pad, play either the chart note's sound or the sound of the pad you hit.",
+            "ハイハットや左シンバルを共通にしたとき、別のレーンの音符を取ったら、譜面の音符の音を鳴らすか、叩いたパッドの音を鳴らすかを選びます。",
+        ),
     ),
     priority(
         FT_PRIORITY,
-        "フロアタムの音",
-        "ロータムとフロアタムを共通にしたとき、譜面の音符の音を鳴らすか、叩いたパッドの音を鳴らすかを選びます。",
+        tr("Floor Tom Sound", "フロアタムの音"),
+        tr(
+            "With the low and floor toms grouped, play either the chart note's sound or the sound of the pad you hit.",
+            "ロータムとフロアタムを共通にしたとき、譜面の音符の音を鳴らすか、叩いたパッドの音を鳴らすかを選びます。",
+        ),
     ),
     priority(
         CY_PRIORITY,
-        "シンバルの音",
-        "シンバルとライドを共通にしたとき、譜面の音符の音を鳴らすか、叩いたパッドの音を鳴らすかを選びます。",
+        tr("Cymbal Sound", "シンバルの音"),
+        tr(
+            "With the cymbal and ride grouped, play either the chart note's sound or the sound of the pad you hit.",
+            "シンバルとライドを共通にしたとき、譜面の音符の音を鳴らすか、叩いたパッドの音を鳴らすかを選びます。",
+        ),
     ),
     Def {
         key: MUTING_LP,
         group: Group::Pads,
-        section: "ペダル",
-        name: "閉じたハイハットと左ペダルで止める",
+        section: tr("Pedals", "ペダル"),
+        name: tr("Hi-Hat Choke", "閉じたハイハットと左ペダルで止める"),
         kind: Kind::Toggle { default: true },
-        desc: "閉じたハイハット（HH）か左ペダル（LP）の音が鳴ると、鳴っているハイハットの音（開いたハイハットも）を止めます。叩いた音も、自動で叩くレーンや譜面の自動のハイハットの音も同じです。",
+        desc: tr(
+            "When a closed hi-hat (HH) or left pedal (LP) sound plays, any hi-hat still ringing (open ones too) is cut off. This applies to your hits, auto-played lanes and the chart's own hi-hat sounds alike.",
+            "閉じたハイハット（HH）か左ペダル（LP）の音が鳴ると、鳴っているハイハットの音（開いたハイハットも）を止めます。叩いた音も、自動で叩くレーンや譜面の自動のハイハットの音も同じです。",
+        ),
         in_play: false,
     },
     volume(
         AUTO_VOLUME,
-        "BGM の音量",
+        tr("BGM Volume", "BGM の音量"),
         80,
-        "曲の音の音量です。BGM のほか、譜面の効果音、自動で叩くレーンの音、選曲のプレビューも入ります（全体の音量にさらにかけます）。",
+        tr(
+            "Volume of the song: the BGM plus the chart's sound effects, auto-played lanes and song previews (applied on top of Master Volume).",
+            "曲の音の音量です。BGM のほか、譜面の効果音、自動で叩くレーンの音、選曲のプレビューも入ります（全体の音量にさらにかけます）。",
+        ),
     ),
     volume(
         CHIP_VOLUME,
-        "叩いた音の音量",
+        tr("Hit Sound Volume", "叩いた音の音量"),
         100,
-        "叩いたときに鳴らす譜面の音の音量です（全体の音量にさらにかけます）。強く叩くほど大きく鳴ります。\n電子ドラムの音源の音で叩くなら、「叩いた音」を OFF にします。",
+        tr(
+            "Volume of the chart sounds played when you hit (applied on top of Master Volume). Harder hits play louder.\nIf you play with your drum module's own sounds, set Hit Sounds to OFF.",
+            "叩いたときに鳴らす譜面の音の音量です（全体の音量にさらにかけます）。強く叩くほど大きく鳴ります。\n電子ドラムの音源の音で叩くなら、「叩いた音」を OFF にします。",
+        ),
     ),
     volume(
         METRONOME_VOLUME,
-        "メトロノームの音量",
+        tr("Metronome Volume", "メトロノームの音量"),
         100,
-        "メトロノームと、区間練習の数え始めのクリックの音量です（全体の音量にさらにかけます）。",
+        tr(
+            "Volume of the metronome and the count-in clicks in section practice (applied on top of Master Volume).",
+            "メトロノームと、区間練習の数え始めのクリックの音量です（全体の音量にさらにかけます）。",
+        ),
     ),
     volume(
         SE_VOLUME,
-        "効果音の音量",
+        tr("Menu Sound Volume", "効果音の音量"),
         100,
-        "カーソルを動かす音・決定の音・結果の画面の声など、画面の効果音の音量です（全体の音量にさらにかけます）。\n譜面の効果音は BGM の音量に入ります。",
+        tr(
+            "Volume of menu sounds such as cursor moves, selections and the voice on the result screen (applied on top of Master Volume).\nThe chart's own sound effects follow BGM Volume.",
+            "カーソルを動かす音・決定の音・結果の画面の声など、画面の効果音の音量です（全体の音量にさらにかけます）。\n譜面の効果音は BGM の音量に入ります。",
+        ),
     ),
     Def {
         key: BGM_SOUND,
         group: Group::Sound,
-        section: "鳴らすもの",
-        name: "譜面の BGM",
+        section: tr("Playback", "鳴らすもの"),
+        name: tr("Chart BGM", "譜面の BGM"),
         kind: Kind::Toggle { default: true },
-        desc: "OFF にすると、譜面の BGM（チャンネル 01）を鳴らしません。効果音やギター・ベースの音は鳴らします。",
+        desc: tr(
+            "When OFF, the chart's BGM (channel 01) is muted. Sound effects and guitar/bass sounds still play.",
+            "OFF にすると、譜面の BGM（チャンネル 01）を鳴らしません。効果音やギター・ベースの音は鳴らします。",
+        ),
         in_play: false,
     },
     Def {
         key: METRONOME,
         group: Group::Sound,
-        section: "鳴らすもの",
-        name: "メトロノーム",
+        section: tr("Playback", "鳴らすもの"),
+        name: tr("Metronome", "メトロノーム"),
         kind: Kind::Toggle { default: false },
-        desc: "小節の頭と拍でクリックを鳴らします。演奏中も一時停止から切り替えられます。\n区間練習は、練習の決めごとのメトロノームで鳴らします。",
+        desc: tr(
+            "Clicks on every beat, accented on the first beat of each measure. You can also switch it from the pause menu during play.\nSection practice follows the Metronome option in its own practice settings.",
+            "小節の頭と拍でクリックを鳴らします。演奏中も一時停止から切り替えられます。\n区間練習は、練習の決めごとのメトロノームで鳴らします。",
+        ),
         in_play: true,
     },
     Def {
         key: BGM_ADJUST,
         group: Group::Timing,
-        section: "",
-        name: "BGM のずらし",
+        section: EMPTY,
+        name: tr("BGM Offset", "BGM のずらし"),
         kind: Kind::Number {
             min: -99,
             max: 99,
             step: 1,
             default: 0,
-            unit: " ms",
+            unit: tr(" ms", " ms"),
             zero: None,
         },
-        desc: "BGM と効果音を鳴らす時刻をずらします（プラスで遅く）。譜面と BGM が合っていない曲に。\n-99 〜 99 ms。",
+        desc: tr(
+            "Shifts when the BGM and sound effects play (positive is later). For songs whose BGM is out of step with the chart.\n-99 to 99 ms.",
+            "BGM と効果音を鳴らす時刻をずらします（プラスで遅く）。譜面と BGM が合っていない曲に。\n-99 〜 99 ms。",
+        ),
         in_play: false,
     },
-    hit_window(HIT_KEYS[0], "判定の幅", "PERFECT の幅", 34, HIT_DESC),
-    hit_window(HIT_KEYS[1], "判定の幅", "GREAT の幅", 67, HIT_DESC),
-    hit_window(HIT_KEYS[2], "判定の幅", "GOOD の幅", 84, HIT_DESC),
-    hit_window(HIT_KEYS[3], "判定の幅", "POOR の幅", 117, HIT_DESC),
+    hit_window(
+        HIT_KEYS[0],
+        tr("Judgment Windows", "判定の幅"),
+        tr("PERFECT Window", "PERFECT の幅"),
+        34,
+        HIT_DESC,
+    ),
+    hit_window(
+        HIT_KEYS[1],
+        tr("Judgment Windows", "判定の幅"),
+        tr("GREAT Window", "GREAT の幅"),
+        67,
+        HIT_DESC,
+    ),
+    hit_window(
+        HIT_KEYS[2],
+        tr("Judgment Windows", "判定の幅"),
+        tr("GOOD Window", "GOOD の幅"),
+        84,
+        HIT_DESC,
+    ),
+    hit_window(
+        HIT_KEYS[3],
+        tr("Judgment Windows", "判定の幅"),
+        tr("POOR Window", "POOR の幅"),
+        117,
+        HIT_DESC,
+    ),
     hit_window(
         PEDAL_HIT_KEYS[0],
-        "判定の幅（ペダル）",
-        "PERFECT の幅",
+        tr("Judgment Windows (Pedals)", "判定の幅（ペダル）"),
+        tr("PERFECT Window", "PERFECT の幅"),
         34,
         PEDAL_HIT_DESC,
     ),
     hit_window(
         PEDAL_HIT_KEYS[1],
-        "判定の幅（ペダル）",
-        "GREAT の幅",
+        tr("Judgment Windows (Pedals)", "判定の幅（ペダル）"),
+        tr("GREAT Window", "GREAT の幅"),
         67,
         PEDAL_HIT_DESC,
     ),
     hit_window(
         PEDAL_HIT_KEYS[2],
-        "判定の幅（ペダル）",
-        "GOOD の幅",
+        tr("Judgment Windows (Pedals)", "判定の幅（ペダル）"),
+        tr("GOOD Window", "GOOD の幅"),
         84,
         PEDAL_HIT_DESC,
     ),
     hit_window(
         PEDAL_HIT_KEYS[3],
-        "判定の幅（ペダル）",
-        "POOR の幅",
+        tr("Judgment Windows (Pedals)", "判定の幅（ペダル）"),
+        tr("POOR Window", "POOR の幅"),
         117,
         PEDAL_HIT_DESC,
     ),
@@ -1161,10 +1362,10 @@ impl Values {
         let on_off = |b: bool| (if b { "ON" } else { "OFF" }).to_owned();
         match def(key).kind {
             Kind::Toggle { .. } => on_off(self.flag(key)),
-            Kind::Choice { choices, .. } => choices[self.choice(key)].label.to_owned(),
+            Kind::Choice { choices, .. } => choices[self.choice(key)].label.get().to_owned(),
             Kind::Number { unit, zero, .. } => match (self.number(key), zero) {
-                (0, Some(z)) => z.to_owned(),
-                (n, _) => format!("{n}{unit}"),
+                (0, Some(z)) => z.get().to_owned(),
+                (n, _) => format!("{n}{}", unit.get()),
             },
             Kind::All { members } => {
                 let on = members.iter().filter(|m| self.flag(m)).count();
@@ -1453,6 +1654,7 @@ mod tests {
 
     #[test]
     fn rules_default_to_upstream() {
+        let _ja = i18n::scoped(i18n::Lang::Ja);
         let mut v = Values::default();
         assert_eq!(v.damage_factor(), 0.5);
         assert_eq!(v.label(DAMAGE_LEVEL), "ふつう");
@@ -1537,7 +1739,7 @@ mod tests {
         assert_eq!(all, vec![80, 100, 100, 100]);
         // 音の分類の「音量」の小見出しに、この順で並ぶ
         let in_mixer: Vec<&str> = in_group(Group::Sound)
-            .filter(|d| d.section == "音量")
+            .filter(|d| d.section.ja == "音量")
             .map(|d| d.key)
             .collect();
         assert_eq!(in_mixer, VOLUMES);
@@ -1550,6 +1752,7 @@ mod tests {
 
     #[test]
     fn old_fullscreen_becomes_the_display_mode() {
+        let _ja = i18n::scoped(i18n::Lang::Ja);
         let mut v: Values = toml::from_str("fullscreen = true\nvsync = false\n").unwrap();
         assert!(v.upgrade());
         assert_eq!(v.display_mode(), DisplayMode::Fullscreen);
@@ -1575,6 +1778,7 @@ mod tests {
 
     #[test]
     fn old_vsync_flag_becomes_the_vsync_choice() {
+        let _ja = i18n::scoped(i18n::Lang::Ja);
         let mut on: Values = toml::from_str("vsync = true\n").unwrap();
         assert!(on.upgrade());
         assert_eq!(on.vsync(), Vsync::On);

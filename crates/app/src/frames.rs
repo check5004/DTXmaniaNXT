@@ -1,4 +1,4 @@
-//! フレームの時間を測る。F9 で画面の右上に出し、出しているあいだは 1 秒ごとにログにも書く。
+//! フレームの時間を測る。FPS と遅延の表示（[`crate::perf`]、F9）を出しているあいだ測り、1 秒ごとにログにも書く。
 //!
 //! 選曲画面のスクロールなどがコマ落ちしていないかを、Windows の実機でも確かめられるようにするためのもの。
 //! 「間隔」はフレームとフレームの間の時間（画面の滑らかさ）、「画面」はアプリが画面の中身を作るのに
@@ -7,10 +7,8 @@
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
-use egui::{Align2, Color32, FontId, Pos2, Rect, Stroke, pos2, vec2};
-
-/// グラフに出すフレームの数
-const KEEP: usize = 240;
+/// 覚えておくフレームの数（詳しい表示のグラフ）
+pub const KEEP: usize = 240;
 /// ログに書く間隔
 const LOG_EVERY: Duration = Duration::from_secs(1);
 /// 間隔がふだん（中央値）のこの倍を超えたフレームを「落ちた」と数える
@@ -18,12 +16,12 @@ const HITCH: f32 = 1.5;
 
 /// 1 フレームの時間（ミリ秒）
 #[derive(Debug, Clone, Copy, PartialEq)]
-struct Frame {
-    interval: f32,
+pub struct Frame {
+    pub interval: f32,
     /// 画面の中身を作る
-    build: f32,
+    pub build: f32,
     /// 作り始めから GPU に渡し終えるまで（画面の空きを待つ時間は除く）
-    work: f32,
+    pub work: f32,
 }
 
 /// まとめ（直近の何フレームか）
@@ -93,9 +91,12 @@ impl Default for FrameStats {
 }
 
 impl FrameStats {
-    /// 出す・隠す
-    pub fn toggle(&mut self) {
-        self.shown = !self.shown;
+    /// 測る・やめる（測っているあいだは 1 秒ごとにログに書く）
+    pub fn set_shown(&mut self, shown: bool) {
+        if self.shown == shown {
+            return;
+        }
+        self.shown = shown;
         self.recent.clear();
         self.pending.clear();
         self.logged = Instant::now();
@@ -103,6 +104,18 @@ impl FrameStats {
             "frame times: {}",
             if self.shown { "shown" } else { "hidden" }
         );
+    }
+
+    /// 直近のフレーム（古い順、最大 [`KEEP`]）
+    pub fn recent(&self) -> impl ExactSizeIterator<Item = &Frame> {
+        self.recent.iter()
+    }
+
+    /// 直近 `last` フレームのまとめ
+    pub fn summary(&self, last: usize) -> Option<Summary> {
+        let skip = self.recent.len().saturating_sub(last);
+        let tail: Vec<Frame> = self.recent.iter().skip(skip).copied().collect();
+        summarize(&tail)
     }
 
     /// フレームを作り始める
@@ -160,69 +173,6 @@ impl FrameStats {
             }
             self.pending.clear();
         }
-    }
-
-    /// 右上に、直近の数字とグラフを出す（画面の座標で描く）
-    pub fn draw(&self, painter: &egui::Painter, screen: Rect) {
-        if !self.shown {
-            return;
-        }
-        let frames: Vec<Frame> = self.recent.iter().copied().collect();
-        // 数字は直近 1 秒ほど
-        let tail = &frames[frames.len().saturating_sub(60)..];
-        let w = 300.0;
-        let h = 126.0;
-        let rect = Rect::from_min_size(
-            pos2(screen.right() - w - 8.0, screen.top() + 8.0),
-            vec2(w, h),
-        );
-        painter.rect_filled(rect, 4.0, Color32::from_black_alpha(200));
-        let text = match summarize(tail) {
-            Some(s) => format!(
-                "{:.0} fps　落ちたフレーム {}\n間隔 平均 {:.1} / 最大 {:.1} ms\n画面 平均 {:.1} / 最大 {:.1} ms\nGPU へ 平均 {:.1} / 最大 {:.1} ms",
-                s.fps,
-                s.hitches,
-                s.interval_avg,
-                s.interval_max,
-                s.build_avg,
-                s.build_max,
-                s.work_avg,
-                s.work_max
-            ),
-            None => "測っています…".to_owned(),
-        };
-        painter.text(
-            rect.min + vec2(8.0, 6.0),
-            Align2::LEFT_TOP,
-            text,
-            FontId::proportional(13.0),
-            Color32::WHITE,
-        );
-        // グラフ：灰色が間隔、水色が GPU へ渡すまで、橙が画面の中身を作る時間。線は 60 fps（16.7 ms）
-        let graph = Rect::from_min_max(
-            pos2(rect.left() + 8.0, rect.top() + 78.0),
-            rect.max - vec2(8.0, 6.0),
-        );
-        let scale = graph.height() / 40.0;
-        let bar = graph.width() / KEEP as f32;
-        let y_of = |ms: f32| graph.bottom() - (ms * scale).min(graph.height());
-        for (i, f) in frames.iter().enumerate() {
-            let x = graph.left() + i as f32 * bar;
-            let r = |ms: f32| {
-                Rect::from_min_max(
-                    pos2(x, y_of(ms)),
-                    Pos2::new(x + bar.max(1.0), graph.bottom()),
-                )
-            };
-            painter.rect_filled(r(f.interval), 0.0, Color32::from_gray(110));
-            painter.rect_filled(r(f.work), 0.0, Color32::from_rgb(90, 170, 230));
-            painter.rect_filled(r(f.build), 0.0, Color32::from_rgb(255, 150, 40));
-        }
-        let line = y_of(1000.0 / 60.0);
-        painter.line_segment(
-            [pos2(graph.left(), line), pos2(graph.right(), line)],
-            Stroke::new(1.0, Color32::from_rgb(255, 255, 255)),
-        );
     }
 }
 

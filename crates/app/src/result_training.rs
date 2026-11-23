@@ -578,19 +578,16 @@ pub fn draw_weak(c: &Canvas, g: &mut Gfx, o: &Outcome) {
         (0, 0) => t("No records", "記録なし").to_owned(),
         (p, 0) => {
             let p = count(p, "play", "plays", "回");
-            tf!("From your last {p}", "直近のプレイ {p}から")
+            tf!("Based on {p}", "直近のプレイ {p}から")
         }
         (0, l) => {
             let l = count(l, "practice loop", "practice loops", "周");
-            tf!("From your last {l}", "直近の練習 {l}から")
+            tf!("Based on {l}", "直近の練習 {l}から")
         }
         (p, l) => {
             let p = count(p, "play", "plays", "回");
             let l = count(l, "practice loop", "practice loops", "周");
-            tf!(
-                "From your last {p} and {l}",
-                "直近のプレイ {p}と練習 {l}から"
-            )
+            tf!("Based on {p} and {l}", "直近のプレイ {p}と練習 {l}から")
         }
     };
     let small = Style::edged(13.0, Color32::from_gray(200), Color32::BLACK, 1.0);
