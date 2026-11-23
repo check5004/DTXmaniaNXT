@@ -4,7 +4,7 @@
 
 ## ダウンロード
 
-[リリース](https://github.com/check5004/DTXmaniaNXT/releases/latest)から、Windows は [DTXmaniaNXT-Setup.exe](https://github.com/check5004/DTXmaniaNXT/releases/latest/download/DTXmaniaNXT-Setup.exe)（いつも最新の版）をダウンロードして実行します。管理者の権限なしで `%LocalAppData%\DTXmaniaNXT` にインストールして起動し、スタートメニューとデスクトップに DTXmaniaNXT が入ります。画面の画像と効果音（DTXManiaNX v2.0 のスキン）もアプリに入っているので、DTXManiaNX が無くても NX v2.0 と同じ見た目で遊べます。macOS（Apple シリコン）と Linux（x86_64）の版も同じページにあります。
+[リリース](https://github.com/check5004/DTXmaniaNXT/releases/latest)から、Windows は [DTXmaniaNXT-Setup.exe](https://github.com/check5004/DTXmaniaNXT/releases/latest/download/DTXmaniaNXT-Setup.exe)（いつも最新の版）をダウンロードして実行します。管理者の権限なしで `%LocalAppData%\DTXmaniaNXT` にインストールして起動し、スタートメニューとデスクトップに DTXmaniaNXT が入ります。画面の画像と効果音もアプリに入っているので、ほかに何も用意しなくても遊べます。画面の配置は DTXManiaNX v2.0 と同じで、絵と音は DTXmaniaNXT のために作ったものです。macOS（Apple シリコン）と Linux（x86_64）の版も同じページにあります。
 
 - 署名をしていないので、Windows で「Windows によって PC が保護されました」と出たら「詳細情報」→「実行」を押します。
 - 新しい版は、起動したときに GitHub のリリースにあるかを確かめ、あればタイトルのメニューの下に「新しい版」の行が出ます。その行を選ぶと落とし始め（落としている間は画面の隅に % が出て、そのまま遊べます）、落とし終えたら「再起動して入れ替える」で入れ替えて起動し直します。選ばずに終了しても、そのときに入れ替わります。設定の「アプリ」の「更新」で、知らせる（既定）・自動（起動したときに落とし、終了したときに入れ替える）・確かめない を選べます。

@@ -1688,7 +1688,7 @@ impl PlayView {
         c.part(&frame, X, top, src(0.0, 0.0, frame.w, 47.0));
         // 落ちる速さのアイコン（上流の速さの段 n は 0.089375 × (n + 1) ドット/ミリ秒）
         if let Some(t) = g.skin.tex("Graphics/7_panel_icons.jpg") {
-            // 段は 21 まで。NX v2.0 の絵は 16 段しか無いので、絵にある一番下の段で止める
+            // 段は 21 まで。絵の段が足りなければ、絵にある一番下の段で止める
             let rows = (t.h / 48.0).floor().max(1.0);
             let n = (px_per_ms / 0.089375 - 1.0)
                 .round()

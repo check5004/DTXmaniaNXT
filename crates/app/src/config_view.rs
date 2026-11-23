@@ -1,5 +1,5 @@
 //! 設定の画面（2026-11-22 に作り直した。見本から選んだ案 2「3 列」）。
-//! 左に分類、真ん中に項目の一覧、右に説明と見本を出す。背景と上下の帯は NX v2.0 のスキン（4_ の画像）のままで、
+//! 左に分類、真ん中に項目の一覧、右に説明と見本を出す。背景と上下の帯はスキンの画像（4_ の画像）で、
 //! 行や板は絵を足さずにコードで描く（[`crate::settings_ui`]）。
 //!
 //! パッドの役目は固定して、画面の下に出す。HT 上、LT 下、SD 左、FT 右、CY / RD 決定、LC 戻る
@@ -1463,8 +1463,8 @@ pub fn rows(page: Page, info: &ConfigInfo<'_>) -> Vec<Row> {
                 t("Credits", "クレジット"),
                 crate::credits::VOICE.to_owned(),
                 tf!(
-                    "Voice: {}\nMusic: made with Google Lyria 3\nSkin art and sounds: DTXmaniaNXT (CC BY 4.0). Some parts still come from DTXManiaNX v2.0.\nSelect to open the full list in your browser.",
-                    "声: {}\n曲: Google の Lyria 3 で作成\nスキンの絵と音: DTXmaniaNXT（CC BY 4.0）。一部は DTXManiaNX v2.0 のままです。\n決定で、くわしい一覧をブラウザで開きます。",
+                    "Voice: {}\nMusic: made with Google Lyria 3\nSkin art and sounds: DTXmaniaNXT (CC BY 4.0)\nSelect to open the full list in your browser.",
+                    "声: {}\n曲: Google の Lyria 3 で作成\nスキンの絵と音: DTXmaniaNXT（CC BY 4.0）\n決定で、くわしい一覧をブラウザで開きます。",
                     crate::credits::VOICE
                 ),
                 None,

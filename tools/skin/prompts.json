@@ -75,5 +75,28 @@
   "background": "transparent",
   "cost_usd": 0.042125,
   "prompt": "Three separate pieces of spray-painted lettering on a fully transparent background, stacked vertically with generous empty space between them, each centered: top: \"Thank you for Playing!\" in a wide line of bold hand-sprayed letters; middle: \"BACK\"; bottom: \"Random\". White letters with lime green and violet spray outlines, soft overspray and a few drips, slightly slanted and energetic. Spell each exactly as given; no other words. Visual style: hand-made street art on a dark rehearsal-room wall. Spray paint with soft overspray, stencil shapes, paint drips and splatters, torn strips of black gaffer tape, rough concrete and old wood textures. Palette: white, vivid lime green and violet on near-black, with small touches of other colors only where asked. No logos, no brand names, no characters, mascots, animals or faces. No text or letters except exactly the words requested."
+ },
+ {
+  "name": "result_words",
+  "use": "結果の EXCELLENT・FULL COMBO・STAGE CLEARED と、練習の合格の札の文字（第 3 段階）",
+  "date": "2026-11-23",
+  "model": "openai/gpt-image-2.6-sunburst",
+  "size": "1536x1024",
+  "quality": "high",
+  "background": "transparent",
+  "prompt": "Three separate pieces of spray-painted lettering on a fully transparent background, stacked vertically with generous empty space between them, each centered, complete and not touching the image edges: top: \"EXCELLENT\" on one line, in shining gold and yellow letters with small white sparkles; middle: \"FULL COMBO\" on one line, in bright sky-blue and white letters; bottom: \"STAGE CLEARED\" on two lines (\"STAGE\" above \"CLEARED\"), in white letters with lime green spray outlines. All three use bold, chunky, slightly slanted hand-sprayed letters with a thick dark outline and a violet spray shadow, soft overspray, a few drips and small splatters; energetic and celebratory. Spell each exactly as given; no other words. Visual style: hand-made street art on a dark rehearsal-room wall. Spray paint with soft overspray, stencil shapes, paint drips and splatters, torn strips of black gaffer tape, rough concrete and old wood textures. Palette: white, vivid lime green and violet on near-black, with small touches of other colors only where asked. No logos, no brand names, no characters, mascots, animals or faces. No text or letters except exactly the words requested.",
+  "cost_usd": 0.042465
+ },
+ {
+  "name": "badges",
+  "use": "並べ替えのアイコン 7 つ・練習の合格のメダル・スキル対象の印（第 3 段階）",
+  "date": "2026-11-23",
+  "model": "openai/gpt-image-2.6-sunburst",
+  "size": "1536x1024",
+  "quality": "high",
+  "background": "transparent",
+  "prompt": "A sheet of nine separate stencil badges on a fully transparent background, arranged in three rows of three with generous empty space between them; every badge is complete and not touching the others or the image edges. Badges 1 to 7 and 9 share one style: a simple bold pictogram inside a round ring, sprayed through a stencil in white and vivid lime green with a violet spray shadow, soft overspray and one or two tiny drips, all the same size. Pictograms, left to right and top to bottom: (1) a vinyl record; (2) a stage microphone; (3) three rising bars like a signal meter; (4) a staircase with an upward arrow; (5) a stopwatch; (6) the capital letters A and Z with a small arrow between them; (7) a flame; (8) different from the others and a little larger: a shining gold medal with a small laurel wreath around it, hanging from short red and white ribbon tails, painted with spray paint and gold highlights; (9) a bold upward chevron. Visual style: hand-made street art on a dark rehearsal-room wall. Spray paint with soft overspray, stencil shapes, paint drips and splatters, torn strips of black gaffer tape, rough concrete and old wood textures. Palette: white, vivid lime green and violet on near-black, with small touches of other colors only where asked. No logos, no brand names, no characters, mascots, animals or faces. No text or letters except exactly the words requested.",
+  "cost_usd": 0.042785,
+  "note": "背景が透けずに壁の絵で来たので、build_stage3.py で明るさから透明度を作って切り抜く"
  }
 ]
