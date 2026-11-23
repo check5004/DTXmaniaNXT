@@ -50,7 +50,7 @@ Every note you play is recorded. The result screen shows your weak bars, weak ph
 </td>
 <td valign="top">
 <b>🖼️ Feels like DTXManiaNX v2.0</b><br>
-Screens laid out like DTXManiaNX v2.0, with new artwork. Everything is built in, so you don't need DTXManiaNX installed.
+Screens laid out like DTXManiaNX v2.0, with new artwork and sounds. Everything is built in, so you don't need DTXManiaNX installed.
 </td>
 </tr>
 </table>
@@ -251,30 +251,35 @@ The names and the order above follow the DTXManiaNX READMEs and the projects' ow
   | Step | What | Now |
   | --- | --- | --- |
   | 1 | Images that contained KONAMI's GITADORA artwork or logos (backgrounds, title logo, shutter, STAGE FAILED, ranks and more) | **Replaced** with artwork made for DTXmaniaNXT (23 files). Unused ones were deleted. |
-  | 2 | Sound effects and voices | Still from DTXManiaNX v2.0 |
+  | 2 | Sound effects and voices | **Replaced** with sounds made for DTXmaniaNXT (25 files). Unused ones were deleted. |
   | 3 | All other images (judgement text, gauge, pads, sort icons and more) | Still from DTXManiaNX v2.0 |
 
-  - **Our artwork** (step 1) is under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/); please credit “DTXmaniaNXT”. It was made with an image-generation AI (OpenAI GPT Image 2.6 Sunburst, through OpenRouter), then cropped, resized and lettered. The prompts are in `tools/skin/prompts.json`; they don't name any existing game or product.
-  - **Everything else in the skin** is copied unchanged from the `Runtime/System` folder of [BocuD/DTXmaniaNX](https://github.com/BocuD/DTXmaniaNX) at tag `V2.0.0-20260121-5`. It is under neither the MIT License nor CC BY. Its rights stay with its original creators; there is no record of who made each image or sound. The DTXManiaNX repositories have no license file, and DTXMania's own license (`Runtime/Licenses/dtxmania.txt`, MIT-style) covers the DTXMania software, not these files.
-  - Releases up to 0.8.0 and older commits still contain the images from before step 1.
+  - **Our artwork and sounds** (steps 1 and 2) are under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/); please credit “DTXmaniaNXT”. **The voices are the exception** (see below).
+    - Images: made with an image-generation AI (OpenAI GPT Image 2.6 Sunburst, through OpenRouter), then cropped, resized and lettered. The prompts are in `tools/skin/prompts.json`; they don't name any existing game or product.
+    - Menu sounds: synthesized by `tools/skin/ui_sounds.py`.
+    - Title music and the short jingles (stage clear, full combo, game start, loading and others): made with Google's music model Lyria 3 (through OpenRouter). The prompts don't name any existing song or artist. Lyria's output carries an inaudible SynthID watermark.
+    - Voices (difficulty and sort names, and the voice over the jingles): **VOICEVOX:春日部つむぎ** (Kasukabe Tsumugi). They are under neither CC BY nor the MIT License; they follow the [VOICEVOX terms](https://voicevox.hiroshiba.jp/term/) and the [Kasukabe Tsumugi terms](https://tsumugi-official.studio.site/rule). They are only for use inside DTXmaniaNXT, so please don't extract them for other works or redistribute them. The credit is also shown in the app under Config → General → Credits.
+  - **Everything else in the skin** (the step 3 images) is copied unchanged from the `Runtime/System` folder of [BocuD/DTXmaniaNX](https://github.com/BocuD/DTXmaniaNX) at tag `V2.0.0-20260121-5`. It is under neither the MIT License nor CC BY. Its rights stay with its original creators; there is no record of who made each image. The DTXManiaNX repositories have no license file, and DTXMania's own license (`Runtime/Licenses/dtxmania.txt`, MIT-style) covers the DTXMania software, not these files.
+  - Releases up to 0.8.0 still contain the images from before step 1, and releases up to 0.9.1 the sounds from before step 2. So do older commits.
 - **The app icon** is DTXManiaNX's `dtx.ico` (an icon handed down from DTXMania) with its “DTX” lettering changed to “NXT”. It is not under the MIT License either.
 - **The `master` branch** keeps the upstream C# DTXManiaNX code for reference only. Our license doesn't apply to it.
 
 ### Trademarks
 
-GITADORA is a trademark of Konami Digital Entertainment Co., Ltd. The screen layout follows KONAMI's GITADORA series. Up to version 0.8.0, the bundled skin contained artwork and logos taken straight from GITADORA FUZZ-UP; step 1 replaced all of them. Some of the parts still left from DTXManiaNX v2.0 are made to look like GITADORA's screens, and steps 2 and 3 will replace them. DTXmaniaNXT is not affiliated with or endorsed by KONAMI, or by the developers of DTXMania or DTXManiaNX.
+GITADORA is a trademark of Konami Digital Entertainment Co., Ltd. The screen layout follows KONAMI's GITADORA series. Up to version 0.8.0, the bundled skin contained artwork and logos taken straight from GITADORA FUZZ-UP; step 1 replaced all of them. Some of the parts still left from DTXManiaNX v2.0 are made to look like GITADORA's screens, and step 3 will replace them. DTXmaniaNXT is not affiliated with or endorsed by KONAMI, or by the developers of DTXMania or DTXManiaNX.
 
 **If you hold rights to anything here and want it changed or removed, please open an [issue](https://github.com/check5004/DTXmaniaNXT/issues). We will act on it promptly.**
 
 ### Other credits
 
+- Voice: **VOICEVOX:春日部つむぎ** ([VOICEVOX](https://voicevox.hiroshiba.jp/)).
 - XA sound decoding was written from the format description in [bjxa](https://github.com/dridi/bjxa)'s `bjxa(5)` manual. No code was copied.
 - Built with [wgpu](https://wgpu.rs/), [egui](https://github.com/emilk/egui), [winit](https://github.com/rust-windowing/winit), [cpal](https://github.com/RustAudio/cpal), [midir](https://github.com/Boddlnagg/midir), [Symphonia](https://github.com/pdeljanov/Symphonia), [rusqlite](https://github.com/rusqlite/rusqlite), [timestretch](https://github.com/robmorgan/timestretch-rs), [Velopack](https://velopack.io/) and other open-source crates. Their licenses are listed in `THIRD-PARTY-LICENSES.html` on every [release](https://github.com/check5004/DTXmaniaNXT/releases).
 - Sister project: [DTX Web Editor](https://github.com/check5004/dtx-mania-web-editor), the chart editor.
 
 ### About the pictures
 
-The screenshots and clips come from the current development build, so details may differ slightly from the release you download. They show the skin after step 1, with the English screens (the Japanese README shows the Japanese screens). All songs shown are demo songs made for these pictures, not real songs: “Neon Skyline” is the original demo song of DTX Web Editor, and the other titles are made-up names given to copies of it. The play records shown are made up as well.
+The screenshots and clips come from the current development build, so details may differ slightly from the release you download. They show the artwork from step 1, with the English screens (the Japanese README shows the Japanese screens). All songs shown are demo songs made for these pictures, not real songs: “Neon Skyline” is the original demo song of DTX Web Editor, and the other titles are made-up names given to copies of it. The play records shown are made up as well.
 
 ## For developers
 
@@ -301,7 +306,7 @@ Set `DTXMANIANXT_AUTOPLAY=1` to have every note hit automatically while you chec
 | `crates/i18n` | English and Japanese text for the screens |
 | `crates/app` | The app: winit + wgpu + egui, cpal, midir. Draws the NX skin at the same coordinates as upstream |
 | `assets/skin` | The bundled skin, being replaced with our own artwork (see [Credits and rights](#credits-and-rights)) |
-| `tools/skin` | Prompts and build scripts for the new skin artwork |
+| `tools/skin` | Prompts and build scripts for the new skin artwork and sounds |
 | `testdata/charts` | Test charts with hand-checked expected results |
 
 - How judging works: hits are judged by MIDI arrival time and audio playback position, never by frame.
@@ -313,4 +318,4 @@ Pull requests go to `main` of this repository (check5004/DTXmaniaNXT), not to th
 
 ## License
 
-The code on the `main` branch is under the [MIT License](LICENSE). The skin in `assets/skin` (our artwork is CC BY 4.0, the rest is from DTXManiaNX v2.0), the app icon in `assets/icon` and the upstream code on the `master` branch are not covered by it (see [Credits and rights](#credits-and-rights)).
+The code on the `main` branch is under the [MIT License](LICENSE). The skin in `assets/skin` (our artwork and sounds are CC BY 4.0 except the voices, which follow the VOICEVOX and Kasukabe Tsumugi terms; the rest is from DTXManiaNX v2.0), the app icon in `assets/icon` and the upstream code on the `master` branch are not covered by it (see [Credits and rights](#credits-and-rights)).

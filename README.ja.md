@@ -50,7 +50,7 @@ USB-MIDI でつなげばすぐに叩けます。ハイハットの開き具合�
 </td>
 <td valign="top">
 <b>🖼️ DTXManiaNX v2.0 と同じ使い心地</b><br>
-画面の配置は DTXManiaNX v2.0 のまま、絵は新しく描き起こしています。必要なものはすべて内蔵しているので、DTXManiaNX をインストールしておく必要はありません。
+画面の配置は DTXManiaNX v2.0 のまま、絵と音は新しく作っています。必要なものはすべて内蔵しているので、DTXManiaNX をインストールしておく必要はありません。
 </td>
 </tr>
 </table>
@@ -252,30 +252,35 @@ DTXmaniaNXT は**非公式のファンメイド作品**です。2000 年から�
   | 段階 | 範囲 | 今の状態 |
   | --- | --- | --- |
   | 1 | KONAMI の「GITADORA」の絵やロゴが入っていた画像（背景、タイトルのロゴ、シャッター、STAGE FAILED、ランクなど） | DTXmaniaNXT のために作った素材に**置き換え済み**（23 ファイル）。使っていなかったものは削除 |
-  | 2 | 効果音とボイス | DTXManiaNX v2.0 のまま |
+  | 2 | 効果音とボイス | DTXmaniaNXT のために作った音に**置き換え済み**（25 ファイル）。使っていなかったものは削除 |
   | 3 | そのほかの画像（判定の文字、ゲージ、パッド、並べ替えのアイコンなど） | DTXManiaNX v2.0 のまま |
 
-  - **自前の素材**（段階 1）は [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/deed.ja) です。使うときは「DTXmaniaNXT」と表記してください。画像生成 AI（OpenAI の GPT Image 2.6 Sunburst を OpenRouter 経由で使用）で絵を作り、切り抜き・縮小・文字入れをしています。生成の指示文は `tools/skin/prompts.json` にあり、既存のゲームや製品の名前は入れていません。
-  - **それ以外のスキン**は、[BocuD/DTXmaniaNX](https://github.com/BocuD/DTXmaniaNX) のタグ `V2.0.0-20260121-5` にある `Runtime/System` フォルダから無改変でコピーしたものです。MIT ライセンスも CC BY 4.0 も適用されません。権利は元の制作者にありますが、絵や音ごとの制作者の記録は残っていません。DTXManiaNX のリポジトリにはライセンスファイルがなく、上流に含まれている DTXMania の使用許諾書（`Runtime/Licenses/dtxmania.txt`、MIT ライセンスと同等の内容）は DTXMania 本体のソフトウェアを対象としたもので、これらのファイルには及びません。
-  - 0.8.0 までのリリースと過去のコミットには、段階 1 で置き換える前の画像が残っています。
+  - **自前の素材**（段階 1・2）は [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/deed.ja) です。使うときは「DTXmaniaNXT」と表記してください。ただし、**ボイスは扱いが異なります**（下を参照）。
+    - 画像: 画像生成 AI（OpenAI の GPT Image 2.6 Sunburst を OpenRouter 経由で使用）で絵を作り、切り抜き・縮小・文字入れをしています。生成の指示文は `tools/skin/prompts.json` にあり、既存のゲームや製品の名前は入れていません。
+    - 操作音: `tools/skin/ui_sounds.py` で合成しました。
+    - タイトル曲と、クリア・フルコンボ・開始・読み込み中などの短い曲: Google の音楽生成モデル Lyria 3（OpenRouter 経由）で作りました。指示文に既存の曲や演奏者の名前は入れていません。Lyria の出力には、耳では聞こえない透かし（SynthID）が入っています。
+    - ボイス（難易度や並べ替えの読み上げと、短い曲に重ねた声）: **VOICEVOX:春日部つむぎ**。CC BY 4.0 も MIT ライセンスも適用されず、[VOICEVOX の利用規約](https://voicevox.hiroshiba.jp/term/)と[春日部つむぎの利用規約](https://tsumugi-official.studio.site/rule)に従います。DTXmaniaNXT の中で鳴らすためのものなので、取り出してほかの作品に使ったり、配布したりしないでください。アプリでも、Config の「アプリ」にある「クレジット」に表示しています。
+  - **それ以外のスキン**（段階 3 の画像）は、[BocuD/DTXmaniaNX](https://github.com/BocuD/DTXmaniaNX) のタグ `V2.0.0-20260121-5` にある `Runtime/System` フォルダから無改変でコピーしたものです。MIT ライセンスも CC BY 4.0 も適用されません。権利は元の制作者にありますが、絵ごとの制作者の記録は残っていません。DTXManiaNX のリポジトリにはライセンスファイルがなく、上流に含まれている DTXMania の使用許諾書（`Runtime/Licenses/dtxmania.txt`、MIT ライセンスと同等の内容）は DTXMania 本体のソフトウェアを対象としたもので、これらのファイルには及びません。
+  - 置き換える前の画像は 0.8.0 までのリリースに、音は 0.9.1 までのリリースに残っています。過去のコミットも同じです。
 - **アプリのアイコン**は、DTXManiaNX の `dtx.ico`（DTXMania から受け継がれてきたアイコン）の「DTX」の文字を「NXT」に描き換えたものです。こちらも MIT ライセンスの対象外です。
 - **`master` ブランチ**には、参考として上流の C# 版 DTXManiaNX のコードを残しています。このリポジトリのライセンスは適用されません。
 
 ### 商標について
 
-「GITADORA」は株式会社コナミデジタルエンタテインメントの商標です。画面の配置は KONAMI の「GITADORA」シリーズにならっています。0.8.0 までの同梱スキンには、「GITADORA FUZZ-UP」の絵やロゴがそのまま入った画像がありましたが、段階 1 ですべて置き換えました。DTXManiaNX v2.0 から残っている部品の中には GITADORA の画面に似せたものがあり、段階 2・3 で置き換えます。DTXmaniaNXT は KONAMI とは一切関係がなく、KONAMI や DTXMania・DTXManiaNX の開発者による公認を受けたものでもありません。
+「GITADORA」は株式会社コナミデジタルエンタテインメントの商標です。画面の配置は KONAMI の「GITADORA」シリーズにならっています。0.8.0 までの同梱スキンには、「GITADORA FUZZ-UP」の絵やロゴがそのまま入った画像がありましたが、段階 1 ですべて置き換えました。DTXManiaNX v2.0 から残っている部品の中には GITADORA の画面に似せたものがあり、段階 3 で置き換えます。DTXmaniaNXT は KONAMI とは一切関係がなく、KONAMI や DTXMania・DTXManiaNX の開発者による公認を受けたものでもありません。
 
 **権利者の方で、修正や削除をご希望のものがありましたら、[Issue](https://github.com/check5004/DTXmaniaNXT/issues) でお知らせください。速やかに対応します。**
 
 ### その他のクレジット
 
+- ボイス: **VOICEVOX:春日部つむぎ**（[VOICEVOX](https://voicevox.hiroshiba.jp/)）
 - XA 形式の音声のデコードは、[bjxa](https://github.com/dridi/bjxa) のマニュアル `bjxa(5)` にある形式の解説をもとに実装しました。コードは流用していません。
 - [wgpu](https://wgpu.rs/)・[egui](https://github.com/emilk/egui)・[winit](https://github.com/rust-windowing/winit)・[cpal](https://github.com/RustAudio/cpal)・[midir](https://github.com/Boddlnagg/midir)・[Symphonia](https://github.com/pdeljanov/Symphonia)・[rusqlite](https://github.com/rusqlite/rusqlite)・[timestretch](https://github.com/robmorgan/timestretch-rs)・[Velopack](https://velopack.io/) などのオープンソースソフトウェアを使用しています。各ライセンスは、[リリース](https://github.com/check5004/DTXmaniaNXT/releases)ごとに添付している `THIRD-PARTY-LICENSES.html` に記載しています。
 - 姉妹プロジェクト：ドラム譜面エディタ [DTX Web Editor](https://github.com/check5004/dtx-mania-web-editor)
 
 ### 画像について
 
-スクリーンショットと動画は開発中のビルドで撮影したため、配布中のバージョンとは細部が異なる場合があります。スキンは段階 1 まで置き換えた状態で、画面は日本語の表示で撮っています（英語の README には英語の画面を載せています）。画像に出てくる曲はすべてデモ用で、実在の曲ではありません。「Neon Skyline」は DTX Web Editor のオリジナルのデモ曲で、それ以外の曲名は、その譜面を複製して架空の名前を付けたものです。表示されている記録も、撮影用に用意したものです。
+スクリーンショットと動画は開発中のビルドで撮影したため、配布中のバージョンとは細部が異なる場合があります。画面の絵は段階 1 で置き換えたもので、日本語の表示で撮っています（英語の README には英語の画面を載せています）。画像に出てくる曲はすべてデモ用で、実在の曲ではありません。「Neon Skyline」は DTX Web Editor のオリジナルのデモ曲で、それ以外の曲名は、その譜面を複製して架空の名前を付けたものです。表示されている記録も、撮影用に用意したものです。
 
 ## 開発者向け
 
@@ -302,7 +307,7 @@ cargo test --all
 | `crates/i18n` | 画面に出す英語と日本語の文 |
 | `crates/app` | アプリ本体（winit + wgpu + egui、cpal、midir）。NX のスキンを上流と同じ座標で描画 |
 | `assets/skin` | 同梱しているスキン。自前の素材に置き換え中（[クレジットと権利](#クレジットと権利)を参照） |
-| `tools/skin` | 新しいスキンの素材の生成の指示文と組み立て |
+| `tools/skin` | 新しいスキンの素材（絵と音）の生成の指示文と組み立て |
 | `testdata/charts` | テスト用の譜面と、手計算で確かめた正解データ |
 
 - 判定は画面のフレームではなく、MIDI の受信時刻と音声の再生位置で行います。
@@ -314,4 +319,4 @@ PR はフォーク元の上流ではなく、このリポジトリ（check5004/D
 
 ## ライセンス
 
-`main` ブランチのソースコードは [MIT ライセンス](LICENSE)です。`assets/skin` のスキン（自前の素材は CC BY 4.0、残りは DTXManiaNX v2.0 のもの）、`assets/icon` のアイコン、`master` ブランチにある上流のコードには適用されません（[クレジットと権利](#クレジットと権利)を参照）。
+`main` ブランチのソースコードは [MIT ライセンス](LICENSE)です。`assets/skin` のスキン（自前の素材は CC BY 4.0。ただしボイスは VOICEVOX と春日部つむぎの規約に従います。残りは DTXManiaNX v2.0 のもの）、`assets/icon` のアイコン、`master` ブランチにある上流のコードには適用されません（[クレジットと権利](#クレジットと権利)を参照）。
