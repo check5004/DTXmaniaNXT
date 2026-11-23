@@ -5,7 +5,7 @@
 //! 叩いているあいだは、レーンの上に何も重ねない（2026-11-22 のデザインの決まり）。
 //!
 //! - スコアの場所（左上）に、この段の何周目かと速度を、スコアの数字（`7_score numbersGD.png`）で
-//! - その下の欄に、この段で落とした所の地図（1 マスが 1 拍。1 回は黄、重なったら赤）
+//! - その下の欄に、区間の譜面の絵。この段で落とした音に印（1 回は黄、重なったら赤）
 //! - 右のジャケットの場所に、目標と「あと何段」、段の絵、この段の周の丸、段の越え方
 //! - 進み具合のバー（`CActPerfProgressBar` の場所）に、曲の中の区間と今叩いている位置
 //! - 段の変わり目の助走（判定の音符が落ちてくる前）だけ、レーンの真ん中で「OK! 次は 90%」などを知らせる
@@ -14,9 +14,10 @@
 //! - 前の段で重なった拍は、落ちてくる譜面の下に赤い帯で光らせる（`play_view` が描く）
 
 use egui::{Color32, Stroke, StrokeKind};
-use engine::practice::{BeatSlot, Next, SPEED_MIN, STEP_SPEED, SpotTally, speed_percent};
+use engine::practice::{BeatSlot, Next, SPEED_MIN, STEP_SPEED, Section, speed_percent};
 use i18n::{count, t, tf};
 
+use crate::chart_picture::Look;
 use crate::gfx::{Canvas, Gfx, Opt, src};
 use crate::play_view::JUDGE_LINE_Y;
 use crate::practice::{CLEAR_HOLD_MS, Cue, LapState, Practice, pass_line};
@@ -62,10 +63,9 @@ const COUNT_Y: f32 = 440.0;
 const COUNT_POP_MS: f64 = 180.0;
 
 const SECTION_COLOR: Color32 = Color32::from_rgb(0x40, 0xC8, 0xFF);
-/// ノーミス・ミス 1 回・同じ拍のミスが重なった
+/// ノーミス・ミス 1 回
 const OK_COLOR: Color32 = Color32::from_rgb(0x70, 0xE0, 0x90);
 const SLIP_COLOR: Color32 = Color32::from_rgb(0xF0, 0xD0, 0x50);
-const WEAK_COLOR: Color32 = Color32::from_rgb(0xFF, 0x60, 0x50);
 /// 今の段
 const CURRENT_COLOR: Color32 = Color32::from_rgb(0xFF, 0xB8, 0x40);
 const DOWN_COLOR: Color32 = SECTION_COLOR;
@@ -361,14 +361,13 @@ fn draw_lap_and_speed(c: &Canvas, g: &mut Gfx, p: &Practice, now: f64) {
 
 // ---- 左の欄：この段で落とした所 ----
 
-/// 左の欄。この段で落とした所の地図。段の変わり目（次の段をまだ叩いていない）は、さっきの段の地図
+/// 左の欄。区間の譜面の絵に、この段で落とした音の印。段の変わり目（次の段をまだ叩いていない）は、さっきの段の印
 fn draw_info(c: &Canvas, g: &mut Gfx, p: &Practice) {
     let (x, y, w, h) = INFO;
     c.fill(x, y, w, h, Color32::from_black_alpha(190));
     c.frame(x, y, w, h, Color32::from_white_alpha(60));
-    let current = p.attempt_spots();
     let started = p.attempt_laps().iter().any(|l| l.judged > 0);
-    let (title, spots) = match p.done.last() {
+    let (title, marks) = match p.done.last() {
         Some(last) if !started => (
             {
                 let laps = count(last.laps, "loop", "loops", "周");
@@ -377,7 +376,7 @@ fn draw_info(c: &Canvas, g: &mut Gfx, p: &Practice) {
                     "ミスした所（さっきの {laps}）"
                 )
             },
-            last.spots.clone(),
+            p.marks_of_attempt(last.index),
         ),
         _ => (
             tf!(
@@ -385,7 +384,7 @@ fn draw_info(c: &Canvas, g: &mut Gfx, p: &Practice) {
                 "ミスした所（この {} 周）",
                 p.step_laps()
             ),
-            current,
+            p.attempt_marks(),
         ),
     };
     put(
@@ -399,76 +398,18 @@ fn draw_info(c: &Canvas, g: &mut Gfx, p: &Practice) {
         w - 20.0,
         1.0,
     );
-    draw_map(
+    p.picture.draw(
         c,
         g,
-        p,
-        &spots,
-        p.options.rule.weak_times(),
-        (x + 8.0, y + 30.0, w - 16.0, h - 36.0),
+        (x + 6.0, y + 28.0, w - 12.0, h - 34.0),
+        p.options.section,
+        &marks,
+        Look {
+            counts: false,
+            weak_times: p.options.rule.weak_times(),
+            ..Look::default()
+        },
     );
-}
-
-/// 落とした所の地図。1 マスが 1 拍で、落とした周の数（1 回なら黄、重なったら赤で ×2）
-fn draw_map(
-    c: &Canvas,
-    g: &mut Gfx,
-    p: &Practice,
-    spots: &SpotTally,
-    weak_times: u32,
-    (x, y, w, h): (f32, f32, f32, f32),
-) {
-    let section = p.options.section;
-    let n = section.measures().max(1) as f32;
-    let gap = if n > 6.0 { 2.0 } else { 4.0 };
-    let row = (h / n - gap).clamp(3.0, 24.0);
-    let labels = row >= 11.0;
-    let label_w = if labels { 26.0 } else { 0.0 };
-    let px = (row * 0.55).clamp(9.0, 13.0);
-    for (i, m) in (section.first..=section.last).enumerate() {
-        let ry = y + i as f32 * (row + gap);
-        if labels {
-            put_mid(
-                c,
-                g,
-                &m.to_string(),
-                &edged(px, GREY),
-                x + label_w - 6.0,
-                ry + row / 2.0,
-                Align::Right,
-                label_w,
-            );
-        }
-        let beats = p.grid.beats_in(m).max(1);
-        let cw = (w - label_w) / beats as f32;
-        for b in 0..beats {
-            let cell = (x + label_w + b as f32 * cw + 2.0, ry, cw - 4.0, row);
-            let k = spots.count(BeatSlot {
-                measure: m,
-                beat: b,
-            });
-            if k >= weak_times {
-                round_fill(c, cell, 4.0, WEAK_COLOR.gamma_multiply(0.92));
-                if labels {
-                    put_mid(
-                        c,
-                        g,
-                        &format!("×{k}"),
-                        &edged(px + 1.0, Color32::WHITE),
-                        cell.0 + cell.2 / 2.0,
-                        ry + row / 2.0,
-                        Align::Center,
-                        cell.2,
-                    );
-                }
-            } else if k > 0 {
-                round_fill(c, cell, 4.0, SLIP_COLOR.gamma_multiply(0.45));
-            } else {
-                round_fill(c, cell, 4.0, Color32::from_white_alpha(20));
-                round_frame(c, cell, 4.0, Color32::from_white_alpha(45));
-            }
-        }
-    }
 }
 
 // ---- 右の欄：段 ----
@@ -881,9 +822,9 @@ fn draw_banner(
                     _ => (tf!("Again at {from}%", "もう一度 {from}%"), SLIP_COLOR),
                 };
                 banner_frame(c, ln, top, BANNER_H, color, alpha);
-                line(c, g, ln, &head, &bold(38.0, color), top + 16.0, alpha);
+                line(c, g, ln, &head, &bold(38.0, color), top + 12.0, alpha);
                 let weak = last.map(|r| r.weak()).unwrap_or_default();
-                if let Some(&(b, spot)) = weak.first() {
+                if let (Some(&(b, spot)), Some(last)) = (weak.first(), last) {
                     let more = if weak.len() > 1 {
                         tf!(" and {} more", "ほか {} か所", weak.len() - 1)
                     } else {
@@ -897,11 +838,27 @@ fn draw_banner(
                         g,
                         ln,
                         &text,
-                        &edged(18.0, Color32::WHITE),
-                        top + 70.0,
+                        &edged(17.0, Color32::WHITE),
+                        top + 58.0,
                         alpha,
                     );
-                    draw_measure_cells(c, g, ln, p, b, spot.laps, top + 104.0, alpha);
+                    // その小節の譜面の絵。重なった拍を赤く塗り、落とした音に印
+                    let pw = (ln.w - 80.0).min(420.0);
+                    p.picture.draw(
+                        c,
+                        g,
+                        (ln.cx() - pw / 2.0, top + 84.0, pw, 82.0),
+                        Section::new(b.measure, b.measure),
+                        &p.marks_of_attempt(last.index),
+                        Look {
+                            numbers: false,
+                            counts: false,
+                            beat: Some((b.measure, b.beat)),
+                            weak_times: p.options.rule.weak_times(),
+                            alpha,
+                            ..Look::default()
+                        },
+                    );
                 }
                 let note = match next {
                     Next::Down(_) => tf!(
@@ -914,7 +871,7 @@ fn draw_banner(
                         p.step_laps()
                     ),
                 };
-                line(c, g, ln, &note, &edged(15.0, GREY), top + 152.0, alpha);
+                line(c, g, ln, &note, &edged(15.0, GREY), top + 174.0, alpha);
                 // あと 1 回で下げるときは、先に言っておく
                 let down = from.checked_sub(STEP_SPEED).filter(|&d| d >= SPEED_MIN);
                 if next == Next::Again
@@ -931,7 +888,7 @@ fn draw_banner(
                             "もう一度が 2 回続いたら、{d}% に下げます"
                         ),
                         &edged(13.0, DIM),
-                        top + 182.0,
+                        top + 200.0,
                         alpha,
                     );
                 }
@@ -970,63 +927,6 @@ fn draw_banner(
                 &edged(16.0, GREY),
                 top + 150.0,
                 alpha,
-            );
-        }
-    }
-}
-
-/// 小節 `b.measure` の拍を 1 列に並べ、重なった拍を赤く（×回数）
-#[allow(clippy::too_many_arguments)]
-fn draw_measure_cells(
-    c: &Canvas,
-    g: &mut Gfx,
-    ln: Lanes,
-    p: &Practice,
-    b: BeatSlot,
-    laps: u32,
-    y: f32,
-    alpha: f32,
-) {
-    let beats = p.grid.beats_in(b.measure).max(1);
-    let cw = (300.0 / beats as f32).min(76.0);
-    let left = ln.cx() - cw * beats as f32 / 2.0;
-    for i in 0..beats {
-        let cell = (left + i as f32 * cw + 3.0, y, cw - 6.0, 32.0);
-        let cx = cell.0 + cell.2 / 2.0;
-        if i == b.beat {
-            round_fill(c, cell, 5.0, WEAK_COLOR.gamma_multiply(0.95 * alpha));
-            put_mid(
-                c,
-                g,
-                &format!("×{laps}"),
-                &edged(17.0, Color32::WHITE),
-                cx,
-                y + 16.0,
-                Align::Center,
-                cell.2,
-            );
-        } else {
-            round_fill(
-                c,
-                cell,
-                5.0,
-                Color32::from_white_alpha(25).gamma_multiply(alpha),
-            );
-            round_frame(
-                c,
-                cell,
-                5.0,
-                Color32::from_white_alpha(60).gamma_multiply(alpha),
-            );
-            put_mid(
-                c,
-                g,
-                &(i + 1).to_string(),
-                &edged(14.0, GREY),
-                cx,
-                y + 16.0,
-                Align::Center,
-                cell.2,
             );
         }
     }

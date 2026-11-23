@@ -1254,11 +1254,11 @@ pub fn rows(page: Page, info: &ConfigInfo<'_>) -> Vec<Row> {
             if practice {
                 r.push(action(
                     ItemId::Reselect,
-                    t("Change Section / Speed", "区間・速度を選び直す"),
+                    t("Practice Menu", "練習メニューへ"),
                     String::new(),
                     t(
-                        "Stops practice and opens the section and speed panel. Loops so far stay in your records.",
-                        "練習をやめて、区間と速度を選ぶ板を開きます。ここまでの周は記録に残します。",
+                        "Stops practice and goes back to the practice menu, where you can pick another spot or speed. Loops so far stay in your records.",
+                        "練習をやめて練習メニューに戻ります。ほかの所や速度を選べます。ここまでの周は記録に残します。",
                     )
                     .to_owned(),
                     None,
