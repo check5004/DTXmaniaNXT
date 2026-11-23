@@ -11,6 +11,8 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+use i18n::tf;
+
 use crate::config::Config;
 
 /// ログのファイルの名前
@@ -121,9 +123,13 @@ pub fn tell_user(error: &str, log: Option<&Path>) {
 
 /// ダイアログの文
 fn message(error: &str, log: Option<&Path>) -> String {
-    let mut text = format!("エラーで終了しました。\n\n{error}");
+    let mut text = tf!(
+        "The game quit because of an error.\n\n{error}",
+        "エラーで終了しました。\n\n{error}"
+    );
     if let Some(p) = log {
-        text.push_str(&format!(
+        text.push_str(&tf!(
+            "\n\nSee the log for details. If you report this bug, please attach this file.\n{}",
             "\n\nくわしくはログをご覧ください。不具合を知らせるときは、このファイルを添えてください。\n{}",
             p.display()
         ));
@@ -199,6 +205,9 @@ mod tests {
         let text = message("cannot start the GPU", Some(log));
         assert!(text.contains("cannot start the GPU"));
         assert!(text.contains(&log.display().to_string()));
-        assert!(!message("x", None).contains("ログ"));
+        for lang in i18n::Lang::ALL {
+            let _l = i18n::scoped(lang);
+            assert!(!message("x", None).contains(&log.display().to_string()));
+        }
     }
 }

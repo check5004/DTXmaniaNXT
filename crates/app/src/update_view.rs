@@ -10,6 +10,7 @@ use std::time::Instant;
 
 use egui::Color32;
 use egui::epaint::{PathShape, PathStroke};
+use i18n::{t, tf};
 
 use crate::gfx::{Canvas, Gfx};
 use crate::settings_ui as ui;
@@ -91,7 +92,7 @@ pub fn applying(c: &Canvas, g: &mut Gfx, from: &str, to: &str, since: Instant) {
     ui::text(
         c,
         g,
-        "更新しています",
+        t("Updating", "更新しています"),
         tx,
         y + 24.0,
         &ui::bold(30.0, Color32::WHITE),
@@ -109,7 +110,10 @@ pub fn applying(c: &Canvas, g: &mut Gfx, from: &str, to: &str, since: Instant) {
     ui::paragraph(
         c,
         g,
-        "入れ替えのためにいったん閉じます。数秒で、新しい版が自動で起動します。",
+        t(
+            "The game will close to install the update, then start the new version in a few seconds.",
+            "入れ替えのためにいったん閉じます。数秒で、新しい版が自動で起動します。",
+        ),
         tx,
         y + 106.0,
         tw,
@@ -129,14 +133,14 @@ pub fn applying(c: &Canvas, g: &mut Gfx, from: &str, to: &str, since: Instant) {
     }
 }
 
-/// 更新して起動し直したときの知らせ（左下）。`previous` は前の版（分からなければ空）
+/// 更新して起動し直したときの知らせ（左下、操作の案内の帯の上）。`previous` は前の版（分からなければ空）
 pub fn updated(c: &Canvas, g: &mut Gfx, current: &str, previous: &str, alpha: f32) {
     if alpha <= 0.0 {
         return;
     }
     let a = |col: Color32| col.gamma_multiply(alpha);
-    let main = format!("v{current} になりました");
-    let sub = (!previous.is_empty()).then(|| format!("前は v{previous}"));
+    let main = tf!("Updated to v{current}", "v{current} になりました");
+    let sub = (!previous.is_empty()).then(|| tf!("from v{previous}", "前は v{previous}"));
     let main_style = ui::bold(17.0, Color32::WHITE);
     let sub_style = ui::plain(14.0, SUB);
     let mw = ui::text_width(g, &main, &main_style);
@@ -144,7 +148,7 @@ pub fn updated(c: &Canvas, g: &mut Gfx, current: &str, previous: &str, alpha: f3
         .as_deref()
         .map_or(0.0, |s| 10.0 + ui::text_width(g, s, &sub_style));
     let (w, h) = (18.0 + mw + sw + 14.0, 38.0);
-    let (x, y) = (16.0, 720.0 - 16.0 - h);
+    let (x, y) = (16.0, ui::LEGEND_Y - 12.0 - h);
     ui::round_fill(c, x, y, w, h, 4.0, a(CHIP_BG));
     ui::round_frame(c, x, y, w, h, 4.0, 1.0, a(CHIP_LINE));
     c.fill(x, y, 4.0, h, a(OK));

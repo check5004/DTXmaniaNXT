@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use library::SortKind;
 
-use crate::audio::{AudioOut, Bus, Sound, load_sound, load_sound_bytes};
+use crate::audio::{AudioOut, Bus, OutputLatency, Sound, load_sound, load_sound_bytes};
 
 /// 効果音の種類（上流 `CSkin` のシステムサウンド）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -130,12 +130,12 @@ impl Se {
     }
 }
 
-/// プレビューの音に付ける目印
+/// プレビューの音に付ける目印（目印はビットの組なので、目印ごとに別のビットにする）
 const PREVIEW_TAG: u8 = 1;
 /// 読み込みの音に付ける目印（読み込みをやめたら止める）
 const LOADING_TAG: u8 = 2;
 /// タイトルの音に付ける目印（上流と同じく、ほかの画面へ移ったり終わる音を鳴らしたら止める）
-const TITLE_TAG: u8 = 3;
+const TITLE_TAG: u8 = 4;
 
 pub struct Sfx {
     out: Option<AudioOut>,
@@ -194,6 +194,11 @@ impl Sfx {
                 Err(e) => log::warn!("skin: {}: {e:#}", se.file()),
             }
         }
+    }
+
+    /// 画面の音の出力の遅れ（FPS と遅延の表示へ）
+    pub fn latency(&self) -> Option<OutputLatency> {
+        self.out.as_ref().and_then(AudioOut::latency)
     }
 
     /// スキンにその音がある

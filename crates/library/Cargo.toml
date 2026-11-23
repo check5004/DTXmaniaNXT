@@ -9,6 +9,7 @@ rust-version.workspace = true
 
 [dependencies]
 dtx = { path = "../dtx" }
+i18n = { path = "../i18n" }
 
 [lints]
 workspace = true

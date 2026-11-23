@@ -15,6 +15,7 @@ use dtx::DrumLane;
 use egui::Color32;
 use engine::judge::{Judgement, Tally};
 use engine::stroke::Stroke;
+use i18n::{t, tf};
 
 use crate::game::{Fx, GaugeRule, Play};
 use crate::gfx::{Canvas, Gfx, Glyphs, Opt, Src, Tex, fit_scale, src};
@@ -106,8 +107,8 @@ const STROKE_TAG_DY: f32 = 118.0;
 /// スネアの音符を違う所で叩いたときの札（判定の文字の下に、叩くべきだった方を出す）。`cx` は札の真ん中
 fn draw_stroke_tag(c: &Canvas, g: &mut Gfx, cx: f32, y: f32, want: Stroke) {
     let label = match want {
-        Stroke::Rim => "リム",
-        Stroke::Head => "ヘッド",
+        Stroke::Rim => t("RIM", "リム"),
+        Stroke::Head => t("HEAD", "ヘッド"),
     };
     let style = Style {
         px: 16.0,
@@ -605,7 +606,7 @@ pub enum LbdLook {
     Own,
 }
 
-/// 譜面の見た目の設定（設定の表の「譜面の見た目」から）
+/// 譜面の見た目の設定（設定の表の「譜面」から）
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Looks {
     /// 判定ラインを下から上げるドット（上流 `nJudgeLine`。Reverse では上から下げる）
@@ -1300,7 +1301,7 @@ impl PlayView {
                     };
                     if ahead
                         && let Some(text) = g.texts.get(
-                            &format!("{} 周目", lap.in_attempt),
+                            &tf!("Loop {}", "{} 周目", lap.in_attempt),
                             &Style {
                                 px: 14.0,
                                 color: Color32::WHITE,

@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 use egui::Color32;
 use engine::judge::{HitWindows, Judgement};
 use engine::lag::Advice;
+use i18n::{count, t, tf};
 
 use crate::game::Outcome;
 use crate::gfx::{Canvas, Gfx};
@@ -205,8 +206,24 @@ impl HitErrorBar {
         }
         c.fill(BAR_X - 1.0, cy - 12.0, 2.0, 24.0, Color32::WHITE);
         let small = Color32::from_gray(190);
-        draw_text(c, g, "早", BAR_X - BAR_HALF - 15.0, cy - 8.0, 12.0, small);
-        draw_text_right(c, g, "遅", BAR_X + BAR_HALF + 15.0, cy - 8.0, 12.0, small);
+        draw_text(
+            c,
+            g,
+            t("-", "早"),
+            BAR_X - BAR_HALF - 15.0,
+            cy - 8.0,
+            12.0,
+            small,
+        );
+        draw_text_right(
+            c,
+            g,
+            t("+", "遅"),
+            BAR_X + BAR_HALF + 15.0,
+            cy - 8.0,
+            12.0,
+            small,
+        );
         if let Some(m) = self.mean() {
             let x = BAR_X + (m.clamp(-w.poor, w.poor) as f32) * s;
             caret(c, x, cy - 11.0, Color32::WHITE);
@@ -238,16 +255,35 @@ const PANEL: (f32, f32, f32, f32) = (836.0, 62.0, 434.0, 222.0);
 
 /// おすすめの中身（「この曲の補正 +0 → +10 ms」など）。すすめるものが無ければ None
 pub fn advice_text(a: &Advice) -> Option<String> {
-    let global = (a.global_ms != a.global_now)
-        .then(|| format!("全体 {:+} → {:+}", a.global_now, a.global_ms));
-    let song =
-        (a.song_ms != a.song_now).then(|| format!("この曲 {:+} → {:+}", a.song_now, a.song_ms));
+    let global = (a.global_ms != a.global_now).then(|| {
+        tf!(
+            "Global {:+} → {:+}",
+            "全体 {:+} → {:+}",
+            a.global_now,
+            a.global_ms
+        )
+    });
+    let song = (a.song_ms != a.song_now).then(|| {
+        tf!(
+            "This song {:+} → {:+}",
+            "この曲 {:+} → {:+}",
+            a.song_now,
+            a.song_ms
+        )
+    });
     match (global, song) {
-        (Some(g), Some(s)) => Some(format!("{g}、{s} ms")),
-        (Some(g), None) => Some(format!("入力の補正（{g} ms）")),
-        (None, Some(_)) => Some(format!(
+        (Some(g), Some(s)) => Some(tf!("{g}, {s} ms", "{g}、{s} ms")),
+        (Some(_), None) => Some(tf!(
+            "Global offset {:+} → {:+} ms",
+            "入力の補正（全体 {:+} → {:+} ms）",
+            a.global_now,
+            a.global_ms
+        )),
+        (None, Some(_)) => Some(tf!(
+            "Song offset {:+} → {:+} ms",
             "この曲の補正 {:+} → {:+} ms",
-            a.song_now, a.song_ms
+            a.song_now,
+            a.song_ms
         )),
         (None, None) => None,
     }
@@ -261,11 +297,11 @@ pub fn draw_result(c: &Canvas, g: &mut Gfx, o: &Outcome) {
     let (x, y, pw, ph) = PANEL;
     c.fill(x, y, pw, ph, Color32::from_rgba_unmultiplied(8, 8, 16, 225));
     c.frame(x, y, pw, ph, Color32::from_gray(150));
-    g.heading(c, x + 12.0, y + 8.0, "ずれ");
+    g.heading(c, x + 12.0, y + 8.0, t("Timing", "ずれ"));
     draw_text_right(
         c,
         g,
-        "早い ←　→ 遅い",
+        t("Early ←   → Late", "早い ←　→ 遅い"),
         x + pw - 12.0,
         y + 16.0,
         13.0,
@@ -284,18 +320,32 @@ pub fn draw_result(c: &Canvas, g: &mut Gfx, o: &Outcome) {
     let gray = Color32::from_gray(200);
     let mut ty = y + 94.0;
     let now = match (o.offset_mean_ms, o.offset_sd_ms) {
-        (Some(m), Some(sd)) => format!("今回 {}　ばらつき ±{sd:.1} ms", signed_ms_1(m)),
-        (Some(m), None) => format!("今回 {}", signed_ms_1(m)),
-        _ => "今回は叩けた音符がありません".to_owned(),
+        (Some(m), Some(sd)) => tf!(
+            "This play {}   Spread ±{sd:.1} ms",
+            "今回 {}　ばらつき ±{sd:.1} ms",
+            signed_ms_1(m)
+        ),
+        (Some(m), None) => tf!("This play {}", "今回 {}", signed_ms_1(m)),
+        _ => t(
+            "No notes were hit this time",
+            "今回は叩けた音符がありません",
+        )
+        .to_owned(),
     };
     draw_text(c, g, &now, x + 14.0, ty, 15.0, white);
     ty += 22.0;
     let a = &lag.advice;
     let song = match (a.song, a.song_residual_ms()) {
         (Some(s), Some(r)) if s.enough() => {
-            format!("この曲 直近 {} 回 {}", s.sessions, signed_ms(r))
+            tf!(
+                "This song ({}): {}",
+                "この曲 直近 {} {}",
+                count(s.sessions, "play", "plays", "回"),
+                signed_ms(r)
+            )
         }
-        _ => format!(
+        _ => tf!(
+            "Not enough hits on this song yet (needs {})",
             "この曲はまだ記録が足りません（{} 打から）",
             engine::lag::MIN_HITS
         ),
@@ -306,7 +356,11 @@ pub fn draw_result(c: &Canvas, g: &mut Gfx, o: &Outcome) {
         draw_text(
             c,
             g,
-            &format!("全部の曲（{n} 曲の真ん中）{}", signed_ms(r)),
+            &tf!(
+                "All songs (median of {n}) {}",
+                "全部の曲（{n} 曲の真ん中）{}",
+                signed_ms(r)
+            ),
             x + 14.0,
             ty,
             14.0,
@@ -316,14 +370,17 @@ pub fn draw_result(c: &Canvas, g: &mut Gfx, o: &Outcome) {
     let (bx, by, bw, bh) = (x + 12.0, y + ph - 52.0, pw - 24.0, 40.0);
     let orange = Color32::from_rgb(0xFF, 0xB8, 0x40);
     let (label, hint) = match (lag.applied, advice_text(a)) {
-        (Some(_), Some(t)) => (t, "もとに戻す"),
-        (None, Some(t)) => (t, "そうする"),
+        (Some(_), Some(text)) => (text, t("Undo", "もとに戻す")),
+        (None, Some(text)) => (text, t("Apply", "そうする")),
         (_, None) => {
             if a.song.is_some_and(|s| s.enough()) {
                 draw_text(
                     c,
                     g,
-                    "今の補正のままでよさそうです",
+                    t(
+                        "Your current offset looks right",
+                        "今の補正のままでよさそうです",
+                    ),
                     bx + 2.0,
                     by + 12.0,
                     14.0,
@@ -336,9 +393,9 @@ pub fn draw_result(c: &Canvas, g: &mut Gfx, o: &Outcome) {
     c.fill(bx, by, bw, bh, with_alpha(orange, 0.12));
     c.frame(bx, by, bw, bh, orange);
     let head = if lag.applied.is_some() {
-        "変えました"
+        t("Applied", "変えました")
     } else {
-        "おすすめ"
+        t("Suggested", "おすすめ")
     };
     let hw = draw_text(c, g, head, bx + 10.0, by + 11.0, 13.0, orange);
     draw_text(
@@ -351,7 +408,7 @@ pub fn draw_result(c: &Canvas, g: &mut Gfx, o: &Outcome) {
         Color32::WHITE,
     );
     // パッドの印（FT）と、キーボードの O
-    let hint = format!("FT / O：{hint}");
+    let hint = tf!("FT / O: {hint}", "FT / O：{hint}");
     draw_text_right(c, g, &hint, bx + bw - 10.0, by + 11.0, 13.0, white);
 }
 
@@ -425,6 +482,7 @@ mod tests {
 
     #[test]
     fn advice_names_what_changes() {
+        let _ja = i18n::scoped(i18n::Lang::Ja);
         assert_eq!(advice_text(&advice((3, 3), (0, 0))), None);
         assert_eq!(
             advice_text(&advice((3, 3), (0, 10))).as_deref(),
@@ -437,6 +495,15 @@ mod tests {
         assert_eq!(
             advice_text(&advice((0, 12), (5, -2))).as_deref(),
             Some("全体 +0 → +12、この曲 +5 → -2 ms")
+        );
+        let _en = i18n::scoped(i18n::Lang::En);
+        assert_eq!(
+            advice_text(&advice((0, 12), (0, 0))).as_deref(),
+            Some("Global offset +0 → +12 ms")
+        );
+        assert_eq!(
+            advice_text(&advice((0, 12), (5, -2))).as_deref(),
+            Some("Global +0 → +12, This song +5 → -2 ms")
         );
     }
 

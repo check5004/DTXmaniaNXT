@@ -25,6 +25,41 @@ impl Default for AutoMix {
     }
 }
 
+/// ハイハットの音の止め方（上流の Muting LP）での音の役目。
+/// 上流 `tPlaySound` と同じく、閉じたハイハット（0x11、自動の 0x84）と左ペダル（0x1B）を鳴らすと、
+/// それより前に鳴らしたハイハットの音（閉じた・開いた）を止める
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Hat {
+    /// 閉じたハイハット。前のハイハットの音を止め、自分も後の音で止められる
+    Closed,
+    /// 開いたハイハット。後の音で止められる
+    Open,
+    /// 左ペダル。前のハイハットの音を止める
+    Pedal,
+}
+
+impl Hat {
+    /// レーン `lane` の音の役目
+    pub fn of_lane(lane: DrumLane) -> Option<Self> {
+        match lane {
+            DrumLane::HH => Some(Self::Closed),
+            DrumLane::HHO => Some(Self::Open),
+            DrumLane::LP => Some(Self::Pedal),
+            _ => None,
+        }
+    }
+
+    /// 鳴らすと、前に鳴らしたハイハットの音を止める
+    pub fn mutes(self) -> bool {
+        matches!(self, Self::Closed | Self::Pedal)
+    }
+
+    /// ハイハットの音（後の音で止められる）
+    pub fn is_hat(self) -> bool {
+        matches!(self, Self::Closed | Self::Open)
+    }
+}
+
 /// 自動で鳴らす音 1 つ（鳴らす形にしたもの）
 #[derive(Debug, Clone, PartialEq)]
 pub struct AutoVoice {
@@ -35,8 +70,11 @@ pub struct AutoVoice {
     pub gain: f32,
     /// 左右（-1〜1、`#PAN`）
     pub pan: f32,
-    /// 鳴らす長さ。同じ組の次の音が鳴るときはそこで止める（効果音 SE01〜SE05、ギター、ベース）
+    /// 鳴らす長さ。同じ組の次の音が鳴るときはそこで止める（効果音 SE01〜SE05、ギター、ベース、
+    /// [`ChartSounds::mute_hats`] のあとのハイハット）
     pub len_ms: Option<f64>,
+    /// ハイハットの音の止め方での役目（ハイハットと左ペダルの音だけ）
+    pub hat: Option<Hat>,
 }
 
 /// 1 曲の譜面の音
@@ -90,6 +128,8 @@ impl ChartSounds {
                     gain,
                     pan,
                     len_ms: a.cut_ms.map(|cut| cut - a.ms),
+                    // 0x84 は自動で鳴らす閉じたハイハット（上流は 0x11 と同じに扱う）
+                    hat: (a.channel == AutoChannel::Drum(0x84)).then_some(Hat::Closed),
                 }
             })
             .collect();
@@ -97,11 +137,11 @@ impl ChartSounds {
         sounds
     }
 
-    /// 自動で叩くレーンの音符（時刻、音）を、自動で鳴らす音に足す（音量と左右はその音のもの）
-    pub fn add_auto_notes(&mut self, notes: impl IntoIterator<Item = (f64, u16)>) {
+    /// 自動で叩くレーンの音符（時刻、音、レーン）を、自動で鳴らす音に足す（音量と左右はその音のもの）
+    pub fn add_auto_notes(&mut self, notes: impl IntoIterator<Item = (f64, u16, DrumLane)>) {
         let added: Vec<AutoVoice> = notes
             .into_iter()
-            .map(|(ms, wav)| {
+            .map(|(ms, wav, lane)| {
                 let (gain, pan) = self.gain_pan(wav);
                 AutoVoice {
                     ms,
@@ -109,6 +149,7 @@ impl ChartSounds {
                     gain,
                     pan,
                     len_ms: None,
+                    hat: Hat::of_lane(lane),
                 }
             })
             .collect();
@@ -117,6 +158,32 @@ impl ChartSounds {
         }
         self.auto.extend(added);
         self.auto.sort_by(|a, b| a.ms.total_cmp(&b.ms));
+    }
+
+    /// 上流の Muting LP: 自動で鳴らすハイハットの音を、後の閉じたハイハットか左ペダルの音の時刻で止める
+    /// （同じ時刻の音どうしでは止めない）。自動で鳴らす音をすべて足してから呼ぶ
+    pub fn mute_hats(&mut self) {
+        // まだ止めていないハイハットの音（`auto` の添え字）
+        let mut ringing: Vec<usize> = Vec::new();
+        for i in 0..self.auto.len() {
+            let (at, Some(hat)) = (self.auto[i].ms, self.auto[i].hat) else {
+                continue;
+            };
+            if hat.mutes() {
+                ringing.retain(|&j| {
+                    let v = &mut self.auto[j];
+                    if v.ms >= at {
+                        return true;
+                    }
+                    let len = at - v.ms;
+                    v.len_ms = Some(v.len_ms.map_or(len, |l| l.min(len)));
+                    false
+                });
+            }
+            if hat.is_hat() {
+                ringing.push(i);
+            }
+        }
     }
 
     /// 読んでおく音（自動で鳴らす音、空打ちの音、見えない音符）
@@ -174,21 +241,24 @@ mod tests {
                     wav: 1,
                     gain: 1.0,
                     pan: 0.0,
-                    len_ms: None
+                    len_ms: None,
+                    hat: None
                 },
                 AutoVoice {
                     ms: 2000.0,
                     wav: 2,
                     gain: 0.6,
                     pan: -0.5,
-                    len_ms: Some(1000.0)
+                    len_ms: Some(1000.0),
+                    hat: None
                 },
                 AutoVoice {
                     ms: 3000.0,
                     wav: 2,
                     gain: 0.6,
                     pan: -0.5,
-                    len_ms: None
+                    len_ms: None,
+                    hat: None
                 },
             ]
         );
@@ -198,12 +268,45 @@ mod tests {
     #[test]
     fn auto_notes_join_in_time_order() {
         let mut s = sounds("#BPM 120\n#VOLUME05 50\n#00101: 01\n#00201: 02\n#00112: 0005\n");
-        s.add_auto_notes([(3000.0, 5)]);
+        s.add_auto_notes([(3000.0, 5, DrumLane::SD)]);
         let order: Vec<(f64, u16, f32)> = s.auto.iter().map(|a| (a.ms, a.wav, a.gain)).collect();
         assert_eq!(
             order,
             vec![(2000.0, 1, 1.0), (3000.0, 5, 0.5), (4000.0, 2, 1.0)]
         );
+    }
+
+    #[test]
+    fn closed_hats_and_the_left_pedal_cut_the_hats_before_them() {
+        use DrumLane::*;
+        // 0x84（自動で鳴らす閉じたハイハット、音 09）は 3000ms
+        let mut s = sounds("#BPM 120\n#00184: 0009\n");
+        s.add_auto_notes([
+            (2000.0, 1, HHO),
+            (2500.0, 1, HHO),
+            (3000.0, 1, HHO),
+            (3500.0, 3, LP),
+            (3500.0, 4, SD),
+            (4000.0, 2, HH),
+        ]);
+        let lens = |s: &ChartSounds| -> Vec<(f64, u16, Option<f64>)> {
+            s.auto.iter().map(|a| (a.ms, a.wav, a.len_ms)).collect()
+        };
+        // Muting LP が OFF なら止めない
+        assert!(lens(&s).iter().all(|l| l.2.is_none()));
+        s.mute_hats();
+        let got = lens(&s);
+        let len = |ms: f64, wav: u16| got.iter().find(|l| l.0 == ms && l.1 == wav).unwrap().2;
+        // 開いたハイハットは開いたハイハットでは止めず、0x84 で止める
+        assert_eq!(len(2000.0, 1), Some(1000.0));
+        assert_eq!(len(2500.0, 1), Some(500.0));
+        // 同じ時刻の音どうしは止めない。左ペダルで、開いたハイハットも 0x84 も止める
+        assert_eq!(len(3000.0, 1), Some(500.0));
+        assert_eq!(len(3000.0, 9), Some(500.0));
+        // 左ペダル・スネア・最後のハイハットはそのまま
+        assert_eq!(len(3500.0, 3), None);
+        assert_eq!(len(3500.0, 4), None);
+        assert_eq!(len(4000.0, 2), None);
     }
 
     #[test]
@@ -223,7 +326,7 @@ mod tests {
         // BGM は鳴らさず、効果音だけ 600ms 遅らせる（ギターはずらさない）。音量は出力で系統ごとにかける
         assert_eq!(got, vec![(2000.0, 3, 1.0), (3600.0, 2, 1.0)]);
         let mut s = s;
-        s.add_auto_notes([(2000.0, 4)]);
+        s.add_auto_notes([(2000.0, 4, DrumLane::SD)]);
         assert_eq!(s.auto[0].gain, 1.0);
     }
 

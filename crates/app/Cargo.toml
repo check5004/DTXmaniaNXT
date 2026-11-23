@@ -11,6 +11,7 @@ rust-version.workspace = true
 dtx = { path = "../dtx" }
 engine = { path = "../engine" }
 library = { path = "../library" }
+i18n = { path = "../i18n" }
 records = { path = "../records" }
 nx = { path = "../nx" }
 video = { path = "../video" }
@@ -44,6 +45,8 @@ ttf-parser = "0.25"
 rust-embed = "8"
 # インストールと、GitHub のリリースからの自動更新（Setup.exe と差分の更新を作る vpk と組で使う）
 velopack = "1.2"
+# 設定の画面から譜面エディタ（Web アプリ）を既定のブラウザで開く（egui-winit も使っている）
+webbrowser = "1"
 
 [build-dependencies]
 # Windows の exe にアプリのアイコンと版の情報を埋め込む（build.rs。Windows SDK の rc.exe を使う）

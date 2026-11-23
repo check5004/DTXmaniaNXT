@@ -14,6 +14,7 @@
 //! 項目の多くは設定の表（[`crate::settings`]）から作る。表に足した項目は、分類と小見出しのとおりにここへ出る。
 //! 出入りは NX v2.0 と同じくシャッター（`shutter`）。
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -30,7 +31,7 @@ use winit::keyboard::KeyCode;
 
 use crate::config::{Config, MASTER_VOLUME_STEP};
 use crate::gfx::{Canvas, Gfx};
-use crate::inputs::{KEYBOARD, LaneSource, lane_label};
+use crate::inputs::{LaneSource, keyboard, lane_label};
 use crate::settings::{self, Group, Kind};
 use crate::settings_ui::{self as ui, Icon, Pad};
 use crate::sfx::Se;
@@ -38,6 +39,8 @@ use crate::stretch::Pitch;
 use crate::text::Style;
 use crate::title_view::draw_scanning;
 use crate::update::UpdateMode;
+use crate::window_mode::{self, MonitorInfo};
+use i18n::{Lang, Tr, count, t, tf, tr};
 
 /// 補正の値の範囲（ミリ秒）
 pub const OFFSET_RANGE: f64 = 200.0;
@@ -51,32 +54,37 @@ const FLOW_GUARD: Duration = Duration::from_millis(300);
 /// 画面の下の短い知らせを出しておく時間
 const TOAST_FOR: Duration = Duration::from_millis(2500);
 
-/// 分類（左の列）
+/// 分類（左の列）。NX v2.0 と同じく「システム」と「ドラム」の 2 段に分け、中は普通のゲームの名前で小分けにする
+/// （2026-11-22 ユーザーが見本 https://claude.ai/artifact/YbxwgG4eTJDfHoxcAUbGN8 から案 A を選んだ）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Cat {
     /// よく使う（選曲の簡易設定と同じ並び）
     Fav,
-    Play,
-    View,
-    Timing,
+    Display,
     Sound,
-    Input,
+    Play,
     Songs,
-    Practice,
     App,
+    View,
+    Pads,
+    Timing,
+    Input,
+    Practice,
 }
 
 /// 左の列の並び
-pub const CATS: [Cat; 9] = [
+pub const CATS: [Cat; 11] = [
     Cat::Fav,
-    Cat::Play,
-    Cat::View,
-    Cat::Timing,
+    Cat::Display,
     Cat::Sound,
-    Cat::Input,
+    Cat::Play,
     Cat::Songs,
-    Cat::Practice,
     Cat::App,
+    Cat::View,
+    Cat::Pads,
+    Cat::Timing,
+    Cat::Input,
+    Cat::Practice,
 ];
 
 impl Cat {
@@ -84,48 +92,97 @@ impl Cat {
     fn group(self) -> Option<Group> {
         match self {
             Cat::Fav => None,
-            Cat::Play => Some(Group::Play),
-            Cat::View => Some(Group::View),
-            Cat::Timing => Some(Group::Timing),
+            Cat::Display => Some(Group::Display),
             Cat::Sound => Some(Group::Sound),
-            Cat::Input => Some(Group::Input),
+            Cat::Play => Some(Group::Play),
             Cat::Songs => Some(Group::Songs),
-            Cat::Practice => Some(Group::Practice),
             Cat::App => Some(Group::App),
+            Cat::View => Some(Group::View),
+            Cat::Pads => Some(Group::Pads),
+            Cat::Timing => Some(Group::Timing),
+            Cat::Input => Some(Group::Input),
+            Cat::Practice => Some(Group::Practice),
         }
     }
 
     pub fn name(self) -> &'static str {
-        self.group().map_or("よく使う", Group::label)
+        self.group().map_or(t("Common", "よく使う"), Group::label)
+    }
+
+    /// 左の列でこの分類の上に出す見出し（`Some("")` は線だけ）
+    pub fn heading(self) -> Option<&'static str> {
+        match self {
+            Cat::Display => Some(t("System", "システム")),
+            Cat::View => Some(t("Drums", "ドラム")),
+            Cat::Practice => Some(""),
+            _ => None,
+        }
+    }
+
+    /// 見出しの下の分類（左の列で少し右に寄せる）
+    fn indented(self) -> bool {
+        !matches!(self, Cat::Fav | Cat::Practice)
     }
 
     pub fn desc(self) -> &'static str {
         match self {
-            Cat::Fav => "よく変える項目です。",
-            Cat::Play => "ゲームの決まり（STAGE FAILED、自動演奏、判定）。",
-            Cat::View => "譜面の流れ方と、画面に出すもの。",
-            Cat::Timing => "叩いた時刻と表示の補正。",
-            Cat::Sound => "音量と、鳴らすもの。",
-            Cat::Input => "パッドとキーの割り当てと、MIDI 機器ごとの設定。",
-            Cat::Songs => "曲のフォルダと、曲の探し直し。",
-            Cat::Practice => {
-                "区間練習の決めごとの既定です。選曲の練習のポップアップで変えたものも、ここに残ります。"
-            }
-            Cat::App => "更新など、アプリ全体のこと。",
+            Cat::Fav => t(
+                "The settings you change most. Same list as the Quick Settings you open by hitting RD on song select.",
+                "よく変える項目です。選曲で RD を叩いて開く簡易設定と同じ並びです。",
+            ),
+            Cat::Display => t(
+                "Window mode, rendering, and background video.",
+                "窓の出し方と、画面の描き方、譜面の動画。",
+            ),
+            Cat::Sound => t("Volume and what gets played.", "音量と、鳴らすもの。"),
+            Cat::Play => t(
+                "Game rules (STAGE FAILED, gauge), judgment windows, timing display, and records.",
+                "ゲームの決まり（STAGE FAILED、ゲージ）、判定の幅、ずれの表示、記録。",
+            ),
+            Cat::Songs => t(
+                "Song folders, rescanning, and the chart editor.",
+                "曲のフォルダと、曲の探し直し、譜面エディタ。",
+            ),
+            Cat::App => t(
+                "Updates and other app-wide settings.",
+                "更新など、アプリ全体のこと。",
+            ),
+            Cat::View => t(
+                "Scroll speed and direction, note hiding, lanes and notes, and screen elements.",
+                "譜面の速さと流れ方、見えにくくする、レーンとチップ、画面の部品。",
+            ),
+            Cat::Pads => t(
+                "Auto play, pad grouping, and which sound plays when pads are grouped.",
+                "自動演奏、叩き分け、共通にしたときに鳴らす音。",
+            ),
+            Cat::Timing => t(
+                "Offsets for input, display, and BGM.",
+                "叩いた時刻・表示・BGM の補正。",
+            ),
+            Cat::Input => t(
+                "Pad and key mapping, and per-device MIDI settings.",
+                "パッドとキーの割り当てと、MIDI 機器ごとの設定。",
+            ),
+            Cat::Practice => t(
+                "Default rules for section practice. Changes made in the practice popup on song select are saved here too.",
+                "区間練習の決めごとの既定です。選曲の練習のポップアップで変えたものも、ここに残ります。",
+            ),
         }
     }
 
     pub fn icon(self) -> Icon {
         match self {
             Cat::Fav => Icon::Star,
-            Cat::Play => Icon::Stick,
-            Cat::View => Icon::Lanes,
-            Cat::Timing => Icon::Metronome,
+            Cat::Display => Icon::Monitor,
             Cat::Sound => Icon::Speaker,
-            Cat::Input => Icon::Midi,
+            Cat::Play => Icon::Flag,
             Cat::Songs => Icon::Folder,
-            Cat::Practice => Icon::Loop,
             Cat::App => Icon::Gear,
+            Cat::View => Icon::Lanes,
+            Cat::Pads => Icon::Stick,
+            Cat::Timing => Icon::Metronome,
+            Cat::Input => Icon::Midi,
+            Cat::Practice => Icon::Loop,
         }
     }
 }
@@ -159,6 +216,8 @@ pub enum Setting {
     ShowLagTimeColor,
     ShowLagHitCount,
     Update,
+    /// 画面の言語
+    Language,
 }
 
 /// 練習の決めごと（練習のポップアップと同じ項目。区間のほか）
@@ -206,6 +265,8 @@ pub enum ItemId {
     DeviceReset(usize),
     /// MIDI の機器を探し直す
     ReconnectMidi,
+    /// 譜面エディタ（Web アプリ）をブラウザで開く
+    OpenEditor,
     /// 簡易設定から、選んでいる曲の区間練習へ
     PracticeSong,
     /// 簡易設定から、設定の画面へ
@@ -216,12 +277,16 @@ pub enum ItemId {
     Retry,
     /// 演奏をやめて結果へ
     Quit,
+    /// 練習をやめて、区間と速度を選ぶ板へ（今の決めごとを選んでおく）
+    Reselect,
     /// 曲の位置（秒。◀▶ で早送り・巻き戻し）
     Seek,
     /// この曲の補正（ミリ秒。入力の補正（全体）に足す）
     SongOffset,
     /// 補正をおすすめの値にする（全体とこの曲）
     ApplyAdvice,
+    /// 全画面とボーダーレスを出すモニター（0 は窓のあるモニター、1 からはつながっているモニターの並び）
+    Monitor,
 }
 
 /// 数の見せ方
@@ -238,7 +303,7 @@ pub enum Fmt {
     /// 分と秒（曲の位置）
     Clock,
     /// 単位をつける。0 のときに名前があればその名前（Risky の「OFF」など）
-    Unit(&'static str, Option<&'static str>),
+    Unit(Tr, Option<Tr>),
     /// 音量（0〜100 %）。一覧では値の下に横のバーも出す
     Volume,
 }
@@ -248,12 +313,12 @@ impl Fmt {
         match self {
             Fmt::Speed => format!("{:.2}", v as f64 / 20.0),
             Fmt::Ms => format!("{v:+} ms"),
-            Fmt::Channel if v == 0 => "すべて".to_owned(),
+            Fmt::Channel if v == 0 => t("All", "すべて").to_owned(),
             Fmt::OffZero if v == 0 => "OFF".to_owned(),
             Fmt::Channel | Fmt::OffZero => v.to_string(),
             Fmt::Clock => clock(v),
-            Fmt::Unit(_, Some(zero)) if v == 0 => zero.to_owned(),
-            Fmt::Unit(u, _) => format!("{v}{u}"),
+            Fmt::Unit(_, Some(zero)) if v == 0 => zero.get().to_owned(),
+            Fmt::Unit(u, _) => format!("{v}{}", u.get()),
             Fmt::Volume => format!("{v} %"),
         }
     }
@@ -271,7 +336,7 @@ pub enum Ctl {
     },
     /// 選択肢から 1 つ
     Choice {
-        labels: Vec<&'static str>,
+        labels: Vec<Cow<'static, str>>,
         at: usize,
         default: Option<usize>,
     },
@@ -347,16 +412,19 @@ impl Row {
             Ctl::Toggle { default, .. } => default.map(on_off),
             Ctl::Choice {
                 labels, default, ..
-            } => default.and_then(|d| labels.get(d)).map(|s| (*s).to_owned()),
+            } => default.and_then(|d| labels.get(d)).map(|s| s.to_string()),
             Ctl::Number { default, fmt, .. } => default.map(|d| fmt.show(d)),
             _ => None,
         }
     }
 
     /// 選択肢の名前と、今は何番目か（ON / OFF も 2 つの選択肢。混ざっていれば何番目でもない）
-    pub fn options(&self) -> Option<(Vec<&'static str>, Option<usize>)> {
+    pub fn options(&self) -> Option<(Vec<Cow<'static, str>>, Option<usize>)> {
         match &self.ctl {
-            Ctl::Toggle { on, .. } => Some((vec!["ON", "OFF"], on.map(|b| if b { 0 } else { 1 }))),
+            Ctl::Toggle { on, .. } => Some((
+                vec!["ON".into(), "OFF".into()],
+                on.map(|b| if b { 0 } else { 1 }),
+            )),
             Ctl::Choice { labels, at, .. } => Some((labels.clone(), Some(*at))),
             _ => None,
         }
@@ -417,7 +485,7 @@ fn choice(
         labels.get(at).copied().unwrap_or("").to_owned(),
         desc.to_owned(),
         Ctl::Choice {
-            labels: labels.to_vec(),
+            labels: labels.iter().map(|&l| Cow::Borrowed(l)).collect(),
             at,
             default,
         },
@@ -482,6 +550,7 @@ pub fn get(s: Setting, c: &Config) -> i64 {
             .iter()
             .position(|&m| m == c.update_mode())
             .unwrap_or(0) as i64,
+        Setting::Language => Lang::ALL.iter().position(|&l| l == c.lang()).unwrap_or(0) as i64,
     }
 }
 
@@ -501,6 +570,7 @@ pub fn set(s: Setting, c: &mut Config, v: i64) {
         Setting::Update => c.set_update_mode(
             UpdateMode::ALL[v.clamp(0, UpdateMode::ALL.len() as i64 - 1) as usize],
         ),
+        Setting::Language => c.set_lang(Lang::ALL[v.clamp(0, Lang::ALL.len() as i64 - 1) as usize]),
     }
 }
 
@@ -514,83 +584,96 @@ fn value_row(s: Setting, c: &Config) -> Row {
     match s {
         Setting::ScrollSpeed => number(
             id,
-            "譜面の速さ",
+            t("Scroll Speed", "譜面の速さ"),
             at,
             (2, 60, 1),
             Some(def),
             Fmt::Speed,
-            "音符の流れる速さです。大きいほど速く流れ、音符の間が広がります。\n演奏中は ↑↓ キーでも変えられます。"
+            t("How fast notes scroll. Higher is faster, with more space between notes.\nYou can also change it with ↑↓ during play.", "音符の流れる速さです。大きいほど速く流れ、音符の間が広がります。\n演奏中は ↑↓ キーでも変えられます。")
                 .to_owned(),
         ),
         Setting::InputAdjust => number(
             id,
-            "入力の補正（全体）",
+            t("Input Offset (Global)", "入力の補正（全体）"),
             at,
             (-(OFFSET_RANGE as i64), OFFSET_RANGE as i64, 1),
             Some(def),
             Fmt::Ms,
-            "すべての曲の、叩いた時刻の補正です。ずれがいつも遅めなら大きく、早めなら小さくします（演奏中は - と = キー）。"
+            t("Adjusts hit timing for every song. Raise it if you're always late, lower it if you're always early (- and = during play).", "すべての曲の、叩いた時刻の補正です。ずれがいつも遅めなら大きく、早めなら小さくします（演奏中は - と = キー）。")
                 .to_owned(),
         ),
         Setting::VisualAdjust => number(
             id,
-            "表示の補正",
+            t("Visual Offset", "表示の補正"),
             at,
             (-(OFFSET_RANGE as i64), OFFSET_RANGE as i64, 1),
             Some(def),
             Fmt::Ms,
-            "譜面の表示の補正です。音と見た目がずれて見えるときに直します。判定は変わりません。\n演奏中は [ と ] キーでも変えられます。"
+            t("Shifts where notes are drawn. Use it when notes look out of sync with the music. Judgment isn't affected.\nYou can also change it with [ and ] during play.", "譜面の表示の補正です。音と見た目がずれて見えるときに直します。判定は変わりません。\n演奏中は [ と ] キーでも変えられます。")
                 .to_owned(),
         ),
         Setting::MasterVolume => number(
             id,
-            "全体の音量",
+            t("Master Volume", "全体の音量"),
             at,
             (0, 100, i64::from(MASTER_VOLUME_STEP)),
             Some(def),
             Fmt::Volume,
-            format!(
+            tf!(
+                "Volume for all sound, in steps of {MASTER_VOLUME_STEP}%. 0 is silent.\nThe BGM, hit sound, metronome, and menu sound volumes are applied on top of this.",
                 "すべての音にかける音量です。{MASTER_VOLUME_STEP} % ずつ変わり、0 で無音になります。\nBGM・叩いた音・メトロノーム・効果音の音量は、これにさらにかけます。"
             ),
         ),
         Setting::HitSound => flag(
-            "叩いた音",
-            &format!(
+            t("Hit Sounds", "叩いた音"),
+            &tf!(
+                "Plays the chart's sounds when you hit. Turn this OFF if you use your drum module's own sounds.\nYou can also toggle it with {} during play.",
                 "叩いたときに譜面の音を鳴らします。電子ドラムの音源の音を使うなら OFF にします。\n演奏中は {} キーでも切り替えられます。",
                 crate::HIT_SOUND_KEY_NAME
             ),
         ),
         Setting::StageFailed => flag(
-            "ゲージ切れで中断",
-            "ON にすると、ゲージがなくなったときに STAGE FAILED（演奏失敗）となり、演奏が中断されます。練習では中断しません。",
+            t("Fail on Empty Gauge", "ゲージ切れで中断"),
+            t("When ON, running out of gauge ends the song with STAGE FAILED. Practice never stops this way.", "ON にすると、ゲージがなくなったときに STAGE FAILED（演奏失敗）となり、演奏が中断されます。練習では中断しません。"),
         ),
         Setting::ShowLagTime => choice(
             id,
-            "ずれの表示",
-            &["OFF", "ON", "PERFECT 以外"],
+            t("Timing Display", "ずれの表示"),
+            &["OFF", "ON", t("Non-PERFECT", "PERFECT 以外")],
             at as usize,
             Some(def as usize),
-            "判定の下に、ちょうどの時刻からのずれ（ms）を出します。\n「PERFECT 以外」は PERFECT でなかったときだけ出します。",
+            t("Shows how early or late each hit was (in ms) under the judgment.\nNon-PERFECT shows it only when a hit isn't PERFECT.", "判定の下に、ちょうどの時刻からのずれ（ms）を出します。\n「PERFECT 以外」は PERFECT でなかったときだけ出します。"),
         ),
         Setting::ShowLagTimeColor => choice(
             id,
-            "ずれの色",
-            &["早いと青", "早いと赤"],
+            t("Timing Colors", "ずれの色"),
+            &[t("Early = Blue", "早いと青"), t("Early = Red", "早いと赤")],
             at as usize,
             Some(def as usize),
-            "ずれの数字の色です。\n早いと青: 早いと青、遅いと赤。\n早いと赤: 早いと赤、遅いと青。",
+            t("Colors for the timing numbers.\nEarly = Blue: early hits are blue, late hits are red.\nEarly = Red: early hits are red, late hits are blue.", "ずれの数字の色です。\n早いと青: 早いと青、遅いと赤。\n早いと赤: 早いと赤、遅いと青。"),
         ),
         Setting::ShowLagHitCount => flag(
-            "早い・遅いの数",
-            "ON にすると、結果の画面に早かった数と遅かった数を出します。",
+            t("Early/Late Counts", "早い・遅いの数"),
+            t("When ON, the results screen shows how many hits were early and how many were late.", "ON にすると、結果の画面に早かった数と遅かった数を出します。"),
         ),
         Setting::Update => choice(
             id,
-            "更新",
+            t("Updates", "更新"),
             &UpdateMode::ALL.map(UpdateMode::label),
             at as usize,
             Some(def as usize),
-            "新しい版の扱いです。Setup.exe で入れたときだけ働きます。\n知らせる: 起動したときに確かめ、あればタイトルのメニューの下に出します。更新するかは自分で選びます。\n自動: 起動したときに落とし、終了したときに入れ替えます。\n確かめない: 新しい版を確かめません。",
+            t("How new versions are handled. Only works if you installed with Setup.exe.\nNotify: checks at startup and shows it under the title menu. You decide when to update.\nAutomatic: downloads at startup and installs when you quit.\nOff: never checks for new versions.", "新しい版の扱いです。Setup.exe で入れたときだけ働きます。\n知らせる: 起動したときに確かめ、あればタイトルのメニューの下に出します。更新するかは自分で選びます。\n自動: 起動したときに落とし、終了したときに入れ替えます。\n確かめない: 新しい版を確かめません。"),
+        ),        Setting::Language => choice(
+            id,
+            // 読めない言語にしてしまっても見つけられるように、日本語の画面でも英語の名前を添える
+            t("Language", "言語（Language）"),
+            &Lang::ALL.map(Lang::native_name),
+            at as usize,
+            None,
+            t(
+                "The language of menus and messages. Song titles and text drawn in the skin's artwork stay as they are.",
+                "メニューや知らせの文の言語です。曲名や、スキンの絵に描かれた文字は変わりません。",
+            ),
         ),
     }
 }
@@ -643,33 +726,34 @@ fn drill_row_at(d: Drill, c: &Config, at: i64) -> Row {
     };
     match d {
         Drill::Style => pick(
-            "つなぎ方",
-            &["切れ目なく", "毎回区切る"],
-            "切れ目なく: 区間の終わりから切れ目なく頭へ戻ります（ビート向き）。\n毎回区切る: 次の小節の頭の 1 打まで叩き、助走からやり直します（フィル向き）。",
+            t("Looping", "つなぎ方"),
+            &[t("Seamless", "切れ目なく"), t("Restart Each Loop", "毎回区切る")],
+            t("Seamless: goes straight from the end of the section back to the start (good for beats).\nRestart Each Loop: play through the first beat of the next measure, then start over from the lead-in (good for fills).", "切れ目なく: 区間の終わりから切れ目なく頭へ戻ります（ビート向き）。\n毎回区切る: 次の小節の頭の 1 打まで叩き、助走からやり直します（フィル向き）。"),
         ),
         Drill::Rule => pick(
-            "段の越え方",
-            &["ゆるい", "ふつう", "きびしい"],
-            "1 段のうちに、同じ拍を何回落としたら「もう一度」にするかです（落としたのは POOR と MISS）。違う拍のミスは数えません。\nゆるい: 3 回。\nふつう: 2 回。\nきびしい: 1 回でも。",
+            t("Pass Rule", "段の越え方"),
+            &[t("Lenient", "ゆるい"), t("Normal", "ふつう"), t("Strict", "きびしい")],
+            t("How many misses on the same beat (POOR or MISS) in one step send you back to play it again. Misses on different beats don't add up.\nLenient: 3.\nNormal: 2.\nStrict: just 1.", "1 段のうちに、同じ拍を何回落としたら「もう一度」にするかです（落としたのは POOR と MISS）。違う拍のミスは数えません。\nゆるい: 3 回。\nふつう: 2 回。\nきびしい: 1 回でも。"),
         ),
         Drill::StepLaps => pick(
-            "1 段の周",
-            &["3 周", "4 周", "6 周", "8 周"],
-            "1 つの段で叩く周の数です。叩き終えて同じ拍のミスが重ならなければ、次の段へ進みます。",
+            t("Loops per Step", "1 段の周"),
+            &[t("3 loops", "3 周"), t("4 loops", "4 周"), t("6 loops", "6 周"), t("8 loops", "8 周")],
+            t("How many loops you play at each step. Get through them without missing the same beat repeatedly to move up.", "1 つの段で叩く周の数です。叩き終えて同じ拍のミスが重ならなければ、次の段へ進みます。"),
         ),
         Drill::Ladder => pick(
-            "速度の決め方",
-            &["段階アップ", "固定"],
-            &format!(
+            t("Speed Mode", "速度の決め方"),
+            &[t("Step Up", "段階アップ"), t("Fixed", "固定")],
+            &tf!(
+                "Step Up: climbs from the start speed to the target speed in {STEP_SPEED}% steps. Pass the target step to clear. Fail a step twice in a row and you drop down one.\nFixed: a single step at that speed. Pass it to clear (you can still change speed in 5% steps with , and . while practicing).",
                 "段階アップ: 始めの速度から目標の速度まで {STEP_SPEED}% ずつの段をのぼります。目標の段を越えたらクリア。「もう一度」が 2 回続いたら 1 段下げます。\n固定: その速度の 1 段だけです。越えたらクリア（練習中も , と . キーで 5% ずつ変えられます）。"
             ),
         ),
         Drill::Speed => number(
             id,
             if c.practice_ladder {
-                "始めの速度"
+                t("Start Speed", "始めの速度")
             } else {
-                "速度"
+                t("Speed", "速度")
             },
             at,
             (
@@ -678,23 +762,23 @@ fn drill_row_at(d: Drill, c: &Config, at: i64) -> Row {
                 i64::from(SPEED_STEP),
             ),
             def,
-            Fmt::Unit("%", None),
-            "練習の速度です（曲の速さの何 % か）。段階アップなら 1 周目の速度です。".to_owned(),
+            Fmt::Unit(tr("%", "%"), None),
+            t("Practice speed, as a percentage of the song's speed. With Step Up, this is the speed of the first loop.", "練習の速度です（曲の速さの何 % か）。段階アップなら 1 周目の速度です。").to_owned(),
         ),
         Drill::Target => pick(
-            "目標の速度",
+            t("Target Speed", "目標の速度"),
             &["100%", "105%", "110%"],
-            "段階アップの目標の速度です。100% より上にすると、本番に余裕ができます。固定のときは使いません。",
+            t("The speed Step Up climbs to. Going above 100% gives you some headroom for the real song. Not used with Fixed.", "段階アップの目標の速度です。100% より上にすると、本番に余裕ができます。固定のときは使いません。"),
         ),
         Drill::Pitch => pick(
-            "遅くしたときの音程",
-            &["保つ", "一緒に下げる"],
-            "保つ: 音程を保ったまま遅くします。\n一緒に下げる: 音程ごと遅くします（テープと同じ）。",
+            t("Pitch When Slowed", "遅くしたときの音程"),
+            &[t("Keep", "保つ"), t("Lower", "一緒に下げる")],
+            t("Keep: slows down without changing pitch.\nLower: pitch drops along with the speed, like a tape.", "保つ: 音程を保ったまま遅くします。\n一緒に下げる: 音程ごと遅くします（テープと同じ）。"),
         ),
         Drill::Metronome => pick(
-            "メトロノーム",
-            &["オン", "オフ"],
-            "オン: 区間のあいだ拍ごとに小さくクリックを鳴らします（小節の頭は強く）。\n段の頭の 4 拍のカウントは、オフでも鳴ります。",
+            t("Metronome", "メトロノーム"),
+            &[t("On", "オン"), t("Off", "オフ")],
+            t("On: plays a soft click on every beat during the section (accented at the start of each measure).\nThe 4-beat count-in at the start of each step plays even when Off.", "オン: 区間のあいだ拍ごとに小さくクリックを鳴らします（小節の頭は強く）。\n段の頭の 4 拍のカウントは、オフでも鳴ります。"),
         ),
     }
 }
@@ -710,7 +794,10 @@ fn table_row(d: &'static settings::Def, v: &settings::Values) -> Row {
             default: def.map(|a| a != 0),
         },
         Kind::Choice { choices, .. } => Ctl::Choice {
-            labels: choices.iter().map(|c| c.label).collect(),
+            labels: choices
+                .iter()
+                .map(|c| Cow::Borrowed(c.label.get()))
+                .collect(),
             at: at.unwrap_or(0) as usize,
             default: def.map(|a| a as usize),
         },
@@ -734,7 +821,13 @@ fn table_row(d: &'static settings::Def, v: &settings::Values) -> Row {
             },
         },
     };
-    row(id, d.name, v.label(d.key), d.desc.to_owned(), ctl)
+    row(
+        id,
+        d.name.get(),
+        v.label(d.key),
+        d.desc.get().to_owned(),
+        ctl,
+    )
 }
 
 /// 音量ミキサーの行（全体の音量と、系統ごとの音量）
@@ -752,10 +845,10 @@ fn volume_rows(c: &Config) -> Vec<Row> {
 fn mixer_row(c: &Config) -> Row {
     page_row(
         ItemId::Mixer,
-        "音量",
+        t("Volume", "音量"),
         Page::Mixer,
-        format!("全体 {} %", c.master_volume()),
-        "全体・BGM・叩いた音・メトロノーム・効果音の音量を、1 つずつ変えます。\n演奏中も一時停止から変えられ、すぐに効きます。"
+        tf!("Master {}%", "全体 {} %", c.master_volume()),
+        t("Set the master, BGM, hit sound, metronome, and menu sound volumes one by one.\nYou can also change them from the pause menu during play, and they apply right away.", "全体・BGM・叩いた音・メトロノーム・効果音の音量を、1 つずつ変えます。\n演奏中も一時停止から変えられ、すぐに効きます。")
             .to_owned(),
     )
 }
@@ -779,7 +872,7 @@ impl Sections {
     /// 設定の表の分類 `group` の項目を、それぞれの小見出しへ
     fn table(&mut self, group: Group, v: &settings::Values) {
         for d in settings::in_group(group) {
-            self.at(d.section).push(table_row(d, v));
+            self.at(d.section.get()).push(table_row(d, v));
         }
     }
 
@@ -838,6 +931,63 @@ pub struct ConfigInfo<'a> {
     pub play: Option<PlayPos>,
     /// 補正とおすすめ（簡易設定・一時停止・設定の画面を開いたときに記録から出す）
     pub timing: Option<TimingInfo>,
+    /// つながっているモニター（出すモニターの選択肢。左から）
+    pub monitors: &'a [MonitorInfo],
+}
+
+/// 出すモニターの選択肢の、窓のあるモニター（選んでいない）の名前
+const MONITOR_AUTO: Tr = tr("Auto (window's monitor)", "自動（窓のあるモニター）");
+/// 選んだモニターが外れているときの選択肢の名前
+const MONITOR_GONE: Tr = tr(
+    "Chosen monitor (disconnected)",
+    "選んだモニター（外れています）",
+);
+
+/// 出すモニターの行。選択肢は「自動」、つながっているモニター、選んだモニターが外れていればその印
+fn monitor_row(c: &Config, monitors: &[MonitorInfo]) -> Row {
+    let mut labels: Vec<Cow<'static, str>> = vec![MONITOR_AUTO.get().into()];
+    labels.extend(
+        monitors
+            .iter()
+            .enumerate()
+            .map(|(i, m)| Cow::Owned(m.label(i, monitors))),
+    );
+    let at = match &c.monitor {
+        None => 0,
+        Some(pick) => match window_mode::find(pick, monitors) {
+            Some(i) => i + 1,
+            None => {
+                labels.push(MONITOR_GONE.get().into());
+                labels.len() - 1
+            }
+        },
+    };
+    row(
+        ItemId::Monitor,
+        t("Monitor", "出すモニター"),
+        labels[at].to_string(),
+        t("The monitor used for Fullscreen and Borderless. It moves as soon as you pick it. In windowed mode, the window also opens on this monitor at startup.\nWith Auto, or if the chosen monitor is disconnected, the monitor the window is on is used.", "全画面とボーダーレスを出すモニターです。選ぶとその場で移ります。ウィンドウも、起動したときはこのモニターに開きます。\n自動か、選んだモニターが外れているときは、窓のあるモニターに出します。")
+            .to_owned(),
+        Ctl::Choice {
+            labels,
+            at,
+            default: Some(0),
+        },
+    )
+}
+
+/// 一覧の「出すモニター」の値（[`monitor_row`] の何番目か）を設定にする。外れている前の選びはそのまま（変えたら true）
+pub fn set_monitor(c: &mut Config, monitors: &[MonitorInfo], v: i64) -> bool {
+    let pick = match v {
+        0 => None,
+        v if v >= 1 && v as usize <= monitors.len() => Some(monitors[v as usize - 1].pick()),
+        _ => return false,
+    };
+    if c.monitor == pick {
+        return false;
+    }
+    c.monitor = pick;
+    true
 }
 
 /// 補正とおすすめ
@@ -858,33 +1008,45 @@ fn add_timing_rows(rows: &mut Vec<Row>, t: &TimingInfo, global_ms: i64) {
     };
     let a = &t.advice;
     if let Some((_, n)) = a.global {
+        let songs = count(n, "song", "songs", "曲");
         rows[i].desc.push_str(&if a.global_ms != a.global_now {
-            format!("おすすめは {:+} ms（直近 {n} 曲のずれから）。", a.global_ms)
+            tf!(
+                " Suggested: {:+} ms (based on your last {songs}).",
+                "おすすめは {:+} ms（直近 {songs}のずれから）。",
+                a.global_ms
+            )
         } else {
-            format!("直近 {n} 曲のずれからは、今のままでよさそうです。")
+            tf!(
+                " Based on your last {songs}, the current value looks right.",
+                "直近 {songs}のずれからは、今のままでよさそうです。"
+            )
         });
     }
     let mut add = Vec::new();
     if let Some(at) = t.song_ms {
         let r = OFFSET_RANGE as i64;
-        let mut desc = format!(
+        let mut desc = tf!(
+            "Offset for this song only (shared by all difficulties). It's added to the global offset and shifts both judgment and scrolling. Now {global_ms:+} + {at:+} = {:+} ms.",
             "この曲だけの補正（難易度はまとめて）。全体に足し、判定と譜面の流れを一緒にずらします。今は {global_ms:+} + {at:+} = {:+} ms。",
             global_ms + at
         );
         match a.song {
-            Some(l) if l.enough() && a.song_ms != a.song_now => desc.push_str(&format!(
-                "おすすめは {:+} ms（直近 {} 回から）。",
-                a.song_ms, l.sessions
+            Some(l) if l.enough() && a.song_ms != a.song_now => desc.push_str(&tf!(
+                " Suggested: {:+} ms (based on {}).",
+                "おすすめは {:+} ms（直近 {}から）。",
+                a.song_ms,
+                count(l.sessions, "play", "plays", "回")
             )),
-            Some(l) if l.enough() => desc.push_str(&format!(
-                "直近 {} 回からは今のままでよさそうです。",
-                l.sessions
+            Some(l) if l.enough() => desc.push_str(&tf!(
+                " Based on {}, the current value looks right.",
+                "直近 {}からは今のままでよさそうです。",
+                count(l.sessions, "play", "plays", "回")
             )),
             _ => {}
         }
         add.push(number(
             ItemId::SongOffset,
-            "この曲の補正",
+            i18n::t("Song Offset", "この曲の補正"),
             at,
             (-r, r, 1),
             Some(0),
@@ -897,9 +1059,9 @@ fn add_timing_rows(rows: &mut Vec<Row>, t: &TimingInfo, global_ms: i64) {
             tone: Tone::Strong,
             ..action(
                 ItemId::ApplyAdvice,
-                "おすすめにする",
+                i18n::t("Apply Suggestion", "おすすめにする"),
                 text,
-                "記録のずれから出した値にします。全体は直近の曲のずれの真ん中、この曲はこの曲のずれと全体の差です。"
+                i18n::t("Sets the offsets suggested by your recorded timing. Global uses the median of your recent songs; this song uses the gap between this song's timing and the global value.", "記録のずれから出した値にします。全体は直近の曲のずれの真ん中、この曲はこの曲のずれと全体の差です。")
                     .to_owned(),
                 None,
             )
@@ -957,9 +1119,9 @@ fn folder_name(p: &Path) -> String {
 /// 機器の一覧の値（出発点か、使っていないわけ）
 fn device_state(d: &DeviceRow) -> String {
     if d.disabled {
-        "使わない".to_owned()
+        t("Disabled", "使わない").to_owned()
     } else if !d.open {
-        "開けません".to_owned()
+        t("Can't Open", "開けません").to_owned()
     } else {
         d.preset.label().to_owned()
     }
@@ -968,16 +1130,27 @@ fn device_state(d: &DeviceRow) -> String {
 /// 機器の様子の説明
 fn device_summary(d: &DeviceRow) -> String {
     if d.disabled {
-        "使わない設定です。".to_owned()
+        t("This device is disabled.", "使わない設定です。").to_owned()
     } else if let Some(e) = &d.error {
-        format!("開けません（ほかのアプリが使っているかも）: {e}")
-    } else {
-        format!(
-            "{} / チャンネル {} / 変更 {} 個",
-            d.preset.label(),
-            Fmt::Channel.show(i64::from(d.channel)),
-            d.changes
+        tf!(
+            "Can't open it (another app may be using it): {e}",
+            "開けません（ほかのアプリが使っているかも）: {e}"
         )
+    } else {
+        let channel = Fmt::Channel.show(i64::from(d.channel));
+        if i18n::is_ja() {
+            format!(
+                "{} / チャンネル {channel} / 変更 {} 個",
+                d.preset.label(),
+                d.changes
+            )
+        } else {
+            format!(
+                "{} / Channel {channel} / {}",
+                d.preset.label(),
+                count(d.changes, "change", "changes", "")
+            )
+        }
     }
 }
 
@@ -989,8 +1162,8 @@ pub fn lane_value(sources: &[LaneSource]) -> String {
     sources
         .iter()
         .map(|s| {
-            if s.source == KEYBOARD {
-                format!("キー {}", s.inputs.join(" "))
+            if s.source == keyboard() {
+                tf!("Key {}", "キー {}", s.inputs.join(" "))
             } else {
                 s.inputs.join(" ")
             }
@@ -1008,22 +1181,30 @@ pub fn rows(page: Page, info: &ConfigInfo<'_>) -> Vec<Row> {
         Page::Cat(Cat::Fav) => s.at("").extend(favorites(c)),
         Page::Quick => {
             let r = s.at("");
+            // 区間練習は一番上（ドラムなら RD で開いて CY で決めるだけ）
+            if info.song {
+                let mut practice = action(
+                    ItemId::PracticeSong,
+                    t("Practice This Song", "この曲を区間練習"),
+                    String::new(),
+                    t(
+                        "Opens the panel to choose a section and speed for this song (P on the keyboard).",
+                        "選んでいる曲の、区間と速度を選ぶ板を開きます（キーボードなら P）。",
+                    )
+                    .to_owned(),
+                    None,
+                );
+                practice.tone = Tone::Strong;
+                r.push(practice);
+                r.push(heading(" "));
+            }
             r.extend(favorites(c));
             r.push(heading(" "));
-            if info.song {
-                r.push(action(
-                    ItemId::PracticeSong,
-                    "この曲を区間練習",
-                    String::new(),
-                    "選んでいる曲の、区間練習の決めごとを開きます（キーボードなら P）。".to_owned(),
-                    None,
-                ));
-            }
             r.push(action(
                 ItemId::AllSettings,
-                "すべての設定へ",
+                t("All Settings", "すべての設定へ"),
                 String::new(),
-                "設定の画面を開きます（キーボードなら F1）。閉じると選曲に戻ります。".to_owned(),
+                t("Opens the full settings screen (F1 on the keyboard). Closing it brings you back to song select.", "設定の画面を開きます（キーボードなら F1）。閉じると選曲に戻ります。").to_owned(),
                 None,
             ));
         }
@@ -1033,12 +1214,16 @@ pub fn rows(page: Page, info: &ConfigInfo<'_>) -> Vec<Row> {
             let mut resume = action(
                 ItemId::Resume,
                 if practice {
-                    "練習に戻る"
+                    t("Resume Practice", "練習に戻る")
                 } else {
-                    "演奏に戻る"
+                    t("Resume", "演奏に戻る")
                 },
                 String::new(),
-                "一時停止をやめて、止めたところから続けます（Esc でも戻ります）。".to_owned(),
+                t(
+                    "Unpause and continue from where you stopped (Esc works too).",
+                    "一時停止をやめて、止めたところから続けます（Esc でも戻ります）。",
+                )
+                .to_owned(),
                 None,
             );
             resume.tone = Tone::Strong;
@@ -1046,20 +1231,41 @@ pub fn rows(page: Page, info: &ConfigInfo<'_>) -> Vec<Row> {
             r.push(action(
                 ItemId::Retry,
                 if practice {
-                    "区間のはじめから"
+                    t("Restart Section", "区間のはじめから")
                 } else {
-                    "はじめからやり直す"
+                    t("Restart", "はじめからやり直す")
                 },
                 String::new(),
                 if practice {
-                    "今の区間を、助走からやり直します（キーボードなら R）。"
+                    t(
+                        "Restarts the current section from the lead-in (R on the keyboard).",
+                        "今の区間を、助走からやり直します（キーボードなら R）。",
+                    )
                 } else {
-                    "曲をはじめからやり直します（キーボードなら R）。"
+                    t(
+                        "Restarts the song from the beginning (R on the keyboard).",
+                        "曲をはじめからやり直します（キーボードなら R）。",
+                    )
                 }
                 .to_owned(),
                 None,
             ));
-            let r = s.at("演奏中に変えられる設定");
+            // 練習は自分でやめるまで終わらないので、やめる行も上に置く（ドラムなら LT 数回で届く）
+            if practice {
+                r.push(action(
+                    ItemId::Reselect,
+                    t("Change Section / Speed", "区間・速度を選び直す"),
+                    String::new(),
+                    t(
+                        "Stops practice and opens the section and speed panel. Loops so far stay in your records.",
+                        "練習をやめて、区間と速度を選ぶ板を開きます。ここまでの周は記録に残します。",
+                    )
+                    .to_owned(),
+                    None,
+                ));
+                r.push(quit_row(practice));
+            }
+            let r = s.at(t("Change During Play", "演奏中に変えられる設定"));
             if let Some(p) = info.play.filter(|p| !p.practice) {
                 r.push(seek_row(p, v.number(settings::SKIP_MS)));
             }
@@ -1084,39 +1290,45 @@ pub fn rows(page: Page, info: &ConfigInfo<'_>) -> Vec<Row> {
             {
                 r.push(table_row(d, v));
             }
-            let r = s.at(" ");
-            let mut quit = action(
-                ItemId::Quit,
-                if practice {
-                    "練習をやめる"
-                } else {
-                    "演奏をやめる"
-                },
-                String::new(),
-                if practice {
-                    "練習をやめて、結果の画面へ。"
-                } else {
-                    "演奏をやめて、結果の画面へ（ここまでの記録になります）。"
-                }
-                .to_owned(),
-                None,
-            );
-            quit.tone = Tone::Danger;
-            r.push(quit);
+            if !practice {
+                s.at(" ").push(quit_row(practice));
+            }
+        }
+        Page::Cat(Cat::Display) => {
+            s.table(Group::Display, v);
+            // 画面の出し方のすぐ下に、出すモニター（つながっているモニターで選択肢が変わるので表に無い）
+            let r = s.at("");
+            let at = r
+                .iter()
+                .position(|r| r.id == Some(ItemId::Table(settings::DISPLAY_MODE)))
+                .map_or(0, |i| i + 1);
+            r.insert(at, monitor_row(c, info.monitors));
         }
         Page::Cat(Cat::Play) => {
-            s.at("演奏の決まり")
+            s.at(t("Rules", "演奏の決まり"))
                 .push(value_row(Setting::StageFailed, c));
-            s.table(Group::Play, v);
-            s.at("判定").push(value_row(Setting::ShowLagHitCount, c));
-        }
-        Page::Cat(Cat::View) => {
-            s.at("流れ方").push(value_row(Setting::ScrollSpeed, c));
-            let lag = s.at("ずれの表示");
+            // 小見出しの並びを先に決めておく（表の並びは分類ごとではないので）
+            for sec in [
+                t("Judgment Windows", "判定の幅"),
+                t("Judgment Windows (Pedals)", "判定の幅（ペダル）"),
+            ] {
+                s.at(sec);
+            }
+            let lag = s.at(t("Timing Display", "ずれの表示"));
             lag.push(value_row(Setting::ShowLagTime, c));
             lag.push(value_row(Setting::ShowLagTimeColor, c));
+            s.at(t("Records", "記録"));
+            s.table(Group::Play, v);
+            s.at(t("Timing Display", "ずれの表示"))
+                .push(value_row(Setting::ShowLagHitCount, c));
+        }
+        Page::Cat(Cat::View) => {
+            s.at(t("Scrolling", "流れ方"))
+                .push(value_row(Setting::ScrollSpeed, c));
+            s.at(t("Note Hiding", "見えにくくする"));
             s.table(Group::View, v);
         }
+        Page::Cat(Cat::Pads) => s.table(Group::Pads, v),
         Page::Cat(Cat::Timing) => {
             let r = s.at("");
             r.push(value_row(Setting::InputAdjust, c));
@@ -1125,8 +1337,10 @@ pub fn rows(page: Page, info: &ConfigInfo<'_>) -> Vec<Row> {
         }
         Page::Cat(Cat::Sound) => {
             // 音量ミキサーの行（全体のあとに、表の系統ごとの音量が続く）を先頭に
-            s.at("音量").push(value_row(Setting::MasterVolume, c));
-            s.at("鳴らすもの").push(value_row(Setting::HitSound, c));
+            s.at(t("Volume", "音量"))
+                .push(value_row(Setting::MasterVolume, c));
+            s.at(t("Playback", "鳴らすもの"))
+                .push(value_row(Setting::HitSound, c));
             s.table(Group::Sound, v);
         }
         Page::Mixer => s.at("").extend(volume_rows(c)),
@@ -1134,20 +1348,21 @@ pub fn rows(page: Page, info: &ConfigInfo<'_>) -> Vec<Row> {
             let assigned = PADS.iter().filter(|l| info.lanes.contains_key(l)).count();
             s.at("").push(page_row(
                 ItemId::Lanes,
-                "パッドとキーの割り当て",
+                t("Pad & Key Mapping", "パッドとキーの割り当て"),
                 Page::Lanes,
-                format!("{assigned} / {} レーン", PADS.len()),
-                "レーンごとに、叩くパッド（MIDI のノート番号）とキーボードのキーを決めます。\n「順に叩いて割り当てる」で、全部のレーンをまとめて決められます。"
+                tf!("{assigned} / {} lanes", "{assigned} / {} レーン", PADS.len()),
+                t("Choose the pad (MIDI note number) and keyboard key for each lane.\nAssign by Hitting sets up every lane in one go.", "レーンごとに、叩くパッド（MIDI のノート番号）とキーボードのキーを決めます。\n「順に叩いて割り当てる」で、全部のレーンをまとめて決められます。")
                     .to_owned(),
             ));
-            let devices = s.at("MIDI 機器");
+            let devices = s.at(t("MIDI Devices", "MIDI 機器"));
             for (i, d) in info.devices.iter().enumerate() {
                 devices.push(page_row(
                     ItemId::Device(i),
                     &d.name,
                     Page::Device(i),
                     device_state(d),
-                    format!(
+                    tf!(
+                        "{}\nSelect to open this device's settings (enabled, preset, channel, minimum velocity).",
                         "{}\n決定でこの機器の設定（使うか、プリセット、チャンネル、最小ベロシティ）を開きます。",
                         device_summary(d)
                     ),
@@ -1155,51 +1370,68 @@ pub fn rows(page: Page, info: &ConfigInfo<'_>) -> Vec<Row> {
             }
             devices.push(action(
                 ItemId::ReconnectMidi,
-                "機器を探し直す",
+                t("Rescan Devices", "機器を探し直す"),
                 if info.devices.is_empty() {
-                    "見つかりません".to_owned()
+                    t("None Found", "見つかりません").to_owned()
                 } else {
-                    format!("{} 台", info.devices.len())
+                    count(info.devices.len(), "device", "devices", "台")
                 },
-                "MIDI の機器を探し直して、開き直します。後からつないだ機器は、この画面にいれば自動でも見つけます。"
+                t("Searches for MIDI devices again and reopens them. Devices you plug in later are also found automatically while this screen is open.", "MIDI の機器を探し直して、開き直します。後からつないだ機器は、この画面にいれば自動でも見つけます。")
                     .to_owned(),
                 None,
             ));
             s.table(Group::Input, v);
         }
         Page::Cat(Cat::Songs) => {
-            let dirs = s.at("曲のフォルダ");
+            let dirs = s.at(t("Song Folders", "曲のフォルダ"));
             for (i, d) in c.song_dirs.iter().enumerate() {
                 let name = folder_name(d);
                 dirs.push(action(
                     ItemId::SongDir(i),
-                    &format!("フォルダ {}", i + 1),
+                    &tf!("Folder {}", "フォルダ {}", i + 1),
                     name.clone(),
-                    format!(
+                    tf!(
+                        "{}\nSelect to remove it from the list (no files are deleted).",
                         "{}\n決定で一覧から外します（ファイルは消しません）。",
                         d.display()
                     ),
-                    Some(format!(
+                    Some(tf!(
+                        "Remove the song folder \"{name}\" from the list?\nThe files in it won't be deleted.",
                         "曲のフォルダ「{name}」を一覧から外しますか？\nフォルダの中のファイルは消しません。"
                     )),
                 ));
             }
             dirs.push(action(
                 ItemId::AddSongDir,
-                "フォルダを足す",
+                t("Add Folder", "フォルダを足す"),
                 String::new(),
-                "曲のフォルダを足します。決定でフォルダを選ぶ窓を開きます（マウスで選びます）。窓にドロップしても足せます。"
+                t("Adds a song folder. Select to open a folder picker (use the mouse). You can also drop a folder onto the window.", "曲のフォルダを足します。決定でフォルダを選ぶ窓を開きます（マウスで選びます）。窓にドロップしても足せます。")
                     .to_owned(),
                 None,
             ));
             s.at(" ").push(action(
                 ItemId::Rescan,
-                "曲を探し直す",
+                t("Rescan Songs", "曲を探し直す"),
                 match info.scanning {
-                    Some(p) => format!("{} 曲…", p.songs),
-                    None => format!("{} 曲", info.song_count),
+                    Some(p) => format!("{}…", count(p.songs, "song", "songs", "曲")),
+                    None => count(info.song_count, "song", "songs", "曲"),
                 },
-                "曲のフォルダを探し直して、曲の一覧を作り直します。".to_owned(),
+                t(
+                    "Scans the song folders again and rebuilds the song list.",
+                    "曲のフォルダを探し直して、曲の一覧を作り直します。",
+                )
+                .to_owned(),
+                None,
+            ));
+            s.at(t("Chart Editor", "譜面エディタ")).push(action(
+                ItemId::OpenEditor,
+                t("Open Chart Editor", "譜面エディタを開く"),
+                t("Browser", "ブラウザ").to_owned(),
+                tf!(
+                    "Opens DTX Web Editor in your browser. It's a free editor for making and fixing charts while listening to the original song (Chrome or Edge recommended).\nIt can also sync song folders across PCs through Google Drive.\nRun Rescan Songs to see edited charts and new songs in the list.\n{}",
+                    "DTX Web Editor をブラウザで開きます。原曲を聴きながら譜面を作って直せる、無料のエディタです（Chrome か Edge がおすすめ）。\nGoogle Drive で、何台かの PC の曲のフォルダを同期することもできます。\n直した譜面や足した曲は「曲を探し直す」で一覧に出ます。\n{}",
+                    crate::editor::URL
+                ),
                 None,
             ));
             s.table(Group::Songs, v);
@@ -1221,6 +1453,7 @@ pub fn rows(page: Page, info: &ConfigInfo<'_>) -> Vec<Row> {
             s.table(Group::Practice, v);
         }
         Page::Cat(Cat::App) => {
+            s.at("").push(value_row(Setting::Language, c));
             s.at("").push(value_row(Setting::Update, c));
             s.table(Group::App, v);
         }
@@ -1229,14 +1462,14 @@ pub fn rows(page: Page, info: &ConfigInfo<'_>) -> Vec<Row> {
                 tone: Tone::Strong,
                 ..action(
                     ItemId::AssignAll,
-                    "順に叩いて割り当てる",
+                    t("Assign by Hitting", "順に叩いて割り当てる"),
                     String::new(),
-                    "左シンバルから左ペダルまで、言われたレーンのパッドを順に叩いて割り当てます。叩いた機器の割り当てになります。\n叩かずに 4 秒たつと次のレーンへ飛ばします。左バスドラムは下の一覧から足します。"
+                    t("Hit the pad for each lane as it comes up, from Left Cymbal to Left Pedal. The mapping goes to whichever device you hit.\nAfter 4 seconds without a hit, it skips to the next lane. Add the left bass drum from the list below.", "左シンバルから左ペダルまで、言われたレーンのパッドを順に叩いて割り当てます。叩いた機器の割り当てになります。\n叩かずに 4 秒たつと次のレーンへ飛ばします。左バスドラムは下の一覧から足します。")
                         .to_owned(),
                     None,
                 )
             });
-            let lanes = s.at("レーン");
+            let lanes = s.at(t("Lanes", "レーン"));
             for lane in LANES {
                 let sources = info.lanes.get(&lane).map_or(&[][..], Vec::as_slice);
                 let mut desc: String = sources
@@ -1245,15 +1478,15 @@ pub fn rows(page: Page, info: &ConfigInfo<'_>) -> Vec<Row> {
                     .collect();
                 if lane == DrumLane::LBD {
                     desc.push_str(if sources.is_empty() {
-                        "割り当てが無いので、バスドラムで左バスドラムの音符も取れます（ペダルの叩き分けが BD-2 なら左ペダルで）。別のパッドやキーで踏むときだけ足します。\n"
+                        t("Nothing is assigned, so the bass drum also hits left bass drum notes (the left pedal does if Pedal Grouping is BD-2). Only add one if you play it with a separate pad or key.\n", "割り当てが無いので、バスドラムで左バスドラムの音符も取れます（ペダルの叩き分けが BD-2 なら左ペダルで）。別のパッドやキーで踏むときだけ足します。\n")
                     } else {
-                        "左バスドラムをバスドラムでも取るかは、演奏の「ペダルの叩き分け」で決めます。\n"
+                        t("Whether the bass drum also hits left bass drum notes is set in Drums > Auto & Grouping > Pedal Grouping.\n", "左バスドラムをバスドラムでも取るかは、ドラムの「自動・叩き分け」の「ペダルの叩き分け」で決めます。\n")
                     });
                 } else if sources.is_empty() {
-                    desc.push_str("割り当てがありません。\n");
+                    desc.push_str(t("Nothing assigned.\n", "割り当てがありません。\n"));
                 }
                 desc.push_str(
-                    "決定してからパッドを叩くかキーを押すと足します。このレーンに割り当て済みなら外します。",
+                    t("Select, then hit a pad or press a key to add it. If it's already assigned to this lane, it's removed.", "決定してからパッドを叩くかキーを押すと足します。このレーンに割り当て済みなら外します。"),
                 );
                 lanes.push(row(
                     ItemId::Lane(lane),
@@ -1266,14 +1499,15 @@ pub fn rows(page: Page, info: &ConfigInfo<'_>) -> Vec<Row> {
             let changed = c.has_custom_assignments();
             s.at(" ").push(action(
                 ItemId::ResetPads,
-                "割り当てをすべて戻す",
+                t("Reset All Mappings", "割り当てをすべて戻す"),
                 String::new(),
-                format!(
+                tf!(
+                    "Clears every mapping you changed here and goes back to each device's preset and the keyboard defaults.{}",
                     "ここで変えた割り当てを全部消して、機器ごとのプリセットとキーボードの既定に戻します。{}",
-                    if changed { "" } else { "\n（今は変えていません）" }
+                    if changed { "" } else { t("\n(Nothing has been changed.)", "\n（今は変えていません）") }
                 ),
                 Some(
-                    "パッドとキーの割り当てを、すべての機器で既定に戻しますか？\nここで変えた割り当ては消えます。"
+                    t("Reset pad and key mapping to the defaults for all devices?\nMappings you changed here will be lost.", "パッドとキーの割り当てを、すべての機器で既定に戻しますか？\nここで変えた割り当ては消えます。")
                         .to_owned(),
                 ),
             ));
@@ -1285,61 +1519,65 @@ pub fn rows(page: Page, info: &ConfigInfo<'_>) -> Vec<Row> {
             let r = s.at("");
             r.push(row(
                 ItemId::DeviceState(i),
-                "状態",
+                t("Status", "状態"),
                 if d.disabled {
-                    "使っていません".to_owned()
+                    t("Disabled", "使っていません").to_owned()
                 } else if d.open {
-                    "つながっています".to_owned()
+                    t("Connected", "つながっています").to_owned()
                 } else {
-                    "開けません".to_owned()
+                    t("Can't Open", "開けません").to_owned()
                 },
                 format!("{}\n{}", d.name, device_summary(d)),
                 Ctl::Info,
             ));
             r.push(toggle(
                 ItemId::DeviceUse(i),
-                "使う",
+                t("Enabled", "使う"),
                 !d.disabled,
                 true,
-                "OFF にすると、このアプリはこの機器を開きません（ほかのアプリで使うときなど）。",
+                t("When OFF, the app won't open this device (for example, when another app needs it).", "OFF にすると、このアプリはこの機器を開きません（ほかのアプリで使うときなど）。"),
             ));
             r.push(choice(
                 ItemId::DevicePreset(i),
-                "プリセット",
+                t("Preset", "プリセット"),
                 &Preset::ALL.map(Preset::label),
                 Preset::ALL.iter().position(|&p| p == d.preset).unwrap_or(0),
                 Preset::ALL.iter().position(|&p| p == d.default_preset),
-                "割り当ての出発点です。\nRoland: V-Drums の既定（リムやエッジも）。\nGM: General MIDI のドラムの番号。\nなし: 何も割り当てない。",
+                t("The starting point for the mapping.\nRoland: V-Drums defaults (including rims and edges).\nGM: General MIDI drum notes.\nNone: nothing assigned.", "割り当ての出発点です。\nRoland: V-Drums の既定（リムやエッジも）。\nGM: General MIDI のドラムの番号。\nなし: 何も割り当てない。"),
             ));
             r.push(number(
                 ItemId::DeviceChannel(i),
-                "チャンネル",
+                t("Channel", "チャンネル"),
                 i64::from(d.channel),
                 (0, 16, 1),
                 Some(0),
                 Fmt::Channel,
-                "受ける MIDI のチャンネルです。「すべて」ならどのチャンネルでも受けます。"
-                    .to_owned(),
+                t(
+                    "The MIDI channel to listen on. All accepts every channel.",
+                    "受ける MIDI のチャンネルです。「すべて」ならどのチャンネルでも受けます。",
+                )
+                .to_owned(),
             ));
             r.push(number(
                 ItemId::DeviceMinVelocity(i),
-                "最小ベロシティ",
+                t("Minimum Velocity", "最小ベロシティ"),
                 i64::from(d.min_velocity),
                 (0, 127, 1),
                 Some(0),
                 Fmt::OffZero,
-                "これより弱い打撃（ベロシティ）を捨てます。隣のパッドにつられて鳴る弱い音を除きます。".to_owned(),
+                t("Ignores hits softer than this velocity. Filters out weak crosstalk from neighboring pads.", "これより弱い打撃（ベロシティ）を捨てます。隣のパッドにつられて鳴る弱い音を除きます。").to_owned(),
             ));
             r.push(action(
                 ItemId::DeviceReset(i),
-                "割り当てを戻す",
+                t("Reset Mapping", "割り当てを戻す"),
                 if d.changes == 0 {
                     String::new()
                 } else {
-                    format!("{} 個", d.changes)
+                    count(d.changes, "change", "changes", "個")
                 },
-                "この機器で変えた割り当てを消して、プリセットに戻します。".to_owned(),
-                Some(format!(
+                t("Clears the mapping changes for this device and goes back to its preset.", "この機器で変えた割り当てを消して、プリセットに戻します。").to_owned(),
+                Some(tf!(
+                    "Reset {} to its preset mapping?\nThe changes you made on this device ({}) will be lost.",
                     "{} の割り当てをプリセットに戻しますか？\nこの機器で変えた割り当て（{} 個）は消えます。",
                     d.name, d.changes
                 )),
@@ -1359,6 +1597,34 @@ pub fn rows(page: Page, info: &ConfigInfo<'_>) -> Vec<Row> {
 }
 
 /// よく使う項目（設定の画面の「よく使う」と、選曲の簡易設定）
+/// 一時停止の「演奏をやめる」「練習をやめる」の行
+fn quit_row(practice: bool) -> Row {
+    let mut quit = action(
+        ItemId::Quit,
+        if practice {
+            t("Quit Practice", "練習をやめる")
+        } else {
+            t("Quit Song", "演奏をやめる")
+        },
+        String::new(),
+        if practice {
+            t(
+                "Stop practicing and go to the results.",
+                "練習をやめて、結果の画面へ。",
+            )
+        } else {
+            t(
+                "Stop playing and go to the results (your play so far is recorded).",
+                "演奏をやめて、結果の画面へ（ここまでの記録になります）。",
+            )
+        }
+        .to_owned(),
+        None,
+    );
+    quit.tone = Tone::Danger;
+    quit
+}
+
 fn favorites(c: &Config) -> Vec<Row> {
     let mut r: Vec<Row> = [
         Setting::ScrollSpeed,
@@ -1388,10 +1654,11 @@ fn seek_row(p: PlayPos, skip_ms: i64) -> Row {
     let step = (skip_ms / 1000).max(1);
     row(
         ItemId::Seek,
-        "曲の位置",
+        t("Position", "曲の位置"),
         format!("{} / {}", clock(at), clock(end)),
-        format!(
-            "◀▶ で {step} 秒ずつ巻き戻し・早送りします（幅は「アプリ」の「早送り・巻き戻しの幅」）。\n飛んだプレイは記録に残しません。"
+        tf!(
+            "◀▶ rewinds or skips ahead {step} s at a time (set in Gameplay > Skip Length).\nPlays with skips aren't recorded.",
+            "◀▶ で {step} 秒ずつ巻き戻し・早送りします（幅は「ゲームプレイ」の「早送り・巻き戻しの幅」）。\n飛んだプレイは記録に残しません。"
         ),
         Ctl::Number {
             at,
@@ -1408,14 +1675,14 @@ fn seek_row(p: PlayPos, skip_ms: i64) -> Row {
 fn page_title(page: Page, info: &ConfigInfo<'_>) -> String {
     match page {
         Page::Cat(c) => c.name().to_owned(),
-        Page::Quick => "簡易設定".to_owned(),
-        Page::Pause => "一時停止".to_owned(),
-        Page::Mixer => "音量".to_owned(),
-        Page::Lanes => "パッドとキーの割り当て".to_owned(),
-        Page::Device(i) => info
-            .devices
-            .get(i)
-            .map_or_else(|| "MIDI 機器".to_owned(), |d| d.name.clone()),
+        Page::Quick => t("Quick Settings", "簡易設定").to_owned(),
+        Page::Pause => t("Paused", "一時停止").to_owned(),
+        Page::Mixer => t("Volume", "音量").to_owned(),
+        Page::Lanes => t("Pad & Key Mapping", "パッドとキーの割り当て").to_owned(),
+        Page::Device(i) => info.devices.get(i).map_or_else(
+            || t("MIDI Devices", "MIDI 機器").to_owned(),
+            |d| d.name.clone(),
+        ),
     }
 }
 
@@ -1870,7 +2137,7 @@ impl ConfigView {
                 return Response::default();
             }
             let lane = PADS[f.at];
-            self.advance_flow(Some(format!("ノート {note}")));
+            self.advance_flow(Some(tf!("Note {note}", "ノート {note}")));
             return Response::action(Se::Decide, ConfigAction::AssignPad(lane, port, note));
         }
         Response::default()
@@ -1894,7 +2161,11 @@ impl ConfigView {
             ));
         }
         let lane = PADS[self.flow.as_ref()?.at];
-        self.advance_flow(Some(format!("キー {}", crate::inputs::key_label(code))));
+        self.advance_flow(Some(tf!(
+            "Key {}",
+            "キー {}",
+            crate::inputs::key_label(code)
+        )));
         Some(Response::action(
             Se::Decide,
             ConfigAction::AssignKey(lane, code),
@@ -1908,7 +2179,13 @@ impl ConfigView {
             && now.duration_since(since) >= WAIT_FOR
         {
             self.wait = None;
-            self.toast("5 秒叩かなかったので取りやめました".to_owned());
+            self.toast(
+                t(
+                    "Canceled (no hit for 5 seconds)",
+                    "5 秒叩かなかったので取りやめました",
+                )
+                .to_owned(),
+            );
             return Some(Response::se(Se::Cancel));
         }
         if let Some(f) = &self.flow
@@ -1938,7 +2215,11 @@ impl ConfigView {
     fn end_flow(&mut self) {
         if let Some(f) = self.flow.take() {
             let n = f.got.iter().flatten().count();
-            self.toast(format!("順に割り当てるのを終えました（{n} レーン）"));
+            self.toast(tf!(
+                "Assigned {} by hitting",
+                "順に割り当てるのを終えました（{}）",
+                count(n, "lane", "lanes", "レーン")
+            ));
         }
     }
 }
@@ -2000,6 +2281,51 @@ const HEADING_H: f32 = 30.0;
 const GAP_H: f32 = 12.0;
 const HEAD_H: f32 = 46.0;
 
+/// 左の列の 1 行目の上端
+const RAIL_Y: f32 = 104.0;
+/// 左の列の行の間隔と、選んだ行の枠の高さ
+const RAIL_STEP: f32 = 44.0;
+const RAIL_BOX: f32 = 40.0;
+/// 見出し（「システム」「ドラム」）と、線だけの区切りの高さ
+const RAIL_HEAD_H: f32 = 26.0;
+const RAIL_RULE_H: f32 = 14.0;
+/// 左の列の見出しの色（NX v2.0 の設定の左のメニューの水色に寄せる）
+const RAIL_HEADING: Color32 = Color32::from_rgb(110, 205, 240);
+
+/// 左の列の 1 行
+struct RailRow {
+    cat: Cat,
+    /// 行の上端
+    y: f32,
+    /// 行の上に出す見出しの名前と上端
+    heading: Option<(&'static str, f32)>,
+}
+
+/// 左の列の並び
+fn rail_layout() -> Vec<RailRow> {
+    let mut y = RAIL_Y;
+    CATS.iter()
+        .map(|&cat| {
+            let heading = cat.heading().map(|name| {
+                let hy = y + 4.0;
+                y += if name.is_empty() {
+                    RAIL_RULE_H
+                } else {
+                    RAIL_HEAD_H
+                };
+                (name, hy)
+            });
+            let at = y;
+            y += RAIL_STEP;
+            RailRow {
+                cat,
+                y: at,
+                heading,
+            }
+        })
+        .collect()
+}
+
 fn row_height(r: &Row) -> f32 {
     match r.ctl {
         Ctl::Heading if r.name.trim().is_empty() => GAP_H,
@@ -2043,66 +2369,73 @@ fn hints_for(view: &ConfigView, row: Option<&Row>) -> Vec<ui::Hint<'static>> {
     if view.flow.is_some() {
         return vec![(
             ALL,
-            "叩くと割り当て（4 秒で飛ばす・キーボードは Space で飛ばす / Esc でやめる）",
+            t(
+                "Hit to assign (skips after 4 s; on the keyboard, Space skips and Esc cancels)",
+                "叩くと割り当て（4 秒で飛ばす・キーボードは Space で飛ばす / Esc でやめる）",
+            ),
         )];
     }
     if view.wait.is_some() {
         return vec![(
             ALL,
-            "足すパッドを叩く（割り当て済みなら外す・5 秒で取りやめ・キーボードは Esc、Delete で全部外す）",
+            t(
+                "Hit a pad to add (removes it if already assigned; cancels after 5 s; on the keyboard, Esc cancels and Delete clears all)",
+                "足すパッドを叩く（割り当て済みなら外す・5 秒で取りやめ・キーボードは Esc、Delete で全部外す）",
+            ),
         )];
     }
     if view.confirm.is_some() {
         return vec![
-            (&[Pad::HT, Pad::LT], "選ぶ"),
-            (&[Pad::CY, Pad::RD], "決める（Enter）"),
-            (&[Pad::LC], "やめる（Esc）"),
+            (&[Pad::HT, Pad::LT], t("Choose", "選ぶ")),
+            (&[Pad::CY, Pad::RD], t("Confirm (Enter)", "決める（Enter）")),
+            (&[Pad::LC], t("Cancel (Esc)", "やめる（Esc）")),
         ];
     }
     if view.picker.is_some() {
         return if row.is_some_and(|r| matches!(r.ctl, Ctl::Number { .. })) {
             vec![
-                (&[Pad::HT], "増やす"),
-                (&[Pad::LT], "減らす"),
-                (&[Pad::CY, Pad::RD], "決める（Enter）"),
-                (&[Pad::LC], "やめて元に戻す（Esc）"),
+                (&[Pad::HT], t("Increase", "増やす")),
+                (&[Pad::LT], t("Decrease", "減らす")),
+                (&[Pad::CY, Pad::RD], t("Confirm (Enter)", "決める（Enter）")),
+                (&[Pad::LC], t("Cancel (Esc)", "やめて元に戻す（Esc）")),
             ]
         } else {
             vec![
-                (&[Pad::HT], "上"),
-                (&[Pad::LT], "下"),
-                (&[Pad::CY, Pad::RD], "決める（Enter）"),
-                (&[Pad::LC], "やめて元に戻す（Esc）"),
+                (&[Pad::HT], t("Up", "上")),
+                (&[Pad::LT], t("Down", "下")),
+                (&[Pad::CY, Pad::RD], t("Confirm (Enter)", "決める（Enter）")),
+                (&[Pad::LC], t("Cancel (Esc)", "やめて元に戻す（Esc）")),
             ]
         };
     }
     if !view.focus_list {
         return vec![
-            (&[Pad::HT], "上"),
-            (&[Pad::LT], "下"),
-            (&[Pad::CY, Pad::RD], "開く（Enter）"),
-            (&[Pad::LC], "設定を出る（Esc）"),
+            (&[Pad::HT], t("Up", "上")),
+            (&[Pad::LT], t("Down", "下")),
+            (&[Pad::CY, Pad::RD], t("Open (Enter)", "開く（Enter）")),
+            (&[Pad::LC], t("Exit Settings (Esc)", "設定を出る（Esc）")),
         ];
     }
-    let mut v: Vec<ui::Hint<'static>> = vec![(&[Pad::HT], "上"), (&[Pad::LT], "下")];
+    let mut v: Vec<ui::Hint<'static>> =
+        vec![(&[Pad::HT], t("Up", "上")), (&[Pad::LT], t("Down", "下"))];
     let decide = match row.map(|r| &r.ctl) {
-        Some(Ctl::Toggle { .. }) => "切り替え（Enter）",
-        Some(Ctl::Choice { .. } | Ctl::Number { .. }) => "選ぶ（Enter）",
-        Some(Ctl::Page(_)) => "開く（Enter）",
-        Some(Ctl::Lane(_)) => "叩いて足す・外す（Enter）",
-        Some(Ctl::Action { .. }) => "実行（Enter）",
-        _ => "決定（Enter）",
+        Some(Ctl::Toggle { .. }) => t("Toggle (Enter)", "切り替え（Enter）"),
+        Some(Ctl::Choice { .. } | Ctl::Number { .. }) => t("Choose (Enter)", "選ぶ（Enter）"),
+        Some(Ctl::Page(_)) => t("Open (Enter)", "開く（Enter）"),
+        Some(Ctl::Lane(_)) => t("Add/Remove by Hitting (Enter)", "叩いて足す・外す（Enter）"),
+        Some(Ctl::Action { .. }) => t("Select (Enter)", "実行（Enter）"),
+        _ => t("Select (Enter)", "決定（Enter）"),
     };
     if row.is_some_and(Row::editable) {
-        v.push((&[Pad::SD, Pad::FT], "←→ 値を変える"));
+        v.push((&[Pad::SD, Pad::FT], t("←→ Change Value", "←→ 値を変える")));
     } else if row.is_some_and(|r| matches!(r.ctl, Ctl::Page(_))) {
-        v.push((&[Pad::FT], "→ 開く"));
+        v.push((&[Pad::FT], t("→ Open", "→ 開く")));
     }
     v.push((&[Pad::CY, Pad::RD], decide));
     let back = match (view.panel && view.stack.len() == 1, view.page()) {
-        (true, Page::Pause) => "演奏に戻る（Esc）",
-        (true, _) => "閉じる（Esc）",
-        _ => "戻る（Esc）",
+        (true, Page::Pause) => t("Resume (Esc)", "続ける（Esc）"),
+        (true, _) => t("Close (Esc)", "閉じる（Esc）"),
+        _ => t("Back (Esc)", "戻る（Esc）"),
     };
     v.push((&[Pad::LC], back));
     v
@@ -2202,7 +2535,15 @@ impl ConfigView {
 
     /// 上の帯の題と、今どこか
     fn draw_title(&self, c: &Canvas, g: &mut Gfx, info: &ConfigInfo<'_>) {
-        let w = ui::text(c, g, "設定", 40.0, 22.0, &ui::edged(34.0), 200.0);
+        let w = ui::text(
+            c,
+            g,
+            t("Settings", "設定"),
+            40.0,
+            22.0,
+            &ui::edged(34.0),
+            200.0,
+        );
         let mut x = 40.0 + w + 14.0;
         let crumb = ui::edged(20.0);
         let mut parts = vec![CATS[self.cat].name().to_owned()];
@@ -2216,10 +2557,23 @@ impl ConfigView {
         }
     }
 
-    /// 左の列（分類）
+    /// 左の列（分類）。「システム」「ドラム」の見出しの下の分類は少し右に寄せる
     fn draw_rail(&self, c: &Canvas, g: &mut Gfx) {
-        for (i, cat) in CATS.iter().enumerate() {
-            let y = 112.0 + i as f32 * 54.0;
+        for (i, RailRow { cat, y, heading }) in rail_layout().into_iter().enumerate() {
+            if let Some((name, hy)) = heading {
+                let tw = if name.is_empty() {
+                    0.0
+                } else {
+                    ui::text(c, g, name, 40.0, hy, &ui::bold(14.0, RAIL_HEADING), 120.0) + 10.0
+                };
+                c.fill(
+                    40.0 + tw,
+                    hy + if name.is_empty() { 4.0 } else { 9.0 },
+                    224.0 - tw,
+                    1.0,
+                    Color32::from_rgba_unmultiplied(110, 205, 240, 90),
+                );
+            }
             let on = i == self.cat;
             if on {
                 ui::selection(
@@ -2227,7 +2581,7 @@ impl ConfigView {
                     32.0,
                     y,
                     232.0,
-                    46.0,
+                    RAIL_BOX,
                     if self.focus_list { 0.45 } else { 1.0 },
                 );
             }
@@ -2236,16 +2590,25 @@ impl ConfigView {
             } else {
                 Color32::from_rgb(216, 212, 230)
             };
-            ui::icon(c, cat.icon(), 46.0, y + 10.0, 26.0, color);
+            let x = if cat.indented() { 52.0 } else { 44.0 };
+            ui::icon(c, cat.icon(), x, y + 9.0, 22.0, color);
             let style = if on {
-                ui::glow(20.0)
+                ui::glow(19.0)
             } else {
                 Style {
                     edge: Some((Color32::BLACK, 2.0)),
-                    ..ui::bold(20.0, Color32::from_rgb(233, 229, 243))
+                    ..ui::bold(19.0, Color32::from_rgb(233, 229, 243))
                 }
             };
-            ui::text(c, g, cat.name(), 86.0, y + 11.0, &style, 170.0);
+            ui::text(
+                c,
+                g,
+                cat.name(),
+                x + 36.0,
+                y + 9.0,
+                &style,
+                264.0 - x - 40.0,
+            );
         }
     }
 
@@ -2272,7 +2635,7 @@ impl ConfigView {
         let selectable: Vec<usize> = (0..rows.len()).filter(|&i| rows[i].selectable()).collect();
         let count = match cursor.and_then(|at| selectable.iter().position(|&i| i == at)) {
             Some(n) => format!("{} / {}", n + 1, selectable.len()),
-            None => format!("{} 項目", selectable.len()),
+            None => count(selectable.len(), "item", "items", "項目"),
         };
         ui::text_right(
             c,
@@ -2328,7 +2691,11 @@ impl ConfigView {
                 &ui::bold(24.0, Color32::WHITE),
                 w - 44.0,
             );
-            let text = format!("{}\n\n決定か → で中へ。", cat.desc());
+            let text = tf!(
+                "{}\n\nSelect or press → to go in.",
+                "{}\n\n決定か → で中へ。",
+                cat.desc()
+            );
             ui::paragraph(
                 c,
                 g,
@@ -2372,7 +2739,7 @@ impl ConfigView {
             let dw = ui::text(
                 c,
                 g,
-                &format!("既定: {d}"),
+                &tf!("Default: {d}", "既定: {d}"),
                 x + 22.0,
                 ty + 4.0,
                 &ui::plain(14.0, ui::DIM),
@@ -2380,12 +2747,12 @@ impl ConfigView {
             );
             if r.changed() {
                 let chip = ui::bold(12.0, Color32::from_rgb(26, 10, 0));
-                let cw = ui::text_width(g, "変えています", &chip) + 12.0;
+                let cw = ui::text_width(g, t("Changed", "変えています"), &chip) + 12.0;
                 ui::round_fill(c, x + 22.0 + dw + 12.0, ty + 4.0, cw, 19.0, 3.0, ui::ORANGE);
                 ui::text(
                     c,
                     g,
-                    "変えています",
+                    t("Changed", "変えています"),
                     x + 28.0 + dw + 12.0,
                     ty + 6.0,
                     &chip,
@@ -2431,7 +2798,7 @@ fn draw_panel_desc(c: &Canvas, g: &mut Gfx, row: Option<&Row>, y: f32) {
         ui::text(
             c,
             g,
-            &format!("既定: {d}"),
+            &tf!("Default: {d}", "既定: {d}"),
             x + 20.0 + nw + 16.0,
             y + 13.0,
             &ui::plain(14.0, tone),
@@ -2629,10 +2996,22 @@ fn draw_preview(
             | ItemId::DeviceReset(i),
         ) => {
             let d = info.devices.get(i);
-            ui::text(c, g, "最後に届いた打撃", x + 14.0, y + 14.0, &cap, w - 28.0);
-            let last = d
-                .and_then(|d| d.last.clone())
-                .unwrap_or_else(|| "（まだ届いていません。叩くとここに出ます）".to_owned());
+            ui::text(
+                c,
+                g,
+                t("Last Hit Received", "最後に届いた打撃"),
+                x + 14.0,
+                y + 14.0,
+                &cap,
+                w - 28.0,
+            );
+            let last = d.and_then(|d| d.last.clone()).unwrap_or_else(|| {
+                t(
+                    "(Nothing yet. Hit a pad and it shows up here.)",
+                    "（まだ届いていません。叩くとここに出ます）",
+                )
+                .to_owned()
+            });
             ui::paragraph(
                 c,
                 g,
@@ -2667,13 +3046,19 @@ fn preview_mixer(
     selected: Option<usize>,
     (x, y, w, h): (f32, f32, f32, f32),
 ) {
-    const NAMES: [&str; 5] = ["全体", "BGM", "叩いた音", "メトロノーム", "効果音"];
+    let names = [
+        t("Master", "全体"),
+        "BGM",
+        t("Hit Sounds", "叩いた音"),
+        t("Metronome", "メトロノーム"),
+        t("Menu", "効果音"),
+    ];
     let mut levels = vec![i64::from(cfg.master_volume())];
     levels.extend(settings::VOLUMES.iter().map(|k| cfg.settings.number(k)));
-    let col = (w - 24.0) / NAMES.len() as f32;
+    let col = (w - 24.0) / names.len() as f32;
     let (top, bottom) = (y + 40.0, y + h - 34.0);
     let track = bottom - top;
-    for (i, (name, level)) in NAMES.iter().zip(&levels).enumerate() {
+    for (i, (name, level)) in names.iter().zip(&levels).enumerate() {
         let cx = x + 12.0 + col * (i as f32 + 0.5);
         let sel = selected == Some(i);
         if sel {
@@ -2793,7 +3178,7 @@ fn preview_scroll(
     ui::text(
         c,
         g,
-        &format!("速さ {speed:.2}"),
+        &tf!("Speed {speed:.2}", "速さ {speed:.2}"),
         x + 10.0,
         y + h - 22.0,
         &ui::plain(13.0, ui::MUTED),
@@ -2839,7 +3224,10 @@ fn preview_lag(c: &Canvas, g: &mut Gfx, cfg: &Config, (x, y, w, h): (f32, f32, f
     ui::text(
         c,
         g,
-        "早い（-）と遅い（+）の色",
+        t(
+            "Colors for early (-) and late (+)",
+            "早い（-）と遅い（+）の色",
+        ),
         x + 12.0,
         y + h - 22.0,
         &ui::plain(13.0, ui::MUTED),
@@ -2869,7 +3257,7 @@ fn preview_offset(
     ui::text_center(
         c,
         g,
-        "ちょうど",
+        t("On Time", "ちょうど"),
         cx,
         ay - 62.0,
         &ui::plain(13.0, ui::DIM),
@@ -2879,15 +3267,26 @@ fn preview_offset(
     c.fill(mx - 2.0, ay - 30.0, 4.0, 60.0, ui::ORANGE);
     let label = if input {
         match ms {
-            0 => "補正なし".to_owned(),
-            m if m > 0 => format!("叩いた時刻を {m} ms 早めて判定"),
-            m => format!("叩いた時刻を {} ms 遅らせて判定", -m),
+            0 => t("No Offset", "補正なし").to_owned(),
+            m if m > 0 => tf!(
+                "Hits are judged {m} ms earlier",
+                "叩いた時刻を {m} ms 早めて判定"
+            ),
+            m => tf!(
+                "Hits are judged {} ms later",
+                "叩いた時刻を {} ms 遅らせて判定",
+                -m
+            ),
         }
     } else {
         match ms {
-            0 => "補正なし".to_owned(),
-            m if m > 0 => format!("譜面を {m} ms 遅らせて表示"),
-            m => format!("譜面を {} ms 早めて表示", -m),
+            0 => t("No Offset", "補正なし").to_owned(),
+            m if m > 0 => tf!("Notes are drawn {m} ms later", "譜面を {m} ms 遅らせて表示"),
+            m => tf!(
+                "Notes are drawn {} ms earlier",
+                "譜面を {} ms 早めて表示",
+                -m
+            ),
         }
     };
     ui::text_center(
@@ -2902,7 +3301,11 @@ fn preview_offset(
     ui::text(
         c,
         g,
-        &format!("-{0:.0} 〜 +{0:.0} ms", OFFSET_RANGE),
+        &tf!(
+            "-{0:.0} to +{0:.0} ms",
+            "-{0:.0} 〜 +{0:.0} ms",
+            OFFSET_RANGE
+        ),
         x + 12.0,
         y + h - 22.0,
         &ui::plain(13.0, ui::MUTED),
@@ -2923,7 +3326,7 @@ fn preview_kit(
         let sources = info.lanes.get(&lane).map_or(&[][..], Vec::as_slice);
         let notes = sources
             .iter()
-            .filter(|s| s.source != KEYBOARD)
+            .filter(|s| s.source != keyboard())
             .flat_map(|s| s.inputs.iter().cloned())
             .collect::<Vec<_>>()
             .join(",");
@@ -2942,7 +3345,10 @@ fn preview_kit(
     ui::text(
         c,
         g,
-        "丸の下は割り当てたノート番号",
+        t(
+            "Under each circle: the assigned note number",
+            "丸の下は割り当てたノート番号",
+        ),
         x + 12.0,
         y + h - 22.0,
         &ui::plain(13.0, ui::MUTED),
@@ -2964,14 +3370,17 @@ fn preview_auto(c: &Canvas, g: &mut Gfx, cfg: &Config, (x, y, w, h): (f32, f32, 
             19.0,
             ui::lane_color(lane),
             short_lane(lane),
-            if on { "自動" } else { "" },
+            if on { t("Auto", "自動") } else { "" },
             on,
         );
     }
     ui::text(
         c,
         g,
-        "光っているレーンを自動で叩きます",
+        t(
+            "Lit lanes are played automatically",
+            "光っているレーンを自動で叩きます",
+        ),
         x + 12.0,
         y + h - 22.0,
         &ui::plain(13.0, ui::MUTED),
@@ -3027,7 +3436,7 @@ fn draw_picker(c: &Canvas, g: &mut Gfx, r: &Row, x: f32) {
         );
         ui::triangle(c, x + W / 2.0, Y + 150.0, 18.0, 2, ui::YELLOW);
         let text = match default {
-            Some(d) => format!("既定 {}", fmt.show(*d)),
+            Some(d) => tf!("Default {}", "既定 {}", fmt.show(*d)),
             None => String::new(),
         };
         ui::text(c, g, &text, x + 20.0, Y + 178.0, &note, W - 40.0);
@@ -3065,7 +3474,15 @@ fn draw_picker(c: &Canvas, g: &mut Gfx, r: &Row, x: f32) {
         };
         let lw = ui::text(c, g, label, x + 26.0, ly + 6.0, &style, W - 120.0);
         if Some(i) == default {
-            ui::text(c, g, "（既定）", x + 30.0 + lw, ly + 9.0, &note, 80.0);
+            ui::text(
+                c,
+                g,
+                t(" (Default)", "（既定）"),
+                x + 30.0 + lw,
+                ly + 9.0,
+                &note,
+                80.0,
+            );
         }
     }
 }
@@ -3085,7 +3502,10 @@ fn draw_confirm(c: &Canvas, g: &mut Gfx, cf: &Confirm) {
         366.0,
         &ui::plain(17.0, Color32::WHITE),
     );
-    for (i, label) in ["はい", "いいえ"].into_iter().enumerate() {
+    for (i, label) in [t("Yes", "はい"), t("No", "いいえ")]
+        .into_iter()
+        .enumerate()
+    {
         let bx = 440.0 + i as f32 * 210.0;
         let sel = (i == 0) == cf.yes;
         if sel {
@@ -3126,7 +3546,11 @@ fn draw_wait(c: &Canvas, g: &mut Gfx, lane: DrumLane, since: Instant, info: &Con
     ui::text_center(
         c,
         g,
-        &format!("{}に足すパッドを叩いてください", lane_label(lane)),
+        &tf!(
+            "Hit the pad to add to {}",
+            "{}に足すパッドを叩いてください",
+            lane_label(lane)
+        ),
         640.0,
         254.0,
         &ui::bold(22.0, Color32::WHITE),
@@ -3136,7 +3560,7 @@ fn draw_wait(c: &Canvas, g: &mut Gfx, lane: DrumLane, since: Instant, info: &Con
     ui::text_center(
         c,
         g,
-        &format!("今: {now}"),
+        &tf!("Current: {now}", "今: {now}"),
         640.0,
         296.0,
         &ui::plain(15.0, ui::DIM),
@@ -3145,7 +3569,10 @@ fn draw_wait(c: &Canvas, g: &mut Gfx, lane: DrumLane, since: Instant, info: &Con
     ui::text_center(
         c,
         g,
-        "このレーンに割り当て済みのパッドやキーなら外します",
+        t(
+            "A pad or key already assigned to this lane gets removed",
+            "このレーンに割り当て済みのパッドやキーなら外します",
+        ),
         640.0,
         322.0,
         &ui::plain(15.0, ui::DIM),
@@ -3157,7 +3584,10 @@ fn draw_wait(c: &Canvas, g: &mut Gfx, lane: DrumLane, since: Instant, info: &Con
     ui::text_center(
         c,
         g,
-        &format!("あと {secs:.0} 秒で取りやめ（キーボードは Esc）"),
+        &tf!(
+            "Canceling in {secs:.0} s (Esc on the keyboard)",
+            "あと {secs:.0} 秒で取りやめ（キーボードは Esc）"
+        ),
         640.0,
         396.0,
         &ui::plain(14.0, ui::DIM),
@@ -3173,7 +3603,12 @@ fn draw_flow(c: &Canvas, g: &mut Gfx, f: &Flow, info: &ConfigInfo<'_>) {
     ui::text_center(
         c,
         g,
-        &format!("順に叩いて割り当てる　{} / {}", f.at + 1, PADS.len()),
+        &tf!(
+            "Assign by Hitting   {} / {}",
+            "順に叩いて割り当てる　{} / {}",
+            f.at + 1,
+            PADS.len()
+        ),
         640.0,
         112.0,
         &ui::plain(16.0, ui::DIM),
@@ -3182,7 +3617,7 @@ fn draw_flow(c: &Canvas, g: &mut Gfx, f: &Flow, info: &ConfigInfo<'_>) {
     ui::text_center(
         c,
         g,
-        &format!("{}を叩いてください", lane_label(lane)),
+        &tf!("Hit {}", "{}を叩いてください", lane_label(lane)),
         640.0,
         142.0,
         &ui::edged(40.0),
@@ -3191,9 +3626,11 @@ fn draw_flow(c: &Canvas, g: &mut Gfx, f: &Flow, info: &ConfigInfo<'_>) {
     for (i, l) in PADS.iter().enumerate() {
         let (px, py) = ui::lane_spot(*l);
         let sub = if i < f.at {
-            f.got[i].clone().unwrap_or_else(|| "飛ばした".to_owned())
+            f.got[i]
+                .clone()
+                .unwrap_or_else(|| t("Skipped", "飛ばした").to_owned())
         } else if i == f.at {
-            "今ここ".to_owned()
+            t("Now", "今ここ").to_owned()
         } else {
             lane_value(info.lanes.get(l).map_or(&[][..], Vec::as_slice))
         };
@@ -3215,7 +3652,10 @@ fn draw_flow(c: &Canvas, g: &mut Gfx, f: &Flow, info: &ConfigInfo<'_>) {
     ui::text_center(
         c,
         g,
-        &format!("叩かずに {secs:.0} 秒で次のレーンへ"),
+        &tf!(
+            "Next lane in {secs:.0} s without a hit",
+            "叩かずに {secs:.0} 秒で次のレーンへ"
+        ),
         640.0,
         658.0,
         &ui::plain(14.0, ui::DIM),
@@ -3254,7 +3694,7 @@ mod tests {
                         inputs: vec!["38".to_owned(), "40".to_owned()],
                     },
                     LaneSource {
-                        source: KEYBOARD.to_owned(),
+                        source: keyboard().to_owned(),
                         inputs: vec!["D".to_owned()],
                     },
                 ],
@@ -3292,6 +3732,7 @@ mod tests {
             song: true,
             play: None,
             timing: None,
+            monitors: &[],
         }
     }
 
@@ -3319,24 +3760,125 @@ mod tests {
         v
     }
 
+    fn screens() -> Vec<MonitorInfo> {
+        let m = |name: &str, x: i32, w: i32, h: i32, primary: bool| MonitorInfo {
+            name: name.to_owned(),
+            rect: window_mode::Rect { x, y: 0, w, h },
+            hz: Some(60),
+            primary,
+        };
+        vec![
+            m(r"\\.\DISPLAY1", 0, 2560, 1440, true),
+            m(r"\\.\DISPLAY2", 2560, 1920, 1080, false),
+        ]
+    }
+
     #[test]
-    fn every_name_is_japanese_and_no_nx_folder() {
+    fn monitor_row_follows_display_mode_and_lists_the_screens() {
+        let _ja = i18n::scoped(i18n::Lang::Ja);
+        let mut c = Config::default();
+        let list = screens();
+        let with_screens = ConfigInfo {
+            monitors: &list,
+            ..info(&c)
+        };
+        let rows = rows(Page::Cat(Cat::Display), &with_screens);
+        let i = rows
+            .iter()
+            .position(|r| r.id == Some(ItemId::Table(settings::DISPLAY_MODE)))
+            .unwrap();
+        let r = &rows[i + 1];
+        assert_eq!(r.id, Some(ItemId::Monitor));
+        assert_eq!(r.value, MONITOR_AUTO.get());
+        assert_eq!(
+            r.options().unwrap().0,
+            [
+                MONITOR_AUTO.get(),
+                "1：2560×1440 60Hz（メイン）",
+                "2：1920×1080 60Hz（メインの右）"
+            ]
+        );
+        assert!(!r.changed());
+        // 2 枚目を選ぶ
+        assert!(set_monitor(&mut c, &list, 2));
+        assert!(!set_monitor(&mut c, &list, 2));
+        assert_eq!(c.monitor, Some(list[1].pick()));
+        let r = monitor_row(&c, &list);
+        assert_eq!(r.value, "2：1920×1080 60Hz（メインの右）");
+        assert!(r.changed());
+        // 外れたら印の選択肢を足して、選びは消さない
+        let r = monitor_row(&c, &list[..1]);
+        assert_eq!(r.value, MONITOR_GONE.get());
+        assert_eq!(
+            r.options().unwrap(),
+            (
+                vec![
+                    MONITOR_AUTO.get().into(),
+                    "1：2560×1440 60Hz（メイン）".into(),
+                    MONITOR_GONE.get().into()
+                ],
+                Some(2)
+            )
+        );
+        assert!(!set_monitor(&mut c, &list[..1], 2));
+        assert_eq!(c.monitor, Some(list[1].pick()));
+        // 自動に戻す
+        assert!(set_monitor(&mut c, &list, 0));
+        assert_eq!(c.monitor, None);
+    }
+
+    #[test]
+    fn every_name_follows_the_language_and_no_nx_folder() {
         let c = Config::default();
         let info = info(&c);
-        for cat in CATS {
-            for r in rows(Page::Cat(cat), &info) {
-                assert!(!r.name.contains("NX"), "{}", r.name);
-                if r.selectable() {
-                    // 英字だけの名前は無い（機器の名前は除く）
+        let japanese = |s: &str| {
+            s.chars()
+                .any(|ch| matches!(ch, '\u{3040}'..='\u{30ff}' | '\u{4e00}'..='\u{9fff}'))
+        };
+        let pages = CATS.iter().map(|&cat| Page::Cat(cat)).chain([
+            Page::Quick,
+            Page::Pause,
+            Page::Mixer,
+            Page::Lanes,
+        ]);
+        for page in pages {
+            for lang in Lang::ALL {
+                let _lang = i18n::scoped(lang);
+                for r in rows(page, &info) {
+                    assert!(!r.name.contains("NX"), "{}", r.name);
+                    // 機器の名前はそのまま
                     let device = info.devices.iter().any(|d| d.name == r.name);
-                    assert!(
-                        device || !r.name.chars().all(|ch| ch.is_ascii() || ch == '　'),
-                        "{}",
-                        r.name
-                    );
+                    match lang {
+                        // 英字だけの名前は無い
+                        Lang::Ja if r.selectable() => assert!(
+                            device || !r.name.chars().all(|ch| ch.is_ascii() || ch == '　'),
+                            "{}",
+                            r.name
+                        ),
+                        Lang::En => {
+                            for text in [&r.name, &r.value, &r.desc] {
+                                assert!(!japanese(text), "{text}");
+                            }
+                        }
+                        _ => {}
+                    }
                 }
             }
         }
+    }
+
+    #[test]
+    fn the_language_comes_first_in_general() {
+        let mut c = Config::default();
+        let r = &rows(Page::Cat(Cat::App), &info(&c))[0];
+        assert_eq!(r.id, Some(ItemId::Value(Setting::Language)));
+        assert_eq!(r.value, "English");
+        // どちらの言語の画面でも、言語の名前はその言語の綴り
+        c.set_lang(Lang::Ja);
+        let _ja = i18n::scoped(Lang::Ja);
+        let r = &rows(Page::Cat(Cat::App), &info(&c))[0];
+        assert_eq!(r.value, "日本語");
+        assert!(r.name.contains("Language"), "{}", r.name);
     }
 
     #[test]
@@ -3365,6 +3907,7 @@ mod tests {
 
     #[test]
     fn the_song_offset_and_advice_follow_the_input_offset() {
+        let _ja = i18n::scoped(i18n::Lang::Ja);
         let c = Config {
             input_offset_ms: 3.0,
             ..Default::default()
@@ -3479,6 +4022,7 @@ mod tests {
 
     #[test]
     fn the_list_does_not_wrap_and_skips_headings() {
+        let _ja = i18n::scoped(Lang::Ja);
         let c = Config::default();
         let list = rows(Page::Cat(Cat::View), &info(&c));
         assert_eq!(list[0].ctl, Ctl::Heading);
@@ -3488,14 +4032,17 @@ mod tests {
             ItemId::Value(Setting::ScrollSpeed),
         );
         assert_eq!(v.input(ConfigInput::Up, &list), Response::default());
-        // 小見出し「ずれの表示」を飛ばす
-        let heading = list.iter().position(|r| r.name == "ずれの表示").unwrap();
+        // 小見出し「見えにくくする」を飛ばす
+        let heading = list
+            .iter()
+            .position(|r| r.name == "見えにくくする")
+            .unwrap();
         assert_eq!(list[heading].ctl, Ctl::Heading);
         *v.cursor_mut() = heading - 1;
         v.input(ConfigInput::Down, &list);
         assert_eq!(
             list[v.level().cursor].id,
-            Some(ItemId::Value(Setting::ShowLagTime))
+            Some(ItemId::Table(settings::HID_SUD))
         );
         let last = list.iter().rposition(Row::selectable).unwrap();
         *v.cursor_mut() = last;
@@ -3543,13 +4090,14 @@ mod tests {
     }
 
     #[test]
-    fn auto_play_is_in_favorites_and_play() {
+    fn auto_play_is_in_favorites_and_pads() {
+        let _ja = i18n::scoped(Lang::Ja);
         let mut config = Config::default();
         let fav = rows(Page::Cat(Cat::Fav), &info(&config));
         let auto = ItemId::Table(settings::AUTO_ALL);
         let i = find(&fav, auto);
         assert_eq!(fav[i].value, "OFF");
-        let play = rows(Page::Cat(Cat::Play), &info(&config));
+        let play = rows(Page::Cat(Cat::Pads), &info(&config));
         let names: Vec<&str> = play.iter().map(|r| r.name.as_str()).collect();
         let at_auto = names.iter().position(|n| *n == "自動で叩く").unwrap();
         assert_eq!(play[at_auto].ctl, Ctl::Heading);
@@ -3569,6 +4117,7 @@ mod tests {
 
     #[test]
     fn lanes_are_assigned_by_hitting_after_decide() {
+        let _ja = i18n::scoped(i18n::Lang::Ja);
         let config = Config::default();
         let info = info(&config);
         let input = rows(Page::Cat(Cat::Input), &info);
@@ -3618,6 +4167,7 @@ mod tests {
 
     #[test]
     fn assign_all_walks_every_lane_in_order() {
+        let _ja = i18n::scoped(Lang::Ja);
         let config = Config::default();
         let info = info(&config);
         let lanes = rows(Page::Lanes, &info);
@@ -3693,7 +4243,23 @@ mod tests {
     }
 
     #[test]
+    fn the_editor_opens_from_the_songs_page() {
+        // 曲のフォルダが無くても出す（エディタで曲を作ってから足す人もいる）
+        let c = Config::default();
+        let songs = rows(Page::Cat(Cat::Songs), &info(&c));
+        let i = find(&songs, ItemId::OpenEditor);
+        assert!(songs[i].desc.contains(crate::editor::URL));
+        let mut v = at(Page::Cat(Cat::Songs), &songs, ItemId::OpenEditor);
+        // 取り消せない操作ではないので確かめない
+        assert_eq!(
+            v.input(ConfigInput::Decide, &songs).action,
+            Some(ConfigAction::Run(ItemId::OpenEditor))
+        );
+    }
+
+    #[test]
     fn devices_have_their_own_page() {
+        let _ja = i18n::scoped(Lang::Ja);
         let config = Config::default();
         let info = info(&config);
         let input = rows(Page::Cat(Cat::Input), &info);
@@ -3748,7 +4314,7 @@ mod tests {
         let list = rows(v.page(), &info);
         assert_eq!(v.input(ConfigInput::Up, &list), Response::default());
         v.input(ConfigInput::Down, &list);
-        assert_eq!(v.page(), Page::Cat(Cat::Play));
+        assert_eq!(v.page(), Page::Cat(Cat::Display));
         v.input(ConfigInput::Right, &list);
         assert!(v.focus_list);
         let list = rows(v.page(), &info);
@@ -3762,12 +4328,57 @@ mod tests {
         assert_eq!(v.input(ConfigInput::Down, &list), Response::default());
     }
 
+    #[test]
+    fn categories_follow_nx_system_and_drums() {
+        let _ja = i18n::scoped(Lang::Ja);
+        let config = Config::default();
+        let info = info(&config);
+        let in_cat =
+            |cat: Cat, id: ItemId| rows(Page::Cat(cat), &info).iter().any(|r| r.id == Some(id));
+        // 普通のゲームと同じく、全画面と垂直同期は「画面」に
+        assert!(in_cat(Cat::Display, ItemId::Table(settings::DISPLAY_MODE)));
+        assert!(in_cat(Cat::Display, ItemId::Table(settings::VSYNC)));
+        // NX の Drums の叩き分けと、共通にしたときの音は隣どうし
+        assert!(in_cat(Cat::Pads, ItemId::Table(settings::HH_GROUP)));
+        assert!(in_cat(Cat::Pads, ItemId::Table(settings::HH_PRIORITY)));
+        assert!(in_cat(Cat::Pads, ItemId::Table(settings::MUTING_LP)));
+        // ずれの設定はゲームプレイにまとめる
+        for id in [
+            ItemId::Value(Setting::ShowLagTime),
+            ItemId::Value(Setting::ShowLagHitCount),
+            ItemId::Table(settings::HIT_ERROR_BAR),
+        ] {
+            assert!(in_cat(Cat::Play, id), "{id:?}");
+        }
+        // 音は音量が先頭
+        let sound = rows(Page::Cat(Cat::Sound), &info);
+        assert_eq!(sound[0].name, "音量");
+        assert_eq!(sound[1].id, Some(ItemId::Value(Setting::MasterVolume)));
+        // 左の列は システム（画面〜アプリ）、ドラム（譜面〜入力）、線、練習
+        let heads: Vec<(Cat, &str)> = CATS
+            .iter()
+            .filter_map(|&c| c.heading().map(|h| (c, h)))
+            .collect();
+        assert_eq!(
+            heads,
+            [
+                (Cat::Display, "システム"),
+                (Cat::View, "ドラム"),
+                (Cat::Practice, "")
+            ]
+        );
+        // 左の列は下の帯にかからない
+        let last = rail_layout().last().unwrap().y;
+        assert!(last + RAIL_BOX <= LIST_Y + LIST_H, "{last}");
+    }
+
     fn ids(rows: &[Row]) -> Vec<ItemId> {
         rows.iter().filter_map(|r| r.id).collect()
     }
 
     #[test]
     fn the_mixer_opens_from_favorites_quick_and_pause() {
+        let _ja = i18n::scoped(Lang::Ja);
         let mut config = Config::default();
         config.settings.set_raw(settings::AUTO_VOLUME, 60);
         let mut info = info(&config);
@@ -3822,6 +4433,7 @@ mod tests {
 
     #[test]
     fn the_sound_category_starts_with_the_mixer() {
+        let _ja = i18n::scoped(Lang::Ja);
         let config = Config::default();
         let list = rows(Page::Cat(Cat::Sound), &info(&config));
         assert_eq!(
@@ -3843,19 +4455,25 @@ mod tests {
     }
 
     #[test]
-    fn quick_settings_are_the_favorites_then_practice_and_all_settings() {
+    fn quick_settings_are_practice_then_the_favorites_and_all_settings() {
         let config = Config::default();
         let mut info = info(&config);
         let fav = ids(&rows(Page::Cat(Cat::Fav), &info));
         let quick = ids(&rows(Page::Quick, &info));
-        assert_eq!(quick[..fav.len()], fav[..]);
+        // 区間練習が一番上（開いたときに選んでいる）
+        assert_eq!(quick[0], ItemId::PracticeSong);
+        assert_eq!(quick[1..=fav.len()], fav[..]);
+        assert_eq!(quick[fav.len() + 1..], [ItemId::AllSettings]);
+        let list = rows(Page::Quick, &info);
+        let mut v = ConfigView::panel(Page::Quick);
         assert_eq!(
-            quick[fav.len()..],
-            [ItemId::PracticeSong, ItemId::AllSettings]
+            v.input(ConfigInput::Decide, &list),
+            Response::action(Se::Decide, ConfigAction::Run(ItemId::PracticeSong))
         );
         // BOX を選んでいるときは区間練習が無い
         info.song = false;
         let quick = ids(&rows(Page::Quick, &info));
+        assert_eq!(quick[..fav.len()], fav[..]);
         assert_eq!(quick[fav.len()..], [ItemId::AllSettings]);
         // 値の行は設定の画面と同じに動く（◀▶ でその場で変える）
         let list = rows(Page::Quick, &info);
@@ -3879,6 +4497,7 @@ mod tests {
 
     #[test]
     fn the_metronome_switches_from_quick_and_pause() {
+        let _ja = i18n::scoped(Lang::Ja);
         let config = Config::default();
         let mut info = info(&config);
         // 選曲の簡易設定と、よく使うは設定のメトロノーム（音量の次）
@@ -3926,6 +4545,7 @@ mod tests {
 
     #[test]
     fn pause_starts_on_resume_and_seeks_with_left_and_right() {
+        let _ja = i18n::scoped(Lang::Ja);
         let config = Config::default();
         let mut info = info(&config);
         info.play = Some(PlayPos {
@@ -3969,6 +4589,17 @@ mod tests {
         let list = rows(Page::Pause, &info);
         assert!(!ids(&list).contains(&ItemId::Seek));
         assert_eq!(list[0].name, "練習に戻る");
+        // 練習は、選び直す・やめるも上に（ドラムで LT 3 回まで）
+        assert_eq!(
+            ids(&list)[..4],
+            [
+                ItemId::Resume,
+                ItemId::Retry,
+                ItemId::Reselect,
+                ItemId::Quit
+            ]
+        );
+        assert_eq!(ids(&list).iter().filter(|&&i| i == ItemId::Quit).count(), 1);
     }
 
     #[test]

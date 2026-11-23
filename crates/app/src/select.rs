@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use egui::{Color32, Pos2};
+use i18n::{t, tf};
 use library::{LEVELS, Node, Song, SongChart, SortKind};
 
 use crate::gfx::{Canvas, Gfx, Glyphs, Opt, Tex, src};
@@ -380,16 +381,20 @@ impl SelectView {
     fn row(&mut self, songs: &SongList, e: Entry<'_>) -> Row {
         match e {
             Entry::Back => Row {
-                title: "<< 戻る".into(),
-                sub: "BOX を出ます。".into(),
+                title: t("<< Back", "<< 戻る").into(),
+                sub: t("Leave this box.", "BOX を出ます。").into(),
                 bar: Bar::Back,
                 preimage: Preimage::Skin("Graphics/5_preimage backbox.png"),
                 lamp: None,
                 skill: None,
             },
             Entry::Random => Row {
-                title: "< ランダムに選ぶ >".into(),
-                sub: "この中から 1 曲を選びます。".into(),
+                title: t("< Random >", "< ランダムに選ぶ >").into(),
+                sub: t(
+                    "Pick a song from this list at random.",
+                    "この中から 1 曲を選びます。",
+                )
+                .into(),
                 bar: Bar::Song,
                 preimage: Preimage::Skin("Graphics/5_preimage random.png"),
                 lamp: None,
@@ -403,8 +408,9 @@ impl SelectView {
                 Row {
                     title: b.title.clone(),
                     sub: match song_count(&b.nodes) {
-                        0 => "曲がありません".to_owned(),
-                        n => format!("{n} 曲"),
+                        0 => t("No songs", "曲がありません").to_owned(),
+                        1 => t("1 song", "1 曲").to_owned(),
+                        n => tf!("{n} songs", "{n} 曲"),
                     },
                     bar: Bar::Box,
                     preimage: file.map_or(
@@ -495,9 +501,9 @@ impl SelectView {
         let n = songs.len();
         if n == 0 {
             let msg = if songs.scanning().is_some() {
-                "曲を探しています…"
+                t("Looking for songs…", "曲を探しています…")
             } else {
-                "曲が見つかりません"
+                t("No songs found", "曲が見つかりません")
             };
             if let Some(t) = g.texts.get(
                 msg,

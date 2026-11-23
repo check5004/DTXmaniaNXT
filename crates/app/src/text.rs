@@ -267,7 +267,8 @@ impl Texts {
     }
 
     /// `max_w` に収まるように行を分ける（`\n` でも分ける）。
-    /// 日本語はどの字の間でも分けるが、句読点や閉じ括弧は行の頭に置かず、英数字の語は途中で分けない
+    /// 日本語はどの字の間でも分けるが、句読点や閉じ括弧は行の頭に置かず、英数字の語は途中で分けない。
+    /// 英語の文の折り返したところの空白は、行の頭にも終わりにも残さない
     pub fn wrap(&self, text: &str, px: f32, max_w: f32) -> Vec<String> {
         let Some(font) = &self.font else {
             return text.lines().map(str::to_owned).collect();
@@ -338,24 +339,34 @@ fn wrap_with(text: &str, max_w: f32, advance: impl Fn(char) -> f32) -> Vec<Strin
     for para in text.split('\n') {
         let mut line = String::new();
         let mut w = 0.0f32;
-        // 今の英数字の語の始まり（行の中の位置、そこまでの幅）
+        // 今の英数字の語（空白の無い ASCII の字の並び。"it's" や "Alt+Enter" も 1 語）の始まり（行の中の位置、そこまでの幅）
         let mut word: Option<(usize, f32)> = None;
+        // 折り返したあとの行か（その頭の空白は捨てる）
+        let mut wrapped = false;
+        let end = |l: String| l.trim_end_matches(' ').to_owned();
         for ch in para.chars() {
+            if ch == ' ' && wrapped && line.is_empty() {
+                continue;
+            }
             let adv = advance(ch);
-            let in_word = ch.is_ascii_alphanumeric();
+            let in_word = ch.is_ascii_graphic();
             if w + adv > max_w && !line.is_empty() && !no_line_start(ch) {
+                wrapped = true;
                 match word {
                     Some((i, wi)) if in_word && i > 0 => {
                         // 語ごと次の行へ
                         let rest = line.split_off(i);
-                        lines.push(std::mem::replace(&mut line, rest));
+                        lines.push(end(std::mem::replace(&mut line, rest)));
                         w -= wi;
                         word = Some((0, 0.0));
                     }
                     _ => {
-                        lines.push(std::mem::take(&mut line));
+                        lines.push(end(std::mem::take(&mut line)));
                         w = 0.0;
                         word = None;
+                        if ch == ' ' {
+                            continue;
+                        }
                     }
                 }
             }
@@ -578,7 +589,14 @@ mod tests {
         // 句読点は行の頭に置かない
         assert_eq!(w("あい。う", 2.0), ["あい。", "う"]);
         // 英数字の語は分けない
-        assert_eq!(w("あ Enter", 5.0), ["あ ", "Enter"]);
+        assert_eq!(w("あ Enter", 5.0), ["あ", "Enter"]);
+        // 英語の文は語の間で分け、分けたところの空白は残さない
+        assert_eq!(w("ab cd ef", 5.0), ["ab cd", "ef"]);
+        assert_eq!(w("ab cd", 2.0), ["ab", "cd"]);
+        assert_eq!(w("it's ok", 5.0), ["it's", "ok"]);
+        assert_eq!(w("Alt+Enter or F11", 10.0), ["Alt+Enter", "or F11"]);
+        // 段落の頭の空白はそのまま
+        assert_eq!(w(" ab", 9.0), [" ab"]);
         // 行より長い語は分ける
         assert_eq!(w("Enter", 3.0), ["Ent", "er"]);
         assert_eq!(w("a\nb", 9.0), ["a", "b"]);
