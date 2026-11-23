@@ -279,7 +279,7 @@ GITADORA is a trademark of Konami Digital Entertainment Co., Ltd. The screen lay
 
 ### About the pictures
 
-The screenshots and clips come from the current development build, so details may differ slightly from the release you download. They show the artwork from step 1, with the English screens (the Japanese README shows the Japanese screens). All songs shown are demo songs made for these pictures, not real songs: “Neon Skyline” is the original demo song of DTX Web Editor, and the other titles are made-up names given to copies of it. The play records shown are made up as well.
+The screenshots and clips come from the current development build, so details may differ slightly from the release you download. They show the current skin, which is all original artwork, with the English screens (the Japanese README shows the Japanese screens). All songs shown are demo songs made for these pictures, not real songs: “Neon Skyline” is the original demo song of DTX Web Editor, and the other titles are made-up names given to copies of it. The play records shown are made up as well.
 
 ## For developers
 
