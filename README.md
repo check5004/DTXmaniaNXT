@@ -1,134 +1,321 @@
-# DTXmaniaNXT
+<p align="center">
+  <img src="docs/readme/hero.svg" width="960" alt="DTXmaniaNXT: play DTX drum charts and practice the parts you miss. Written from scratch in Rust, laid out like DTXManiaNX v2.0. Made for electronic drums. Windows first, macOS and Linux too.">
+</p>
 
-DTX 形式の譜面で遊べる、ドラムのゲーム兼練習アプリです。Rust で一から書き直しています。
+<p align="center">
+  <a href="https://github.com/check5004/DTXmaniaNXT/releases/latest/download/DTXmaniaNXT-Setup.exe"><img src="docs/readme/download.svg" width="384" alt="Download for Windows (free)"></a>
+</p>
 
-- **ネイティブ**: Windows を主に、macOS と Linux にも同じコードで対応します（描画は wgpu、音は cpal、MIDI は midir）。
-- **電子ドラム**: Roland V-Drums の細かい入力（ハイハットの開き具合、チョーク、リム、ベロシティ）を扱います。
-- **練習**: 区間ループ・速度変更・待ちモード・打撃ごとの記録と分析、AI による練習支援を目指します。
+<p align="center">
+  <b>English</b> · <a href="README.ja.md">日本語</a>
+</p>
 
-譜面づくりは [DTX Web Editor](https://github.com/check5004/dtx-mania-web-editor) で行い、本体とは DTX 形式とテスト譜面で互換を保ちます。
+<p align="center">
+  A free drum game and practice app for <b>DTX charts</b>, the song format of DTXMania.<br>
+  Windows (64-bit). macOS (Apple silicon) and Linux (x86_64) builds are on the <a href="https://github.com/check5004/DTXmaniaNXT/releases/latest">releases page</a>.<br>
+  <sub>In English and Japanese. An unofficial fan project: see <a href="#credits-and-rights">Credits and rights</a>.</sub>
+</p>
 
-## 使い方（開発中）
+<p align="center">
+  <img src="docs/readme/shots/play.gif" width="800" alt="Gameplay: notes fall down ten coloured lanes onto the judgement line, PERFECT and GREAT pop up as they are hit, the combo counts up and the score and gauge fill on the left.">
+  <br>
+  <sub>Playing “Neon Skyline” on MASTER. The songs in these pictures are demo songs made for this README (see <a href="#about-the-pictures">About the pictures</a>).</sub>
+</p>
 
-### ダウンロード
+## What it does
 
-[リリース](https://github.com/check5004/DTXmaniaNXT/releases/latest)から、Windows は [DTXmaniaNXT-Setup.exe](https://github.com/check5004/DTXmaniaNXT/releases/latest/download/DTXmaniaNXT-Setup.exe)（いつも最新の版）をダウンロードして実行します。管理者の権限なしで `%LocalAppData%\DTXmaniaNXT` にインストールして起動し、スタートメニューとデスクトップに DTXmaniaNXT が入ります。画面の画像と効果音（DTXManiaNX v2.0 のスキン）もアプリに入っているので、DTXManiaNX が無くても NX v2.0 と同じ見た目で遊べます。macOS（Apple シリコン）と Linux（x86_64）の版も同じページにあります。
+<table>
+<tr>
+<td width="33%" valign="top">
+<b>🥁 Plays your DTX songs</b><br>
+Point it at your song folder, or drop the folder on the window. <code>set.def</code>, <code>box.def</code>, WAV / OGG / MP3 and old XA sounds all work.
+</td>
+<td width="33%" valign="top">
+<b>🎛️ Made for electronic drums</b><br>
+Plug in by USB-MIDI and play. Hi-hat openness, chokes, snare rim shots and velocity are read. The keyboard works too.
+</td>
+<td width="33%" valign="top">
+<b>🎯 Fair timing</b><br>
+Each hit is judged by when it arrived, against where the music is playing, not by the next screen frame.
+</td>
+</tr>
+<tr>
+<td valign="top">
+<b>🔁 Practice mode</b><br>
+Loop a few bars and climb 70 → 80 → 90 → 100 %. It shows the exact beat you keep missing.
+</td>
+<td valign="top">
+<b>📈 Finds your weak spots</b><br>
+Every note you play is recorded. The result screen shows your weak bars, weak phrases and timing habits.
+</td>
+<td valign="top">
+<b>🖼️ Feels like DTXManiaNX v2.0</b><br>
+Screens laid out like DTXManiaNX v2.0, with new artwork and sounds. Everything is built in, so you don't need DTXManiaNX installed.
+</td>
+</tr>
+</table>
 
-- 署名をしていないので、Windows で「Windows によって PC が保護されました」と出たら「詳細情報」→「実行」を押します。
-- 新しい版は、起動したときに GitHub のリリースにあるかを確かめ、あればタイトルのメニューの下に「新しい版」の行が出ます。その行を選ぶと落とし始め（落としている間は画面の隅に % が出て、そのまま遊べます）、落とし終えたら「再起動して入れ替える」で入れ替えて起動し直します。選ばずに終了しても、そのときに入れ替わります。設定の「アプリ」の「更新」で、知らせる（既定）・自動（起動したときに落とし、終了したときに入れ替える）・確かめない を選べます。
-- 設定と記録は別のフォルダ（下の `%APPDATA%\DTXmaniaNXT`）にあるので、更新しても、入れ直しても引き継がれます。exe 単体で使っていた人も、Setup.exe で一度入れ直せばそのまま使えます（古い exe は消してかまいません）。
-- アンインストールは Windows の設定の「アプリ」から行います。設定と記録は残ります。
-- まだリリースしていない変更を試すときは、[Actions](https://github.com/check5004/DTXmaniaNXT/actions) で成功した CI の実行を開き、下の Artifacts から `dtxmanianxt-Windows`（macOS は `dtxmanianxt-macOS`）をダウンロードします。
+## Get started
 
-### 遊び方
+<p align="center"><img src="docs/readme/steps.svg" width="960" alt="1. Install: run DTXmaniaNXT-Setup.exe, no admin rights needed. 2. Add your songs: pick your DTX song folder or drop it on the window. 3. Plug in and play: connect your e-drum by USB-MIDI, it is found automatically."></p>
 
-1. 起動すると NX と同じタイトルの画面になります（Start / Config / Quit。曲を探しているあいだは左上に印が出ます）。画面の下には、設定の画面と同じ操作の案内の帯を出します（↑↓ か HT / LT で選び、Enter か CY / RD で決め、Esc で終わります。叩き間違えで終わらないよう、LC は使いません）。初めは Config の「曲」にある「フォルダを足す」で曲のフォルダを選びます。曲のフォルダをウィンドウにドロップしても足せます（DTXManiaNX の曲を使うなら、NX のフォルダか、その中の曲のフォルダを選びます）。
-   - 0.1 で「NX Folder」を選んでいた場合は、0.2 を初めて起動したときに、その NX のパッドの割り当てと表示の設定（StageFailed、ShowLagTime など）を一度だけ引き継ぎます。0.1 が設定のフォルダの `nx` に写した NX のスキンは、もう使わないので消します。
-   - 画面の切り替えは NX v2.0 と同じく、黒い板が回りながら閉じて開くシャッターです（タイトルから先へ、設定の出入り、読み込みや演奏をやめたとき、結果から選曲へ）。
-   - 設定の画面は 3 列です（左に分類、真ん中に項目、右に説明と見本）。左の列は NX v2.0 と同じく「システム」と「ドラム」の 2 段で、よく使う、システム（画面・音・ゲームプレイ・曲・アプリ）、ドラム（譜面・自動・叩き分け・タイミング・入力）、練習 の 11 の分類です。↑↓ で選び、←→ で値をその場で変え、Enter で決め（ON / OFF は切り替え、選択肢や数は選ぶ窓を開く）、Esc で戻ります。一覧は端で回らず、何番目か（3 / 12 など）を出します。既定から変えた項目には橙の点が付き、右の列に既定の値と見本を出します。電子ドラムでは HT で上、LT で下、SD で左、FT で右、CY か RD で決定、LC で戻ります（画面の下にいつも出します）。4 つのパッドだけでも、決定で開く窓の中の上下で値を変えられます。選曲の画面から F1 でも開けます。
-   - 画面：画面の出し方（FullScreen。ウィンドウ・ボーダーレス（疑似全画面）・全画面。ボーダーレスは枠のない窓を画面いっぱいに広げ、ほかの窓へすぐ切り替えたり上に重ねたりできます）、出すモニター（全画面とボーダーレスを出すモニター。番号・大きさ・メインから見た位置で選び、選ぶとその場で移ります。ウィンドウも起動したときはこのモニターに開きます。選んだモニターが外れているときは窓のあるモニターに出します）、ウィンドウの大きさ（前回のまま・1280×720〜2560×1440。位置はいつも前回のところに開きます）、「なめらかさと遅れ」の垂直同期（VSyncWait。ON・低遅延（裂けない）・OFF。低遅延は書き換えに合わせたまま一番新しい絵を出し、使えない GPU では ON と同じ）・フレームレートの上限（OFF・60〜360。叩いた音と判定は遅れません）・ほかの窓を見ているとき（そのまま・描く回数を下げる。下げると 1 秒に 30 回。演奏と練習の最中は下げません）・FPS と遅延の表示（出さない・小さく・詳しく。右上の隅に FPS と、叩いてから音が鳴るまでの時間と、音の出力の遅れを出します。詳しくではフレームのグラフと、遅れの内訳（MIDI の揺れ・処理待ち・出力）も出します。どの画面でも F9 で切り替えられ、5 秒ごとにログにも書きます）、「動画」の譜面の動画（AVI。#AVI の動画をレーンの後ろに流します。今は Windows だけで、MP4 の H.264 や AVI の Xvid・DivX を Windows の Media Foundation で読みます。横長の動画は幅を、それより縦長の動画は高さを画面に合わせます）・レーンの透け具合（MovieAlpha。0〜100 %）。音：「音量」の全体（0〜100 で、初めは 50）・BGM（AutoVolume。譜面の効果音、自動で叩くレーン、選曲のプレビューも入り、既定 80 %）・叩いた音（ChipVolume、既定 100 %）・メトロノーム・効果音（SE）、「鳴らすもの」の叩いた音・BGM を鳴らすか（BGM Sound）・小節と拍で鳴らすメトロノーム（Metronome。音は NX のスキンに無いので、数え始めと同じ作った音）。ゲームプレイ：「演奏の決まり」のゲージ切れで中断（上流の StageFailed）・ゲージの減り方（DamageLevel）・ミスの許容数（Risky）・GREAT・GOOD でも減る（HAZARD）・空打ちをミスに（Tight）、「判定の幅」の PERFECT〜POOR の幅（ミリ秒。ペダル（バスドラム・左ペダル・左バスドラム）とそれ以外で別。NX の Config.ini の DrumPerfect〜、DrumPedalPerfect〜 にあたり、既定は 34 / 67 / 84 / 117）、「ずれの表示」のずれの表示（OFF / ON / PERFECT 以外）・ずれの色（早いと青 / 早いと赤）・ずれのバー（演奏中、左のスコアの下。既定 ON）・早い・遅いの数（結果の画面に出す）、記録を更新した結果を画像で残す（AutoSaveResult、既定 ON。NX と同じく結果の画面を譜面と同じフォルダに「譜面の名前.日時_DRUMS_ランク.png」で残します）、早送り・巻き戻しの幅。曲：曲のフォルダ（足す・外す）、曲を探し直す、譜面エディタを開く（[DTX Web Editor](https://check5004.github.io/dtx-mania-web-editor/) を既定のブラウザで開きます。原曲を聴きながら譜面を作って直せ、Google Drive で何台かの PC の曲のフォルダを同期することもできます）。アプリ：更新（知らせる・自動・確かめない。Setup.exe で入れたときだけ働く）。譜面：譜面の速さ、判定ラインの高さ（JudgeLinePos）、下から上へ流す（Reverse。判定ラインとパッドとゲージが上に行き、上下のシャッターも入れ替わります）、HIDDEN・SUDDEN・STEALTH（HID-SUD）、上下のシャッター（ShutterInPos / ShutterOutPos）、レーンの並び（LaneType の A〜D。B はペダル 2 つとタム 3 つ、C はタム 3 つをまとめ、D は左右対称）と RD の位置（RDPosition。右端を RD にするか CY にするか。パッド・レーンの光・火花・判定の文字も一緒に動きます）、オープンハイハットの絵（HHOGraphics。丸あり・丸なし・クローズと同じ）、左バスドラムの出し方（LBDGraphics）、スネアのリムの音符、暗くする（Dark）、レーンと小節線（LaneDisp）、判定ライン、レーンの光、叩いたときの効果（AttackEffect）、判定の文字の位置（JudgePosition）、コンボの表示と出す数（D-MinCombo）。自動・叩き分け：自動演奏（AutoPlay。全部のレーンか、選んだレーンを自動で叩く。自動のレーンがあるプレイはベストに入れず、全部自動なら記録に残しません）、ハイハット・フロアタム・シンバル・ペダルの叩き分け（HH / FT / CY / BD Group）とシンバルフリー（CymbalFree）、共通にしたレーンで譜面の音とパッドの音のどちらを鳴らすか（HH / FT / CY Priority）、閉じたハイハットと左ペダルで鳴っているハイハットを止めるか（Muting LP、既定 ON。叩いた音も自動で叩く音も止める）。タイミング：入力の補正（全体）、この曲の補正（選曲から開いたとき）、補正のおすすめ、表示の補正、BGM のずらし（BGMAdjust。BGM と効果音（SE01〜SE32）だけを ±99 ミリ秒）。練習：区間練習の決めごとの既定（練習のポップアップと同じ）。どの画面でも Alt+Enter か F11 で、ウィンドウと最後に使った方（ボーダーレスか全画面）を切り替えられ、次に開いたときもそのままです。F12 でいつでも今の画面を PNG で「ピクチャ」の DTXmaniaNXT に残せます。
-   - 入力：「パッドとキーの割り当て」の「順に叩いて割り当てる」で、言われたレーンのパッドを順に叩くと、全部のレーンを割り当てます（叩かずに 4 秒たつと次のレーンへ）。レーンを選んで決定してから叩くと、そのパッドかキーを足し、もう割り当ててあれば外します（5 秒叩かなければ取りやめ。Delete でそのレーンを全部外す。割り当ては機器ごとに `config.toml` に残します）。MIDI の機器ごとに、使うかどうか、プリセット（Roland / GM / なし）、チャンネル、最小ベロシティを決めます。割り当てを戻す、曲のフォルダを外すなど取り消せない操作は、はい / いいえ で確かめます。
-2. Start で選曲の画面になります（NX v2.0 と同じ配置）。↑↓ で曲を選び、Tab で難易度、Enter で始めます。←→ で右上の並べ替え（フォルダのまま、BOX、曲名、アーティスト、難易度、レベル、遊んだ記録、全曲、スキルの高い 50 曲）を変え、R で今いる BOX の中からランダムに選びます。BOX は Enter で入り、Backspace か Esc で出ます（一番上で Esc を押すとタイトルに戻ります。タイトルで Esc か Quit を選ぶと終わります）。マウスのホイールでも動かせ、曲の帯を押すとそこへ動きます（選んでいる曲を押すと始めます。並べ替えのアイコンも押せます）。電子ドラムは HT / LT で選び、SD / FT で並べ替え、HH を 2 回で難易度、CY で決め、LC で戻ります（LC は Esc と同じで、BOX の中なら BOX を出て、一番上ならタイトルに戻ります）。RD（キーボードは F2）で、右に簡易設定が開きます（一番上に「この曲を区間練習」、その下に設定の「よく使う」と同じ項目と「すべての設定へ」。開いたときは「この曲を区間練習」を選んでいるので、ドラムなら RD → CY で練習の板が開きます。操作は設定の画面と同じで、LC か Esc で閉じます）。足で踏むパッド（BD・LP）は演奏の合間に踏んでしまいやすいので、どの画面でもメニューの操作には使いません。曲の帯の左のランプはクリアした一番上の難易度の色、上の帯は曲別スキルで、右下の難易度のパネルには難易度ごとのランクと達成率を出します。DTXManiaNX で遊んだ譜面の隣に `score.ini` があれば、曲を探し終えたときに一度だけ、ドラムの一番の達成率とスコア（進み具合のバー、判定の数も）を記録に引き継ぎます。ランク・スキル・New Record・前回のベストにそのまま効きます（音符ごとの結果は無いので、苦手の分析には使いません。自動で叩いたレーンがあった記録は入れません）。始めると NX と同じ読み込みの画面が「Now loading」の音が鳴り終わるまで出て、演奏の画面になります（読み込みの画面で Esc を押すと選曲に戻ります）。
-3. 電子ドラムは、つないでおけば起動したときに見つけます。無ければキーボードで叩けます（A S Z D G F H J K L、Q で HH オープン）。
-4. 演奏の画面は NX と同じ配置です（スコア、判定の数と達成率・曲別スキル、ゲージ、コンボ、判定の文字とずれ、進み具合のバー、ジャケット）。遊んでいる間は - / = で入力の補正、[ / ] で表示の補正、↑↓ で速さ、F2 で叩いた音（OFF のときは演奏の始めに知らせます）、R でやり直し、← → で巻き戻し・早送りします（幅は設定の「早送り・巻き戻しの幅」、既定 5 秒。NX と同じく、飛んだプレイは記録に残さず STAGE FAILED にもしません）。Esc・Space・Pause で一時停止し、右に一時停止の板が開きます（演奏に戻る、はじめからやり直す、曲の位置、譜面の速さ・入力の補正（全体）・この曲の補正・補正のおすすめ・表示の補正・叩いた音・全体の音量・ずれの表示・ずれのバー、演奏をやめる。電子ドラムでも設定の画面と同じパッドで操作でき、LC か Esc で演奏に戻ります）。I で設定と入力の情報（音の出力、MIDI の入力、最後に叩いたパッドとハイハットの開き具合）を出します。ゲージが尽きると、NX と同じく STAGE FAILED で選曲に戻ります（設定の「ゲージ切れで中断」を OFF にすると終わらなくなります。練習では終わりません）。判定の下のずれの数字は設定の「ずれの表示」と「ずれの色」に従います。
-5. 最後まで叩くと、NX と同じ結果の画面になります（ランク、Excellent・フルコンボ・ステージクリア、判定の数と割合、スコア、達成率と曲別スキル、今回と自己ベストの進み具合のバー、達成率が自己ベストを超えたら New Record、それぞれの音）。設定の「早い・遅いの数」が ON なら、早かった数と遅かった数も出します。← → で 2 ページ目（このアプリの分析）と切り替え、Enter か Esc で選曲へ、R でもう一度、P で区間を練習します。電子ドラムは SD でもう一度、RD で区間練習、CY か LC で選曲へ、HT か LT でページを切り替えます（画面の下にいつも出します）。
+1. **Install.** Download [DTXmaniaNXT-Setup.exe](https://github.com/check5004/DTXmaniaNXT/releases/latest/download/DTXmaniaNXT-Setup.exe) and run it. It installs for your Windows user only (no admin rights) and starts right away.
+   The installer isn't code-signed yet, so Windows may say “Windows protected your PC”. Click **More info**, then **Run anyway**.
+2. **Add your songs.** On the title screen choose **Config** and add your song folder, or simply drop the folder onto the window. Any folder with DTX charts works, including your DTXManiaNX `Songs` folder.
+3. **Plug in and play.** Connect your electronic drum kit by USB-MIDI before starting. It is found automatically. No kit? Use the keyboard.
 
-曲の音は WAV・OGG・MP3 のほか、古い曲がドラムの音によく使う XA（BandJAM XA、`.xa`）も鳴らします。
+<details>
+<summary><b>Controls</b></summary>
 
-設定（曲のフォルダ・補正値など）は `config.toml` に残ります（Windows は `%APPDATA%\DTXmaniaNXT`）。
+| | Keyboard | Drum pads |
+| --- | --- | --- |
+| Move | <kbd>↑</kbd> <kbd>↓</kbd> | HT / LT |
+| Choose | <kbd>Enter</kbd> | CY |
+| Back | <kbd>Esc</kbd> | LC |
+| Difficulty (song select) | <kbd>Tab</kbd> | HH twice |
+| Sort (song select) | <kbd>←</kbd> <kbd>→</kbd> | SD / FT |
+| Quick settings (song select) | <kbd>F2</kbd> | RD |
+| Pause (while playing) | <kbd>Esc</kbd> or <kbd>Space</kbd> | |
 
-アプリのログ（動作の記録）は同じフォルダの `dtxmanianxt.log` に書きます（前回の分は `dtxmanianxt.prev.log`）。Windows ではコンソールの窓を出さないので、うまく動かないときはこのファイルを見てください。起動できなかったときや落ちたときは、その場所をダイアログで知らせます。
+The foot pedals (BD, LP) never control menus, so a stray kick between songs does nothing.
 
-遊んだ記録は、音符 1 つごとの判定・ずれ・強さまで同じフォルダの `records.sqlite` に残ります。自己ベスト（達成率、スコア、進み具合のバー）もここから出します（途中でやめたプレイと STAGE FAILED は自己ベストの達成率に入れず、進み具合のバーだけ、最後まで遊んだ記録が無ければ一番先まで進んだものを出します）。結果の画面の 2 ページ目には、直近の記録から出した「苦手な小節」の帯（赤いほど苦手）と、苦手なフレーズの上位 5 つが出ます。小節の番号は DTX の小節番号（`#xxxyy` の `xxx`）です。
+Playing on the keyboard: <kbd>A</kbd> <kbd>S</kbd> <kbd>Z</kbd> <kbd>D</kbd> <kbd>G</kbd> <kbd>F</kbd> <kbd>H</kbd> <kbd>J</kbd> <kbd>K</kbd> <kbd>L</kbd> are LC, HH, LP, SD, HT, BD, LT, FT, CY and RD, and <kbd>Q</kbd> is the open hi-hat. While playing, <kbd>↑</kbd> <kbd>↓</kbd> change the scroll speed, <kbd>R</kbd> restarts and <kbd>←</kbd> <kbd>→</kbd> skip back and forward. <kbd>F11</kbd> or <kbd>Alt</kbd>+<kbd>Enter</kbd> toggles full screen, and <kbd>F12</kbd> saves a screenshot.
+</details>
 
-### ずれを合わせる
+## Play
 
-- 補正は 2 つあります。「入力の補正（全体）」はすべての曲の判定をずらします（機材の遅れ向け）。「この曲の補正」は曲ごとの値で、全体に足して使います（難易度はまとめて 1 つ）。判定と譜面の流れを一緒にずらすので、譜面と BGM が合っていない曲にも使えます。選曲の簡易設定（RD か F2）、一時停止の板、選曲から開いた設定の「タイミング」で変えられます。
-- 演奏中は左のスコアの下（練習では左下の、成績の板の下）に「ずれのバー」が出ます。レーンにはかぶせません。真ん中が ±0、左が早い、右が遅いで、叩いた音符ごとに判定の色の線が出て 4 秒で消えます。帯は判定の幅、▼ と数字は直近 20 打の平均です。設定の「ずれのバー」で消せます。
-- 結果の画面の 1 ページ目の「ずれ」の板に、今回のずれの散らばりと、この曲と全部の曲のずれ、補正のおすすめが出ます。おすすめは記録のずれに、そのときの補正を足し戻して出します。全体は直近 15 曲（曲ごとに直近 5 回の平均）の真ん中、この曲はこの曲のずれと全体の差です。叩けた音符が 50 に満たない曲は使わず、3 ms より小さい変化はすすめません。等速未満の練習の周、自動演奏だけのプレイ、早送り・巻き戻ししたプレイは使いません。FT（キーボードは O）を叩くとおすすめの値になり、もう一度でもとに戻ります。設定の行の「おすすめにする」でも同じ値にできます。
+<p align="center">
+  <img src="docs/readme/shots/select.gif" width="720" alt="Song select: the song list scrolls smoothly, each song with a lamp in the colour of the cleared difficulty, and the panel under the jacket shows the rank and achievement for each difficulty.">
+</p>
 
-### 区間を練習する
+Song select works like DTXManiaNX v2.0: browse your folders and BOXes, sort by title, artist, level or skill, and see your lamp, rank and best achievement for every difficulty.
+If you played these songs in DTXManiaNX, the best results in its `score.ini` files are brought in once, so your lamps and ranks are there from the start.
 
-選曲の画面か結果の画面で P を押す（結果の画面では苦手フレーズを押しても）と、練習メニューが開きます。ドラムでは、選曲は RD → CY（簡易設定の一番上）、結果の画面は RD です。
+<table>
+<tr>
+<td width="50%" valign="top">
+<img src="docs/readme/shots/result.jpg" alt="Result screen: rank A and STAGE CLEARED, the judgement counts, achievement and skill, a timing panel with a histogram of early and late hits and a suggested offset, and a Weak Measures panel.">
+<br><sub>The result screen, with your timing and a suggested offset.</sub>
+</td>
+<td width="50%" valign="top">
+<img src="docs/readme/shots/result-analysis.jpg" alt="Second page of the result: a bar of all measures coloured from green to red by how often they were missed, and the weakest phrases with a Practice button each.">
+<br><sub>Page 2: your weak bars and phrases, one press away from practice.</sub>
+</td>
+</tr>
+</table>
 
-練習メニューの左には、遊んだ記録から出した「苦手な所」が苦手な順に並びます。札ごとに区間の小さな譜面の絵が付き、右にはカーソルの所の大きな譜面の絵が出ます。絵は行がパッド（上からシンバル、ハイハット、タム、スネア、バスドラ）、横が時間で、よくミスする音には輪が付きます（1 回は黄、2 回からは赤で「×2」）。小節の番号だけでなく、どのフレーズのことかが見て分かります。選んでいる所の音（BGM と叩く音）もくり返し流れ、白い線が今鳴っている所を指します（曲の音を読み終えるまでは絵だけです）。
+## Practice the parts you miss
 
-操作は設定の画面と同じです。↑↓（HT / LT）で選び、Enter（CY / RD）で決め、Esc（LC）で選曲に戻ります。パッドの役目は画面の下に出します。開いたときは一番苦手な所を選んでいるので、そのまま決めればすぐ始まります。
+<p align="center"><img src="docs/readme/practice.svg" width="960" alt="Climb the steps to clear: four laps per step at 70, 80, 90 and 100 percent. A map of the section marks beats missed once in yellow and twice in red. Missing the same beat twice means try that step again, and two tries again in a row drop one step."></p>
 
-練習を終えると（クリアしても、途中でやめても）、結果の画面から練習メニューに戻ります。苦手な所の並びは変わらず、クリアした所には「✓ 100%」の印が付き、カーソルは次のまだクリアしていない所に移ります。次を始めるかどうかは自分で決めます（勝手には始まりません）。一時停止の板の「練習メニューへ」でも戻れます。
+Press <kbd>P</kbd> on song select or the result screen to open the practice menu (on drums: RD on the result screen, or RD then CY on song select). It lists your weak spots from past plays. Each one comes with a picture of its notes, and the notes you often miss are marked, so you can see which phrase it is, not just a bar number. The selected spot also plays on a loop so you can hear it. Pick one, or choose your own bars, and start. The section loops with a count-in and a metronome, from a slower speed up to your target. When you finish, you are back in the practice menu with the next weak spot selected.
 
-1. 苦手な所の下の「自分で選ぶ」で、←→（SD / FT）で区間を 1 小節ずつずらし、「長さ」で長さを変えます。マウスなら小節の帯をドラッグしても選べます（クリックで 1 小節）。
-2. 「速度・つなぎ方」を開くと、右に次の行が出ます。周のつなぎ方を選びます。「切れ目なく」は区間の終わりから切れ目なく頭へ戻り、「毎回区切る」は次の小節の頭の 1 打（着地）まで叩いて助走からやり直します。
-3. 速度の決め方を選びます。
-   - 段階アップ（既定）: 始めの速度（既定 70%）から目標の速度（100%、105%、110% から選ぶ）まで、10% ずつの段をのぼります。目標の段を越えたらクリアです。メニューに「70 → 80 → 90 → 100%（4 段）」と段の数が出ます。
-   - 固定: 25〜150% の決めた速度の 1 段だけです。越えたらクリア。
-   - 遅くするときの音は「保つ」（音程を保つ）か「一緒に下げる」（テープと同じ）から選べます。
-   - メトロノーム（既定はオン）: 区間のあいだ拍ごとに小さくクリックを鳴らします（小節の頭は強く）。
-4. 「練習を始める」で始めると、区間の 1 小節前から BGM が流れ、クリックで 4 拍数えてから区間を繰り返します。判定の幅は遅くしても実際のミリ秒のままなので、遅い周でも判定は甘くなりません。
-5. 段の決まり:
-   - 1 段は 4 周です。同じ拍で 2 回ミス（POOR か MISS）しなければ、4 周を叩き終えたところで止まらずに次の段へ進みます。違う拍のミスがばらばらに出るのは数えません。空打ちとずれも数えません（結果の画面で知らせます）。
-   - 同じ拍で 2 回目のミスが出たら、その周の終わりで段を区切り、同じ速度で「もう一度」です。「もう一度」が 2 回続いたら、自動で 1 段（10%）下げます。始めの速度より下にも下がります。
-   - 途中で選ぶものはありません。目標の段を越えたら「クリア！」が出て、3 秒で結果の画面になります。
-   - 1 段の周（3・4・6・8 周）と、何回のミスで「もう一度」にするか（ゆるい 3 回・ふつう 2 回・きびしい 1 回）は、設定の「練習」で変えられます。
-6. 練習中の画面:
-   - 左上に、この段の何周目（「2 / 4」）と今の速度。その下に区間の譜面の絵があり、この段でミスした音に輪が付きます（1 回は黄、決まりの回数に届いたら赤）。
-   - 右（ジャケットの場所）に、目標と「あと 2 段」、段の絵（越えた段は緑に ✓、今の段は橙に「いまここ」、いちばん上に旗）、この段の 4 周の丸（ノーミスは緑、ミスがあった周は黄、今の周は橙）。
-   - 「もう一度」の段では、2 回ミスした拍がレーンの上で赤く光ります。
-   - 叩いているあいだは、レーンの真ん中に何も重ねません。段の変わり目は 1 小節の助走と 4 拍のカウントをはさみ、その間だけ「OK! 次は 90%」「もう一度 80%」「70% に下げます」を出します（判定の音符が落ちてくる前に消えます）。「もう一度」のときは、ミスが重なった小節の譜面の絵も出し、その拍を赤く塗ります。
-   - 止めるときは叩くのをやめます。1 周（助走を入れて。短い区間でも 4 秒）何も叩かなければ一時停止の板が開きます（キーボードなら Esc か Space）。叩かなかった周は成績にも記録にも入れず、「もう一度」にも数えません。「練習に戻る」を選ぶと、残りの周のあとに助走をはさんで、同じ段を 1 周目から数え直します。
-   - 一時停止の板の上の方に、練習に戻る・区間のはじめから・練習メニューへ（ここまでの周を記録に残して、練習メニューに戻ります）・練習をやめる（結果へ。練習はスコアと自己ベストには入りません）が並びます。
-   - キーボードでは、←→ で区間を 1 小節ずらし、, と . で速度を 1 段（固定なら 5%）変え（次の周から、助走のあと。その段は 1 周目から数え直し）、R で最初から。
-7. 結果の画面には、段の絵（段ごとの挑戦を緑の OK と赤の「もう一度」の点で）、練習した時間、叩いた周、ノーミスの周、全部の周でミスした音を印にした譜面の絵（いちばんミスした拍は赤く塗ります）が出ます。→（HT / LT）で周ごとの成績の表です。SD（R）で同じ決めごとでもう一度、CY・RD・LC（Enter）で練習メニューへ戻ります。空打ちが一つのパッドの弱い打に偏っていればパッドの拾いすぎを（設定の「MIDI 機器」で最小ベロシティを上げると減ります）、ずれの平均が 10ms 以上なら入力の補正を知らせます。
+- **One step is 4 laps.** If you don't miss the same beat twice, you move up to the next speed without stopping.
+- **Same beat missed twice?** You try that step again. Two tries in a row and it steps down 10 %.
+- **Clear the top step** and the section is marked as cleared. When you later play the whole song and that part is no longer weak, the result says so.
+- Slowing down keeps the pitch of the music. Timing windows stay in real milliseconds, so slow laps are not easier to judge.
 
-速度が変わるのは段の変わり目と、手で変えたときだけです。「切れ目なく」では次の周がもう落ちてきていることがあるので、段が決まったときや手で変えたときは、まだ始まっていない次の周を取り下げ、新しい速度の助走から並べ直します（次の周の音が鳴り始める間際で間に合わないときだけ、次の次の周から変わります）。
+<table>
+<tr>
+<td width="50%" valign="top">
+<img src="docs/readme/shots/practice-menu.jpg" alt="Practice menu: a bar of all measures, the list of weak spots with a small picture of the notes for each, and a large picture of the selected spot where often-missed notes are marked with how many times they were missed. Below it, the speed steps 70, 80, 90 and 100%.">
+<br><sub>The practice menu: your weak spots, drawn as notes.</sub>
+</td>
+<td width="50%" valign="top">
+<img src="docs/readme/shots/practice-step.gif" alt="Practice: a lap ends with no misses, the banner says OK! Next: 80%, and the step ladder on the right moves up.">
+<br><sub>No misses, so it moves up to the next speed.</sub>
+</td>
+</tr>
+<tr>
+<td valign="top">
+<img src="docs/readme/shots/practice-clear.gif" alt="Practice: the last lap at 100% ends and CLEAR! appears over the lanes.">
+<br><sub>The top step cleared.</sub>
+</td>
+<td valign="top">
+<img src="docs/readme/shots/practice-result.jpg" alt="Practice result: the ladder from 70% to 100% all cleared, practice time, laps played and laps with no misses, and the notes of the section with any missed ones marked.">
+<br><sub>What you practised and where you missed. Next, back to the practice menu.</sub>
+</td>
+</tr>
+</table>
 
-最後まで叩いた周は速度と一緒に記録に残ります。苦手な小節の色に使うのは 100% で叩いた周だけです。
+## Timing you can trust
 
-BGM は区間の分だけを 1 本にまとめ、速度ごとに別のスレッドで伸ばしておきます。音程を保つ伸ばしには [timestretch](https://github.com/robmorgan/timestretch-rs)（MIT、Rust だけで書かれていて、ビルドに C++ や LLVM が要らない）を使います。叩いた音とクリックは伸ばしません。
+<p align="center"><img src="docs/readme/timing.svg" width="960" alt="Timing is measured, not guessed. Judging per screen frame can add up to 16.7 ms of error at 60 fps. DTXmaniaNXT stamps each MIDI hit when it arrives and compares it with the audio playback position."></p>
 
-### 克服と叩き方のくせ
+Your drum hits are timestamped the moment they arrive and compared with where the song actually is in the audio. Window size and frame rate don't change your judgements.
 
-- 練習で等速以上の速度の段を越えると、その区間は「クリア」として残ります。そのあとの普通のプレイで、区間を全部叩いて苦手でなく（点が 0.25 未満）、区間の苦手度が練習の前より下がっていれば、結果の画面に「克服！」と出ます。クリアした区間と克服したかは、区間を選ぶ画面にも並びます。
-- 結果の画面の「叩き方のくせ」は、すべての曲の等速で叩いた直近 200 回の記録から、レーンと拍の中の位置（表拍、8 分裏、16 分裏、3 連符、細かい位置）ごとにずれの平均とばらつきを出したものです。平均が 8ms 以上ずれている組を、ずれの大きい順に 3 つまで文で出し、全部の組は表で見られます（組ごとに 20 打から）。この版より前の記録は拍の中の位置を持たないので入りません。
+<p align="center"><img src="docs/readme/hit-error.svg" width="960" alt="A hit error bar: early on the left, late on the right, coloured bands for the judgement windows, a tick for each hit and a marker for the average of the last 20 hits."></p>
 
-### 自分でビルドする
+- **Hit error bar.** While you play, a small bar under the score shows each hit as early or late. It never covers the lanes.
+- **Offsets.** One offset for your whole setup (for audio and MIDI latency), plus one per song for charts whose music is a little off.
+- **Suggested offset.** The result screen works out an offset from your recent plays. Hit FT (or <kbd>O</kbd>) to use it.
 
-Rust（stable）を入れてから（Linux は `libasound2-dev` も）:
+## Made for electronic drums
+
+<p align="center"><img src="docs/readme/devices.svg" width="960" alt="Every drum kit keeps its own settings: an e-drum module with the Roland preset on channel 10, a pad controller with custom notes, and the keyboard, all feeding the same ten lanes."></p>
+
+- Each MIDI device keeps its own settings: on or off, preset (Roland / GM / none), channel, minimum velocity and pad mapping.
+- **Map pads by hitting them.** The app names each lane in turn and you hit the pad for it.
+- Hi-hat openness (CC4), cymbal chokes and the snare's head, rim and cross-stick are read. Rim shots are marked on the snare notes of charts that use rim sounds.
+- Left bass drum for twin pedals, with four ways to show it.
+- A volume mixer for the whole game, the music, your hit sounds, the metronome and sound effects.
+
+## Updates
+
+<p align="center"><img src="docs/readme/update.svg" width="960" alt="Updating: 1. a New version row appears under the title menu. 2. it downloads while you play, with a percentage in the corner. 3. choose Restart to switch versions. 4. done, settings and records are kept."></p>
+
+When a new version is out, a row appears under the title menu (Windows, installed with the Setup.exe). Choose it, keep playing while it downloads, then restart to switch. Your settings and play records stay where they are.
+
+## FAQ
+
+<details>
+<summary><b>Do I need DTXManiaNX or DTXMania installed?</b></summary>
+
+No. Everything the app needs, including the screens and sounds, comes in the installer. Just bring your songs.
+</details>
+
+<details>
+<summary><b>Can I use my DTXManiaNX songs and scores?</b></summary>
+
+Yes. Add your NX song folder (or the NX folder itself). Best results from DTXManiaNX's `score.ini` files are imported once when the songs are scanned: achievement, score and the progress bar, so lamps, ranks and skill carry over. They don't include per-note results, so weak-spot analysis starts from your plays in DTXmaniaNXT.
+</details>
+
+<details>
+<summary><b>Guitar and bass?</b></summary>
+
+No. DTXmaniaNXT is drums only.
+</details>
+
+<details>
+<summary><b>Can I switch the game to Japanese?</b></summary>
+
+Yes. The game starts in English. Change it under Config → General → Language (言語).
+</details>
+
+<details>
+<summary><b>macOS and Linux?</b></summary>
+
+Download the `.tar.gz` for your system from the [releases page](https://github.com/check5004/DTXmaniaNXT/releases/latest) and extract it. On macOS, run `xattr -d com.apple.quarantine dtxmanianxt` in the extracted folder before the first start, because the app isn't signed. Linux needs ALSA (`libasound2`). Automatic updates are Windows only.
+</details>
+
+<details>
+<summary><b>Do chart videos (#AVI) play?</b></summary>
+
+On Windows, yes. They play behind the lanes, read by Windows' own Media Foundation (MP4 H.264, AVI Xvid and DivX). macOS and Linux don't play them yet.
+</details>
+
+<details>
+<summary><b>Where are my settings and records?</b></summary>
+
+In `%APPDATA%\DTXmaniaNXT` on Windows (`config.toml` for settings, `records.sqlite` for every note you played, and `dtxmanianxt.log`). Updating or reinstalling keeps them. Uninstall from Windows Settings → Apps; your settings and records are left in place.
+</details>
+
+<details>
+<summary><b>How do I make my own charts?</b></summary>
+
+Use [DTX Web Editor](https://github.com/check5004/dtx-mania-web-editor), a free drum chart editor that runs in your browser (by the same author). You can open it from Config → Songs → Open Chart Editor. It saves DTX song folders you can play here and in DTXMania; choose Rescan Songs to see your edits in the list.
+</details>
+
+<details>
+<summary><b>Something is wrong.</b></summary>
+
+Please open an [issue](https://github.com/check5004/DTXmaniaNXT/issues). Attaching `dtxmanianxt.log` from the folder above helps a lot.
+</details>
+
+**The full guide** (every setting, practice rules and the files the app writes) is in Japanese: [docs/guide.ja.md](docs/guide.ja.md).
+
+## Credits and rights
+
+DTXmaniaNXT is an **unofficial fan project**. It would not exist without more than twenty years of work by the DTXMania community. Thank you to everyone who has made and kept DTXMania and its forks going.
+
+<p align="center"><img src="docs/readme/lineage.svg" width="960" alt="Where it comes from: DTXMania (FROM, DTXMania Group, since 2000), then DTXManiaXG verK (kairera0467), DTXManiaNX (limyz, fisyher), DTXManiaNX v2.0 (BocuD), and DTXmaniaNXT. NXT's code is written from scratch. Its skin started from the v2.0 images and sounds and is being replaced with its own artwork, step by step."></p>
+
+### The DTXMania family
+
+| Project | By | Notes |
+| --- | --- | --- |
+| [DTXMania](https://dtxmania.net/) | FROM | The original DTXMania and the DTX format, since 2000. Still developed today (DTXMania 4). The site reads “© 2000 FROM / Kenji yamazaki”, and DTXMania's license names “Copyright (C) 2000 2010 DTXMania Group”. |
+| [DTXMania (OSDN)](https://osdn.net/projects/dtxmania) | yyagi | DTXMania as developed on OSDN, home of the [DTX data format wiki](https://osdn.net/projects/dtxmania/wiki/DTX%20data%20format). |
+| [DTXManiaXG verK](https://osdn.net/projects/dtxmaniaxg-verk) | kairera0467 | The fork that DTXManiaNX started from. |
+| [DTXManiaNX](https://github.com/limyz/DTXmaniaNX) | limyz / fisyher | This repository is a GitHub fork of it. |
+| [DTXManiaNX v2.0](https://github.com/BocuD/DTXmaniaNX) | BocuD | The screen layout comes from this version, and so does the part of the skin not yet replaced. |
+| [DTXMania AL](http://senamih.com/dtxal) | Sena | Another DTXMania fork, listed with the others in the DTXManiaNX README. |
+
+The names and the order above follow the DTXManiaNX READMEs and the projects' own pages. If something here is wrong, please tell us in an [issue](https://github.com/check5004/DTXmaniaNXT/issues).
+
+### What is in this repository
+
+- **The code** (the `main` branch) is new code written in Rust for this project. It contains no code from DTXMania or DTXManiaNX; their features are re-implemented to behave the same way. It is under the [MIT License](LICENSE).
+- **The skin** (`assets/skin`, the images and sounds you see and hear) started as the DTXManiaNX v2.0 skin and **is being replaced with original artwork, step by step**. It is built into the app so that it runs without DTXManiaNX. Details for every file: [assets/README.md](assets/README.md).
+
+  | Step | What | Now |
+  | --- | --- | --- |
+  | 1 | Images that contained KONAMI's GITADORA artwork or logos (backgrounds, title logo, shutter, STAGE FAILED, ranks and more) | **Replaced** with artwork made for DTXmaniaNXT (23 files). Unused ones were deleted. |
+  | 2 | Sound effects and voices | **Replaced** with sounds made for DTXmaniaNXT (25 files). Unused ones were deleted. |
+  | 3 | All other images (judgement text, gauge, pads, sort icons and more) | Still from DTXManiaNX v2.0 |
+
+  - **Our artwork and sounds** (steps 1 and 2) are under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/); please credit “DTXmaniaNXT”. **The voices are the exception** (see below).
+    - Images: made with an image-generation AI (OpenAI GPT Image 2.6 Sunburst, through OpenRouter), then cropped, resized and lettered. The prompts are in `tools/skin/prompts.json`; they don't name any existing game or product.
+    - Menu sounds: synthesized by `tools/skin/ui_sounds.py`.
+    - Title music and the short jingles (stage clear, full combo, game start, loading and others): made with Google's music model Lyria 3 (through OpenRouter). The prompts don't name any existing song or artist. Lyria's output carries an inaudible SynthID watermark.
+    - Voices (difficulty and sort names, and the voice over the jingles): **VOICEVOX:春日部つむぎ** (Kasukabe Tsumugi). They are under neither CC BY nor the MIT License; they follow the [VOICEVOX terms](https://voicevox.hiroshiba.jp/term/) and the [Kasukabe Tsumugi terms](https://tsumugi-official.studio.site/rule). They are only for use inside DTXmaniaNXT, so please don't extract them for other works or redistribute them. The credit is also shown in the app under Config → General → Credits.
+  - **Everything else in the skin** (the step 3 images) is copied unchanged from the `Runtime/System` folder of [BocuD/DTXmaniaNX](https://github.com/BocuD/DTXmaniaNX) at tag `V2.0.0-20260121-5`. It is under neither the MIT License nor CC BY. Its rights stay with its original creators; there is no record of who made each image. The DTXManiaNX repositories have no license file, and DTXMania's own license (`Runtime/Licenses/dtxmania.txt`, MIT-style) covers the DTXMania software, not these files.
+  - Releases up to 0.8.0 still contain the images from before step 1, and releases up to 0.9.1 the sounds from before step 2. So do older commits.
+- **The app icon** is DTXManiaNX's `dtx.ico` (an icon handed down from DTXMania) with its “DTX” lettering changed to “NXT”. It is not under the MIT License either.
+- **The `master` branch** keeps the upstream C# DTXManiaNX code for reference only. Our license doesn't apply to it.
+
+### Trademarks
+
+GITADORA is a trademark of Konami Digital Entertainment Co., Ltd. The screen layout follows KONAMI's GITADORA series. Up to version 0.8.0, the bundled skin contained artwork and logos taken straight from GITADORA FUZZ-UP; step 1 replaced all of them. Some of the parts still left from DTXManiaNX v2.0 are made to look like GITADORA's screens, and step 3 will replace them. DTXmaniaNXT is not affiliated with or endorsed by KONAMI, or by the developers of DTXMania or DTXManiaNX.
+
+**If you hold rights to anything here and want it changed or removed, please open an [issue](https://github.com/check5004/DTXmaniaNXT/issues). We will act on it promptly.**
+
+### Other credits
+
+- Voice: **VOICEVOX:春日部つむぎ** ([VOICEVOX](https://voicevox.hiroshiba.jp/)).
+- XA sound decoding was written from the format description in [bjxa](https://github.com/dridi/bjxa)'s `bjxa(5)` manual. No code was copied.
+- Built with [wgpu](https://wgpu.rs/), [egui](https://github.com/emilk/egui), [winit](https://github.com/rust-windowing/winit), [cpal](https://github.com/RustAudio/cpal), [midir](https://github.com/Boddlnagg/midir), [Symphonia](https://github.com/pdeljanov/Symphonia), [rusqlite](https://github.com/rusqlite/rusqlite), [timestretch](https://github.com/robmorgan/timestretch-rs), [Velopack](https://velopack.io/) and other open-source crates. Their licenses are listed in `THIRD-PARTY-LICENSES.html` on every [release](https://github.com/check5004/DTXmaniaNXT/releases).
+- Sister project: [DTX Web Editor](https://github.com/check5004/dtx-mania-web-editor), the chart editor.
+
+### About the pictures
+
+The screenshots and clips come from the current development build, so details may differ slightly from the release you download. They show the artwork from step 1, with the English screens (the Japanese README shows the Japanese screens). All songs shown are demo songs made for these pictures, not real songs: “Neon Skyline” is the original demo song of DTX Web Editor, and the other titles are made-up names given to copies of it. The play records shown are made up as well.
+
+## For developers
+
+DTXmaniaNXT is a Cargo workspace. Rust stable is all you need (on Linux, also `libasound2-dev`).
 
 ```sh
-cargo run -p dtxmanianxt                       # 選曲から
-cargo run -p dtxmanianxt -- path/to/song.dtx   # その譜面をすぐ遊ぶ
+cargo run -p dtxmanianxt                        # start at the title screen
+cargo run -p dtxmanianxt -- path/to/song.dtx    # play one chart right away
+cargo fmt --all --check
+cargo clippy --all-targets -- -D warnings
 cargo test --all
 ```
 
-画面を確かめるときは `DTXMANIANXT_AUTOPLAY=1` を付けて起動すると、音符を自動で叩きます（開発用）。
+Set `DTXMANIANXT_AUTOPLAY=1` to have every note hit automatically while you check the screens.
 
-| 場所 | 中身 |
+| Path | What's in it |
 | --- | --- |
-| `crates/dtx` | DTX の読み込み（文字コード判定、ヘッダ、チップ、BPM と小節長から時刻を計算） |
-| `crates/engine` | 判定、音と MIDI の時計、電子ドラムの入力の正規化、記録からの苦手・克服・叩き方のくせの分析、練習の区間ループの並べ方と段階アップ |
-| `crates/library` | 曲のフォルダの探し方（set.def・box.def・DTXFiles.*）と、選曲の並べ替え（`sort.rs`） |
-| `crates/nx` | DTXManiaNX のフォルダの読み方（0.1 の設定の引き継ぎに使う Config.ini、大文字・小文字を区別しないファイル探し） |
-| `crates/records` | 遊んだ記録（SQLite）の読み書き |
-| `crates/app` | アプリ本体（winit + wgpu + egui、cpal、midir）。NX のスキンの画像を上流と同じ座標で描く（スキンの読み込み `skin.rs`、`gfx.rs`、タイトル `title_view.rs`、設定 `config_view.rs`（項目の表は `settings.rs`、コードで描く板や行は `settings_ui.rs`）、選曲 `select.rs`（並べ替えは `crates/library` の `sort.rs`）、読み込み `loading.rs`、演奏 `play_view.rs`、結果 `result_view.rs`、画面の切り替えのシャッター `shutter.rs`） |
-| `assets/skin` | DTXManiaNX v2.0（BocuD 版）のスキン（画像と効果音）。リリースのビルドでは exe に埋め込み、開発中のビルドはこのフォルダから読みます。出どころと扱いは [`assets/README.md`](assets/README.md) |
-| `testdata/charts` | テスト譜面と手計算の正解。DTX Web Editor と共有する予定 |
+| `crates/dtx` | DTX parser: text encoding, headers, chips, timing from BPM and measure length |
+| `crates/engine` | Judging, audio and MIDI clocks, e-drum input normalisation, weak-spot analysis, practice loops |
+| `crates/library` | Song folder scanning (`set.def`, `box.def`) and song select sorting |
+| `crates/records` | Play records (SQLite) |
+| `crates/nx` | Reading DTXManiaNX folders (`Config.ini`, `score.ini`) |
+| `crates/video` | Chart videos (#AVI), via Media Foundation on Windows |
+| `crates/i18n` | English and Japanese text for the screens |
+| `crates/app` | The app: winit + wgpu + egui, cpal, midir. Draws the NX skin at the same coordinates as upstream |
+| `assets/skin` | The bundled skin, being replaced with our own artwork (see [Credits and rights](#credits-and-rights)) |
+| `tools/skin` | Prompts and build scripts for the new skin artwork and sounds |
+| `testdata/charts` | Test charts with hand-checked expected results |
 
-## リリースの出し方
+- How judging works: hits are judged by MIDI arrival time and audio playback position, never by frame.
+- DTX parsing follows upstream DTXMania behaviour and [DTX Web Editor](https://github.com/check5004/dtx-mania-web-editor)'s `src/dtx`. When it changes, add a chart and its expected result to `testdata/charts`.
+- Releases: bump `version` in `Cargo.toml` on `main` and the Release workflow builds the installer, auto-update packages and the macOS / Linux archives. See [docs/releasing.md](docs/releasing.md) (Japanese).
+- README pictures: the animated SVGs are generated by `python3 tools/readme/make_svgs.py` (standard library only, English and Japanese). `tools/readme/player.py` plays a chart like a person by sending keys, for recording clips.
 
-1. `Cargo.toml` の `[workspace.package]` の `version` を上げる PR を出して `main` に入れる（[SemVer](https://semver.org/lang/ja/)。1.0 までは、遊び方や記録が変わるときに 0.x の x を、直しだけなら最後の数を上げる）。
-2. `main` に入ると [Release](.github/workflows/release.yml) のワークフローが、タグ `v<version>`（例: `v0.2.0`）と GitHub のリリースを作り、Windows のインストーラー `DTXmaniaNXT-Setup.exe`（落とすのはこれ 1 つだけ）と自動更新の材料（その版の `.nupkg` と `releases.win.json`）、macOS と Linux の tar.gz、`THIRD-PARTY-LICENSES.html`、`SHA256SUMS.txt` を載せます。リリースの説明は `.github/release/notes.md` と、前のリリースから入った PR の一覧です。
-3. macOS か Linux のビルドだけ落ちたときは、Windows の分だけでリリースします。あとで Actions の画面から Release を Run workflow で動かすと、そのタグのコミットから作り直してファイルを差し替えます。
+Pull requests go to `main` of this repository (check5004/DTXmaniaNXT), not to the upstream it was forked from.
 
-ビルドと詰め方は `.github/release/` のスクリプトにあります。Windows の exe は C のランタイムを入れて作るので（`.cargo/config.toml` の `crt-static`）、VC++ の再頒布パッケージが無い PC でも起動します。ライセンスの表記（`THIRD-PARTY-LICENSES.html`）は [cargo-about](https://github.com/EmbarkStudios/cargo-about) で作ります。
+## License
 
-Windows のインストーラーと自動更新は [Velopack](https://velopack.io) で作ります（`.github/release/velopack.sh`。アプリの側は `crates/app/src/update.rs`）。前のリリースの材料を落としてきて、前の版との差分の `.nupkg` も作るので、更新で落とすのは変わったところだけです。インストールしたアプリは、GitHub の新しい 10 個のリリースにある `releases.win.json` を読んで新しい版を探します。
-
-## 上流について
-
-このリポジトリは [limyz/DTXmaniaNX](https://github.com/limyz/DTXmaniaNX) のフォークです。
-`main` ブランチは上流の履歴を持たない新しい実装で、上流のコードは含みません。画面の画像と効果音（`assets/skin`）だけは、上流（NX v2.0 の BocuD 版）の `Runtime/System` をそのまま入れています（出どころと扱いは [`assets/README.md`](assets/README.md)）。上流の C# 版は `master` ブランチに参考として残しています。
-
-## ライセンス
-
-MIT（`main` ブランチの新しいコードについて）。`assets/skin` の画像と音、`master` ブランチの上流のコードには適用されません。
+The code on the `main` branch is under the [MIT License](LICENSE). The skin in `assets/skin` (our artwork and sounds are CC BY 4.0 except the voices, which follow the VOICEVOX and Kasukabe Tsumugi terms; the rest is from DTXManiaNX v2.0), the app icon in `assets/icon` and the upstream code on the `master` branch are not covered by it (see [Credits and rights](#credits-and-rights)).

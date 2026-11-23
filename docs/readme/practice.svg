@@ -1,0 +1,190 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="380" viewBox="0 0 960 380" role="img" aria-labelledby="title desc">
+<title id="title">Climb the steps to clear</title>
+<desc id="desc">Practice a section from 70% speed up to 100%. Four laps per step; missing the same beat twice means trying the step again.</desc>
+<style>
+text{font-family:'Segoe UI','Inter','Helvetica Neue',Arial,'Hiragino Sans','Yu Gothic UI','Meiryo','Noto Sans JP',system-ui,sans-serif}
+.mono{font-family:'JetBrains Mono','SF Mono','Cascadia Mono',Consolas,Menlo,monospace}
+.fb{transform-box:fill-box;transform-origin:50% 50%}
+@keyframes w3{0.000%{opacity:0}5.750%{opacity:0}6.250%{opacity:1}99.938%{opacity:1}100.000%{opacity:0}100.000%{opacity:0}}
+.w3{opacity:0;animation:w3 16.0s linear infinite}
+@keyframes w4{0.000%{opacity:0}9.500%{opacity:0}10.000%{opacity:1}99.938%{opacity:1}100.000%{opacity:0}100.000%{opacity:0}}
+.w4{opacity:0;animation:w4 16.0s linear infinite}
+@keyframes w5{0.000%{opacity:0}13.250%{opacity:0}13.750%{opacity:1}99.938%{opacity:1}100.000%{opacity:0}100.000%{opacity:0}}
+.w5{opacity:0;animation:w5 16.0s linear infinite}
+@keyframes w6{0.000%{opacity:0}17.000%{opacity:0}17.500%{opacity:1}99.938%{opacity:1}100.000%{opacity:0}100.000%{opacity:0}}
+.w6{opacity:0;animation:w6 16.0s linear infinite}
+@keyframes w7{0.000%{opacity:0}26.375%{opacity:0}26.875%{opacity:1}40.562%{opacity:1}41.062%{opacity:0}100.000%{opacity:0}}
+.w7{opacity:0;animation:w7 16.0s linear infinite}
+@keyframes w8{0.000%{opacity:0}30.125%{opacity:0}30.625%{opacity:1}40.562%{opacity:1}41.062%{opacity:0}100.000%{opacity:0}}
+.w8{opacity:0;animation:w8 16.0s linear infinite}
+@keyframes w9{0.000%{opacity:0}33.875%{opacity:0}34.375%{opacity:1}40.562%{opacity:1}41.062%{opacity:0}100.000%{opacity:0}}
+.w9{opacity:0;animation:w9 16.0s linear infinite}
+@keyframes w10{0.000%{opacity:0}43.875%{opacity:0}44.375%{opacity:1}99.938%{opacity:1}100.000%{opacity:0}100.000%{opacity:0}}
+.w10{opacity:0;animation:w10 16.0s linear infinite}
+@keyframes w11{0.000%{opacity:0}47.625%{opacity:0}48.125%{opacity:1}99.938%{opacity:1}100.000%{opacity:0}100.000%{opacity:0}}
+.w11{opacity:0;animation:w11 16.0s linear infinite}
+@keyframes w12{0.000%{opacity:0}51.375%{opacity:0}51.875%{opacity:1}99.938%{opacity:1}100.000%{opacity:0}100.000%{opacity:0}}
+.w12{opacity:0;animation:w12 16.0s linear infinite}
+@keyframes w13{0.000%{opacity:0}55.125%{opacity:0}55.625%{opacity:1}99.938%{opacity:1}100.000%{opacity:0}100.000%{opacity:0}}
+.w13{opacity:0;animation:w13 16.0s linear infinite}
+@keyframes w14{0.000%{opacity:0}64.500%{opacity:0}65.000%{opacity:1}99.938%{opacity:1}100.000%{opacity:0}100.000%{opacity:0}}
+.w14{opacity:0;animation:w14 16.0s linear infinite}
+@keyframes w15{0.000%{opacity:0}68.250%{opacity:0}68.750%{opacity:1}99.938%{opacity:1}100.000%{opacity:0}100.000%{opacity:0}}
+.w15{opacity:0;animation:w15 16.0s linear infinite}
+@keyframes w16{0.000%{opacity:0}72.000%{opacity:0}72.500%{opacity:1}99.938%{opacity:1}100.000%{opacity:0}100.000%{opacity:0}}
+.w16{opacity:0;animation:w16 16.0s linear infinite}
+@keyframes w17{0.000%{opacity:0}75.750%{opacity:0}76.250%{opacity:1}99.938%{opacity:1}100.000%{opacity:0}100.000%{opacity:0}}
+.w17{opacity:0;animation:w17 16.0s linear infinite}
+@keyframes w18{0.000%{opacity:0}85.125%{opacity:0}85.625%{opacity:1}99.938%{opacity:1}100.000%{opacity:0}100.000%{opacity:0}}
+.w18{opacity:0;animation:w18 16.0s linear infinite}
+@keyframes w19{0.000%{opacity:0}88.875%{opacity:0}89.375%{opacity:1}99.938%{opacity:1}100.000%{opacity:0}100.000%{opacity:0}}
+.w19{opacity:0;animation:w19 16.0s linear infinite}
+@keyframes w20{0.000%{opacity:0}92.625%{opacity:0}93.125%{opacity:1}99.938%{opacity:1}100.000%{opacity:0}100.000%{opacity:0}}
+.w20{opacity:0;animation:w20 16.0s linear infinite}
+@keyframes w21{0.000%{opacity:0}96.375%{opacity:0}96.875%{opacity:1}99.938%{opacity:1}100.000%{opacity:0}100.000%{opacity:0}}
+.w21{opacity:0;animation:w21 16.0s linear infinite}
+@keyframes w22{0.000%{opacity:0}18.438%{opacity:0}19.375%{opacity:1}98.125%{opacity:1}99.062%{opacity:0}100.000%{opacity:0}}
+.w22{opacity:0;animation:w22 16.0s linear infinite}
+@keyframes w23{0.000%{opacity:0}56.563%{opacity:0}57.500%{opacity:1}98.125%{opacity:1}99.062%{opacity:0}100.000%{opacity:0}}
+.w23{opacity:0;animation:w23 16.0s linear infinite}
+@keyframes w24{0.000%{opacity:0}77.188%{opacity:0}78.125%{opacity:1}98.125%{opacity:1}99.062%{opacity:0}100.000%{opacity:0}}
+.w24{opacity:0;animation:w24 16.0s linear infinite}
+@keyframes w25{0.000%{opacity:0}95.938%{opacity:0}96.875%{opacity:1}98.125%{opacity:1}99.062%{opacity:0}100.000%{opacity:0}}
+.w25{opacity:0;animation:w25 16.0s linear infinite}
+@keyframes w26{0.000%{opacity:0}0.000%{opacity:0}0.000%{opacity:1}21.875%{opacity:1}22.812%{opacity:0}100.000%{opacity:0}}
+.w26{opacity:0;animation:w26 16.0s linear infinite}
+@keyframes w27{0.000%{opacity:0}20.937%{opacity:0}21.875%{opacity:1}60.000%{opacity:1}60.938%{opacity:0}100.000%{opacity:0}}
+.w27{opacity:0;animation:w27 16.0s linear infinite}
+@keyframes w28{0.000%{opacity:0}59.063%{opacity:0}60.000%{opacity:1}80.625%{opacity:1}81.563%{opacity:0}100.000%{opacity:0}}
+.w28{opacity:0;animation:w28 16.0s linear infinite}
+@keyframes w29{0.000%{opacity:0}79.688%{opacity:0}80.625%{opacity:1}96.875%{opacity:1}97.813%{opacity:0}100.000%{opacity:0}}
+.w29{opacity:0;animation:w29 16.0s linear infinite}
+@keyframes w30{0.000%{opacity:0}30.250%{opacity:0}30.625%{opacity:1}34.375%{opacity:1}34.750%{opacity:0}100.000%{opacity:0}}
+.w30{opacity:0;animation:w30 16.0s linear infinite}
+@keyframes w31{0.000%{opacity:0}34.000%{opacity:0}34.375%{opacity:1}55.625%{opacity:1}56.000%{opacity:0}100.000%{opacity:0}}
+.w31{opacity:0;animation:w31 16.0s linear infinite}
+@keyframes w32{0.000%{opacity:0}40.000%{opacity:0}40.625%{opacity:1}55.625%{opacity:1}56.250%{opacity:0}100.000%{opacity:0}}
+.w32{opacity:0;animation:w32 16.0s linear infinite}
+@keyframes nf{0%{transform:translateY(0)}100%{transform:translateY(196px)}}.nf{animation:nf 1.2s linear infinite}
+@keyframes w33{0.000%{opacity:0}17.375%{opacity:0}18.125%{opacity:1}24.375%{opacity:1}25.125%{opacity:0}100.000%{opacity:0}}
+.w33{opacity:0;animation:w33 16.0s linear infinite}
+@keyframes w34{0.000%{opacity:0}34.875%{opacity:0}35.625%{opacity:1}41.875%{opacity:1}42.625%{opacity:0}100.000%{opacity:0}}
+.w34{opacity:0;animation:w34 16.0s linear infinite}
+@keyframes w35{0.000%{opacity:0}55.500%{opacity:0}56.250%{opacity:1}62.500%{opacity:1}63.250%{opacity:0}100.000%{opacity:0}}
+.w35{opacity:0;animation:w35 16.0s linear infinite}
+@keyframes w36{0.000%{opacity:0}76.125%{opacity:0}76.875%{opacity:1}83.125%{opacity:1}83.875%{opacity:0}100.000%{opacity:0}}
+.w36{opacity:0;animation:w36 16.0s linear infinite}
+@keyframes w37{0.000%{opacity:0}95.938%{opacity:0}96.875%{opacity:1}98.750%{opacity:1}99.688%{opacity:0}100.000%{opacity:0}}
+.w37{opacity:0;animation:w37 16.0s linear infinite}
+@media (prefers-reduced-motion:reduce){*{animation:none!important}}
+</style>
+<defs><linearGradient id="bg1" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#0B1018"/><stop offset="1" stop-color="#151B2E"/></linearGradient><radialGradient id="rg2" cx="0.25" cy="0.9" r="0.6"><stop offset="0" stop-color="#7CF29A" stop-opacity="0.22"/><stop offset="1" stop-color="#7CF29A" stop-opacity="0"/></radialGradient></defs>
+<rect x="1" y="1" width="958" height="378" rx="18" fill="url(#bg1)" stroke="#263247"/>
+<rect x="1" y="1" width="958" height="378" rx="18" fill="url(#rg2)"/>
+<text x="40" y="46" font-size="22" fill="#E8EEF7" font-weight="800" text-anchor="start">Climb the steps to clear</text>
+<text x="40" y="70" font-size="13" fill="#9AA8BC" font-weight="400" text-anchor="start">Practice mode · A–B section loop</text>
+<rect x="60" y="274" width="250" height="48" rx="8" fill="#121A29" stroke="#2A3650"/>
+<text x="76" y="305" font-size="18" fill="#E8EEF7" font-weight="800" text-anchor="start">70%</text>
+<rect x="94" y="218" width="250" height="48" rx="8" fill="#121A29" stroke="#2A3650"/>
+<text x="110" y="249" font-size="18" fill="#E8EEF7" font-weight="800" text-anchor="start">80%</text>
+<rect x="128" y="162" width="250" height="48" rx="8" fill="#121A29" stroke="#2A3650"/>
+<text x="144" y="193" font-size="18" fill="#E8EEF7" font-weight="800" text-anchor="start">90%</text>
+<rect x="162" y="106" width="250" height="48" rx="8" fill="#121A29" stroke="#2A3650"/>
+<text x="178" y="137" font-size="18" fill="#E8EEF7" font-weight="800" text-anchor="start">100%</text>
+<path d="M382 104 v-30 l22 8 l-22 8" fill="#FFA94D" stroke="#FFA94D" stroke-width="2"/>
+<circle cx="152" cy="298" r="10" fill="none" stroke="#3A4A66" stroke-width="2"/>
+<circle cx="182" cy="298" r="10" fill="none" stroke="#3A4A66" stroke-width="2"/>
+<circle cx="212" cy="298" r="10" fill="none" stroke="#3A4A66" stroke-width="2"/>
+<circle cx="242" cy="298" r="10" fill="none" stroke="#3A4A66" stroke-width="2"/>
+<circle cx="186" cy="242" r="10" fill="none" stroke="#3A4A66" stroke-width="2"/>
+<circle cx="216" cy="242" r="10" fill="none" stroke="#3A4A66" stroke-width="2"/>
+<circle cx="246" cy="242" r="10" fill="none" stroke="#3A4A66" stroke-width="2"/>
+<circle cx="276" cy="242" r="10" fill="none" stroke="#3A4A66" stroke-width="2"/>
+<circle cx="220" cy="186" r="10" fill="none" stroke="#3A4A66" stroke-width="2"/>
+<circle cx="250" cy="186" r="10" fill="none" stroke="#3A4A66" stroke-width="2"/>
+<circle cx="280" cy="186" r="10" fill="none" stroke="#3A4A66" stroke-width="2"/>
+<circle cx="310" cy="186" r="10" fill="none" stroke="#3A4A66" stroke-width="2"/>
+<circle cx="254" cy="130" r="10" fill="none" stroke="#3A4A66" stroke-width="2"/>
+<circle cx="284" cy="130" r="10" fill="none" stroke="#3A4A66" stroke-width="2"/>
+<circle cx="314" cy="130" r="10" fill="none" stroke="#3A4A66" stroke-width="2"/>
+<circle cx="344" cy="130" r="10" fill="none" stroke="#3A4A66" stroke-width="2"/>
+<circle class="w3" cx="152" cy="298" r="10" fill="#7CF29A"/>
+<circle class="w4" cx="182" cy="298" r="10" fill="#7CF29A"/>
+<circle class="w5" cx="212" cy="298" r="10" fill="#7CF29A"/>
+<circle class="w6" cx="242" cy="298" r="10" fill="#7CF29A"/>
+<circle class="w7" cx="186" cy="242" r="10" fill="#7CF29A"/>
+<circle class="w8" cx="216" cy="242" r="10" fill="#FFD54F"/>
+<circle class="w9" cx="246" cy="242" r="10" fill="#FF6B6B"/>
+<circle class="w10" cx="186" cy="242" r="10" fill="#7CF29A"/>
+<circle class="w11" cx="216" cy="242" r="10" fill="#7CF29A"/>
+<circle class="w12" cx="246" cy="242" r="10" fill="#7CF29A"/>
+<circle class="w13" cx="276" cy="242" r="10" fill="#7CF29A"/>
+<circle class="w14" cx="220" cy="186" r="10" fill="#7CF29A"/>
+<circle class="w15" cx="250" cy="186" r="10" fill="#7CF29A"/>
+<circle class="w16" cx="280" cy="186" r="10" fill="#7CF29A"/>
+<circle class="w17" cx="310" cy="186" r="10" fill="#7CF29A"/>
+<circle class="w18" cx="254" cy="130" r="10" fill="#7CF29A"/>
+<circle class="w19" cx="284" cy="130" r="10" fill="#7CF29A"/>
+<circle class="w20" cx="314" cy="130" r="10" fill="#7CF29A"/>
+<circle class="w21" cx="344" cy="130" r="10" fill="#7CF29A"/>
+<g class="w22"><circle cx="288" cy="298" r="11" fill="#7CF29A"/><path d="M283 298 l4 4 l7 -8" stroke="#06121B" stroke-width="2.6" fill="none" stroke-linecap="round"/></g>
+<g class="w23"><circle cx="322" cy="242" r="11" fill="#7CF29A"/><path d="M317 242 l4 4 l7 -8" stroke="#06121B" stroke-width="2.6" fill="none" stroke-linecap="round"/></g>
+<g class="w24"><circle cx="356" cy="186" r="11" fill="#7CF29A"/><path d="M351 186 l4 4 l7 -8" stroke="#06121B" stroke-width="2.6" fill="none" stroke-linecap="round"/></g>
+<g class="w25"><circle cx="390" cy="130" r="11" fill="#7CF29A"/><path d="M385 130 l4 4 l7 -8" stroke="#06121B" stroke-width="2.6" fill="none" stroke-linecap="round"/></g>
+<g class="w26"><rect x="52" y="270" width="266" height="56" rx="10" fill="none" stroke="#FFA94D" stroke-width="2.5"/><text x="48" y="304" font-size="12" fill="#FFA94D" font-weight="800" text-anchor="end">you</text></g>
+<g class="w27"><rect x="86" y="214" width="266" height="56" rx="10" fill="none" stroke="#FFA94D" stroke-width="2.5"/><text x="82" y="248" font-size="12" fill="#FFA94D" font-weight="800" text-anchor="end">you</text></g>
+<g class="w28"><rect x="120" y="158" width="266" height="56" rx="10" fill="none" stroke="#FFA94D" stroke-width="2.5"/><text x="116" y="192" font-size="12" fill="#FFA94D" font-weight="800" text-anchor="end">you</text></g>
+<g class="w29"><rect x="154" y="102" width="266" height="56" rx="10" fill="none" stroke="#FFA94D" stroke-width="2.5"/><text x="150" y="136" font-size="12" fill="#FFA94D" font-weight="800" text-anchor="end">you</text></g>
+<rect x="470" y="96" width="450" height="250" rx="12" fill="#070A11" stroke="#20293A"/>
+<text x="494" y="128" font-size="13" fill="#9AA8BC" font-weight="700" text-anchor="start">Misses in this step</text>
+<text x="490" y="166" font-size="11" fill="#5B6B82" font-weight="600" text-anchor="end" class="mono">24</text>
+<rect x="500" y="148" width="26" height="26" rx="4" fill="#141C2B" stroke="#25324A"/>
+<rect x="530" y="148" width="26" height="26" rx="4" fill="#141C2B" stroke="#25324A"/>
+<rect x="560" y="148" width="26" height="26" rx="4" fill="#141C2B" stroke="#25324A"/>
+<rect x="590" y="148" width="26" height="26" rx="4" fill="#141C2B" stroke="#25324A"/>
+<text x="490" y="196" font-size="11" fill="#5B6B82" font-weight="600" text-anchor="end" class="mono">25</text>
+<rect x="500" y="178" width="26" height="26" rx="4" fill="#141C2B" stroke="#25324A"/>
+<rect x="530" y="178" width="26" height="26" rx="4" fill="#141C2B" stroke="#25324A"/>
+<rect x="560" y="178" width="26" height="26" rx="4" fill="#141C2B" stroke="#25324A"/>
+<rect x="590" y="178" width="26" height="26" rx="4" fill="#141C2B" stroke="#25324A"/>
+<text x="490" y="226" font-size="11" fill="#5B6B82" font-weight="600" text-anchor="end" class="mono">26</text>
+<rect x="500" y="208" width="26" height="26" rx="4" fill="#141C2B" stroke="#25324A"/>
+<rect x="530" y="208" width="26" height="26" rx="4" fill="#141C2B" stroke="#25324A"/>
+<rect x="560" y="208" width="26" height="26" rx="4" fill="#141C2B" stroke="#25324A"/>
+<rect x="590" y="208" width="26" height="26" rx="4" fill="#141C2B" stroke="#25324A"/>
+<text x="490" y="256" font-size="11" fill="#5B6B82" font-weight="600" text-anchor="end" class="mono">27</text>
+<rect x="500" y="238" width="26" height="26" rx="4" fill="#141C2B" stroke="#25324A"/>
+<rect x="530" y="238" width="26" height="26" rx="4" fill="#141C2B" stroke="#25324A"/>
+<rect x="560" y="238" width="26" height="26" rx="4" fill="#141C2B" stroke="#25324A"/>
+<rect x="590" y="238" width="26" height="26" rx="4" fill="#141C2B" stroke="#25324A"/>
+<rect class="w30" x="560" y="178" width="26" height="26" rx="4" fill="#FFD54F"/>
+<g class="w31"><rect x="560" y="178" width="26" height="26" rx="4" fill="#FF6B6B"/><text x="573" y="196" font-size="11" fill="#fff" font-weight="800" text-anchor="middle">×2</text></g>
+<rect x="660" y="110" width="23" height="222" fill="#FF5C8A" fill-opacity="0.05"/>
+<rect x="684" y="110" width="23" height="222" fill="#4FC3F7" fill-opacity="0.05"/>
+<rect x="708" y="110" width="23" height="222" fill="#F48FB1" fill-opacity="0.05"/>
+<rect x="732" y="110" width="23" height="222" fill="#FFD54F" fill-opacity="0.05"/>
+<rect x="756" y="110" width="23" height="222" fill="#66BB6A" fill-opacity="0.05"/>
+<rect x="780" y="110" width="23" height="222" fill="#9C84E0" fill-opacity="0.05"/>
+<rect x="804" y="110" width="23" height="222" fill="#EF5350" fill-opacity="0.05"/>
+<rect x="828" y="110" width="23" height="222" fill="#FF9800" fill-opacity="0.05"/>
+<rect x="852" y="110" width="23" height="222" fill="#42A5F5" fill-opacity="0.05"/>
+<rect x="876" y="110" width="23" height="222" fill="#80DEEA" fill-opacity="0.05"/>
+<rect x="660" y="306" width="240" height="3" fill="#fff" fill-opacity="0.8"/>
+<rect class="w32" x="660" y="166" width="240" height="24" fill="#FF6B6B" fill-opacity="0.35"/>
+<rect class="nf" style="animation-delay:0.00s" x="735" y="110" width="17" height="5" rx="2" fill="#FFD54F" fill-opacity="0.8"/>
+<rect class="nf" style="animation-delay:-0.12s" x="879" y="110" width="17" height="5" rx="2" fill="#80DEEA" fill-opacity="0.8"/>
+<rect class="nf" style="animation-delay:-0.24s" x="855" y="110" width="17" height="5" rx="2" fill="#42A5F5" fill-opacity="0.8"/>
+<rect class="nf" style="animation-delay:-0.36s" x="711" y="110" width="17" height="5" rx="2" fill="#F48FB1" fill-opacity="0.8"/>
+<rect class="nf" style="animation-delay:-0.48s" x="783" y="110" width="17" height="5" rx="2" fill="#9C84E0" fill-opacity="0.8"/>
+<rect class="nf" style="animation-delay:-0.60s" x="879" y="110" width="17" height="5" rx="2" fill="#80DEEA" fill-opacity="0.8"/>
+<rect class="nf" style="animation-delay:-0.72s" x="831" y="110" width="17" height="5" rx="2" fill="#FF9800" fill-opacity="0.8"/>
+<rect class="nf" style="animation-delay:-0.84s" x="879" y="110" width="17" height="5" rx="2" fill="#80DEEA" fill-opacity="0.8"/>
+<rect class="nf" style="animation-delay:-0.96s" x="687" y="110" width="17" height="5" rx="2" fill="#4FC3F7" fill-opacity="0.8"/>
+<rect class="nf" style="animation-delay:-1.08s" x="879" y="110" width="17" height="5" rx="2" fill="#80DEEA" fill-opacity="0.8"/>
+<g class="w33"><rect x="670" y="200" width="220" height="44" rx="10" fill="#0B1220" stroke="#7CF29A" stroke-width="2"/><text x="780" y="229" font-size="18" fill="#7CF29A" font-weight="800" text-anchor="middle">OK! Next: 80%</text></g>
+<g class="w34"><rect x="670" y="200" width="220" height="44" rx="10" fill="#0B1220" stroke="#FFA94D" stroke-width="2"/><text x="780" y="229" font-size="18" fill="#FFA94D" font-weight="800" text-anchor="middle">Again: 80%</text></g>
+<g class="w35"><rect x="670" y="200" width="220" height="44" rx="10" fill="#0B1220" stroke="#7CF29A" stroke-width="2"/><text x="780" y="229" font-size="18" fill="#7CF29A" font-weight="800" text-anchor="middle">OK! Next: 90%</text></g>
+<g class="w36"><rect x="670" y="200" width="220" height="44" rx="10" fill="#0B1220" stroke="#7CF29A" stroke-width="2"/><text x="780" y="229" font-size="18" fill="#7CF29A" font-weight="800" text-anchor="middle">OK! Next: 100%</text></g>
+<g class="w37"><rect x="654" y="188" width="252" height="68" rx="12" fill="#0B1220" stroke="#FFD54F" stroke-width="3"/><text x="780" y="234" font-size="34" fill="#FFD54F" font-weight="900" text-anchor="middle">CLEAR!</text></g>
+<text x="40" y="366" font-size="13" fill="#9AA8BC" font-weight="400" text-anchor="start">4 laps per step · the same beat missed twice → try the step again · two agains in a row → one step down</text>
+</svg>
