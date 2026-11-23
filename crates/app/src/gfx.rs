@@ -376,7 +376,7 @@ impl Skin {
         }
     }
 
-    /// 画像（`Graphics\5_bar box.png` など NX の書き方でよい）
+    /// 画像（`Graphics\5_bar.png` など NX の書き方でよい）
     pub fn tex(&self, rel: &str) -> Option<Tex> {
         self.tex_with(rel, false)
     }

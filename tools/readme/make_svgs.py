@@ -748,9 +748,9 @@ def lineage(lang: str) -> Svg:
         960,
         300,
         "Where DTXmaniaNXT comes from" if en else "DTXmaniaNXT の系譜",
-        "DTXMania, DTXManiaXG verK, DTXManiaNX by limyz, DTXManiaNX v2.0 by BocuD, and DTXmaniaNXT. NXT is new code. It started from the v2.0 skin and is replacing it with its own artwork, step by step."
+        "DTXMania, DTXManiaXG verK, DTXManiaNX by limyz, DTXManiaNX v2.0 by BocuD, and DTXmaniaNXT. NXT is new code. It follows the v2.0 screen layout; its skin started from v2.0's and is now all its own artwork."
         if en
-        else "DTXMania、DTXManiaXG verK、limyz 版 DTXManiaNX、BocuD 版 DTXManiaNX v2.0、DTXmaniaNXT の順。NXT のソースコードは新規。スキンは v2.0 のものから始めて、段階的に自前の素材へ置き換え中。",
+        else "DTXMania、DTXManiaXG verK、limyz 版 DTXManiaNX、BocuD 版 DTXManiaNX v2.0、DTXmaniaNXT の順。NXT のソースコードは新規。画面の配置は v2.0 にならい、スキンは v2.0 のものから始めて、すべて自前の素材に置き換えた。",
     )
     card_bg(s)
     nodes = [
@@ -771,7 +771,7 @@ def lineage(lang: str) -> Svg:
         if i < 3:
             ax = x + w + 2
             s.add(f'<path d="M{ax} {y + 39} h{gap - 6} m-6 -5 l6 5 l-6 5" stroke="#8FA3BF" stroke-width="2" fill="none"/>')
-    # v2.0 → NXT は、スキンだけ（点線）
+    # v2.0 → NXT は、画面の配置とスキンの出発点だけ（点線）
     x3 = 30 + 3 * (w + gap) + w
     s.add(f'<path d="M{x3 + 2} {y + 39} h{gap - 6} m-6 -5 l6 5 l-6 5" stroke="{MAGENTA}" stroke-width="2" fill="none" stroke-dasharray="4 3"/>')
     s.add(text(40, 44, "Where it comes from" if en else "DTXmaniaNXT の系譜", 20, INK, 800))
@@ -780,13 +780,13 @@ def lineage(lang: str) -> Svg:
     notes = (
         [
             ("— code", "Each project was forked from the one before it.", "#8FA3BF", False),
-            ("- - skin only", "NXT started from the v2.0 skin and is replacing it with its own artwork, step by step.", MAGENTA, True),
+            ("- - screens", "NXT follows the v2.0 screen layout. Its skin started from v2.0's and is now all its own artwork.", MAGENTA, True),
             ("", "NXT's code is written from scratch in Rust. No upstream code is copied.", CYAN, False),
         ]
         if en
         else [
             ("— コード", "各プロジェクトは、左隣のプロジェクトからのフォークです。", "#8FA3BF", False),
-            ("- - スキンのみ", "NXT のスキンは v2.0 のものから始め、段階的に自前の素材へ置き換えています。", MAGENTA, True),
+            ("- - 画面のみ", "NXT は v2.0 の画面の配置にならっています。スキンは v2.0 のものから始め、今はすべて自前の素材です。", MAGENTA, True),
             ("", "NXT のソースコードは Rust で新規に書いたもので、上流のコードは含みません。", CYAN, False),
         ]
     )

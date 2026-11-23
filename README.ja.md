@@ -229,7 +229,7 @@ Windows では `%APPDATA%\DTXmaniaNXT` に保存されます（設定の `config
 
 DTXmaniaNXT は**非公式のファンメイド作品**です。2000 年から続く DTXMania と、その派生版を作り育ててきた方々の積み重ねがあってこそ生まれました。DTXMania に関わってきたすべての皆さまに感謝します。
 
-<p align="center"><img src="docs/readme/lineage.ja.svg" width="960" alt="DTXmaniaNXT の系譜。DTXMania（FROM・DTXMania Group、2000 年〜）、DTXManiaXG verK（kairera0467）、DTXManiaNX（limyz・fisyher）、DTXManiaNX v2.0（BocuD）、DTXmaniaNXT の順。NXT のソースコードは新規に書いたもの。スキンは v2.0 の画像と効果音から始め、段階的に自前の素材へ置き換えている途中"></p>
+<p align="center"><img src="docs/readme/lineage.ja.svg" width="960" alt="DTXmaniaNXT の系譜。DTXMania（FROM・DTXMania Group、2000 年〜）、DTXManiaXG verK（kairera0467）、DTXManiaNX（limyz・fisyher）、DTXManiaNX v2.0（BocuD）、DTXmaniaNXT の順。NXT のソースコードは新規に書いたもの。画面の配置は v2.0 にならい、スキンは v2.0 の画像と効果音から始めて、すべて自前の素材に置き換えた"></p>
 
 ### DTXMania と派生版
 
@@ -239,7 +239,7 @@ DTXmaniaNXT は**非公式のファンメイド作品**です。2000 年から�
 | [DTXMania（OSDN）](https://osdn.net/projects/dtxmania) | yyagi | OSDN で開発されていた DTXMania です。DTX 形式を解説した [Wiki](https://osdn.net/projects/dtxmania/wiki/DTX%20data%20format) もここにあります。 |
 | [DTXManiaXG verK](https://osdn.net/projects/dtxmaniaxg-verk) | kairera0467 | DTXManiaNX のフォーク元です。 |
 | [DTXManiaNX](https://github.com/limyz/DTXmaniaNX) | limyz / fisyher | このリポジトリは、GitHub 上でこれをフォークしています。 |
-| [DTXManiaNX v2.0](https://github.com/BocuD/DTXmaniaNX) | BocuD | 画面レイアウトはこのバージョンにならっています。スキンのうち、まだ置き換えていない部分もこのバージョンのものです。 |
+| [DTXManiaNX v2.0](https://github.com/BocuD/DTXmaniaNX) | BocuD | 画面レイアウトはこのバージョンにならっています。NXT のスキンは、このバージョンのスキンから始めました（今はすべて置き換え済み）。 |
 | [DTXMania AL](http://senamih.com/dtxal) | Sena | DTXManiaNX の README で、ほかの派生版と並んで紹介されている派生版です。 |
 
 プロジェクト名と並び順は、DTXManiaNX の README と各プロジェクトのページに合わせています。誤りがあれば [Issue](https://github.com/check5004/DTXmaniaNXT/issues) でお知らせください。
@@ -247,27 +247,27 @@ DTXmaniaNXT は**非公式のファンメイド作品**です。2000 年から�
 ### このリポジトリの中身
 
 - **ソースコード**（`main` ブランチ）は、このプロジェクトのために Rust で新しく書いたものです。DTXMania・DTXManiaNX のコードは含んでおらず、機能は同じ動きになるよう一から書き起こしています。ライセンスは [MIT](LICENSE) です。
-- **スキン**（`assets/skin`。画面の画像と効果音）は、DTXManiaNX v2.0 のスキンから始めて、**段階的に自前の素材へ置き換えている途中**です。DTXManiaNX がなくても動くよう、アプリに埋め込んでいます。ファイルごとの内訳は [assets/README.md](assets/README.md) にあります。
+- **スキン**（`assets/skin`。画面の画像と効果音）は、DTXManiaNX v2.0 のスキンから始めて、3 つの段階で**すべて自前の素材に置き換えました**。ファイル名と配置は v2.0 のままで、DTXManiaNX がなくても動くよう、アプリに埋め込んでいます。ファイルごとの内訳は [assets/README.md](assets/README.md) にあります。
 
-  | 段階 | 範囲 | 今の状態 |
+  | 段階 | 範囲 | 状態 |
   | --- | --- | --- |
   | 1 | KONAMI の「GITADORA」の絵やロゴが入っていた画像（背景、タイトルのロゴ、シャッター、STAGE FAILED、ランクなど） | DTXmaniaNXT のために作った素材に**置き換え済み**（23 ファイル）。使っていなかったものは削除 |
   | 2 | 効果音とボイス | DTXmaniaNXT のために作った音に**置き換え済み**（25 ファイル）。使っていなかったものは削除 |
-  | 3 | そのほかの画像（判定の文字、ゲージ、パッド、並べ替えのアイコンなど） | DTXManiaNX v2.0 のまま |
+  | 3 | そのほかの画像（レーン、チップ、パッド、判定の文字、数字、ゲージ、選曲の帯、並べ替えのアイコンなど） | DTXmaniaNXT のために作った素材に**置き換え済み**（116 ファイル）。使っていなかったものは削除 |
 
-  - **自前の素材**（段階 1・2）は [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/deed.ja) です。使うときは「DTXmaniaNXT」と表記してください。ただし、**ボイスは扱いが異なります**（下を参照）。
-    - 画像: 画像生成 AI（OpenAI の GPT Image 2.6 Sunburst を OpenRouter 経由で使用）で絵を作り、切り抜き・縮小・文字入れをしています。生成の指示文は `tools/skin/prompts.json` にあり、既存のゲームや製品の名前は入れていません。
+  - **自前の素材**は [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/deed.ja) です。使うときは「DTXmaniaNXT」と表記してください。ただし、**ボイスは扱いが異なります**（下を参照）。
+    - 画像（段階 1）: 画像生成 AI（OpenAI の GPT Image 2.6 Sunburst を OpenRouter 経由で使用）で絵を作り、切り抜き・縮小・文字入れをしています。生成の指示文は `tools/skin/prompts.json` にあり、既存のゲームや製品の名前は入れていません。
+    - 画像（段階 3）: ほとんどは `tools/skin/build_stage3.py` で図形とフォント（Rubik Spray Paint と Inter。どちらも SIL Open Font License）から描きました。結果の文字、並べ替えのアイコン、練習の合格のメダルは、同じ画像生成 AI で作った 2 枚の絵から切り出しています。
     - 操作音: `tools/skin/ui_sounds.py` で合成しました。
     - タイトル曲と、クリア・フルコンボ・開始・読み込み中などの短い曲: Google の音楽生成モデル Lyria 3（OpenRouter 経由）で作りました。指示文に既存の曲や演奏者の名前は入れていません。Lyria の出力には、耳では聞こえない透かし（SynthID）が入っています。
     - ボイス（難易度や並べ替えの読み上げと、短い曲に重ねた声）: **VOICEVOX:春日部つむぎ**。CC BY 4.0 も MIT ライセンスも適用されず、[VOICEVOX の利用規約](https://voicevox.hiroshiba.jp/term/)と[春日部つむぎの利用規約](https://tsumugi-official.studio.site/rule)に従います。DTXmaniaNXT の中で鳴らすためのものなので、取り出してほかの作品に使ったり、配布したりしないでください。アプリでも、Config の「アプリ」にある「クレジット」に表示しています。
-  - **それ以外のスキン**（段階 3 の画像）は、[BocuD/DTXmaniaNX](https://github.com/BocuD/DTXmaniaNX) のタグ `V2.0.0-20260121-5` にある `Runtime/System` フォルダから無改変でコピーしたものです。MIT ライセンスも CC BY 4.0 も適用されません。権利は元の制作者にありますが、絵ごとの制作者の記録は残っていません。DTXManiaNX のリポジトリにはライセンスファイルがなく、上流に含まれている DTXMania の使用許諾書（`Runtime/Licenses/dtxmania.txt`、MIT ライセンスと同等の内容）は DTXMania 本体のソフトウェアを対象としたもので、これらのファイルには及びません。
-  - 置き換える前の画像は 0.8.0 までのリリースに、音は 0.9.1 までのリリースに残っています。過去のコミットも同じです。
+  - **過去のリリース**には、DTXManiaNX v2.0 のスキン（[BocuD/DTXmaniaNX](https://github.com/BocuD/DTXmaniaNX) のタグ `V2.0.0-20260121-5` にある `Runtime/System` フォルダ）のファイルが残っています。段階 1 の画像は 0.8.0 まで、音は 0.9.1 まで、段階 3 の画像は 0.10.0 までのリリースで、過去のコミットも同じです。これらのファイルには MIT ライセンスも CC BY 4.0 も適用されません。権利は元の制作者にありますが、絵ごとの制作者の記録は残っていません。DTXManiaNX のリポジトリにはライセンスファイルがなく、上流に含まれている DTXMania の使用許諾書（`Runtime/Licenses/dtxmania.txt`、MIT ライセンスと同等の内容）は DTXMania 本体のソフトウェアを対象としたもので、これらのファイルには及びません。
 - **アプリのアイコン**は、DTXManiaNX の `dtx.ico`（DTXMania から受け継がれてきたアイコン）の「DTX」の文字を「NXT」に描き換えたものです。こちらも MIT ライセンスの対象外です。
 - **`master` ブランチ**には、参考として上流の C# 版 DTXManiaNX のコードを残しています。このリポジトリのライセンスは適用されません。
 
 ### 商標について
 
-「GITADORA」は株式会社コナミデジタルエンタテインメントの商標です。画面の配置は KONAMI の「GITADORA」シリーズにならっています。0.8.0 までの同梱スキンには、「GITADORA FUZZ-UP」の絵やロゴがそのまま入った画像がありましたが、段階 1 ですべて置き換えました。DTXManiaNX v2.0 から残っている部品の中には GITADORA の画面に似せたものがあり、段階 3 で置き換えます。DTXmaniaNXT は KONAMI とは一切関係がなく、KONAMI や DTXMania・DTXManiaNX の開発者による公認を受けたものでもありません。
+「GITADORA」は株式会社コナミデジタルエンタテインメントの商標です。画面の配置は KONAMI の「GITADORA」シリーズにならっています。0.8.0 までの同梱スキンには、「GITADORA FUZZ-UP」の絵やロゴがそのまま入った画像がありましたが、段階 1 ですべて置き換えました。0.10.0 までは、DTXManiaNX v2.0 から残っていた部品の中に GITADORA の画面に似せたものがありましたが、段階 3 で置き換えました。DTXmaniaNXT は KONAMI とは一切関係がなく、KONAMI や DTXMania・DTXManiaNX の開発者による公認を受けたものでもありません。
 
 **権利者の方で、修正や削除をご希望のものがありましたら、[Issue](https://github.com/check5004/DTXmaniaNXT/issues) でお知らせください。速やかに対応します。**
 
@@ -306,7 +306,7 @@ cargo test --all
 | `crates/video` | 譜面の動画（#AVI）。Windows では Media Foundation を使用 |
 | `crates/i18n` | 画面に出す英語と日本語の文 |
 | `crates/app` | アプリ本体（winit + wgpu + egui、cpal、midir）。NX のスキンを上流と同じ座標で描画 |
-| `assets/skin` | 同梱しているスキン。自前の素材に置き換え中（[クレジットと権利](#クレジットと権利)を参照） |
+| `assets/skin` | 同梱しているスキン。絵も音もすべて自前の素材（[クレジットと権利](#クレジットと権利)を参照） |
 | `tools/skin` | 新しいスキンの素材（絵と音）の生成の指示文と組み立て |
 | `testdata/charts` | テスト用の譜面と、手計算で確かめた正解データ |
 
@@ -319,4 +319,4 @@ PR はフォーク元の上流ではなく、このリポジトリ（check5004/D
 
 ## ライセンス
 
-`main` ブランチのソースコードは [MIT ライセンス](LICENSE)です。`assets/skin` のスキン（自前の素材は CC BY 4.0。ただしボイスは VOICEVOX と春日部つむぎの規約に従います。残りは DTXManiaNX v2.0 のもの）、`assets/icon` のアイコン、`master` ブランチにある上流のコードには適用されません（[クレジットと権利](#クレジットと権利)を参照）。
+`main` ブランチのソースコードは [MIT ライセンス](LICENSE)です。`assets/skin` のスキン（自前の素材は CC BY 4.0。ただしボイスは VOICEVOX と春日部つむぎの規約に従います）、`assets/icon` のアイコン、`master` ブランチにある上流のコードには適用されません（[クレジットと権利](#クレジットと権利)を参照）。

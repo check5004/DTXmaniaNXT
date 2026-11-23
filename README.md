@@ -228,7 +228,7 @@ Please open an [issue](https://github.com/check5004/DTXmaniaNXT/issues). Attachi
 
 DTXmaniaNXT is an **unofficial fan project**. It would not exist without more than twenty years of work by the DTXMania community. Thank you to everyone who has made and kept DTXMania and its forks going.
 
-<p align="center"><img src="docs/readme/lineage.svg" width="960" alt="Where it comes from: DTXMania (FROM, DTXMania Group, since 2000), then DTXManiaXG verK (kairera0467), DTXManiaNX (limyz, fisyher), DTXManiaNX v2.0 (BocuD), and DTXmaniaNXT. NXT's code is written from scratch. Its skin started from the v2.0 images and sounds and is being replaced with its own artwork, step by step."></p>
+<p align="center"><img src="docs/readme/lineage.svg" width="960" alt="Where it comes from: DTXMania (FROM, DTXMania Group, since 2000), then DTXManiaXG verK (kairera0467), DTXManiaNX (limyz, fisyher), DTXManiaNX v2.0 (BocuD), and DTXmaniaNXT. NXT's code is written from scratch. It follows the v2.0 screen layout; its skin started from the v2.0 images and sounds and has since been fully replaced with its own artwork."></p>
 
 ### The DTXMania family
 
@@ -238,7 +238,7 @@ DTXmaniaNXT is an **unofficial fan project**. It would not exist without more th
 | [DTXMania (OSDN)](https://osdn.net/projects/dtxmania) | yyagi | DTXMania as developed on OSDN, home of the [DTX data format wiki](https://osdn.net/projects/dtxmania/wiki/DTX%20data%20format). |
 | [DTXManiaXG verK](https://osdn.net/projects/dtxmaniaxg-verk) | kairera0467 | The fork that DTXManiaNX started from. |
 | [DTXManiaNX](https://github.com/limyz/DTXmaniaNX) | limyz / fisyher | This repository is a GitHub fork of it. |
-| [DTXManiaNX v2.0](https://github.com/BocuD/DTXmaniaNX) | BocuD | The screen layout comes from this version, and so does the part of the skin not yet replaced. |
+| [DTXManiaNX v2.0](https://github.com/BocuD/DTXmaniaNX) | BocuD | The screen layout comes from this version. NXT's skin started from this version's skin (now fully replaced). |
 | [DTXMania AL](http://senamih.com/dtxal) | Sena | Another DTXMania fork, listed with the others in the DTXManiaNX README. |
 
 The names and the order above follow the DTXManiaNX READMEs and the projects' own pages. If something here is wrong, please tell us in an [issue](https://github.com/check5004/DTXmaniaNXT/issues).
@@ -246,27 +246,27 @@ The names and the order above follow the DTXManiaNX READMEs and the projects' ow
 ### What is in this repository
 
 - **The code** (the `main` branch) is new code written in Rust for this project. It contains no code from DTXMania or DTXManiaNX; their features are re-implemented to behave the same way. It is under the [MIT License](LICENSE).
-- **The skin** (`assets/skin`, the images and sounds you see and hear) started as the DTXManiaNX v2.0 skin and **is being replaced with original artwork, step by step**. It is built into the app so that it runs without DTXManiaNX. Details for every file: [assets/README.md](assets/README.md).
+- **The skin** (`assets/skin`, the images and sounds you see and hear) started as the DTXManiaNX v2.0 skin and **has been fully replaced with original artwork**, in three steps. It keeps the v2.0 file names and layout, and it is built into the app so that it runs without DTXManiaNX. Details for every file: [assets/README.md](assets/README.md).
 
   | Step | What | Now |
   | --- | --- | --- |
   | 1 | Images that contained KONAMI's GITADORA artwork or logos (backgrounds, title logo, shutter, STAGE FAILED, ranks and more) | **Replaced** with artwork made for DTXmaniaNXT (23 files). Unused ones were deleted. |
   | 2 | Sound effects and voices | **Replaced** with sounds made for DTXmaniaNXT (25 files). Unused ones were deleted. |
-  | 3 | All other images (judgement text, gauge, pads, sort icons and more) | Still from DTXManiaNX v2.0 |
+  | 3 | All other images (lanes, notes, pads, judgement text, numbers, gauge, song bars, sort icons and more) | **Replaced** with artwork made for DTXmaniaNXT (116 files). Unused ones were deleted. |
 
-  - **Our artwork and sounds** (steps 1 and 2) are under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/); please credit “DTXmaniaNXT”. **The voices are the exception** (see below).
-    - Images: made with an image-generation AI (OpenAI GPT Image 2.6 Sunburst, through OpenRouter), then cropped, resized and lettered. The prompts are in `tools/skin/prompts.json`; they don't name any existing game or product.
+  - **Our artwork and sounds** are under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/); please credit “DTXmaniaNXT”. **The voices are the exception** (see below).
+    - Images, step 1: made with an image-generation AI (OpenAI GPT Image 2.6 Sunburst, through OpenRouter), then cropped, resized and lettered. The prompts are in `tools/skin/prompts.json`; they don't name any existing game or product.
+    - Images, step 3: mostly drawn by `tools/skin/build_stage3.py` from shapes and fonts (Rubik Spray Paint and Inter, both SIL Open Font License). The result lettering, the sort icons and the practice medal come from two more images made with the same AI.
     - Menu sounds: synthesized by `tools/skin/ui_sounds.py`.
     - Title music and the short jingles (stage clear, full combo, game start, loading and others): made with Google's music model Lyria 3 (through OpenRouter). The prompts don't name any existing song or artist. Lyria's output carries an inaudible SynthID watermark.
     - Voices (difficulty and sort names, and the voice over the jingles): **VOICEVOX:春日部つむぎ** (Kasukabe Tsumugi). They are under neither CC BY nor the MIT License; they follow the [VOICEVOX terms](https://voicevox.hiroshiba.jp/term/) and the [Kasukabe Tsumugi terms](https://tsumugi-official.studio.site/rule). They are only for use inside DTXmaniaNXT, so please don't extract them for other works or redistribute them. The credit is also shown in the app under Config → General → Credits.
-  - **Everything else in the skin** (the step 3 images) is copied unchanged from the `Runtime/System` folder of [BocuD/DTXmaniaNX](https://github.com/BocuD/DTXmaniaNX) at tag `V2.0.0-20260121-5`. It is under neither the MIT License nor CC BY. Its rights stay with its original creators; there is no record of who made each image. The DTXManiaNX repositories have no license file, and DTXMania's own license (`Runtime/Licenses/dtxmania.txt`, MIT-style) covers the DTXMania software, not these files.
-  - Releases up to 0.8.0 still contain the images from before step 1, and releases up to 0.9.1 the sounds from before step 2. So do older commits.
+  - **Older releases** still contain files from the DTXManiaNX v2.0 skin (the `Runtime/System` folder of [BocuD/DTXmaniaNX](https://github.com/BocuD/DTXmaniaNX) at tag `V2.0.0-20260121-5`): the step 1 images up to 0.8.0, the sounds up to 0.9.1 and the step 3 images up to 0.10.0. So do older commits. Those files are under neither the MIT License nor CC BY. Their rights stay with their original creators; there is no record of who made each image. The DTXManiaNX repositories have no license file, and DTXMania's own license (`Runtime/Licenses/dtxmania.txt`, MIT-style) covers the DTXMania software, not these files.
 - **The app icon** is DTXManiaNX's `dtx.ico` (an icon handed down from DTXMania) with its “DTX” lettering changed to “NXT”. It is not under the MIT License either.
 - **The `master` branch** keeps the upstream C# DTXManiaNX code for reference only. Our license doesn't apply to it.
 
 ### Trademarks
 
-GITADORA is a trademark of Konami Digital Entertainment Co., Ltd. The screen layout follows KONAMI's GITADORA series. Up to version 0.8.0, the bundled skin contained artwork and logos taken straight from GITADORA FUZZ-UP; step 1 replaced all of them. Some of the parts still left from DTXManiaNX v2.0 are made to look like GITADORA's screens, and step 3 will replace them. DTXmaniaNXT is not affiliated with or endorsed by KONAMI, or by the developers of DTXMania or DTXManiaNX.
+GITADORA is a trademark of Konami Digital Entertainment Co., Ltd. The screen layout follows KONAMI's GITADORA series. Up to version 0.8.0, the bundled skin contained artwork and logos taken straight from GITADORA FUZZ-UP; step 1 replaced all of them. Up to version 0.10.0, some other parts from DTXManiaNX v2.0 were made to look like GITADORA's screens; step 3 replaced them too. DTXmaniaNXT is not affiliated with or endorsed by KONAMI, or by the developers of DTXMania or DTXManiaNX.
 
 **If you hold rights to anything here and want it changed or removed, please open an [issue](https://github.com/check5004/DTXmaniaNXT/issues). We will act on it promptly.**
 
@@ -305,7 +305,7 @@ Set `DTXMANIANXT_AUTOPLAY=1` to have every note hit automatically while you chec
 | `crates/video` | Chart videos (#AVI), via Media Foundation on Windows |
 | `crates/i18n` | English and Japanese text for the screens |
 | `crates/app` | The app: winit + wgpu + egui, cpal, midir. Draws the NX skin at the same coordinates as upstream |
-| `assets/skin` | The bundled skin, being replaced with our own artwork (see [Credits and rights](#credits-and-rights)) |
+| `assets/skin` | The bundled skin, all our own artwork and sounds (see [Credits and rights](#credits-and-rights)) |
 | `tools/skin` | Prompts and build scripts for the new skin artwork and sounds |
 | `testdata/charts` | Test charts with hand-checked expected results |
 
@@ -318,4 +318,4 @@ Pull requests go to `main` of this repository (check5004/DTXmaniaNXT), not to th
 
 ## License
 
-The code on the `main` branch is under the [MIT License](LICENSE). The skin in `assets/skin` (our artwork and sounds are CC BY 4.0 except the voices, which follow the VOICEVOX and Kasukabe Tsumugi terms; the rest is from DTXManiaNX v2.0), the app icon in `assets/icon` and the upstream code on the `master` branch are not covered by it (see [Credits and rights](#credits-and-rights)).
+The code on the `main` branch is under the [MIT License](LICENSE). The skin in `assets/skin` (our artwork and sounds are CC BY 4.0 except the voices, which follow the VOICEVOX and Kasukabe Tsumugi terms), the app icon in `assets/icon` and the upstream code on the `master` branch are not covered by it (see [Credits and rights](#credits-and-rights)).
