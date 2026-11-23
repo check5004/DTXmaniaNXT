@@ -63,6 +63,7 @@ def main():
     ap.add_argument("--y1", type=int, default=250)
     ap.add_argument("--y2", type=int, default=450)
     ap.add_argument("--judge-y", type=int, default=564)
+    ap.add_argument("--speed", type=float, default=0.0, help="チップの速さ（px/s）。0 なら 2 か所の時刻から測る（重い環境ではぶれる）")
     a = ap.parse_args()
     rnd = random.Random(a.seed)
     notes = parse(a.chart)
@@ -108,10 +109,19 @@ def main():
                 return time.perf_counter()
         raise SystemExit("no chip")
 
-    t1 = cross(a.y1)
-    t2 = cross(a.y2)
-    v = (a.y2 - a.y1) / (t2 - t1)
-    t_judge = t2 + (a.judge_y - a.y2) / v
+    if a.speed > 0:
+        # 速さを決めておき、何か所も通る時刻から出した「着く時刻」の平均を取る（画面のコマの粗さでぶれにくい）
+        ys = list(range(a.y1, a.y2 + 1, 25))
+        ts = [cross(y) for y in ys]
+        v = a.speed
+        ests = [t + (a.judge_y - y) / v for t, y in zip(ts, ys)]
+        t_judge = sum(ests) / len(ests)
+        print(f"measured {(ys[-1] - ys[0]) / (ts[-1] - ts[0]):.0f} px/s, using {v:.0f}, spread {(max(ests) - min(ests)) * 1000:.0f} ms", file=sys.stderr)
+    else:
+        t1 = cross(a.y1)
+        t2 = cross(a.y2)
+        v = (a.y2 - a.y1) / (t2 - t1)
+        t_judge = t2 + (a.judge_y - a.y2) / v
     t0 = t_judge + a.lag / 1000
     start_ms = 0.0
     print(f"chip speed {v:.0f} px/s, judge in {(t_judge - time.perf_counter()) * 1000:.0f} ms", file=sys.stderr)

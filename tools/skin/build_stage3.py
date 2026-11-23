@@ -406,7 +406,9 @@ def word(text, col, size):
 def judges():
     sheet = Image.new("RGBA", (1500, 4080), (0, 0, 0, 0))
     for ci, (text, col) in enumerate(JUDGE):
-        base = word(text, col, 32)
+        # 同じ段に出る HH と SD の中心は 100 px ほどしか離れていないので、横に詰めて 90 px 台に収める
+        base = word(text, col, 31)
+        base = base.resize((int(base.width * 0.64), base.height), Image.LANCZOS)
         for f in range(24):
             if f < 3:  # 少し大きく出て、すぐ落ち着く
                 s, a, sx = 1.24 - 0.08 * f, 0.55 + 0.15 * f, 1.0
@@ -772,10 +774,9 @@ for key, label in SORT_LABEL.items():
     text_on(ic, (45, 60), label, SEMI, 12, (255, 226, 40), stroke=2, anchor="mm")
     save(ic, f"Sorting/{key}.png")
 
-# ---- 並べ替えメニューの地（662×92）と、上の帯（320×36 を横 4 倍に引き伸ばす）
-sm, smm = panel(662, 92, (0, 0, 662, 92), radius=0, fill=(10, 10, 13), alpha=215, rough=0)
-a = np.asarray(sm.getchannel("A"), np.float32) * np.linspace(0.7, 1.0, 92)[:, None]
-sm.putalpha(Image.fromarray(a.astype(np.uint8), "L"))
+# ---- 並べ替えメニューの地（662×92）と、上の帯（320×36 を横 4 倍に引き伸ばす）。
+# どちらも曲の帯の上に重なるので、透けると帯の字が見えて散らかる。不透明にする
+sm, smm = panel(662, 92, (0, 0, 662, 92), radius=0, fill=(10, 10, 13), alpha=255, rough=0)
 sm.alpha_composite(mist(662, 92, 331, 96, 360, 18, LIME, 120))
 rule(sm, 89, 0, 662, LIME, 230)
 sm.alpha_composite(masked(speckle(662, 92, VIOLET, 0.003, 150), Image.fromarray((np.linspace(0, 255, 92)[:, None].repeat(662, 1)).astype(np.uint8), "L")))
@@ -783,7 +784,7 @@ save(sm, "5_sortmenu_bg.png")
 tb = Image.new("RGBA", (320, 36), (0, 0, 0, 0))
 arr = np.zeros((36, 320, 4), np.uint8)
 arr[..., 0:3] = 6
-arr[..., 3] = np.linspace(235, 200, 36)[:, None].astype(np.uint8)
+arr[..., 3] = 255
 tb = Image.fromarray(arr, "RGBA")
 d = ImageDraw.Draw(tb)
 d.line((0, 33, 320, 33), fill=LIME + (255,), width=2)
