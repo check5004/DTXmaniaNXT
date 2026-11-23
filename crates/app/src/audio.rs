@@ -2,7 +2,7 @@
 //! 決めたフレームに鳴らす。出力のコールバックごとに「このバッファが鳴るホスト時刻」を時計に渡す。
 
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU8, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result, anyhow};
@@ -248,6 +248,38 @@ fn apply_master(data: &mut [f32], channels: usize, from: f32, to: f32) {
 /// 同じ音を同時に鳴らせる数（上流の PolyphonicSounds の既定）。これを超えると、同じ音の一番古いものを止める
 pub const MAX_OVERLAP: usize = 4;
 
+/// 叩いてから音が鳴るまでの時刻（ホスト時刻、マイクロ秒）。FPS と遅延の表示に使う
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HitTiming {
+    /// 叩いた時刻（MIDI の時刻から見積もったもの）
+    pub hit_us: i64,
+    /// アプリに届いた時刻
+    pub arrival_us: i64,
+    /// 判定して、叩いた音を出力へ渡した時刻
+    pub handled_us: i64,
+    /// 叩いた音が鳴り始めた時刻（出力の知らせから。音を鳴らさなかったら `None`）
+    pub sound_us: Option<i64>,
+}
+
+/// 出力の遅れ（出力のコールバックが書き、画面が読む）
+#[derive(Debug, Default)]
+struct OutStats {
+    /// 直近のコールバックで、書いた音が鳴るまで（マイクロ秒。まだ鳴らしていなければ 0）
+    latency_us: AtomicI64,
+    /// 直近のバッファのフレーム数
+    buffer_frames: AtomicU32,
+}
+
+/// 出力の遅れ（ミリ秒）
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct OutputLatency {
+    /// 出力へ渡した音が鳴るまで（ドライバーとデバイスの知らせ）
+    pub latency_ms: f32,
+    /// 1 回に渡すバッファの長さ
+    pub buffer_ms: f32,
+    pub rate: u32,
+}
+
 enum Command {
     /// 決めたフレームから鳴らす（曲の BGM など）
     At(Voice),
@@ -260,6 +292,8 @@ enum Command {
         bus: Bus,
         /// 同じ音の重なりを [`MAX_OVERLAP`] までにする（譜面の音）
         limit: bool,
+        /// 叩いた時刻。あれば、鳴らし始めた時刻を入れて知らせ返す（FPS と遅延の表示）
+        timing: Option<HitTiming>,
     },
     /// `tag` と同じビットを持つ音を短いフェードで止める（選曲のプレビューの音、メトロノーム）。
     /// 鳴らす予定でまだ鳴り始めていない音は取りやめる
@@ -401,6 +435,7 @@ impl Mixer {
                 tag,
                 bus,
                 limit,
+                ..
             } => {
                 let mut v = Voice::whole(sound, now, gain, bus);
                 v.pan = pan;
@@ -537,6 +572,9 @@ pub struct AudioOut {
     /// 一時停止（出力を無音にし、フレームを進めない）
     paused: Arc<AtomicBool>,
     pub device_name: String,
+    stats: Arc<OutStats>,
+    /// 鳴らし始めた叩いた音の時刻（出力のコールバックから）
+    timings: rtrb::Consumer<HitTiming>,
 }
 
 impl AudioOut {
@@ -563,6 +601,9 @@ impl AudioOut {
         let channels = usize::from(config.channels);
         let clock = Arc::new(Mutex::new(AudioClock::new(rate, start_ms)));
         let (tx, mut rx) = rtrb::RingBuffer::<Command>::new(4096);
+        let (mut timing_tx, timings) = rtrb::RingBuffer::<HitTiming>::new(256);
+        let stats = Arc::new(OutStats::default());
+        let cb_stats = stats.clone();
 
         let cb_clock = clock.clone();
         let paused = Arc::new(AtomicBool::new(false));
@@ -579,8 +620,23 @@ impl AudioOut {
             move |data: &mut [f32], info: &cpal::OutputCallbackInfo| {
                 let now = host_us();
                 let ts = info.timestamp();
-                let play_us = now + duration_us(ts.playback.duration_since(ts.callback));
+                let latency_us = duration_us(ts.playback.duration_since(ts.callback));
+                let play_us = now + latency_us;
+                cb_stats.latency_us.store(latency_us, Ordering::Relaxed);
+                cb_stats
+                    .buffer_frames
+                    .store((data.len() / channels.max(1)) as u32, Ordering::Relaxed);
                 while let Ok(cmd) = rx.pop() {
+                    // 叩いた音はこのバッファの頭から鳴る
+                    if let Command::Now {
+                        timing: Some(t), ..
+                    } = &cmd
+                    {
+                        let _ = timing_tx.push(HitTiming {
+                            sound_us: Some(play_us),
+                            ..*t
+                        });
+                    }
                     mixer.command(cmd, frames_done);
                 }
                 let n = (data.len() / channels) as u64;
@@ -632,7 +688,25 @@ impl AudioOut {
             start_ms,
             paused,
             device_name,
+            stats,
+            timings,
         })
+    }
+
+    /// 出力の遅れ。まだ鳴らしていなければ `None`
+    pub fn latency(&self) -> Option<OutputLatency> {
+        let us = self.stats.latency_us.load(Ordering::Relaxed);
+        let frames = self.stats.buffer_frames.load(Ordering::Relaxed);
+        (frames > 0).then(|| OutputLatency {
+            latency_ms: us as f32 / 1000.0,
+            buffer_ms: frames as f32 * 1000.0 / self.rate as f32,
+            rate: self.rate,
+        })
+    }
+
+    /// 鳴らし始めた叩いた音の時刻を取り出す（[`AudioOut::play_hit`] で鳴らしたもの）
+    pub fn take_timings(&mut self) -> impl Iterator<Item = HitTiming> + '_ {
+        std::iter::from_fn(|| self.timings.pop().ok())
     }
 
     /// 鳴らし始める（0 フレーム目が `start_ms`）
@@ -767,8 +841,15 @@ impl AudioOut {
     }
 
     /// 叩いた音をすぐ鳴らす。左右 `pan` と、止めるときの目印 `tag`（ビットの組。0 は止めない）を付ける。
-    /// 同じ音の重なりは [`MAX_OVERLAP`] まで
-    pub fn play_hit(&mut self, sound: &Sound, (gain, pan): (f32, f32), tag: u8) {
+    /// 同じ音の重なりは [`MAX_OVERLAP`] まで。鳴らし始めた時刻を `timing` に入れて、
+    /// [`AudioOut::take_timings`] で知らせ返す
+    pub fn play_hit(
+        &mut self,
+        sound: &Sound,
+        (gain, pan): (f32, f32),
+        tag: u8,
+        timing: Option<HitTiming>,
+    ) {
         let _ = self.tx.push(Command::Now {
             sound: sound.clone(),
             gain,
@@ -776,6 +857,7 @@ impl AudioOut {
             tag,
             bus: Bus::Hits,
             limit: true,
+            timing,
         });
     }
 
@@ -788,6 +870,7 @@ impl AudioOut {
             tag,
             bus,
             limit: false,
+            timing: None,
         });
     }
 
@@ -945,6 +1028,7 @@ mod tests {
                 tag: 1,
                 bus: Bus::Hits,
                 limit: false,
+                timing: None,
             },
             200,
         );

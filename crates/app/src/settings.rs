@@ -134,6 +134,8 @@ pub const WINDOW_SIZE: &str = "window_size";
 pub const FPS_LIMIT: &str = "fps_limit";
 /// ほかの窓を使っているあいだ、描く回数を下げる（演奏中は除く）
 pub const BACKGROUND_FPS: &str = "background_fps";
+/// FPS と遅延の表示（このアプリで足したもの。並びは [`crate::perf::Mode`] と同じ）
+pub const MONITOR: &str = "monitor";
 pub const AUTO_SAVE_RESULT: &str = "auto_save_result";
 
 /// ゲージの減り方（MISS の減りにかける数を選ぶ）
@@ -277,6 +279,13 @@ impl DisplayMode {
         Self::ALL.into_iter().find(|m| m.name() == name)
     }
 }
+
+/// FPS と遅延の表示（並びは [`crate::perf::Mode`] と同じ）
+const MONITOR_CHOICES: &[Choice] = choices![
+    "off" => tr("Off", "出さない"),
+    "compact" => tr("Compact", "小さく"),
+    "detail" => tr("Detailed", "詳しく"),
+];
 
 /// 上流 `nHidSud`（並びは上流と同じ）
 pub const HID_SUD_CHOICES: &[Choice] = choices![
@@ -836,6 +845,21 @@ pub const ALL: &[Def] = &[
             "ほかの窓を使っているあいだ、1 秒に 30 回だけ描いて GPU を休ませます。\n演奏と練習の最中は下げません。",
         ),
         in_play: false,
+    },
+    Def {
+        key: MONITOR,
+        group: Group::Display,
+        section: DISPLAY_SMOOTH,
+        name: tr("Performance Overlay", "FPS と遅延の表示"),
+        kind: Kind::Choice {
+            choices: MONITOR_CHOICES,
+            default: 0,
+        },
+        desc: tr(
+            "Shows FPS and the time from a hit to its sound in the top-right corner. F9 also cycles it.\nJudgement uses the hit time, so this delay doesn't affect it.",
+            "右上の隅に FPS と、叩いてから音が鳴るまでの時間を出します。F9 でも変えられます。\n判定は叩いた時刻で行うので、この遅れは判定に入りません。",
+        ),
+        in_play: true,
     },
     Def {
         key: AUTO_SAVE_RESULT,
