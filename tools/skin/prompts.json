@@ -1,0 +1,79 @@
+[
+ {
+  "name": "bg_a",
+  "use": "背景（タイトル・選曲・演奏・結果・読み込み・終了の元）",
+  "date": "2026-11-22",
+  "model": "openai/gpt-image-2.6-sunburst",
+  "size": "1536x1024",
+  "quality": "medium",
+  "background": "opaque",
+  "cost_usd": 0.03487,
+  "prompt": "Style: gritty hand-made street art. A rough black concrete wall and old wooden boards in a rehearsal room, layered spray-paint drips and splatters, stencil shapes of drumsticks, cymbals and drum heads, torn strips of black gaffer tape, worn paper scraps with only abstract shapes. Neon green and violet spray paint. Slight depth-of-field blur, energetic but not busy in the middle. Wide landscape background art for the menu and play screens of a drum rhythm game. Overall very dark (near-black, deep navy and charcoal) with vivid green and violet as the only accent colors. Keep the center calm and low-contrast because interface panels will sit on top; put most detail toward the left and right edges. Absolutely no text, letters, numbers, logos, signatures, watermarks, stickers with writing, characters, mascots, animals or faces."
+ },
+ {
+  "name": "logo_a",
+  "use": "タイトルのロゴ「DTXmaniaNXT」とジャケットの代わりのロゴ",
+  "date": "2026-11-22",
+  "model": "openai/gpt-image-2.6-sunburst",
+  "size": "1536x1024",
+  "quality": "medium",
+  "background": "transparent",
+  "cost_usd": 0.0348,
+  "prompt": "A game title logo on a fully transparent background. The logo text reads exactly \"DTXmaniaNXT\" as one word (capital D, T, X, then lowercase m, a, n, i, a, then capital N, X, T). Spell it exactly; no other words, no tagline, no symbols except abstract decoration. Main colors white, vivid green and violet so it stands out on a very dark background. Centered, wide horizontal composition, nothing touching the image edges. Style: hand-painted street lettering. Thick bold slanted letters painted with spray paint and a wide brush, white fill with green and violet spray outlines, paint drips and a few splatters, a rough dark painted shape behind the letters like a torn tape patch. Energetic and hand-made."
+ },
+ {
+  "name": "ranks",
+  "use": "結果のランク SS〜E（7 枚を 1 回で）",
+  "date": "2026-11-23",
+  "model": "openai/gpt-image-2.6-sunburst",
+  "size": "1536x1024",
+  "quality": "high",
+  "background": "transparent",
+  "cost_usd": 0.0425,
+  "prompt": "A sheet of seven separate result-rank emblems for a drum rhythm game, on a fully transparent background, arranged in two rows with generous empty space between them (top row: SS, S, A, B; bottom row: C, D, E). Each emblem is one big bold spray-painted letter (or the double letter SS) sitting on its own rough square patch of torn black tape and spray-paint splatter, slightly tilted, thick white outline, small drips. Colors per rank: SS shining gold with white sparkles, S gold-yellow, A hot orange-red, B lime green, C violet, D steel blue, E dull gray. SS and S look the most celebratory; D and E look worn and faded. Every emblem is complete and not touching the others or the image edges. Visual style: hand-made street art on a dark rehearsal-room wall. Spray paint with soft overspray, stencil shapes, paint drips and splatters, torn strips of black gaffer tape, rough concrete and old wood textures. Palette: white, vivid lime green and violet on near-black, with small touches of other colors only where asked. No logos, no brand names, no characters, mascots, animals or faces. No text or letters except exactly the words requested."
+ },
+ {
+  "name": "shutter",
+  "use": "レーンを閉じる板",
+  "date": "2026-11-23",
+  "model": "openai/gpt-image-2.6-sunburst",
+  "size": "1024x1536",
+  "quality": "high",
+  "background": "opaque",
+  "cost_usd": 0.042225,
+  "prompt": "A tall portrait image of a heavy black steel stage door panel covered in street art, filling the whole frame edge to edge. Two crossed drumsticks sprayed through a stencil in white near the vertical center, a cymbal shape stencil above and a drum-head ring stencil below, lime green and violet spray clouds and drips, strips of black gaffer tape across the edges, bolts and scratches. The design reads well even when only the top half or only the bottom half is visible, and can be stretched slightly sideways. Visual style: hand-made street art on a dark rehearsal-room wall. Spray paint with soft overspray, stencil shapes, paint drips and splatters, torn strips of black gaffer tape, rough concrete and old wood textures. Palette: white, vivid lime green and violet on near-black, with small touches of other colors only where asked. No text or letters at all. No logos, no brand names, no characters, mascots, animals or faces. No text or letters except exactly the words requested."
+ },
+ {
+  "name": "failed",
+  "use": "STAGE FAILED の左右の扉",
+  "date": "2026-11-23",
+  "model": "openai/gpt-image-2.6-sunburst",
+  "size": "1536x1024",
+  "quality": "high",
+  "background": "opaque",
+  "cost_usd": 0.042285,
+  "prompt": "Two closed black wooden doors side by side that meet exactly at the vertical center line of the image, filling the frame edge to edge, like a stage that has just shut. The left door has the word STAGE and the right door has the word FAILED, each in huge rough spray-painted white letters with dark violet and lime green outlines and long drips, a little crooked. Torn tape, scuffs and splatters on both doors, dim and moody. Only these two words: \"STAGE\" on the left door and \"FAILED\" on the right door. Nothing crosses the center seam. Visual style: hand-made street art on a dark rehearsal-room wall. Spray paint with soft overspray, stencil shapes, paint drips and splatters, torn strips of black gaffer tape, rough concrete and old wood textures. Palette: white, vivid lime green and violet on near-black, with small touches of other colors only where asked. No logos, no brand names, no characters, mascots, animals or faces. No text or letters except exactly the words requested."
+ },
+ {
+  "name": "parts",
+  "use": "選曲の左の紙 2 枚、タイトルのメニューの板、おすすめのアイコン",
+  "date": "2026-11-23",
+  "model": "openai/gpt-image-2.6-sunburst",
+  "size": "1536x1024",
+  "quality": "high",
+  "background": "transparent",
+  "cost_usd": 0.04256,
+  "prompt": "A sheet of four separate decorative pieces on a fully transparent background, with clear empty space between them: (1) a long horizontal torn paper strip about 2.7 times wider than tall, dark gray paper with a lime green spray stencil of two drumsticks and splatter; (2) a nearly square torn poster sheet, dark charcoal paper with a large violet and lime spray stencil of a cymbal and drum kit outline, tape on two corners; (3) a horizontal dark plate about 2.2 times wider than tall, almost black painted wood with rough brushed edges and a thin lime green spray outline, very plain and dark in the middle so white menu text can sit on it; (4) a small round badge sprayed through a stencil: a five-pointed star inside a ring, white and lime green with a violet shadow. Visual style: hand-made street art on a dark rehearsal-room wall. Spray paint with soft overspray, stencil shapes, paint drips and splatters, torn strips of black gaffer tape, rough concrete and old wood textures. Palette: white, vivid lime green and violet on near-black, with small touches of other colors only where asked. No text or letters at all. No logos, no brand names, no characters, mascots, animals or faces. No text or letters except exactly the words requested."
+ },
+ {
+  "name": "words",
+  "use": "Thank you for Playing!・BACK・Random の文字",
+  "date": "2026-11-23",
+  "model": "openai/gpt-image-2.6-sunburst",
+  "size": "1536x1024",
+  "quality": "high",
+  "background": "transparent",
+  "cost_usd": 0.042125,
+  "prompt": "Three separate pieces of spray-painted lettering on a fully transparent background, stacked vertically with generous empty space between them, each centered: top: \"Thank you for Playing!\" in a wide line of bold hand-sprayed letters; middle: \"BACK\"; bottom: \"Random\". White letters with lime green and violet spray outlines, soft overspray and a few drips, slightly slanted and energetic. Spell each exactly as given; no other words. Visual style: hand-made street art on a dark rehearsal-room wall. Spray paint with soft overspray, stencil shapes, paint drips and splatters, torn strips of black gaffer tape, rough concrete and old wood textures. Palette: white, vivid lime green and violet on near-black, with small touches of other colors only where asked. No logos, no brand names, no characters, mascots, animals or faces. No text or letters except exactly the words requested."
+ }
+]
