@@ -716,7 +716,7 @@ def update(lang: str) -> Svg:
                 s.add(text(mx, sy + 34 + k * 20, item, 13, "#C8D3E3", 700, "middle"))
         if i == 0:
             s.add(f'<rect x="{sx + 28}" y="{sy + 84}" width="{sw - 56}" height="24" rx="6" fill="{GREEN}" fill-opacity="0.18" stroke="{GREEN}"/>')
-            s.add(text(mx, sy + 101, f"新しい版 {SAMPLE_VERSION}", 12, GREEN, 800, "middle"))
+            s.add(text(mx, sy + 101, f"{SAMPLE_VERSION} Available" if en else f"新しい版 {SAMPLE_VERSION}", 12, GREEN, 800, "middle"))
         elif i == 1:
             # 演奏の画面と隅の %
             for k, name in enumerate(LANES):
@@ -727,10 +727,10 @@ def update(lang: str) -> Svg:
                 s.add(text(sx + sw - 31, sy + sh - 13, f"{k}%", 11, CYAN, 800, "middle", f"{w} mono"))
         elif i == 2:
             s.add(f'<rect x="{sx + 22}" y="{sy + 84}" width="{sw - 44}" height="24" rx="6" fill="{ORANGE}" fill-opacity="0.18" stroke="{ORANGE}"/>')
-            s.add(text(mx, sy + 101, "再起動して入れ替える", 12, ORANGE, 800, "middle"))
+            s.add(text(mx, sy + 101, "Restart to Update" if en else "再起動して入れ替える", 12, ORANGE, 800, "middle"))
         else:
             s.add(f'<rect x="{sx + 22}" y="{sy + 84}" width="{sw - 44}" height="24" rx="12" fill="{CYAN}" fill-opacity="0.18"/>')
-            s.add(text(mx, sy + 101, f"{SAMPLE_VERSION} になりました", 12, CYAN, 800, "middle"))
+            s.add(text(mx, sy + 101, f"Updated to {SAMPLE_VERSION}" if en else f"{SAMPLE_VERSION} になりました", 12, CYAN, 800, "middle"))
         s.add(f'<circle cx="{x + 32}" cy="172" r="13" fill="none" stroke="{CYAN}" stroke-width="2"/>')
         s.add(text(x + 32, 177, str(i + 1), 13, CYAN, 800, "middle"))
         s.add(text(x + 54, 178, t, 17, INK, 800))

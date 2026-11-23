@@ -35,7 +35,7 @@ text{font-family:'Segoe UI','Inter','Helvetica Neue',Arial,'Hiragino Sans','Yu G
 <text x="122.0" y="76" font-size="13" fill="#C8D3E3" font-weight="700" text-anchor="middle">Config</text>
 <text x="122.0" y="96" font-size="13" fill="#C8D3E3" font-weight="700" text-anchor="middle">Quit</text>
 <rect x="52" y="106" width="140" height="24" rx="6" fill="#7CF29A" fill-opacity="0.18" stroke="#7CF29A"/>
-<text x="122.0" y="123" font-size="12" fill="#7CF29A" font-weight="800" text-anchor="middle">新しい版 v0.9.0</text>
+<text x="122.0" y="123" font-size="12" fill="#7CF29A" font-weight="800" text-anchor="middle">v0.9.0 Available</text>
 <circle cx="40" cy="172" r="13" fill="none" stroke="#5CE1E6" stroke-width="2"/>
 <text x="40" y="177" font-size="13" fill="#5CE1E6" font-weight="800" text-anchor="middle">1</text>
 <text x="62" y="178" font-size="17" fill="#E8EEF7" font-weight="800" text-anchor="start">New version</text>
@@ -71,7 +71,7 @@ text{font-family:'Segoe UI','Inter','Helvetica Neue',Arial,'Hiragino Sans','Yu G
 <text x="598.0" y="76" font-size="13" fill="#C8D3E3" font-weight="700" text-anchor="middle">Config</text>
 <text x="598.0" y="96" font-size="13" fill="#C8D3E3" font-weight="700" text-anchor="middle">Quit</text>
 <rect x="522" y="106" width="152" height="24" rx="6" fill="#FFA94D" fill-opacity="0.18" stroke="#FFA94D"/>
-<text x="598.0" y="123" font-size="12" fill="#FFA94D" font-weight="800" text-anchor="middle">再起動して入れ替える</text>
+<text x="598.0" y="123" font-size="12" fill="#FFA94D" font-weight="800" text-anchor="middle">Restart to Update</text>
 <circle cx="516" cy="172" r="13" fill="none" stroke="#5CE1E6" stroke-width="2"/>
 <text x="516" y="177" font-size="13" fill="#5CE1E6" font-weight="800" text-anchor="middle">3</text>
 <text x="538" y="178" font-size="17" fill="#E8EEF7" font-weight="800" text-anchor="start">Restart</text>
@@ -83,7 +83,7 @@ text{font-family:'Segoe UI','Inter','Helvetica Neue',Arial,'Hiragino Sans','Yu G
 <text x="836.0" y="76" font-size="13" fill="#C8D3E3" font-weight="700" text-anchor="middle">Config</text>
 <text x="836.0" y="96" font-size="13" fill="#C8D3E3" font-weight="700" text-anchor="middle">Quit</text>
 <rect x="760" y="106" width="152" height="24" rx="12" fill="#5CE1E6" fill-opacity="0.18"/>
-<text x="836.0" y="123" font-size="12" fill="#5CE1E6" font-weight="800" text-anchor="middle">v0.9.0 になりました</text>
+<text x="836.0" y="123" font-size="12" fill="#5CE1E6" font-weight="800" text-anchor="middle">Updated to v0.9.0</text>
 <circle cx="754" cy="172" r="13" fill="none" stroke="#5CE1E6" stroke-width="2"/>
 <text x="754" y="177" font-size="13" fill="#5CE1E6" font-weight="800" text-anchor="middle">4</text>
 <text x="776" y="178" font-size="17" fill="#E8EEF7" font-weight="800" text-anchor="start">Done</text>
