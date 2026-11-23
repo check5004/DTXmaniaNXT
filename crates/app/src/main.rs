@@ -596,7 +596,7 @@ const DOUBLE_HIT_US: i64 = 500_000;
 impl App {
     fn new(arg: Option<PathBuf>) -> Self {
         let mut config = Config::load();
-        i18n::set_lang(config.ui_lang());
+        i18n::set_lang(config.lang());
         if config.take_over_nx() {
             config.save();
         }
@@ -1921,7 +1921,7 @@ impl App {
                     Setting::MasterVolume => apply_volumes(&self.config),
                     Setting::Update => self.updater.set_mode(self.config.update_mode()),
                     Setting::Language => {
-                        i18n::set_lang(self.config.ui_lang());
+                        i18n::set_lang(self.config.lang());
                         // BOX の名前（並べ替えで作るもの）を今の言語で作り直す
                         self.songs.relabel();
                     }

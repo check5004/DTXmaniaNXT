@@ -1452,9 +1452,7 @@ pub fn rows(page: Page, info: &ConfigInfo<'_>) -> Vec<Row> {
             s.table(Group::Practice, v);
         }
         Page::Cat(Cat::App) => {
-            if crate::config::LANGUAGE_READY {
-                s.at("").push(value_row(Setting::Language, c));
-            }
+            s.at("").push(value_row(Setting::Language, c));
             s.at("").push(value_row(Setting::Update, c));
             s.table(Group::App, v);
         }
@@ -3866,6 +3864,20 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn the_language_comes_first_in_general() {
+        let mut c = Config::default();
+        let r = &rows(Page::Cat(Cat::App), &info(&c))[0];
+        assert_eq!(r.id, Some(ItemId::Value(Setting::Language)));
+        assert_eq!(r.value, "English");
+        // どちらの言語の画面でも、言語の名前はその言語の綴り
+        c.set_lang(Lang::Ja);
+        let _ja = i18n::scoped(Lang::Ja);
+        let r = &rows(Page::Cat(Cat::App), &info(&c))[0];
+        assert_eq!(r.value, "日本語");
+        assert!(r.name.contains("Language"), "{}", r.name);
     }
 
     #[test]
