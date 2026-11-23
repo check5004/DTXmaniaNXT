@@ -136,6 +136,12 @@ const PREVIEW_TAG: u8 = 1;
 const LOADING_TAG: u8 = 2;
 /// タイトルの音に付ける目印（上流と同じく、ほかの画面へ移ったり終わる音を鳴らしたら止める）
 const TITLE_TAG: u8 = 4;
+/// 練習メニューで流している区間の音に付ける目印
+const SECTION_TAG: u8 = 8;
+/// 区間の音をくり返すときの、終わりから次の頭までの間（ミリ秒）
+const SECTION_GAP_MS: f64 = 600.0;
+/// 区間の音を鳴らし始めるまでの余裕（ミリ秒）。出力のバッファより先に置く
+const SECTION_LEAD_MS: f64 = 80.0;
 
 pub struct Sfx {
     out: Option<AudioOut>,
@@ -144,6 +150,17 @@ pub struct Sfx {
     preview: Option<PathBuf>,
     jobs: Sender<(PathBuf, u32)>,
     done: Receiver<(PathBuf, Option<Sound>)>,
+    /// くり返し流している区間の音
+    section: Option<SectionLoop>,
+}
+
+/// くり返し流している区間の音
+struct SectionLoop {
+    sound: Sound,
+    /// 1 回の長さ（ミリ秒）
+    len_ms: f64,
+    /// 出力の時刻で、鳴らし始めた（鳴らす予定の）頭。古い順
+    starts: Vec<f64>,
 }
 
 impl Sfx {
@@ -173,6 +190,7 @@ impl Sfx {
             preview: None,
             jobs,
             done,
+            section: None,
         }
     }
 
@@ -261,8 +279,76 @@ impl Sfx {
         }
     }
 
-    /// 読み終えたプレビューの音を鳴らす。毎フレーム呼ぶ
+    /// 出力のサンプリング周波数（出力が無ければ None）
+    pub fn rate(&self) -> Option<u32> {
+        self.out.as_ref().map(AudioOut::rate)
+    }
+
+    /// 出力の今の時刻（ミリ秒）
+    fn out_now_ms(&self) -> Option<f64> {
+        self.out.as_ref()?.song_ms_at(crate::time::host_us())
+    }
+
+    /// 区間の音をくり返し流す（前の区間の音とプレビューは止める）。曲の音の系統の音量で鳴る
+    pub fn play_section(&mut self, sound: Sound) {
+        self.stop_section();
+        self.preview(None);
+        let (Some(rate), Some(now)) = (self.rate(), self.out_now_ms()) else {
+            return;
+        };
+        let len_ms = sound.frames() as f64 / f64::from(rate) * 1000.0;
+        if len_ms <= 0.0 {
+            return;
+        }
+        self.section = Some(SectionLoop {
+            sound,
+            len_ms,
+            starts: Vec::new(),
+        });
+        self.queue_section(now + SECTION_LEAD_MS);
+    }
+
+    /// 区間の音を止める
+    pub fn stop_section(&mut self) {
+        if self.section.take().is_some()
+            && let Some(out) = &mut self.out
+        {
+            out.stop(SECTION_TAG);
+        }
+    }
+
+    /// 区間の音の、今鳴っている所（頭から 0〜1）。鳴っていない（くり返しの間）なら None
+    pub fn section_position(&self) -> Option<f32> {
+        let s = self.section.as_ref()?;
+        let now = self.out_now_ms()?;
+        let start = s.starts.iter().rev().find(|&&t| t <= now)?;
+        let f = (now - start) / s.len_ms;
+        (f < 1.0).then_some(f as f32)
+    }
+
+    /// 区間の音を時刻 `at`（出力の時刻）に鳴らす予定にする
+    fn queue_section(&mut self, at: f64) {
+        let (Some(out), Some(s)) = (&mut self.out, &mut self.section) else {
+            return;
+        };
+        out.play_at_tagged(&s.sound, at, 1.0, SECTION_TAG, Bus::Song);
+        s.starts.push(at);
+        // 古いものは要らない
+        if s.starts.len() > 4 {
+            s.starts.remove(0);
+        }
+    }
+
+    /// 読み終えたプレビューの音を鳴らす。区間の音は、次の回の頭が近づいたら予定にする。毎フレーム呼ぶ
     pub fn poll(&mut self) {
+        if let (Some(now), Some(s)) = (self.out_now_ms(), &self.section)
+            && let Some(&last) = s.starts.last()
+        {
+            let next = last + s.len_ms + SECTION_GAP_MS;
+            if next - now < 300.0 {
+                self.queue_section(next.max(now + SECTION_LEAD_MS));
+            }
+        }
         for (path, sound) in self.done.try_iter() {
             if self.preview.as_ref() != Some(&path) {
                 continue;

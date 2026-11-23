@@ -266,8 +266,6 @@ pub struct PracticeOutcome {
     pub laps: Vec<LapSummary>,
     /// 段の挑戦ごとのまとめ（途中でやめた挑戦も、最後まで叩いた周があれば入れる）
     pub attempts: Vec<Attempt>,
-    /// 区間の小節ごとの拍の数（ミスした所の地図）
-    pub beats_per_measure: Vec<u32>,
     /// 練習した時間（最初の助走から、やめるまで。ミリ秒）
     pub elapsed_ms: f64,
     /// 目標の段を越えた
@@ -276,6 +274,8 @@ pub struct PracticeOutcome {
     pub strays: Option<StrayHint>,
     /// 最後まで叩いた周のずれの平均（ミリ秒）と打った数
     pub offset: Option<(f64, usize)>,
+    /// 譜面の絵（ミスした所に印を付けて出す）
+    pub picture: crate::chart_picture::ChartPicture,
 }
 
 /// 苦手な小節の地図（結果の画面に出す）
@@ -1294,9 +1294,6 @@ impl Play {
                 options: p.options,
                 laps: p.summaries(self.now_ms()),
                 attempts: p.attempts(),
-                beats_per_measure: (p.options.section.first..=p.options.section.last)
-                    .map(|m| p.grid.beats_in(m))
-                    .collect(),
                 elapsed_ms: p
                     .laps
                     .first()
@@ -1304,6 +1301,7 @@ impl Play {
                 cleared: p.cleared(),
                 strays: p.stray_hint(),
                 offset: p.offset_mean(),
+                picture: p.picture.clone(),
             }),
         }
     }
@@ -1581,7 +1579,7 @@ fn unix_now() -> i64 {
 }
 
 /// 譜面が使う音（叩く音符、自動で鳴らす音、空打ちの音、見えない音符）をすべて読む。読めない音は飛ばす
-fn load_sounds(
+pub(crate) fn load_sounds(
     chart: &Chart,
     chart_sounds: &ChartSounds,
     dir: &Path,

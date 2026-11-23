@@ -5,11 +5,12 @@
 //! - ふだんのプレイ：右の空いた場所に、苦手な小節を進み具合のバーの形（黒地に縞）で出す
 
 use egui::{Color32, Stroke, StrokeKind};
-use engine::practice::{BeatSlot, Section, SpeedPlan, SpotTally, speed_percent};
+use engine::practice::{Section, SpeedPlan, SpotTally, speed_percent};
 use engine::stroke::StrokeTally;
 use i18n::{Tr, count, t, tf, tr};
 
 use crate::band::{Band, BandData, CLEARED_COLOR};
+use crate::chart_picture::Look;
 use crate::game::{Outcome, PracticeOutcome};
 use crate::gfx::{Canvas, Gfx};
 use crate::inputs::lane_label;
@@ -258,62 +259,7 @@ fn draw_stairs(c: &Canvas, g: &mut Gfx, p: &PracticeOutcome, (x, y, w, h): (f32,
     }
 }
 
-/// 落とした所の地図（全部の周）。1 マスが 1 拍で、落とした周の数（1 回は黄、2 回から赤で ×n）
-fn draw_map(
-    c: &Canvas,
-    g: &mut Gfx,
-    p: &PracticeOutcome,
-    spots: &SpotTally,
-    (x, y, w, h): (f32, f32, f32, f32),
-) {
-    let s = p.options.section;
-    let n = s.measures().max(1) as f32;
-    let gap = if n > 6.0 { 2.0 } else { 4.0 };
-    let row = (h / n - gap).clamp(3.0, 26.0);
-    let labels = row >= 11.0;
-    let label_w = if labels { 30.0 } else { 0.0 };
-    let px = (row * 0.55).clamp(9.0, 14.0);
-    for (i, m) in (s.first..=s.last).enumerate() {
-        let ry = y + i as f32 * (row + gap);
-        if labels {
-            let style = Style::edged(px, Color32::from_gray(200), Color32::BLACK, 1.0);
-            if let Some(t) = g.texts.get(&m.to_string(), &style) {
-                t.draw(c, x + label_w - 8.0 - t.w, ry + (row - t.h) / 2.0, 1.0, 1.0);
-            }
-        }
-        let beats = p.beats_per_measure.get(i).copied().unwrap_or(4).max(1);
-        let cw = (w - label_w) / beats as f32;
-        for b in 0..beats {
-            let cell = (x + label_w + b as f32 * cw + 2.0, ry, cw - 4.0, row);
-            let k = spots.count(BeatSlot {
-                measure: m,
-                beat: b,
-            });
-            if k >= 2 {
-                round_fill(c, cell, 4.0, WEAK_COLOR.gamma_multiply(0.92));
-                if labels {
-                    centered(
-                        c,
-                        g,
-                        &format!("×{k}"),
-                        cell.0 + cell.2 / 2.0,
-                        ry + row / 2.0,
-                        px + 1.0,
-                        Color32::WHITE,
-                        cell.2,
-                    );
-                }
-            } else if k == 1 {
-                round_fill(c, cell, 4.0, SLIP_COLOR.gamma_multiply(0.45));
-            } else {
-                round_fill(c, cell, 4.0, Color32::from_white_alpha(20));
-                round_frame(c, cell, 4.0, Color32::from_white_alpha(45));
-            }
-        }
-    }
-}
-
-/// 練習の結果。段と挑戦の印、時間と周の数、ミスした所の地図、いちばんミスした所、気づいたこと
+/// 練習の結果。段と挑戦の印、時間と周の数、ミスした所の譜面の絵、いちばんミスした所、気づいたこと
 pub fn draw_practice(c: &Canvas, g: &mut Gfx, p: &PracticeOutcome) {
     let (x, y, w, _) = PRACTICE;
     panel(c, PRACTICE);
@@ -377,11 +323,13 @@ pub fn draw_practice(c: &Canvas, g: &mut Gfx, p: &PracticeOutcome) {
             Color32::from_gray(200),
         );
     }
-    // ミスした所（全部の周）
+    // ミスした所（全部の周）：区間の譜面の絵に、落とした音の印。いちばん落とした拍は赤く塗る
     let mut spots = SpotTally::default();
     for l in &done {
         spots.add_lap(&l.misses);
     }
+    let worst = spots.weak(1);
+    let marks = crate::practice::marks_of(done.iter().map(|l| &l.missed_notes));
     let map_y = y + 306.0;
     text(
         c,
@@ -392,40 +340,41 @@ pub fn draw_practice(c: &Canvas, g: &mut Gfx, p: &PracticeOutcome) {
         15.0,
         Color32::WHITE,
     );
-    draw_map(c, g, p, &spots, (left - 4.0, map_y + 28.0, 340.0, 150.0));
-    let worst = spots.weak(1);
-    let wx = left + 370.0;
+    let picture = (left - 4.0, map_y + 26.0, w - 32.0, 150.0);
+    p.picture.draw(
+        c,
+        g,
+        picture,
+        o.section,
+        &marks,
+        Look {
+            beat: worst.first().map(|(b, _)| (b.measure, b.beat)),
+            weak_times: o.rule.weak_times(),
+            ..Look::default()
+        },
+    );
+    let line_y = picture.1 + picture.3 + 10.0;
     match worst.first() {
         Some((b, spot)) => {
-            text(
-                c,
-                g,
-                t("Most missed", "いちばんミスした所"),
-                wx,
-                map_y + 30.0,
-                14.0,
-                Color32::from_gray(200),
-            );
-            let name = tf!(
-                "Measure {}, beat {}",
-                "{} 小節目の {} 拍目",
-                b.measure,
-                b.beat + 1
-            );
-            text(c, g, &name, wx, map_y + 54.0, 22.0, WEAK_COLOR);
             let lanes: Vec<&str> = spot.lanes.iter().map(|l| l.name()).collect();
             let misses = count(spot.laps, "miss", "misses", "回");
-            let line = tf!("{}   {misses}", "{}　{misses}", lanes.join(t("/", "・")));
-            text(c, g, &line, wx, map_y + 86.0, 18.0, Color32::WHITE);
+            let line = tf!(
+                "Most missed: measure {}, beat {} ({})  {misses}",
+                "いちばんミスした所: {} 小節目の {} 拍目（{}）　{misses}",
+                b.measure,
+                b.beat + 1,
+                lanes.join(t("/", "・"))
+            );
+            text(c, g, &line, left, line_y, 16.0, WEAK_COLOR);
         }
         None if !done.is_empty() => {
             text(
                 c,
                 g,
                 t("No misses", "ミスなし"),
-                wx,
-                map_y + 54.0,
-                22.0,
+                left,
+                line_y,
+                16.0,
                 PASS_COLOR,
             );
         }
@@ -437,8 +386,8 @@ pub fn draw_practice(c: &Canvas, g: &mut Gfx, p: &PracticeOutcome) {
                     "No loops were played to the end",
                     "最後まで叩いた周はありません",
                 ),
-                wx,
-                map_y + 54.0,
+                left,
+                line_y,
                 16.0,
                 Color32::from_gray(200),
             );
@@ -452,9 +401,9 @@ pub fn draw_practice(c: &Canvas, g: &mut Gfx, p: &PracticeOutcome) {
     if let Some(note) = p.offset.and_then(offset_note) {
         notes.push(note);
     }
-    let mut ny = map_y + 126.0;
+    let mut ny = line_y + 28.0;
     for n in notes {
-        ny = paragraph(c, g, &n, wx, ny, 13.0, NOTE_COLOR, x + w - 20.0 - wx);
+        ny = paragraph(c, g, &n, left, ny, 13.0, NOTE_COLOR, w - 40.0);
     }
     // 操作の案内は画面の下の帯（`ResultView::hints`）
 }

@@ -11,7 +11,7 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use dtx::{DrumLane, DrumNote, TempoMap};
+use dtx::{DrumLane, DrumNote, NotePos, TempoMap};
 use engine::analysis::mean_and_sd;
 use engine::judge::{JudgeEvent, Judgement, Tally};
 use engine::practice::{
@@ -22,6 +22,7 @@ use engine::practice::{
 use i18n::{t, tf};
 use records::{ClearRecord, StrayHit};
 
+use crate::chart_picture::{ChartPicture, Marks};
 use crate::game::WeakMap;
 use crate::history::History;
 use crate::stretch::Pitch;
@@ -75,6 +76,9 @@ pub struct PracticeSetup {
     pub weak: WeakMap,
     /// 練習でクリアした区間（古い順）
     pub clears: Vec<ClearRecord>,
+    /// 譜面の絵と、記録でよくミスする音
+    pub picture: ChartPicture,
+    pub marks: Marks,
     pub section: Option<Section>,
     pub style: LoopStyle,
     pub rule: PassRule,
@@ -103,6 +107,8 @@ impl PracticeSetup {
         let notes_per_measure = count_per_measure(&notes, tempo.measure_count());
         let weak = history.weak_map(path, &notes_per_measure, None);
         let clears = history.clears(path);
+        let picture = ChartPicture::new(&notes, &tempo);
+        let marks = history.note_marks(path);
         let section = previous
             .map(|p| p.section.clamped(notes_per_measure.len()))
             .or_else(|| default_section(&weak, &notes_per_measure));
@@ -113,6 +119,8 @@ impl PracticeSetup {
             notes_per_measure,
             weak,
             clears,
+            picture,
+            marks,
             section,
             style: previous.map_or(prefs.style, |p| p.style),
             rule: previous.map_or(prefs.rule, |p| p.rule),
@@ -269,10 +277,12 @@ pub struct LapState {
     pub tally: Tally,
     offsets: Vec<f64>,
     pub strays: Vec<StrayHit>,
-    /// 判定の音符ごとの、区間の中の拍（区切るときの着地は None）とレーン
-    slots: Vec<(Option<BeatSlot>, DrumLane)>,
+    /// 判定の音符ごとの、区間の中の拍（区切るときの着地は None）とレーン、譜面の位置
+    slots: Vec<(Option<BeatSlot>, DrumLane, NotePos)>,
     /// 落とした音符（POOR と MISS）の拍とレーン
     pub misses: Vec<(BeatSlot, DrumLane)>,
+    /// 落とした音符の譜面の位置とレーン（譜面の絵に印を付ける）
+    pub missed_notes: Vec<(NotePos, DrumLane)>,
     /// 判定が済んだ音符の数
     pub judged: usize,
     /// 助走のあいだに知らせること（助走の無い周や、知らせることの無い周は None）
@@ -314,6 +324,7 @@ impl LapState {
             completed,
             passed: completed.then_some(self.clean()),
             misses: self.misses.clone(),
+            missed_notes: self.missed_notes.clone(),
             attempt: self.attempt,
         }
     }
@@ -334,6 +345,8 @@ pub struct LapSummary {
     pub passed: Option<bool>,
     /// 落とした音符の拍とレーン
     pub misses: Vec<(BeatSlot, DrumLane)>,
+    /// 落とした音符の譜面の位置とレーン
+    pub missed_notes: Vec<(NotePos, DrumLane)>,
     /// 何回目の段の挑戦の周か（0 から）
     pub attempt: usize,
 }
@@ -407,8 +420,10 @@ pub struct Practice {
     pub band: Vec<Option<f64>>,
     /// 区間の拍（落とした所の地図）
     pub grid: BeatGrid,
+    /// 譜面の絵（落とした音に印を付ける）
+    pub picture: ChartPicture,
     /// 次に並べる周の、判定の音符ごとの拍とレーン（`next_lap` が作り、`push_lap` が周に移す）
-    next_slots: Vec<(Option<BeatSlot>, DrumLane)>,
+    next_slots: Vec<(Option<BeatSlot>, DrumLane, NotePos)>,
     /// 叩くのをやめたら休みにするか（区間の音符がすべて自動で叩くレーンなら見ない）
     rest_watch: bool,
     /// 最後にパッドを叩いた実時間と、叩かない時間を数え始めた実時間（休みのあと）
@@ -424,6 +439,7 @@ pub const WITHDRAW_MARGIN_MS: f64 = 60.0;
 impl Practice {
     pub fn new(options: PracticeOptions, tempo: &TempoMap, chart_notes: Vec<DrumNote>) -> Self {
         let times = SectionTimes::new(tempo, options.section);
+        let picture = ChartPicture::new(&chart_notes, tempo);
         Self {
             options,
             tempo: tempo.clone(),
@@ -446,6 +462,7 @@ impl Practice {
             faint: Vec::new(),
             band: Vec::new(),
             grid: BeatGrid::new(tempo, options.section),
+            picture,
             next_slots: Vec::new(),
             rest_watch: true,
             last_hit_ms: f64::NEG_INFINITY,
@@ -543,7 +560,8 @@ impl Practice {
             let note = &self.chart_notes[n.note];
             if n.judged {
                 // 区切るときの着地（区間の外）は地図に入れない
-                self.next_slots.push((self.grid.slot(note), note.lane));
+                self.next_slots
+                    .push((self.grid.slot(note), note.lane, note.at));
                 judged.push(DrumNote {
                     ms: n.ms,
                     ..note.clone()
@@ -919,6 +937,7 @@ impl Practice {
             strays: Vec::new(),
             slots: std::mem::take(&mut self.next_slots),
             misses: Vec::new(),
+            missed_notes: Vec::new(),
             judged: 0,
             cue,
             settled_at_ms: None,
@@ -942,9 +961,10 @@ impl Practice {
                 lap.offsets.push(o);
             }
             if matches!(e.judgement, Judgement::Poor | Judgement::Miss)
-                && let Some(&(Some(slot), lane)) = lap.slots.get(e.note - lap.notes.start)
+                && let Some(&(Some(slot), lane, at)) = lap.slots.get(e.note - lap.notes.start)
             {
                 lap.misses.push((slot, lane));
+                lap.missed_notes.push((at, lane));
                 missed |= i >= self.attempt_start;
             }
         }
@@ -977,6 +997,21 @@ impl Practice {
             }
         }
         spots
+    }
+
+    /// 今の挑戦で落とした音（叩いている途中の周も入れる）。譜面の絵の印
+    pub fn attempt_marks(&self) -> Marks {
+        marks_of(self.attempt_laps().iter().map(|l| &l.missed_notes))
+    }
+
+    /// 挑戦 `attempt`（0 から）で落とした音
+    pub fn marks_of_attempt(&self, attempt: usize) -> Marks {
+        marks_of(
+            self.laps
+                .iter()
+                .filter(|l| l.attempt == attempt && !l.rest)
+                .map(|l| &l.missed_notes),
+        )
     }
 
     /// 空打ちを、そのとき叩いていた周に数える。助走の空打ちは数えない
@@ -1082,6 +1117,21 @@ pub fn pass_line(r: PassRule) -> String {
             "同じ拍で {n} 回ミスしなければ、次の段へ"
         ),
     }
+}
+
+/// 周ごとの落とした音を、音ごとに「何周で落としたか」に数える（同じ周で同じ音は 1 回）
+pub fn marks_of<'a>(laps: impl Iterator<Item = &'a Vec<(NotePos, DrumLane)>>) -> Marks {
+    let mut m = Marks::new();
+    for lap in laps {
+        let mut seen: Vec<&(NotePos, DrumLane)> = Vec::new();
+        for k in lap {
+            if !seen.contains(&k) {
+                seen.push(k);
+                *m.entry(*k).or_default() += 1;
+            }
+        }
+    }
+    m
 }
 
 /// 区間の名前（「小節 3〜6」）
@@ -1305,6 +1355,8 @@ mod tests {
             notes_per_measure: npm,
             weak,
             clears: Vec::new(),
+            picture: ChartPicture::default(),
+            marks: Marks::new(),
             section: Some(Section::new(2, 5)),
             style: LoopStyle::Connect,
             rule: PassRule::Normal,
@@ -1340,6 +1392,8 @@ mod tests {
                 practice_laps: 0,
             },
             clears: Vec::new(),
+            picture: ChartPicture::default(),
+            marks: Marks::new(),
             section: Some(Section::new(0, 0)),
             style: LoopStyle::Connect,
             rule: PassRule::Normal,
@@ -1806,6 +1860,8 @@ mod tests {
                 practice_laps: 0,
             },
             clears: Vec::new(),
+            picture: ChartPicture::default(),
+            marks: Marks::new(),
             section: None,
             style: LoopStyle::Connect,
             rule: PassRule::Normal,

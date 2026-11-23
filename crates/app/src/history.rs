@@ -13,6 +13,7 @@ use engine::practice::Section;
 use library::Stats;
 use records::{BestScore, ChartKey, ClearRecord, PlayScore, Records, SessionKind, SessionLag};
 
+use crate::chart_picture::Marks;
 use crate::game::{Play, WeakMap};
 use crate::result_view::Rank;
 
@@ -333,6 +334,21 @@ impl History {
             phrases,
             plays,
             practice_laps,
+        }
+    }
+
+    /// よくミスする音。直近のプレイと練習（苦手な小節と同じ周）で、音符ごとに POOR・MISS になった回数
+    pub fn note_marks(&self, path: &Path) -> Marks {
+        let path = path.to_string_lossy();
+        let Some(r) = self.records.as_ref() else {
+            return Marks::new();
+        };
+        match r.recent_note_misses(&path, HISTORY_PLAYS, RECENT_PRACTICE_LAPS, None) {
+            Ok(v) => v.into_iter().map(|m| ((m.at, m.lane), m.misses)).collect(),
+            Err(e) => {
+                log::warn!("cannot read the records: {e}");
+                Marks::new()
+            }
         }
     }
 
