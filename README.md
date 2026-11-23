@@ -108,7 +108,7 @@ If you played these songs in DTXManiaNX, the best results in its `score.ini` fil
 
 <p align="center"><img src="docs/readme/practice.svg" width="960" alt="Climb the steps to clear: four laps per step at 70, 80, 90 and 100 percent. A map of the section marks beats missed once in yellow and twice in red. Missing the same beat twice means try that step again, and two tries again in a row drop one step."></p>
 
-Press <kbd>P</kbd> on song select or the result screen (on drums, open quick settings with RD), pick a few bars or one of your weak phrases, and start. The section loops with a count-in and a metronome, from a slower speed up to your target.
+Press <kbd>P</kbd> on song select or the result screen to open the practice menu (on drums: RD on the result screen, or RD then CY on song select). It lists your weak spots from past plays. Each one comes with a picture of its notes, and the notes you often miss are marked, so you can see which phrase it is, not just a bar number. The selected spot also plays on a loop so you can hear it. Pick one, or choose your own bars, and start. The section loops with a count-in and a metronome, from a slower speed up to your target. When you finish, you are back in the practice menu with the next weak spot selected.
 
 - **One step is 4 laps.** If you don't miss the same beat twice, you move up to the next speed without stopping.
 - **Same beat missed twice?** You try that step again. Two tries in a row and it steps down 10 %.
@@ -118,22 +118,22 @@ Press <kbd>P</kbd> on song select or the result screen (on drums, open quick set
 <table>
 <tr>
 <td width="50%" valign="top">
-<img src="docs/readme/shots/practice-step.gif" alt="Practice: a lap ends with no misses, the banner says OK! Next: 80%, and the step ladder on the right moves up.">
-<br><sub>No misses, so it moves up to the next speed.</sub>
+<img src="docs/readme/shots/practice-menu.jpg" alt="Practice menu: a bar of all measures, the list of weak spots with a small picture of the notes for each, and a large picture of the selected spot where often-missed notes are marked with how many times they were missed. Below it, the speed steps 70, 80, 90 and 100%.">
+<br><sub>The practice menu: your weak spots, drawn as notes.</sub>
 </td>
 <td width="50%" valign="top">
-<img src="docs/readme/shots/practice-clear.gif" alt="Practice: the last lap at 100% ends and CLEAR! appears over the lanes.">
-<br><sub>The top step cleared.</sub>
+<img src="docs/readme/shots/practice-step.gif" alt="Practice: a lap ends with no misses, the banner says OK! Next: 80%, and the step ladder on the right moves up.">
+<br><sub>No misses, so it moves up to the next speed.</sub>
 </td>
 </tr>
 <tr>
 <td valign="top">
-<img src="docs/readme/shots/practice-setup.jpg" alt="Practice setup: a bar of all measures with the chosen section highlighted, the weak phrases list, and options for looping, speed steps, pitch and metronome.">
-<br><sub>Choose the section, the speeds and the metronome.</sub>
+<img src="docs/readme/shots/practice-clear.gif" alt="Practice: the last lap at 100% ends and CLEAR! appears over the lanes.">
+<br><sub>The top step cleared.</sub>
 </td>
 <td valign="top">
-<img src="docs/readme/shots/practice-result.jpg" alt="Practice result: the ladder from 70% to 100% all cleared, practice time, laps played and laps with no misses, and a map of where misses happened.">
-<br><sub>What you practised and where you missed.</sub>
+<img src="docs/readme/shots/practice-result.jpg" alt="Practice result: the ladder from 70% to 100% all cleared, practice time, laps played and laps with no misses, and the notes of the section with any missed ones marked.">
+<br><sub>What you practised and where you missed. Next, back to the practice menu.</sub>
 </td>
 </tr>
 </table>
