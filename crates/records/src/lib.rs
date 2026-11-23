@@ -185,6 +185,14 @@ pub struct RecentLap {
     pub results: Vec<NoteResult>,
 }
 
+/// 音符 1 つの、POOR と MISS になった回数
+#[derive(Debug, Clone, PartialEq)]
+pub struct NoteMiss {
+    pub at: NotePos,
+    pub lane: DrumLane,
+    pub misses: u32,
+}
+
 /// 普通のプレイ 1 回、または練習 1 回
 #[derive(Debug, Clone)]
 pub struct Session {
@@ -619,6 +627,80 @@ impl Records {
         practice_laps: usize,
         before: Option<i64>,
     ) -> Result<Vec<RecentLap>> {
+        let ids = self.recent_lap_ids(chart_path, plays, practice_laps, before)?;
+        let mut hits = self
+            .conn
+            .prepare("SELECT measure, judgement FROM hits WHERE lap_id = ?1")?;
+        ids.into_iter()
+            .map(|(id, kind)| {
+                let results = hits
+                    .query_map(params![id], |row| {
+                        let measure: u32 = row.get(0)?;
+                        let name: String = row.get(1)?;
+                        Ok((measure, name))
+                    })?
+                    .filter_map(|r| match r {
+                        Ok((measure, name)) => Judgement::from_name(&name)
+                            .map(|judgement| Ok(NoteResult { measure, judgement })),
+                        Err(e) => Some(Err(e)),
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(RecentLap { kind, results })
+            })
+            .collect()
+    }
+
+    /// [`recent_results`](Self::recent_results) と同じ周で、音符ごとに POOR と MISS になった回数。
+    /// 譜面の絵でよくミスする音に印を付けるのに使う
+    pub fn recent_note_misses(
+        &self,
+        chart_path: &str,
+        plays: usize,
+        practice_laps: usize,
+        before: Option<i64>,
+    ) -> Result<Vec<NoteMiss>> {
+        let ids = self.recent_lap_ids(chart_path, plays, practice_laps, before)?;
+        let mut hits = self.conn.prepare(
+            "SELECT measure, pos_num, pos_den, lane FROM hits
+             WHERE lap_id = ?1 AND judgement IN (?2, ?3)",
+        )?;
+        let mut counts: std::collections::BTreeMap<(NotePos, DrumLane), u32> =
+            std::collections::BTreeMap::new();
+        for (id, _) in ids {
+            let rows = hits.query_map(
+                params![id, Judgement::Poor.name(), Judgement::Miss.name()],
+                |row| {
+                    Ok((
+                        row.get::<_, u32>(0)?,
+                        row.get::<_, u32>(1)?,
+                        row.get::<_, u32>(2)?,
+                        row.get::<_, String>(3)?,
+                    ))
+                },
+            )?;
+            for r in rows {
+                let (measure, num, den, lane) = r?;
+                if let Some(lane) = DrumLane::from_name(&lane) {
+                    *counts
+                        .entry((NotePos::new(measure, num, den), lane))
+                        .or_default() += 1;
+                }
+            }
+        }
+        Ok(counts
+            .into_iter()
+            .map(|((at, lane), misses)| NoteMiss { at, lane, misses })
+            .collect())
+    }
+
+    /// 等速（100%）で叩いた周の番号と種類。新しい順（[`recent_results`](Self::recent_results) を見る）
+    fn recent_lap_ids(
+        &self,
+        chart_path: &str,
+        plays: usize,
+        practice_laps: usize,
+        before: Option<i64>,
+    ) -> Result<Vec<(i64, SessionKind)>> {
         let mut laps = self.conn.prepare(
             "SELECT id, kind FROM (
                  SELECT l.id, s.kind, s.started_at, s.id AS session, l.lap,
@@ -641,27 +723,10 @@ impl Records {
                 |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
             )?
             .collect::<Result<Vec<_>>>()?;
-        let mut hits = self
-            .conn
-            .prepare("SELECT measure, judgement FROM hits WHERE lap_id = ?1")?;
-        ids.into_iter()
+        Ok(ids
+            .into_iter()
             .filter_map(|(id, kind)| SessionKind::from_name(&kind).map(|kind| (id, kind)))
-            .map(|(id, kind)| {
-                let results = hits
-                    .query_map(params![id], |row| {
-                        let measure: u32 = row.get(0)?;
-                        let name: String = row.get(1)?;
-                        Ok((measure, name))
-                    })?
-                    .filter_map(|r| match r {
-                        Ok((measure, name)) => Judgement::from_name(&name)
-                            .map(|judgement| Ok(NoteResult { measure, judgement })),
-                        Err(e) => Some(Err(e)),
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                Ok(RecentLap { kind, results })
-            })
-            .collect()
+            .collect())
     }
 }
 
@@ -913,6 +978,41 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn note_misses_count_poor_and_miss_per_note() {
+        let mut r = Records::open_in_memory().unwrap();
+        r.save(&chart(1), &play(100, 1.0, vec![hit(1, Judgement::Miss)]))
+            .unwrap();
+        r.save(
+            &chart(1),
+            &play(
+                200,
+                1.0,
+                vec![hit(1, Judgement::Poor), hit(2, Judgement::Great)],
+            ),
+        )
+        .unwrap();
+        // 70% の周は数えない
+        r.save(&chart(1), &play(300, 0.7, vec![hit(2, Judgement::Miss)]))
+            .unwrap();
+        let got = r
+            .recent_note_misses("songs/a/master.dtx", 10, 10, None)
+            .unwrap();
+        assert_eq!(
+            got,
+            vec![NoteMiss {
+                at: NotePos::new(1, 1, 4),
+                lane: DrumLane::SD,
+                misses: 2,
+            }]
+        );
+        // 直近 1 回だけなら 1 回
+        let got = r
+            .recent_note_misses("songs/a/master.dtx", 1, 0, None)
+            .unwrap();
+        assert_eq!(got[0].misses, 1);
     }
 
     #[test]

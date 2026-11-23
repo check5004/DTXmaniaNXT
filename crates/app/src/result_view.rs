@@ -440,17 +440,11 @@ fn result_hints(page: Page, practice: bool, lag: Option<&LagResult>) -> Vec<ui::
             t("Score and Rank (←)", "スコアとランク（←）"),
         ),
     };
-    let mut v: Vec<ui::Hint<'static>> = vec![
-        (&[Pad::SD], t("Play Again (R)", "もう一度（R）")),
-        (
-            &[Pad::RD],
-            if practice {
-                t("Change Section / Speed (P)", "区間・速度を選び直す（P）")
-            } else {
-                t("Practice a Section (P)", "区間練習（P）")
-            },
-        ),
-    ];
+    let mut v: Vec<ui::Hint<'static>> = vec![(&[Pad::SD], t("Play Again (R)", "もう一度（R）"))];
+    // 練習の結果からは練習メニューへ戻る（CY・LC・RD のどれでも）
+    if !practice {
+        v.push((&[Pad::RD], t("Practice a Section (P)", "区間練習（P）")));
+    }
     // ずれの板のおすすめ（板は 1 ページ目だけ）
     if page == Page::Summary
         && let Some(lag) = lag
@@ -468,10 +462,17 @@ fn result_hints(page: Page, practice: bool, lag: Option<&LagResult>) -> Vec<ui::
         }
     }
     v.push(turn);
-    v.push((
-        &[Pad::CY, Pad::LC],
-        t("Song Select (Enter)", "選曲へ（Enter）"),
-    ));
+    v.push(if practice {
+        (
+            &[Pad::CY, Pad::RD, Pad::LC],
+            t("Practice Menu (Enter)", "練習メニューへ（Enter）"),
+        )
+    } else {
+        (
+            &[Pad::CY, Pad::LC],
+            t("Song Select (Enter)", "選曲へ（Enter）"),
+        )
+    });
     v
 }
 
@@ -670,11 +671,14 @@ mod tests {
                 .find(|x| x.1.starts_with(what))
                 .map(|x| x.0.to_vec())
         };
-        // 練習の結果：SD でもう一度、RD で選び直す、CY・LC で選曲へ
+        // 練習の結果：SD でもう一度、CY・RD・LC で練習メニューへ（選曲へは戻らない）
         let h = result_hints(Page::Summary, true, None);
         assert_eq!(pads(&h, "もう一度"), Some(vec![Pad::SD]));
-        assert_eq!(pads(&h, "区間・速度を選び直す"), Some(vec![Pad::RD]));
-        assert_eq!(pads(&h, "選曲へ"), Some(vec![Pad::CY, Pad::LC]));
+        assert_eq!(
+            pads(&h, "練習メニューへ"),
+            Some(vec![Pad::CY, Pad::RD, Pad::LC])
+        );
+        assert_eq!(pads(&h, "選曲へ"), None);
         assert_eq!(pads(&h, "周ごとの表"), Some(vec![Pad::HT, Pad::LT]));
         // ふだんの結果：おすすめがあるときだけ FT を出す
         let advice = engine::lag::Advice {

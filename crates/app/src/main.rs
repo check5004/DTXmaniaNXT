@@ -17,6 +17,7 @@ mod app_icon;
 mod audio;
 mod band;
 mod capture;
+mod chart_picture;
 mod chart_sound;
 mod config;
 mod config_view;
@@ -39,10 +40,11 @@ mod perf;
 mod play_view;
 mod practice;
 mod practice_hud;
-mod practice_popup;
+mod practice_menu;
 mod result_training;
 mod result_view;
 mod rim_look;
+mod section_sound;
 mod select;
 mod settings;
 mod settings_ui;
@@ -89,8 +91,9 @@ use crate::loading::{Job, Loading};
 use crate::midi::MidiIn;
 use crate::play_view::PlayView;
 use crate::practice::{PracticeOptions, PracticeSetup};
-use crate::practice_popup::{Done, PopupInput, PopupMouse, PracticePopup};
+use crate::practice_menu::{Done, Finished, MenuInput, MenuMouse, PracticeMenu, Spot};
 use crate::result_view::{Page, ResultInfo, ResultView};
+use crate::section_sound::SectionAudio;
 use crate::select::{PREVIEW_WAIT, SelectView};
 use crate::settings::{DisplayMode, Vsync};
 use crate::sfx::{Se, Sfx};
@@ -393,7 +396,7 @@ enum Screen {
     Config(Box<ConfigView>, bool),
     /// 終わる前の画面
     End(Ending),
-    /// 選曲（練習の決めごとのポップアップは App の `popup`）
+    /// 選曲（練習メニューは App の `menu`）
     Select,
     /// 曲を読み込んでいる
     Loading(Box<Loading>),
@@ -442,8 +445,13 @@ struct App {
     shutter: Shutter,
     /// シャッターを閉じ終えたら移る先（閉じているあいだは操作を受け付けない）
     after_close: Option<AfterClose>,
-    /// 選曲画面に重ねる、練習の決めごとのポップアップ
-    popup: Option<Box<PracticePopup>>,
+    /// 選曲画面に重ねる、練習メニュー
+    menu: Option<Box<PracticeMenu>>,
+    /// 練習メニューに出した曲と苦手な所（練習から戻ったとき、同じ並びで出す）
+    menu_spots: Option<(PathBuf, Vec<Spot>)>,
+    /// 練習メニューで選んでいる所の音と、その具合（メニューに出す）
+    section_audio: SectionAudio,
+    menu_sound: Option<practice_menu::Sound>,
     /// 選曲の簡易設定か、演奏中の一時停止の板（設定の画面と同じ行）
     quick: Option<Box<ConfigView>>,
     /// 補正の行に出す、この曲の補正とおすすめ
@@ -554,8 +562,8 @@ enum AfterClose {
     Result {
         at_ms: f64,
     },
-    /// 結果の画面から練習の決めごとへ（選曲画面に開く）
-    Setup(PathBuf, Option<PracticeOptions>),
+    /// 結果の画面や一時停止の板から練習メニューへ（選曲画面に開く）。今の決めごとと、終えた練習
+    Setup(PathBuf, Option<PracticeOptions>, Option<Finished>),
 }
 
 /// シャッターを開き始めるまでの待ち（v2 はフレームで数える。60 で割った時間にする）。
@@ -659,7 +667,10 @@ impl App {
             startup_error: None,
             shutter: Shutter::new(),
             after_close: None,
-            popup: None,
+            menu: None,
+            menu_spots: None,
+            section_audio: SectionAudio::default(),
+            menu_sound: None,
             quick: None,
             timing: None,
             wheel: 0.0,
@@ -843,7 +854,7 @@ impl App {
     /// 選曲画面に戻る。v2 と同じく、入るたびにシャッターを開く（閉じていなければ閉じた形から）
     fn go_to_select(&mut self) {
         self.sfx.stop_title();
-        self.popup = None;
+        self.menu = None;
         self.quick = None;
         self.screen = Screen::Select;
         self.view.enter();
@@ -883,7 +894,10 @@ impl App {
     /// シャッターを閉じ終えたので、決めておいた画面へ移る
     fn closed(&mut self, next: AfterClose) {
         match next {
-            AfterClose::Select => self.go_to_select(),
+            AfterClose::Select => {
+                self.close_menu();
+                self.go_to_select();
+            }
             AfterClose::Title => {
                 self.go_to_title();
                 self.shutter.open(CONFIG_LEAVE_OPEN_DELAY);
@@ -893,7 +907,9 @@ impl App {
                 self.finish_play(Some(at_ms));
                 self.shutter.open(shutter::OPEN_DELAY);
             }
-            AfterClose::Setup(path, previous) => self.open_setup(path, previous),
+            AfterClose::Setup(path, previous, finished) => {
+                self.open_setup(path, previous, finished)
+            }
         }
     }
 
@@ -1138,8 +1154,14 @@ impl App {
         self.toast = Some((text, Instant::now() + time));
     }
 
-    /// 練習の決めごとのポップアップを選曲画面に開く。`previous` があればその区間とつなぎ方を選んでおく
-    fn open_setup(&mut self, path: PathBuf, previous: Option<PracticeOptions>) {
+    /// 練習メニューを選曲画面に開く。`previous` があればその区間とつなぎ方を選んでおく。
+    /// `finished` は今終えた練習（クリアしたら次の苦手な所を選んでおく）
+    fn open_setup(
+        &mut self,
+        path: PathBuf,
+        previous: Option<PracticeOptions>,
+        finished: Option<Finished>,
+    ) {
         if !matches!(self.screen, Screen::Select) {
             self.save_unfinished();
             self.go_to_select();
@@ -1147,7 +1169,18 @@ impl App {
         match PracticeSetup::load(&path, &self.history, previous, self.config.practice_prefs()) {
             Ok(s) => {
                 self.message = None;
-                self.popup = Some(Box::new(PracticePopup::new(s)));
+                // 同じ曲の練習から戻ってきたなら、苦手な所は前と同じ並びで出す
+                let spots = self
+                    .menu_spots
+                    .take()
+                    .filter(|(p, _)| *p == path)
+                    .map(|(_, v)| v);
+                let menu = PracticeMenu::new(s, spots, finished);
+                self.menu_spots = Some((path.clone(), menu.spots().to_vec()));
+                self.menu = Some(Box::new(menu));
+                self.sfx.preview(None);
+                let auto = self.rules().auto_mix;
+                self.section_audio.prepare(&path, self.sfx.rate(), auto);
             }
             Err(e) => {
                 log::error!("{e:#}");
@@ -1156,39 +1189,47 @@ impl App {
         }
     }
 
-    /// ポップアップを操作する
-    fn popup_input(&mut self, input: PopupInput) {
-        let Some(p) = &mut self.popup else {
+    /// 練習メニューを操作する
+    fn menu_input(&mut self, input: MenuInput) {
+        let Some(m) = &mut self.menu else {
             return;
         };
-        let r = p.input(input);
-        self.popup_response(r);
+        let r = m.input(input);
+        self.menu_response(r);
     }
 
-    /// ポップアップの操作の結果：音を鳴らし、決めごとを覚え、閉じるか練習を始める
-    fn popup_response(&mut self, r: practice_popup::Response) {
-        let Some(p) = &self.popup else {
+    /// 練習メニューの操作の結果：音を鳴らし、決めごとを覚え、閉じるか練習を始める
+    fn menu_response(&mut self, r: practice_menu::Response) {
+        let Some(m) = &self.menu else {
             return;
         };
         if let Some(se) = r.se {
             self.sfx.play(se);
         }
         // 区間のほかの決めごとは次の練習でも使う
-        let prefs = p.setup.prefs();
+        let prefs = m.setup.prefs();
         if prefs != self.config.practice_prefs() {
             self.config.set_practice_prefs(prefs);
             self.config.save();
         }
         match r.done {
             Some(Done::Start(o)) => {
-                let path = p.setup.path.clone();
-                self.popup = None;
-                self.sfx.preview(None);
+                let path = m.setup.path.clone();
+                self.menu = None;
+                // 曲の音は残す（練習から戻ったら、すぐ流せるように）
+                self.section_audio.stop(&mut self.sfx);
                 self.start_practice(path, o);
             }
-            Some(Done::Close) => self.popup = None,
+            Some(Done::Close) => self.close_menu(),
             None => {}
         }
+    }
+
+    /// 練習メニューを閉じて選曲に戻る
+    fn close_menu(&mut self) {
+        self.menu = None;
+        self.menu_spots = None;
+        self.section_audio.forget(&mut self.sfx);
     }
 
     /// 区間の練習を始める
@@ -1431,7 +1472,21 @@ impl App {
         {
             self.closed(next);
         }
-        if matches!(self.screen, Screen::Select) && self.after_close.is_none() {
+        // 練習メニューを開いていれば、プレビューの代わりに選んでいる所の音を流す
+        self.menu_sound = match &self.menu {
+            Some(m) if self.after_close.is_none() => {
+                let shown = m.shown();
+                Some(self.section_audio.update(&mut self.sfx, shown))
+            }
+            _ => {
+                self.section_audio.stop(&mut self.sfx);
+                None
+            }
+        };
+        if matches!(self.screen, Screen::Select)
+            && self.after_close.is_none()
+            && self.menu.is_none()
+        {
             // 選んでから少し待ってプレビューの音を鳴らす（上流 CActSelectPresound）
             let preview = if self.view.settled_for(&self.songs, PREVIEW_WAIT) {
                 self.view.preview_path(&self.songs)
@@ -1684,7 +1739,7 @@ impl App {
 
     /// 選曲の簡易設定（パッドは RD、キーボードは F2）を開く
     fn open_quick(&mut self) {
-        if self.quick.is_some() || self.popup.is_some() {
+        if self.quick.is_some() || self.menu.is_some() {
             return;
         }
         self.sfx.play(Se::Decide);
@@ -1859,10 +1914,10 @@ impl App {
                 if let Screen::Play(play, _) = &self.screen
                     && let Some(options) = play.practice.as_ref().map(|p| p.restart_options())
                 {
-                    // ここまでの周は記録に残し（open_setup）、今の決めごとを選んだ板を開く
+                    // ここまでの周は記録に残し（open_setup）、今の決めごとを選んだ練習メニューを開く
                     let path = play.path.clone();
                     self.quick = None;
-                    self.close_then(AfterClose::Setup(path, Some(options)), Duration::ZERO);
+                    self.close_then(AfterClose::Setup(path, Some(options), None), Duration::ZERO);
                 }
             }
             ConfigAction::Run(ItemId::PracticeSong) => {
@@ -2265,10 +2320,10 @@ impl App {
             self.wheel = 0.0;
             return;
         }
-        if let Some(p) = &mut self.popup {
+        if let Some(m) = &mut self.menu {
             self.wheel = 0.0;
-            let r = p.mouse(mouse.popup);
-            self.popup_response(r);
+            let r = m.mouse(mouse.menu);
+            self.menu_response(r);
             return;
         }
         self.wheel += mouse.wheel;
@@ -2296,8 +2351,8 @@ impl App {
             self.on_quick_key(code);
             return;
         }
-        if self.popup.is_some() {
-            self.on_popup_key(code);
+        if self.menu.is_some() {
+            self.on_menu_key(code);
             return;
         }
         // 簡易設定（パッドなら RD）
@@ -2351,20 +2406,20 @@ impl App {
         }
     }
 
-    /// ポップアップを開いているときのキー
-    fn on_popup_key(&mut self, code: KeyCode) {
+    /// 練習メニューを開いているときのキー
+    fn on_menu_key(&mut self, code: KeyCode) {
         let input = match code {
-            KeyCode::ArrowUp => PopupInput::Up,
-            KeyCode::ArrowDown => PopupInput::Down,
-            KeyCode::ArrowLeft => PopupInput::Left,
-            KeyCode::ArrowRight => PopupInput::Right,
-            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space => PopupInput::Decide,
-            KeyCode::Escape | KeyCode::Backspace => PopupInput::Cancel,
+            KeyCode::ArrowUp => MenuInput::Up,
+            KeyCode::ArrowDown => MenuInput::Down,
+            KeyCode::ArrowLeft => MenuInput::Left,
+            KeyCode::ArrowRight => MenuInput::Right,
+            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space => MenuInput::Decide,
+            KeyCode::Escape | KeyCode::Backspace => MenuInput::Cancel,
             KeyCode::Comma | KeyCode::Period => {
-                if let Some(p) = &mut self.popup {
-                    p.setup
+                if let Some(m) = &mut self.menu {
+                    m.setup
                         .nudge_speed(if code == KeyCode::Comma { -1 } else { 1 });
-                    self.popup_response(practice_popup::Response {
+                    self.menu_response(practice_menu::Response {
                         se: Some(Se::Move),
                         done: None,
                     });
@@ -2373,12 +2428,12 @@ impl App {
             }
             _ => return,
         };
-        self.popup_input(input);
+        self.menu_input(input);
     }
 
     /// メニューの画面での電子ドラムの操作（上流の割り当てがもと）。
     /// HT で上、LT で下、CY か RD で決定、LC で戻る。選曲は HH を 2 回で難易度、RD で簡易設定（決定は CY だけ）。
-    /// 結果は SD でもう一度、RD で区間練習、CY か LC で選曲へ。
+    /// 結果は SD でもう一度、RD で区間練習、CY か LC で選曲へ（練習の結果なら CY・RD・LC で練習メニューへ）。
     /// 足で踏むパッド（BD・LP・LBD）は演奏の合間に踏んでしまうので、メニューの操作には使わない
     fn on_menu_pad(&mut self, lane: DrumLane, at_us: i64) {
         if self.after_close.is_some() || self.applying.is_some() {
@@ -2420,18 +2475,18 @@ impl App {
             }
             Screen::End(_) => {}
             Screen::Select => {
-                if self.popup.is_some() {
-                    // 設定の画面と同じパッドの役目（SD・FT で値をその場で変える）
+                if self.menu.is_some() {
+                    // 設定の画面と同じパッドの役目（SD・FT で区間や値をその場で変える）
                     let input = match lane {
-                        DrumLane::HT => PopupInput::Up,
-                        DrumLane::LT => PopupInput::Down,
-                        DrumLane::SD => PopupInput::Left,
-                        DrumLane::FT => PopupInput::Right,
-                        DrumLane::CY | DrumLane::RD => PopupInput::Decide,
-                        DrumLane::LC => PopupInput::Cancel,
+                        DrumLane::HT => MenuInput::Up,
+                        DrumLane::LT => MenuInput::Down,
+                        DrumLane::SD => MenuInput::Left,
+                        DrumLane::FT => MenuInput::Right,
+                        DrumLane::CY | DrumLane::RD => MenuInput::Decide,
+                        DrumLane::LC => MenuInput::Cancel,
                         _ => return,
                     };
-                    self.popup_input(input);
+                    self.menu_input(input);
                     return;
                 }
                 match lane {
@@ -2461,7 +2516,7 @@ impl App {
                 DrumLane::CY | DrumLane::LC => self.result_action(ui::ResultAction::Back),
                 // もう一度（練習なら同じ決めごとで。キーボードは R）
                 DrumLane::SD => self.result_action(ui::ResultAction::Retry),
-                // 区間練習の板（練習なら今の決めごとを選んでおく。キーボードは P）
+                // 練習メニュー（練習の結果なら今の区間を選んでおく。キーボードは P）
                 DrumLane::RD => self.result_action(ui::ResultAction::Practice(None)),
                 // 「ずれ」の板のおすすめ（キーボードは O）
                 DrumLane::FT => self.toggle_result_advice(),
@@ -2596,7 +2651,7 @@ impl App {
                 // 上流のソートのポップアップと同じく、選曲画面の上に開く
                 if let Some(path) = self.songs.selected_chart() {
                     self.sfx.play(Se::Decide);
-                    self.open_setup(path, None);
+                    self.open_setup(path, None, None);
                 }
             }
         }
@@ -2611,7 +2666,17 @@ impl App {
         };
         let path = o.path.clone();
         let options = o.practice.as_ref().map(|p| p.options);
+        let finished = o.practice.as_ref().map(|p| Finished {
+            section: p.options.section,
+            cleared: p.cleared,
+            speed: p.options.speed.goal(),
+        });
         match action {
+            // 練習の結果からは、選曲でなく練習メニューへ戻る（次の苦手な所を選べるように）
+            ui::ResultAction::Back | ui::ResultAction::Practice(None) if finished.is_some() => {
+                self.sfx.play(Se::Decide);
+                self.close_then(AfterClose::Setup(path, options, finished), Duration::ZERO);
+            }
             ui::ResultAction::Back => {
                 // 上流と同じく戻る音を鳴らして選曲へ（v2：シャッターを閉じてから）
                 self.sfx.play(Se::Cancel);
@@ -2637,7 +2702,7 @@ impl App {
                     }
                     None => options,
                 };
-                self.close_then(AfterClose::Setup(path, previous), Duration::ZERO);
+                self.close_then(AfterClose::Setup(path, previous, None), Duration::ZERO);
             }
         }
     }
@@ -2855,8 +2920,9 @@ impl App {
                 self.view.update(&mut self.songs);
                 self.view.left_bass_apart = self.config.settings.left_bass_apart();
                 self.view.draw(&c, &mut self.gfx, &self.songs);
-                if let Some(p) = &self.popup {
-                    p.draw(&c, &mut self.gfx);
+                if let Some(m) = &self.menu {
+                    let sound = self.menu_sound.unwrap_or(practice_menu::Sound::Off);
+                    m.draw(&c, &mut self.gfx, sound);
                 }
                 if let Some(q) = &mut self.quick {
                     let mut info = config_info(
@@ -3153,7 +3219,7 @@ impl ApplicationHandler for App {
                                 | KeyCode::ArrowRight
                         ),
                         Screen::Select => {
-                            self.popup.is_none()
+                            self.menu.is_none()
                                 && matches!(code, KeyCode::ArrowUp | KeyCode::ArrowDown)
                         }
                         _ => false,
@@ -3210,8 +3276,8 @@ struct SelectMouse {
     clicked_row: Option<isize>,
     /// 押した並べ替えのアイコンが、選んでいるものから何個先か
     clicked_sort: Option<isize>,
-    /// 練習のポップアップへのマウスの操作
-    popup: PopupMouse,
+    /// 練習メニューへのマウスの操作
+    menu: MenuMouse,
 }
 
 impl SelectMouse {
@@ -3237,7 +3303,7 @@ impl SelectMouse {
                 .map(|p| c.to_nx(p));
             let clicked_row = clicked.and_then(|p| view.row_at(p));
             let clicked_sort = clicked.and_then(SelectView::sort_at);
-            let popup = PopupMouse {
+            let menu = MenuMouse {
                 pressed: i
                     .pointer
                     .primary_pressed()
@@ -3251,7 +3317,7 @@ impl SelectMouse {
                 wheel,
                 clicked_row,
                 clicked_sort,
-                popup,
+                menu,
             }
         })
     }
