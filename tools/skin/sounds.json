@@ -231,5 +231,81 @@
       "decide": "Sounds/Decide.ogg",
       "cancel": "Sounds/Cancel.ogg"
     }
+  },
+  "jingles": {
+    "note": "Lyria の曲（music の y_*）から切り出す区間（秒）、終わりを消す長さ、重ねる声とその位置。音量は lufs（無ければ -13）",
+    "cuts": {
+      "stage_clear": {
+        "file": "Sounds/stage clear.ogg",
+        "raw": "y_clear",
+        "start": 16.02,
+        "end": 20.3,
+        "fade_out": 1.6,
+        "voice": "stage_clear",
+        "voice_at": 1.07
+      },
+      "full_combo": {
+        "file": "Sounds/Full combo.ogg",
+        "raw": "y_combo",
+        "start": 17.55,
+        "end": 21.8,
+        "fade_out": 1.6,
+        "voice": "full_combo",
+        "voice_at": 1.19
+      },
+      "excellent": {
+        "file": "Sounds/Excellent.ogg",
+        "raw": "y_excellent",
+        "start": 16.02,
+        "end": 20.2,
+        "fade_out": 1.7,
+        "voice": "excellent",
+        "voice_at": 0.8
+      },
+      "stage_failed": {
+        "file": "Sounds/Stage failed.ogg",
+        "raw": "y_failed",
+        "start": 20.89,
+        "end": 25.0,
+        "fade_out": 1.8,
+        "voice": "stage_failed",
+        "voice_at": 0.1
+      },
+      "new_record": {
+        "file": "Sounds/New Record.ogg",
+        "raw": "y_new_record",
+        "start": 9.65,
+        "end": 13.5,
+        "fade_out": 0.6,
+        "voice": "new_record",
+        "voice_at": 0.1
+      },
+      "game_start": {
+        "file": "Sounds/Game start.ogg",
+        "raw": "y_game_start",
+        "start": 4.28,
+        "end": 7.3,
+        "fade_out": 1.2,
+        "voice": "game_start",
+        "voice_at": 0.4
+      },
+      "game_end": {
+        "file": "Sounds/Game end.ogg",
+        "raw": "y_game_end",
+        "start": 15.48,
+        "end": 21.0,
+        "fade_out": 2.2,
+        "voice": "game_end",
+        "voice_at": 0.25
+      },
+      "loading": {
+        "file": "Sounds/Now loading.ogg",
+        "raw": "y_loading",
+        "start": 0.0,
+        "end": 3.0,
+        "fade_out": 0.5,
+        "lufs": -15.0
+      }
+    }
   }
 }

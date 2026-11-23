@@ -27,8 +27,9 @@ use crate::text::Style;
 
 /// 入ってきたときのフェード（上流 `CActFIFOBlack`）
 const FADE_IN: Duration = Duration::from_millis(500);
-/// 結果の音から New Record の音までの間（上流は 10 ミリ秒 × 150）
-const NEW_RECORD_DELAY: Duration = Duration::from_millis(1500);
+/// 結果の音から New Record の音までの間。結果の音の声（「ステージクリア！」など）が
+/// 3 秒近くまで続くので、その後にする（上流は 10 ミリ秒 × 150 の 1.5 秒で、今の音だと声が重なる）
+const NEW_RECORD_DELAY: Duration = Duration::from_millis(3000);
 /// 記録を更新した結果を画像で残す時刻（上流と同じく動きが落ち着いてから）
 const CAPTURE_AT: Duration = Duration::from_millis(2000);
 

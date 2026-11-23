@@ -5,6 +5,7 @@
     python3 tools/skin/build_stage2.py <声のフォルダ> <操作音のフォルダ> <Lyria の元のフォルダ> assets/skin
 
 Lyria の元のフォルダには `lyria.py` で作った mp3 を、`sounds.json` の music の名前で置く（title.mp3 など）。
+結果・開始・終了・読み込み中の音は `jingles.py` で切り出して声を重ねる。
 ogg は Vorbis（品質 0.6 相当）、並べ替えの読み上げは上流と同じ wav（16 bit）で書く。
 """
 
@@ -14,6 +15,8 @@ from pathlib import Path
 
 import numpy as np
 import soundfile as sf
+
+import jingles
 
 SR = 48000
 HERE = Path(__file__).resolve().parent
@@ -64,6 +67,8 @@ def main() -> None:
     if peak > 0.98:
         x *= 0.98 / peak
     write(skin, "Sounds/Title.ogg", x)
+    for j in cfg["jingles"]["cuts"].values():
+        write(skin, j["file"], jingles.build(j, raw, voice).T)
 
 
 if __name__ == "__main__":
