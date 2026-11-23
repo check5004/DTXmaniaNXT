@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use egui::Color32;
 use engine::judge::{HitWindows, Judgement};
 use engine::lag::Advice;
-use i18n::{t, tf};
+use i18n::{count, t, tf};
 
 use crate::game::Outcome;
 use crate::gfx::{Canvas, Gfx};
@@ -338,9 +338,9 @@ pub fn draw_result(c: &Canvas, g: &mut Gfx, o: &Outcome) {
     let song = match (a.song, a.song_residual_ms()) {
         (Some(s), Some(r)) if s.enough() => {
             tf!(
-                "This song, last {} plays {}",
-                "この曲 直近 {} 回 {}",
-                s.sessions,
+                "This song ({}): {}",
+                "この曲 直近 {} {}",
+                count(s.sessions, "play", "plays", "回"),
                 signed_ms(r)
             )
         }

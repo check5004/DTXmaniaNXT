@@ -1008,16 +1008,17 @@ fn add_timing_rows(rows: &mut Vec<Row>, t: &TimingInfo, global_ms: i64) {
     };
     let a = &t.advice;
     if let Some((_, n)) = a.global {
+        let songs = count(n, "song", "songs", "曲");
         rows[i].desc.push_str(&if a.global_ms != a.global_now {
             tf!(
-                " Suggested: {:+} ms (from your last {n} songs).",
-                "おすすめは {:+} ms（直近 {n} 曲のずれから）。",
+                " Suggested: {:+} ms (based on your last {songs}).",
+                "おすすめは {:+} ms（直近 {songs}のずれから）。",
                 a.global_ms
             )
         } else {
             tf!(
-                " Based on your last {n} songs, the current value looks right.",
-                "直近 {n} 曲のずれからは、今のままでよさそうです。"
+                " Based on your last {songs}, the current value looks right.",
+                "直近 {songs}のずれからは、今のままでよさそうです。"
             )
         });
     }
@@ -1031,15 +1032,15 @@ fn add_timing_rows(rows: &mut Vec<Row>, t: &TimingInfo, global_ms: i64) {
         );
         match a.song {
             Some(l) if l.enough() && a.song_ms != a.song_now => desc.push_str(&tf!(
-                " Suggested: {:+} ms (from your last {} plays).",
-                "おすすめは {:+} ms（直近 {} 回から）。",
+                " Suggested: {:+} ms (based on {}).",
+                "おすすめは {:+} ms（直近 {}から）。",
                 a.song_ms,
-                l.sessions
+                count(l.sessions, "play", "plays", "回")
             )),
             Some(l) if l.enough() => desc.push_str(&tf!(
-                " Based on your last {} plays, the current value looks right.",
-                "直近 {} 回からは今のままでよさそうです。",
-                l.sessions
+                " Based on {}, the current value looks right.",
+                "直近 {}からは今のままでよさそうです。",
+                count(l.sessions, "play", "plays", "回")
             )),
             _ => {}
         }
