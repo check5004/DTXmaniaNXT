@@ -6,6 +6,7 @@ VOICEVOX のエンジンを 127.0.0.1:50021 で動かしておく。例:
     python3 tools/skin/voice.py <出力先のフォルダ>
 
 `sounds.json` の `voice` の行ごとに、声だけの wav（48kHz・ステレオ・響きを足したもの）を書く。
+`kana` があればアクセントをそれで決める（VOICEVOX の読みのままだと、外来語のアクセントが外れることがある）。
 """
 
 import io
@@ -25,15 +26,23 @@ HERE = Path(__file__).resolve().parent
 _open = urllib.request.build_opener(urllib.request.ProxyHandler({})).open
 
 
-def tts(text: str, speaker: int, speed: float, pitch: float, inton: float) -> np.ndarray:
-    q = json.load(
-        _open(
-            urllib.request.Request(
-                f"{BASE}/audio_query?" + urllib.parse.urlencode({"text": text, "speaker": speaker}),
-                method="POST",
-            )
-        )
+def _post(path: str, params: dict, body: bytes | None = None):
+    req = urllib.request.Request(
+        f"{BASE}/{path}?" + urllib.parse.urlencode(params),
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
     )
+    return _open(req).read()
+
+
+def tts(text: str, speaker: int, speed: float, pitch: float, inton: float, kana: str | None = None) -> np.ndarray:
+    q = json.loads(_post("audio_query", {"text": text, "speaker": speaker}))
+    if kana:
+        # アクセントを指定する（AquesTalk 風の書き方。' の前の拍で下がる、末尾の ' は平板、/ と 、 で区切る、_ は無声化）
+        q["accent_phrases"] = json.loads(
+            _post("accent_phrases", {"text": kana, "speaker": speaker, "is_kana": "true"})
+        )
     q.update(
         speedScale=speed,
         pitchScale=pitch,
@@ -43,13 +52,7 @@ def tts(text: str, speaker: int, speed: float, pitch: float, inton: float) -> np
         outputSamplingRate=SR,
         outputStereo=False,
     )
-    req = urllib.request.Request(
-        f"{BASE}/synthesis?speaker={speaker}",
-        data=json.dumps(q).encode(),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    wav, sr = sf.read(io.BytesIO(_open(req).read()), dtype="float32")
+    wav, sr = sf.read(io.BytesIO(_post("synthesis", {"speaker": speaker}, json.dumps(q).encode())), dtype="float32")
     assert sr == SR
     return wav
 
@@ -89,7 +92,14 @@ def main() -> None:
     out.mkdir(parents=True, exist_ok=True)
     cfg = json.loads((HERE / "sounds.json").read_text(encoding="utf-8"))["voice"]
     for key, line in cfg["lines"].items():
-        x = tts(line["text"], cfg["speaker"], line.get("speed", 1.0), line.get("pitch", 0.0), line.get("inton", 1.2))
+        x = tts(
+            line["text"],
+            cfg["speaker"],
+            line.get("speed", 1.0),
+            line.get("pitch", 0.0),
+            line.get("inton", 1.0),
+            line.get("kana"),
+        )
         y = fx(x, line["fx"])
         sf.write(out / f"{key}.wav", y.T, SR)
         print(key, line["text"], f"{y.shape[1] / SR:.2f}s")

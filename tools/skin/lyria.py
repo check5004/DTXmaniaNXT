@@ -49,6 +49,9 @@ def main() -> None:
                 audio = c.get("delta", {}).get("audio") or {}
                 if audio.get("data"):
                     chunks.append(audio["data"])
+    if not chunks:
+        # 音が返らないことがある（費用は 0）。指示文を変えるか、もう一度呼ぶ
+        raise SystemExit(f"{name}: 音が返らなかった（usage: {usage}）")
     out.write_bytes(b"".join(base64.b64decode(c) for c in chunks))
     meta = {"name": name, "model": entry["model"], "prompt": entry["prompt"], "usage": usage}
     out.with_suffix(".json").write_text(json.dumps(meta, ensure_ascii=False, indent=1), encoding="utf-8")
