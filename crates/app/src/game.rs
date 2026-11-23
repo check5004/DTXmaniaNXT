@@ -65,6 +65,8 @@ pub enum PracticeEvent {
     Cleared,
     /// クリアを見せ終えた。この時刻（曲の時刻）までで結果へ
     Finished { at_ms: f64 },
+    /// 1 周叩かなかったので休みにした（一時停止の板を出す）
+    Rest,
 }
 
 /// 画面の効果に使う出来事。演奏画面が毎フレーム取り出す
@@ -446,7 +448,11 @@ impl Play {
             None => (Judge::with_groups(notes, rules.windows, groups), None),
             Some(options) => (
                 Judge::with_groups(Vec::new(), rules.windows, groups),
-                Some(Practice::new(options, &tempo, notes)),
+                Some({
+                    let mut p = Practice::new(options, &tempo, notes);
+                    p.set_auto_lanes(auto);
+                    p
+                }),
             ),
         };
         judge.set_auto(auto);
@@ -632,6 +638,9 @@ impl Play {
             sa.poll();
         }
         p.settle(now_ms);
+        if p.check_rest(now_ms) {
+            self.practice_events.push(PracticeEvent::Rest);
+        }
         // 速度が変わったら、まだ始まっていない次の周を取り下げ、新しい速度の助走から並べ直す。
         // 新しい速度の音ができていなければ取り下げない（前の速度で回し、できてから変える）
         let ready = self
@@ -1043,6 +1052,9 @@ impl Play {
             return;
         }
         let ms = self.judge_ms(self.song_ms_at(at_us));
+        if let Some(p) = self.practice.as_mut() {
+            p.on_hit(ms);
+        }
         let rim = lane == DrumLane::SD
             && matches!(
                 articulation,
@@ -1245,13 +1257,18 @@ impl Play {
     /// 今までの成績
     pub fn outcome(&self) -> Outcome {
         let (mean, sd) = mean_and_sd(&self.hit_offsets);
+        // 練習で叩かずに休んだ周は、結果の数に入れない
+        let (tally, notes) = match &self.practice {
+            Some(p) => p.without_rest(self.judge.tally(), self.judge.notes().len()),
+            None => (self.judge.tally().clone(), self.judge.notes().len()),
+        };
         Outcome {
             path: self.path.clone(),
             title: self.title.clone(),
             artist: self.artist.clone(),
             level: self.level,
-            notes: self.judge.notes().len(),
-            tally: self.judge.tally().clone(),
+            notes,
+            tally,
             offset_mean_ms: mean,
             offset_sd_ms: sd,
             offsets: self.hit_offsets.clone(),
@@ -1413,7 +1430,7 @@ impl Play {
             Some(p) => p
                 .laps
                 .iter()
-                .filter(|l| l.complete() && !l.notes.is_empty())
+                .filter(|l| l.complete() && !l.notes.is_empty() && !l.rest)
                 .map(|l| {
                     let s = l.summary();
                     Lap {
