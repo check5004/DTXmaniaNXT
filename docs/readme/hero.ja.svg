@@ -55,7 +55,7 @@ text{font-family:'Hiragino Sans','Hiragino Kaku Gothic ProN','Yu Gothic UI','Yu 
 <text x="52" y="122" font-size="58" font-weight="800" fill="#E8EEF7" letter-spacing="-1">DTXmania<tspan fill="url(#tg3)">NXT</tspan></text>
 <text x="54" y="160" font-size="25" fill="#E8EEF7" font-weight="700" text-anchor="start">DTX 譜面で遊んで、</text>
 <text x="54" y="192" font-size="25" fill="#E8EEF7" font-weight="700" text-anchor="start">苦手なフレーズを集中練習。</text>
-<text x="54" y="226" font-size="15" fill="#9AA8BC" font-weight="400" text-anchor="start">見た目は DTXManiaNX v2.0、中身は Rust でゼロから作り直し。</text>
+<text x="54" y="226" font-size="15" fill="#9AA8BC" font-weight="400" text-anchor="start">画面の配置は DTXManiaNX v2.0、中身は Rust でゼロから作り直し。</text>
 <text x="54" y="248" font-size="15" fill="#9AA8BC" font-weight="400" text-anchor="start">電子ドラム向け。Windows 版のほか、macOS・Linux 版もあります。</text>
 <rect x="52" y="274" width="177" height="28" rx="14" fill="#5CE1E6" fill-opacity="0.12" stroke="#5CE1E6" stroke-opacity="0.55"/>
 <circle cx="66" cy="288" r="4" fill="#5CE1E6"/>

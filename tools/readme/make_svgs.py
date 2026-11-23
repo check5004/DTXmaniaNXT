@@ -169,13 +169,13 @@ def hero(lang: str) -> Svg:
     if en:
         s.add(text(54, 160, "Play DTX drum charts.", 25, INK, 700))
         s.add(text(54, 192, "Practice the parts you miss.", 25, INK, 700))
-        s.add(text(54, 226, "Written from scratch in Rust, with the DTXManiaNX v2.0 look.", 15, SUB))
+        s.add(text(54, 226, "Written from scratch in Rust, laid out like DTXManiaNX v2.0.", 15, SUB))
         s.add(text(54, 248, "Made for electronic drums. Windows first, macOS and Linux too.", 15, SUB))
         tags = [("E-drums (MIDI)", CYAN), ("Practice mode", GREEN), ("Timing tools", YELLOW), ("Free", MAGENTA)]
     else:
         s.add(text(54, 160, "DTX 譜面で遊んで、", 25, INK, 700))
         s.add(text(54, 192, "苦手なフレーズを集中練習。", 25, INK, 700))
-        s.add(text(54, 226, "見た目は DTXManiaNX v2.0、中身は Rust でゼロから作り直し。", 15, SUB))
+        s.add(text(54, 226, "画面の配置は DTXManiaNX v2.0、中身は Rust でゼロから作り直し。", 15, SUB))
         s.add(text(54, 248, "電子ドラム向け。Windows 版のほか、macOS・Linux 版もあります。", 15, SUB))
         tags = [("電子ドラム（MIDI）", CYAN), ("練習モード", GREEN), ("タイミング調整", YELLOW), ("無料", MAGENTA)]
     x = 52
@@ -748,9 +748,9 @@ def lineage(lang: str) -> Svg:
         960,
         300,
         "Where DTXmaniaNXT comes from" if en else "DTXmaniaNXT の系譜",
-        "DTXMania, DTXManiaXG verK, DTXManiaNX by limyz, DTXManiaNX v2.0 by BocuD, and DTXmaniaNXT. NXT is new code; only the v2.0 skin (images and sounds) is bundled unchanged."
+        "DTXMania, DTXManiaXG verK, DTXManiaNX by limyz, DTXManiaNX v2.0 by BocuD, and DTXmaniaNXT. NXT is new code. It started from the v2.0 skin and is replacing it with its own artwork, step by step."
         if en
-        else "DTXMania、DTXManiaXG verK、limyz 版 DTXManiaNX、BocuD 版 DTXManiaNX v2.0、DTXmaniaNXT の順。NXT のソースコードは新規で、v2.0 のスキン（画像と効果音）だけを無改変で同梱。",
+        else "DTXMania、DTXManiaXG verK、limyz 版 DTXManiaNX、BocuD 版 DTXManiaNX v2.0、DTXmaniaNXT の順。NXT のソースコードは新規。スキンは v2.0 のものから始めて、段階的に自前の素材へ置き換え中。",
     )
     card_bg(s)
     nodes = [
@@ -780,13 +780,13 @@ def lineage(lang: str) -> Svg:
     notes = (
         [
             ("— code", "Each project was forked from the one before it.", "#8FA3BF", False),
-            ("- - skin only", "NXT bundles the v2.0 images and sounds unchanged (tag V2.0.0-20260121-5).", MAGENTA, True),
+            ("- - skin only", "NXT started from the v2.0 skin and is replacing it with its own artwork, step by step.", MAGENTA, True),
             ("", "NXT's code is written from scratch in Rust. No upstream code is copied.", CYAN, False),
         ]
         if en
         else [
             ("— コード", "各プロジェクトは、左隣のプロジェクトからのフォークです。", "#8FA3BF", False),
-            ("- - スキンのみ", "NXT は v2.0 の画像と効果音を無改変で同梱しています（タグ V2.0.0-20260121-5）。", MAGENTA, True),
+            ("- - スキンのみ", "NXT のスキンは v2.0 のものから始め、段階的に自前の素材へ置き換えています。", MAGENTA, True),
             ("", "NXT のソースコードは Rust で新規に書いたもので、上流のコードは含みません。", CYAN, False),
         ]
     )

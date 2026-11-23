@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/readme/hero.ja.svg" width="960" alt="DTXmaniaNXT。DTX 譜面で遊んで、苦手なフレーズを集中練習。見た目は DTXManiaNX v2.0、中身は Rust でゼロから作り直したドラムゲーム。電子ドラム向けで、Windows 版のほか macOS・Linux 版もあります。">
+  <img src="docs/readme/hero.ja.svg" width="960" alt="DTXmaniaNXT。DTX 譜面で遊んで、苦手なフレーズを集中練習。画面の配置は DTXManiaNX v2.0、中身は Rust でゼロから作り直したドラムゲーム。電子ドラム向けで、Windows 版のほか macOS・Linux 版もあります。">
 </p>
 
 <p align="center">
@@ -13,11 +13,11 @@
 <p align="center">
   DTX 譜面で遊べる、無料のドラムゲーム兼練習ソフトです。<br>
   対応 OS は Windows（64bit）。macOS 版・Linux 版も<a href="https://github.com/check5004/DTXmaniaNXT/releases/latest">リリースページ</a>にあります。<br>
-  <sub>非公式のファンメイド作品です。詳しくは<a href="#クレジットと権利">クレジットと権利</a>をご覧ください。</sub>
+  <sub>英語と日本語に対応。非公式のファンメイド作品です。詳しくは<a href="#クレジットと権利">クレジットと権利</a>をご覧ください。</sub>
 </p>
 
 <p align="center">
-  <img src="docs/readme/shots/play.gif" width="800" alt="演奏画面。10 色のレーンをチップが判定ラインへ流れてきて、叩くたびに PERFECT や GREAT が表示され、コンボが伸び、左のスコアとゲージが増えていく">
+  <img src="docs/readme/shots/play.ja.gif" width="800" alt="演奏画面。10 色のレーンをチップが判定ラインへ流れてきて、叩くたびに PERFECT や GREAT が表示され、コンボが伸び、左のスコアとゲージが増えていく">
   <br>
   <sub>「Neon Skyline」の MASTER をプレイ中。画像に出てくる曲は、この README 用に用意したデモ曲です（<a href="#画像について">画像について</a>）。</sub>
 </p>
@@ -49,8 +49,8 @@ USB-MIDI でつなげばすぐに叩けます。ハイハットの開き具合�
 叩いたチップは 1 つずつ記録しています。リザルト画面で、苦手な小節やフレーズ、叩き方のクセを確認できます。
 </td>
 <td valign="top">
-<b>🖼️ DTXManiaNX v2.0 の見た目</b><br>
-DTXManiaNX v2.0 の画面と効果音を内蔵しています。DTXManiaNX をインストールしておく必要はありません。
+<b>🖼️ DTXManiaNX v2.0 と同じ使い心地</b><br>
+画面の配置は DTXManiaNX v2.0 のまま、絵は新しく描き起こしています。必要なものはすべて内蔵しているので、DTXManiaNX をインストールしておく必要はありません。
 </td>
 </tr>
 </table>
@@ -61,6 +61,7 @@ DTXManiaNX v2.0 の画面と効果音を内蔵しています。DTXManiaNX を�
 
 1. **インストール**　[DTXmaniaNXT-Setup.exe](https://github.com/check5004/DTXmaniaNXT/releases/latest/download/DTXmaniaNXT-Setup.exe) をダウンロードして実行すると、インストールが終わってそのまま起動します。ユーザーごとのインストールなので、管理者権限は要りません。
    まだコード署名をしていないため、「Windows によって PC が保護されました」と表示されることがあります。その場合は「詳細情報」→「実行」と進んでください。
+   初めて起動したときは英語の画面です。**Config** →「General」→「Language」で「日本語」を選ぶと、日本語の表示に切り替わります。
 2. **曲を追加**　タイトル画面の **Config** から曲フォルダを追加するか、フォルダをウィンドウにドラッグ＆ドロップします。DTX 譜面が入ったフォルダならどこでもよく、DTXManiaNX の `Songs` フォルダもそのまま使えます。
 3. **電子ドラムをつないで遊ぶ**　起動前に電子ドラムを USB-MIDI でつないでおけば、自動で認識します。電子ドラムがなくても、キーボードで遊べます。
 
@@ -85,7 +86,7 @@ DTXManiaNX v2.0 の画面と効果音を内蔵しています。DTXManiaNX を�
 ## 遊ぶ
 
 <p align="center">
-  <img src="docs/readme/shots/select.gif" width="720" alt="選曲画面。曲のバーがなめらかにスクロールし、バーの左にはクリアした難易度の色のランプ。右の難易度パネルに難易度ごとのランクと達成率">
+  <img src="docs/readme/shots/select.ja.gif" width="720" alt="選曲画面。曲の一覧がなめらかにスクロールし、曲ごとにクリアした難易度の色のランプが付く。ジャケットの下のパネルに、難易度ごとのランクと達成率">
 </p>
 
 選曲画面の操作感は DTXManiaNX v2.0 と同じです。フォルダや BOX をたどり、曲名・アーティスト・レベル・スキルなどで並べ替えられます。難易度ごとのクリアランプ、ランク、最高達成率も表示します。
@@ -94,11 +95,11 @@ DTXManiaNX で遊んでいた曲なら、`score.ini` に残っている自己ベ
 <table>
 <tr>
 <td width="50%" valign="top">
-<img src="docs/readme/shots/result.jpg" alt="リザルト画面。STAGE CLEARED、判定ごとの数、達成率とスキル。右上にタイミングのずれの分布と、おすすめの補正値">
+<img src="docs/readme/shots/result.ja.jpg" alt="リザルト画面。ランク S と STAGE CLEARED、判定ごとの数、達成率とスキル。右上にタイミングのずれの分布とおすすめの補正値、その下に苦手な小節">
 <br><sub>リザルト画面。ずれの分布と、おすすめの補正値も表示します。</sub>
 </td>
 <td width="50%" valign="top">
-<img src="docs/readme/shots/result-analysis.jpg" alt="リザルトの 2 ページ目。全小節をミスの多さで緑から赤に塗り分けた帯と、苦手なフレーズの一覧。それぞれに練習ボタン">
+<img src="docs/readme/shots/result-analysis.ja.jpg" alt="リザルトの 2 ページ目。全小節をミスの多さで緑から赤に塗り分けた帯と、苦手なフレーズの一覧。それぞれに練習ボタン">
 <br><sub>2 ページ目。苦手な小節やフレーズから、そのまま練習を始められます。</sub>
 </td>
 </tr>
@@ -118,21 +119,21 @@ DTXManiaNX で遊んでいた曲なら、`score.ini` に残っている自己ベ
 <table>
 <tr>
 <td width="50%" valign="top">
-<img src="docs/readme/shots/practice-step.gif" alt="練習中。ノーミスで周が終わり「OK! 次は 80%」と表示され、右の段の図が 1 段上がる">
+<img src="docs/readme/shots/practice-step.ja.gif" alt="練習中。ノーミスで周が終わり「OK! 次は 80%」と表示され、右の段の図が 1 段上がる">
 <br><sub>ノーミスで 1 段クリア。次のテンポへ進みます。</sub>
 </td>
 <td width="50%" valign="top">
-<img src="docs/readme/shots/practice-clear.gif" alt="練習中。100% の最後の周が終わり、レーンの上に「クリア！」と表示される">
+<img src="docs/readme/shots/practice-clear.ja.gif" alt="練習中。100% の最後の周が終わり、レーンの上に「クリア！」と表示される">
 <br><sub>最後の段をクリア。</sub>
 </td>
 </tr>
 <tr>
 <td valign="top">
-<img src="docs/readme/shots/practice-setup.jpg" alt="区間練習の設定画面。全小節の帯の上に選んだ区間、苦手フレーズの一覧、ループのしかた・テンポの上げ方・音程・メトロノームの設定">
+<img src="docs/readme/shots/practice-setup.ja.jpg" alt="区間練習の設定画面。全小節の帯の上に選んだ区間、苦手フレーズの一覧、ループのしかた・テンポの上げ方・音程・メトロノームの設定">
 <br><sub>区間・テンポ・メトロノームを選ぶ画面。</sub>
 </td>
 <td valign="top">
-<img src="docs/readme/shots/practice-result.jpg" alt="練習の結果。70% から 100% までの段がすべてクリア。練習時間、叩いた周回数、ノーミスの周回数、ミスした場所のマップ">
+<img src="docs/readme/shots/practice-result.ja.jpg" alt="練習の結果。70% から 100% までの段がすべてクリア。練習時間、叩いた周回数、ノーミスの周回数、ミスした場所のマップ">
 <br><sub>練習の結果。どこでミスしたかも分かります。</sub>
 </td>
 </tr>
@@ -181,6 +182,12 @@ DTXManiaNX で遊んでいた曲なら、`score.ini` に残っている自己ベ
 </details>
 
 <details>
+<summary><b>画面が英語で表示されます</b></summary>
+
+初めて起動したときは英語の画面になります。**Config** →「General」→「Language」で「日本語」を選んでください。メニューやメッセージが日本語に切り替わります（曲名やスキンの絵に描かれた文字はそのままです）。
+</details>
+
+<details>
 <summary><b>ギターやベースは遊べますか？</b></summary>
 
 遊べません。DTXmaniaNXT はドラム専用です。
@@ -207,7 +214,7 @@ Windows では `%APPDATA%\DTXmaniaNXT` に保存されます（設定の `config
 <details>
 <summary><b>自分で譜面を作りたいときは？</b></summary>
 
-同じ作者による、ブラウザで使える無料のドラム譜面エディタ [DTX Web Editor](https://github.com/check5004/dtx-mania-web-editor) をどうぞ。保存した曲フォルダは、DTXmaniaNXT でも DTXMania でもそのまま遊べます。
+同じ作者による、ブラウザで使える無料のドラム譜面エディタ [DTX Web Editor](https://github.com/check5004/dtx-mania-web-editor) をどうぞ。設定の「曲」→「譜面エディタを開く」からも開けます。保存した曲フォルダは、DTXmaniaNXT でも DTXMania でもそのまま遊べます。直した譜面は「曲を探し直す」で一覧に反映されます。
 </details>
 
 <details>
@@ -222,7 +229,7 @@ Windows では `%APPDATA%\DTXmaniaNXT` に保存されます（設定の `config
 
 DTXmaniaNXT は**非公式のファンメイド作品**です。2000 年から続く DTXMania と、その派生版を作り育ててきた方々の積み重ねがあってこそ生まれました。DTXMania に関わってきたすべての皆さまに感謝します。
 
-<p align="center"><img src="docs/readme/lineage.ja.svg" width="960" alt="DTXmaniaNXT の系譜。DTXMania（FROM・DTXMania Group、2000 年〜）、DTXManiaXG verK（kairera0467）、DTXManiaNX（limyz・fisyher）、DTXManiaNX v2.0（BocuD）、DTXmaniaNXT の順。NXT は v2.0 の画像と効果音を無改変で同梱し、ソースコードは新規に書いたもの"></p>
+<p align="center"><img src="docs/readme/lineage.ja.svg" width="960" alt="DTXmaniaNXT の系譜。DTXMania（FROM・DTXMania Group、2000 年〜）、DTXManiaXG verK（kairera0467）、DTXManiaNX（limyz・fisyher）、DTXManiaNX v2.0（BocuD）、DTXmaniaNXT の順。NXT のソースコードは新規に書いたもの。スキンは v2.0 の画像と効果音から始め、段階的に自前の素材へ置き換えている途中"></p>
 
 ### DTXMania と派生版
 
@@ -232,7 +239,7 @@ DTXmaniaNXT は**非公式のファンメイド作品**です。2000 年から�
 | [DTXMania（OSDN）](https://osdn.net/projects/dtxmania) | yyagi | OSDN で開発されていた DTXMania です。DTX 形式を解説した [Wiki](https://osdn.net/projects/dtxmania/wiki/DTX%20data%20format) もここにあります。 |
 | [DTXManiaXG verK](https://osdn.net/projects/dtxmaniaxg-verk) | kairera0467 | DTXManiaNX のフォーク元です。 |
 | [DTXManiaNX](https://github.com/limyz/DTXmaniaNX) | limyz / fisyher | このリポジトリは、GitHub 上でこれをフォークしています。 |
-| [DTXManiaNX v2.0](https://github.com/BocuD/DTXmaniaNX) | BocuD | 画面レイアウトと、同梱しているスキンはこのバージョンのものです。 |
+| [DTXManiaNX v2.0](https://github.com/BocuD/DTXmaniaNX) | BocuD | 画面レイアウトはこのバージョンにならっています。スキンのうち、まだ置き換えていない部分もこのバージョンのものです。 |
 | [DTXMania AL](http://senamih.com/dtxal) | Sena | DTXManiaNX の README で、ほかの派生版と並んで紹介されている派生版です。 |
 
 プロジェクト名と並び順は、DTXManiaNX の README と各プロジェクトのページに合わせています。誤りがあれば [Issue](https://github.com/check5004/DTXmaniaNXT/issues) でお知らせください。
@@ -240,13 +247,23 @@ DTXmaniaNXT は**非公式のファンメイド作品**です。2000 年から�
 ### このリポジトリの中身
 
 - **ソースコード**（`main` ブランチ）は、このプロジェクトのために Rust で新しく書いたものです。DTXMania・DTXManiaNX のコードは含んでおらず、機能は同じ動きになるよう一から書き起こしています。ライセンスは [MIT](LICENSE) です。
-- **スキン**（`assets/skin`。画面の画像と効果音）は、[BocuD/DTXmaniaNX](https://github.com/BocuD/DTXmaniaNX) のタグ `V2.0.0-20260121-5` にある `Runtime/System` フォルダを、無改変でコピーしたものです（背景動画 2 本と、Windows が自動で作る `Thumbs.db`・`desktop.ini` は除いています）。DTXManiaNX がなくても動くよう、アプリに埋め込んでいます。**スキンには MIT ライセンスは適用されません。** 権利は DTXMania・DTXManiaNX の各制作者にあります。なお、DTXManiaNX のリポジトリにはライセンスファイルがありません。上流に含まれている DTXMania の使用許諾書（`Runtime/Licenses/dtxmania.txt`、MIT ライセンスと同等の内容）は、DTXMania 本体のソフトウェアを対象としたものです。詳細は [assets/README.md](assets/README.md) をご覧ください。
+- **スキン**（`assets/skin`。画面の画像と効果音）は、DTXManiaNX v2.0 のスキンから始めて、**段階的に自前の素材へ置き換えている途中**です。DTXManiaNX がなくても動くよう、アプリに埋め込んでいます。ファイルごとの内訳は [assets/README.md](assets/README.md) にあります。
+
+  | 段階 | 範囲 | 今の状態 |
+  | --- | --- | --- |
+  | 1 | KONAMI の「GITADORA」の絵やロゴが入っていた画像（背景、タイトルのロゴ、シャッター、STAGE FAILED、ランクなど） | DTXmaniaNXT のために作った素材に**置き換え済み**（23 ファイル）。使っていなかったものは削除 |
+  | 2 | 効果音とボイス | DTXManiaNX v2.0 のまま |
+  | 3 | そのほかの画像（判定の文字、ゲージ、パッド、並べ替えのアイコンなど） | DTXManiaNX v2.0 のまま |
+
+  - **自前の素材**（段階 1）は [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/deed.ja) です。使うときは「DTXmaniaNXT」と表記してください。画像生成 AI（OpenAI の GPT Image 2.6 Sunburst を OpenRouter 経由で使用）で絵を作り、切り抜き・縮小・文字入れをしています。生成の指示文は `tools/skin/prompts.json` にあり、既存のゲームや製品の名前は入れていません。
+  - **それ以外のスキン**は、[BocuD/DTXmaniaNX](https://github.com/BocuD/DTXmaniaNX) のタグ `V2.0.0-20260121-5` にある `Runtime/System` フォルダから無改変でコピーしたものです。MIT ライセンスも CC BY 4.0 も適用されません。権利は元の制作者にありますが、絵や音ごとの制作者の記録は残っていません。DTXManiaNX のリポジトリにはライセンスファイルがなく、上流に含まれている DTXMania の使用許諾書（`Runtime/Licenses/dtxmania.txt`、MIT ライセンスと同等の内容）は DTXMania 本体のソフトウェアを対象としたもので、これらのファイルには及びません。
+  - 0.8.0 までのリリースと過去のコミットには、段階 1 で置き換える前の画像が残っています。
 - **アプリのアイコン**は、DTXManiaNX の `dtx.ico`（DTXMania から受け継がれてきたアイコン）の「DTX」の文字を「NXT」に描き換えたものです。こちらも MIT ライセンスの対象外です。
 - **`master` ブランチ**には、参考として上流の C# 版 DTXManiaNX のコードを残しています。このリポジトリのライセンスは適用されません。
 
 ### 商標について
 
-画面のデザインは KONAMI の「GITADORA」シリーズを模したもので、スキンには「GITADORA」「FUZZ-UP」「Tri-Boost」の名称やロゴを含む画像があります。「GITADORA」は株式会社コナミデジタルエンタテインメントの商標です。DTXmaniaNXT は KONAMI とは一切関係がなく、KONAMI や DTXMania・DTXManiaNX の開発者による公認を受けたものでもありません。
+「GITADORA」は株式会社コナミデジタルエンタテインメントの商標です。画面の配置は KONAMI の「GITADORA」シリーズにならっています。0.8.0 までの同梱スキンには、「GITADORA FUZZ-UP」の絵やロゴがそのまま入った画像がありましたが、段階 1 ですべて置き換えました。DTXManiaNX v2.0 から残っている部品の中には GITADORA の画面に似せたものがあり、段階 2・3 で置き換えます。DTXmaniaNXT は KONAMI とは一切関係がなく、KONAMI や DTXMania・DTXManiaNX の開発者による公認を受けたものでもありません。
 
 **権利者の方で、修正や削除をご希望のものがありましたら、[Issue](https://github.com/check5004/DTXmaniaNXT/issues) でお知らせください。速やかに対応します。**
 
@@ -258,7 +275,7 @@ DTXmaniaNXT は**非公式のファンメイド作品**です。2000 年から�
 
 ### 画像について
 
-スクリーンショットと動画は開発中のビルドで撮影したため、配布中のバージョンとは細部が異なる場合があります。画像に出てくる曲はすべてデモ用で、実在の曲ではありません。「Neon Skyline」は DTX Web Editor のオリジナルのデモ曲で、それ以外の曲名は、その譜面を複製して架空の名前を付けたものです。表示されている記録も、撮影用に用意したものです。
+スクリーンショットと動画は開発中のビルドで撮影したため、配布中のバージョンとは細部が異なる場合があります。スキンは段階 1 まで置き換えた状態で、画面は日本語の表示で撮っています（英語の README には英語の画面を載せています）。画像に出てくる曲はすべてデモ用で、実在の曲ではありません。「Neon Skyline」は DTX Web Editor のオリジナルのデモ曲で、それ以外の曲名は、その譜面を複製して架空の名前を付けたものです。表示されている記録も、撮影用に用意したものです。
 
 ## 開発者向け
 
@@ -282,8 +299,10 @@ cargo test --all
 | `crates/records` | プレイ記録（SQLite） |
 | `crates/nx` | DTXManiaNX のフォルダの読み込み（`Config.ini`・`score.ini`） |
 | `crates/video` | 譜面の動画（#AVI）。Windows では Media Foundation を使用 |
+| `crates/i18n` | 画面に出す英語と日本語の文 |
 | `crates/app` | アプリ本体（winit + wgpu + egui、cpal、midir）。NX のスキンを上流と同じ座標で描画 |
-| `assets/skin` | 同梱している DTXManiaNX v2.0 のスキン（[クレジットと権利](#クレジットと権利)を参照） |
+| `assets/skin` | 同梱しているスキン。自前の素材に置き換え中（[クレジットと権利](#クレジットと権利)を参照） |
+| `tools/skin` | 新しいスキンの素材の生成の指示文と組み立て |
 | `testdata/charts` | テスト用の譜面と、手計算で確かめた正解データ |
 
 - 判定は画面のフレームではなく、MIDI の受信時刻と音声の再生位置で行います。
@@ -295,4 +314,4 @@ PR はフォーク元の上流ではなく、このリポジトリ（check5004/D
 
 ## ライセンス
 
-`main` ブランチのソースコードは [MIT ライセンス](LICENSE)です。`assets/skin` のスキン、`assets/icon` のアイコン、`master` ブランチにある上流のコードには適用されません（[クレジットと権利](#クレジットと権利)を参照）。
+`main` ブランチのソースコードは [MIT ライセンス](LICENSE)です。`assets/skin` のスキン（自前の素材は CC BY 4.0、残りは DTXManiaNX v2.0 のもの）、`assets/icon` のアイコン、`master` ブランチにある上流のコードには適用されません（[クレジットと権利](#クレジットと権利)を参照）。

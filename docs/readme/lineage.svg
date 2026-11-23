@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="960" height="300" viewBox="0 0 960 300" role="img" aria-labelledby="title desc">
 <title id="title">Where DTXmaniaNXT comes from</title>
-<desc id="desc">DTXMania, DTXManiaXG verK, DTXManiaNX by limyz, DTXManiaNX v2.0 by BocuD, and DTXmaniaNXT. NXT is new code; only the v2.0 skin (images and sounds) is bundled unchanged.</desc>
+<desc id="desc">DTXMania, DTXManiaXG verK, DTXManiaNX by limyz, DTXManiaNX v2.0 by BocuD, and DTXmaniaNXT. NXT is new code. It started from the v2.0 skin and is replacing it with its own artwork, step by step.</desc>
 <style>
 text{font-family:'Segoe UI','Inter','Helvetica Neue',Arial,'Hiragino Sans','Yu Gothic UI','Meiryo','Noto Sans JP',system-ui,sans-serif}
 .mono{font-family:'JetBrains Mono','SF Mono','Cascadia Mono',Consolas,Menlo,monospace}
@@ -37,7 +37,7 @@ text{font-family:'Segoe UI','Inter','Helvetica Neue',Arial,'Hiragino Sans','Yu G
 <text x="200" y="210" font-size="13" fill="#9AA8BC" font-weight="400" text-anchor="start">Each project was forked from the one before it.</text>
 <line x1="40" y1="232" x2="70" y2="232" stroke="#C77DFF" stroke-width="2" stroke-dasharray="4 3"/>
 <text x="78" y="236" font-size="12" fill="#C77DFF" font-weight="700" text-anchor="start">skin only</text>
-<text x="200" y="236" font-size="13" fill="#9AA8BC" font-weight="400" text-anchor="start">NXT bundles the v2.0 images and sounds unchanged (tag V2.0.0-20260121-5).</text>
+<text x="200" y="236" font-size="13" fill="#9AA8BC" font-weight="400" text-anchor="start">NXT started from the v2.0 skin and is replacing it with its own artwork, step by step.</text>
 <circle cx="55" cy="258" r="5" fill="#5CE1E6"/>
 <text x="200" y="262" font-size="13" fill="#E8EEF7" font-weight="400" text-anchor="start">NXT's code is written from scratch in Rust. No upstream code is copied.</text>
 </svg>
