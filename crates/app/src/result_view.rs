@@ -4,6 +4,7 @@
 //! 1 ページ目の右の空いた場所に、苦手な小節を進み具合のバーの形で足す。
 //! 2 ページ目（←→ で切り替え）は、このアプリで足した分析（苦手な小節、叩き方のくせ）。
 //! 練習の結果は 1 ページだけで、ランクとジャケットの場所に周ごとの成績の表を出す。
+//! どのページも、画面の下にパッドの役目の帯を出す（ドラムだけで、もう一度・区間練習・選曲へ戻るができる）。
 
 use std::f64::consts::FRAC_PI_2;
 use std::path::PathBuf;
@@ -16,9 +17,11 @@ use records::{BestScore, PROGRESS_SECTIONS};
 
 use crate::game::Outcome;
 use crate::gfx::{Canvas, Gfx, Opt, fit_scale, src};
+use crate::lag_view::LagResult;
 use crate::play_view::{
     Finish, LARGE_RESULT, PanelNumbers, draw_score_digits, draw_skill_panel, rotate_about_center,
 };
+use crate::settings_ui::{self as ui, Pad};
 use crate::sfx::Se;
 use crate::text::Style;
 
@@ -251,14 +254,15 @@ impl ResultView {
         self.draw_rank(c, g, elapsed);
         crate::result_training::draw_weak(c, g, o);
         crate::lag_view::draw_result(c, g, o);
-        self.draw_page_hint(
-            c,
-            g,
-            t(
-                "→ Details (weak spots, timing habits)",
-                "→ 詳しい結果（苦手な小節、叩き方のくせ）",
-            ),
-        );
+    }
+
+    /// 画面の下に、パッドの役目の帯を出す（どのページも）
+    pub fn draw_legend(&self, c: &Canvas, g: &mut Gfx, o: &Outcome) {
+        ui::legend(c, g, &self.hints(o));
+    }
+
+    fn hints(&self, o: &Outcome) -> Vec<ui::Hint<'static>> {
+        result_hints(self.page, o.practice.is_some(), o.lag.as_ref())
     }
 
     /// 練習の結果の 2 ページ目（周ごとの成績の表）
@@ -269,30 +273,11 @@ impl ResultView {
         self.draw_title(c, g);
     }
 
-    /// 2 ページ目の上に出す、ページの切り替えの案内
-    pub fn draw_analysis_hint(&self, c: &Canvas, g: &mut Gfx) {
-        self.draw_page_hint(c, g, t("← Score and rank", "← スコアとランク"));
-    }
-
     /// 入ってきたときのフェード。いちばん上に描く
     pub fn draw_fade(&self, c: &Canvas) {
         let t = self.entered.elapsed().as_secs_f32() / FADE_IN.as_secs_f32();
         if t < 1.0 {
             c.cover(Color32::from_black_alpha(((1.0 - t) * 255.0) as u8));
-        }
-    }
-
-    fn draw_page_hint(&self, c: &Canvas, g: &mut Gfx, text: &str) {
-        let style = Style {
-            px: 16.0,
-            color: Color32::from_gray(230),
-            bold: false,
-            shadow: None,
-            edge: Some((Color32::BLACK, 1.5)),
-            gradient: None,
-        };
-        if let Some(t) = g.texts.get(text, &style) {
-            t.draw(c, 1270.0 - t.w, 696.0, 1.0, 1.0);
         }
     }
 
@@ -440,6 +425,54 @@ impl ResultView {
             c.draw(&t, X - 165.0, Y + 100.0);
         }
     }
+}
+/// 結果の画面のパッドの役目（`main.rs` の結果の画面のパッドと同じ）。足のパッドは使わない
+fn result_hints(page: Page, practice: bool, lag: Option<&LagResult>) -> Vec<ui::Hint<'static>> {
+    let turn: ui::Hint<'static> = match (page, practice) {
+        (Page::Summary, true) => (&[Pad::HT, Pad::LT], t("Loop Table (→)", "周ごとの表（→）")),
+        (Page::Summary, false) => (&[Pad::HT, Pad::LT], t("Details (→)", "詳しい結果（→）")),
+        (Page::Analysis, true) => (
+            &[Pad::HT, Pad::LT],
+            t("Practice Result (←)", "練習の結果（←）"),
+        ),
+        (Page::Analysis, false) => (
+            &[Pad::HT, Pad::LT],
+            t("Score and Rank (←)", "スコアとランク（←）"),
+        ),
+    };
+    let mut v: Vec<ui::Hint<'static>> = vec![
+        (&[Pad::SD], t("Play Again (R)", "もう一度（R）")),
+        (
+            &[Pad::RD],
+            if practice {
+                t("Change Section / Speed (P)", "区間・速度を選び直す（P）")
+            } else {
+                t("Practice a Section (P)", "区間練習（P）")
+            },
+        ),
+    ];
+    // ずれの板のおすすめ（板は 1 ページ目だけ）
+    if page == Page::Summary
+        && let Some(lag) = lag
+    {
+        if lag.applied.is_some() {
+            v.push((
+                &[Pad::FT],
+                t("Undo Suggested Offset (O)", "おすすめを戻す（O）"),
+            ));
+        } else if lag.advice.changes() {
+            v.push((
+                &[Pad::FT],
+                t("Use Suggested Offset (O)", "補正をおすすめに（O）"),
+            ));
+        }
+    }
+    v.push(turn);
+    v.push((
+        &[Pad::CY, Pad::LC],
+        t("Song Select (Enter)", "選曲へ（Enter）"),
+    ));
+    v
 }
 
 /// 練習の結果のスコアの場所：クリアしたか、どこまでのぼったか
@@ -627,5 +660,63 @@ mod tests {
         assert_eq!(v.page, Page::Summary);
         v.turn();
         assert_eq!(v.page, Page::Analysis);
+    }
+
+    #[test]
+    fn the_legend_shows_what_each_pad_does() {
+        let _ja = i18n::scoped(i18n::Lang::Ja);
+        let pads = |h: &[ui::Hint<'static>], what: &str| {
+            h.iter()
+                .find(|x| x.1.starts_with(what))
+                .map(|x| x.0.to_vec())
+        };
+        // 練習の結果：SD でもう一度、RD で選び直す、CY・LC で選曲へ
+        let h = result_hints(Page::Summary, true, None);
+        assert_eq!(pads(&h, "もう一度"), Some(vec![Pad::SD]));
+        assert_eq!(pads(&h, "区間・速度を選び直す"), Some(vec![Pad::RD]));
+        assert_eq!(pads(&h, "選曲へ"), Some(vec![Pad::CY, Pad::LC]));
+        assert_eq!(pads(&h, "周ごとの表"), Some(vec![Pad::HT, Pad::LT]));
+        // ふだんの結果：おすすめがあるときだけ FT を出す
+        let advice = engine::lag::Advice {
+            global: None,
+            song: None,
+            global_ms: 5,
+            song_ms: 0,
+            global_now: 0,
+            song_now: 0,
+        };
+        let lag = LagResult {
+            charts: Vec::new(),
+            advice,
+            applied: None,
+        };
+        let h = result_hints(Page::Summary, false, Some(&lag));
+        assert_eq!(pads(&h, "区間練習"), Some(vec![Pad::RD]));
+        assert_eq!(pads(&h, "補正をおすすめに"), Some(vec![Pad::FT]));
+        assert_eq!(
+            pads(&result_hints(Page::Analysis, false, Some(&lag)), "補正"),
+            None
+        );
+        let none = LagResult {
+            advice: engine::lag::Advice {
+                global_ms: 0,
+                ..advice
+            },
+            ..lag
+        };
+        assert_eq!(
+            pads(&result_hints(Page::Summary, false, Some(&none)), "補正"),
+            None
+        );
+        // 足のパッドは使わない
+        for page in [Page::Summary, Page::Analysis] {
+            for practice in [true, false] {
+                assert!(
+                    result_hints(page, practice, None)
+                        .iter()
+                        .all(|h| !h.0.contains(&Pad::BD))
+                );
+            }
+        }
     }
 }

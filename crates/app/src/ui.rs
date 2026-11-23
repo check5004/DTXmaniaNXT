@@ -131,11 +131,9 @@ pub fn draw_result(ui: &mut egui::Ui, g: &mut Gfx, o: &Outcome) -> Vec<ResultAct
                 ui.add_space(24.0);
                 draw_tendencies(ui, &o.tendencies);
                 ui.add_space(24.0);
+                // ドラムのパッドは画面の下の帯に出す
                 if ui
-                    .button(i18n::t(
-                        "Back to Song Select (Enter, or Right Cymbal / Ride on drums)",
-                        "選曲に戻る（Enter、ドラムは右シンバルかライド）",
-                    ))
+                    .button(i18n::t("Back to Song Select (Enter)", "選曲に戻る（Enter）"))
                     .clicked()
                 {
                     actions.push(ResultAction::Back);
@@ -405,9 +403,9 @@ pub fn pick_folder(title: &str) -> Option<PathBuf> {
 }
 
 /// 演奏の画面で、レーンの下に短い知らせを出す
-pub fn play_toast(ctx: &egui::Context, c: &Canvas, msg: &str) {
+pub fn play_toast(ctx: &egui::Context, c: &Canvas, msg: &str, (x, y): (f32, f32)) {
     egui::Area::new(egui::Id::unique("play-toast"))
-        .fixed_pos(c.pos(574.0, 676.0))
+        .fixed_pos(c.pos(x, y))
         .pivot(Align2::CENTER_TOP)
         .interactable(false)
         .order(egui::Order::Foreground)
