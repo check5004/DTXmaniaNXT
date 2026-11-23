@@ -1,0 +1,311 @@
+{
+  "voice": {
+    "engine": "VOICEVOX エンジン 0.26.2（CPU 版）",
+    "character": "春日部つむぎ（ノーマル）",
+    "credit": "VOICEVOX:春日部つむぎ",
+    "speaker": 8,
+    "date": "2026-11-23",
+    "lines": {
+      "full_combo": {
+        "text": "フルコンボ！",
+        "kana": "フルコ'ンボ",
+        "fx": "call",
+        "inton": 1.15,
+        "speed": 1.0
+      },
+      "excellent": {
+        "text": "エクセレント！",
+        "kana": "エ'_クセレント",
+        "fx": "call",
+        "inton": 1.15,
+        "speed": 1.0
+      },
+      "new_record": {
+        "text": "ニューレコード！",
+        "kana": "ニュウレコ'オド",
+        "fx": "call",
+        "inton": 1.15,
+        "speed": 1.0
+      },
+      "stage_clear": {
+        "text": "ステージクリア！",
+        "kana": "_ステエジクリ'ア",
+        "fx": "call",
+        "inton": 1.15,
+        "speed": 1.0
+      },
+      "stage_failed": {
+        "text": "ステージ、フェイルド",
+        "kana": "_ステ'エジ、フェ'イルド",
+        "fx": "call",
+        "inton": 0.95,
+        "speed": 0.95,
+        "pitch": -0.03
+      },
+      "game_start": {
+        "text": "ゲームスタート！",
+        "kana": "ゲエムスタ'アト",
+        "fx": "call",
+        "inton": 1.15,
+        "speed": 1.0
+      },
+      "game_end": {
+        "text": "プレイしてくれて、ありがとう！またね！",
+        "kana": "プレ'イシテクレテ、アリ'ガトオ、マタ'ネ",
+        "fx": "call",
+        "inton": 1.1,
+        "speed": 1.0
+      },
+      "basic": {
+        "text": "ベーシック",
+        "kana": "ベ'エシック",
+        "fx": "ui",
+        "inton": 1.05,
+        "speed": 1.04
+      },
+      "advanced": {
+        "text": "アドバンスト",
+        "kana": "アドバ'ン_スト",
+        "fx": "ui",
+        "inton": 1.05,
+        "speed": 1.04
+      },
+      "extreme": {
+        "text": "エクストリーム",
+        "kana": "エ_クストリ'イム",
+        "fx": "ui",
+        "inton": 1.05,
+        "speed": 1.04
+      },
+      "master": {
+        "text": "マスター",
+        "kana": "マ'_スタア",
+        "fx": "ui",
+        "inton": 1.05,
+        "speed": 1.04
+      },
+      "sort_recommended": {
+        "text": "おすすめ",
+        "kana": "オススメ'",
+        "fx": "ui",
+        "inton": 1.05,
+        "speed": 1.04
+      },
+      "sort_title": {
+        "text": "タイトル",
+        "kana": "タ'イトル",
+        "fx": "ui",
+        "inton": 1.05,
+        "speed": 1.04
+      },
+      "sort_artist": {
+        "text": "アーティスト",
+        "kana": "ア'ア_ティスト",
+        "fx": "ui",
+        "inton": 1.05,
+        "speed": 1.04
+      },
+      "sort_difficulty": {
+        "text": "難易度",
+        "kana": "ナンイ'ド",
+        "fx": "ui",
+        "inton": 1.05,
+        "speed": 1.04
+      },
+      "sort_level": {
+        "text": "レベル",
+        "kana": "レ'ベル",
+        "fx": "ui",
+        "inton": 1.05,
+        "speed": 1.04
+      },
+      "sort_player": {
+        "text": "プレイヤー",
+        "kana": "プレ'イヤア",
+        "fx": "ui",
+        "inton": 1.05,
+        "speed": 1.04
+      },
+      "sort_allmusic": {
+        "text": "全曲",
+        "kana": "ゼンキョク'",
+        "fx": "ui",
+        "inton": 1.05,
+        "speed": 1.04
+      },
+      "sort_skill": {
+        "text": "スキル",
+        "kana": "_スキ'ル",
+        "fx": "ui",
+        "inton": 1.05,
+        "speed": 1.04
+      }
+    },
+    "files": {
+      "basic": "Sounds/Basic.ogg",
+      "advanced": "Sounds/Advanced.ogg",
+      "extreme": "Sounds/Extreme.ogg",
+      "master": "Sounds/Master.ogg",
+      "sort_recommended": "Graphics/Sorting/recommended.wav",
+      "sort_title": "Graphics/Sorting/title.wav",
+      "sort_artist": "Graphics/Sorting/artist.wav",
+      "sort_difficulty": "Graphics/Sorting/difficulty.wav",
+      "sort_level": "Graphics/Sorting/level.wav",
+      "sort_player": "Graphics/Sorting/player.wav",
+      "sort_allmusic": "Graphics/Sorting/allmusic.wav",
+      "sort_skill": "Graphics/Sorting/skill.wav"
+    },
+    "note": "アクセントは NHK 日本語発音アクセント辞典（Wiktionary に引かれている型）に合わせ、外来語の複合語は語の型を保つ。抑揚（inton）は 1.0 前後にする（大きくすると外れて聞こえる）。"
+  },
+  "music": {
+    "title": {
+      "use": "Sounds/Title.ogg（タイトルの画面で 1 回流す）",
+      "date": "2026-11-23",
+      "model": "google/lyria-3-clip-preview",
+      "cost_usd": 0.04,
+      "prompt": "Instrumental title-screen music for a drum practice game with a street graffiti look. Energetic funk-rock breakbeat at 112 BPM: a tight live drum kit with crisp snare, ghost notes and open hi-hats, slap bass, punchy brass section stabs, wah guitar riffs, short drum fills. Confident and stylish, polished modern studio mix, wide stereo, no vocals. It should build for a few bars, peak, and end with a clean final hit.",
+      "fade_out_sec": 3.0
+    },
+    "y_clear": {
+      "date": "2026-11-23",
+      "model": "google/lyria-3-clip-preview",
+      "cost_usd": 0.04,
+      "use": "Sounds/stage clear.ogg",
+      "prompt": "One short modern stinger for the result screen of a drum rhythm game: punchy live drums, a filtered riser that resolves into one huge hit with a wide synth-brass chord, a sub-bass drop and a long, wide reverb tail. About three seconds of sound, then complete silence for the rest of the clip. Sleek, contemporary, premium sound design, no vocals. Not cheesy, not retro, no orchestral fanfare."
+    },
+    "y_combo": {
+      "date": "2026-11-23",
+      "model": "google/lyria-3-clip-preview",
+      "cost_usd": 0.04,
+      "use": "Sounds/Full combo.ogg",
+      "prompt": "One short modern stinger for a drum rhythm game when the player hits every note: a fast drum fill, a rising bright synth arpeggio and a filtered riser that explode into one huge sparkling chord hit with crash cymbals and a sub-bass drop, ringing out in a wide reverb. About three seconds of sound, then complete silence for the rest of the clip. Euphoric, sleek, premium sound design, no vocals. Not cheesy, not retro."
+    },
+    "y_failed": {
+      "date": "2026-11-23",
+      "model": "google/lyria-3-clip-preview",
+      "cost_usd": 0.04,
+      "use": "Sounds/Stage failed.ogg",
+      "prompt": "One short modern stinger for a drum rhythm game when the player fails the stage: the beat slows down and pitches down like a tape stop, a dark low synth chord and a reverse cymbal swell, ending in a deep sub-bass hit with a dark reverb tail. About three seconds of sound, then complete silence for the rest of the clip. Moody and stylish, premium sound design, no vocals. Not comic."
+    },
+    "y_excellent": {
+      "date": "2026-11-23",
+      "model": "google/lyria-3-clip-preview",
+      "cost_usd": 0.04,
+      "use": "Sounds/Excellent.ogg",
+      "prompt": "One short modern stinger for a drum rhythm game when every single note is perfect: a fast drum fill and a soaring filtered riser burst into a huge, shimmering, wide synth chord hit with crash cymbals, a deep sub-bass drop and sparkling high arpeggios, ringing out in a long, wide reverb. Euphoric and triumphant, the biggest moment of the game. About four seconds of sound, then complete silence for the rest of the clip. Sleek, contemporary, premium sound design, no vocals. Not cheesy, not retro, no orchestral fanfare."
+    },
+    "y_new_record": {
+      "date": "2026-11-23",
+      "model": "google/lyria-3-clip-preview",
+      "cost_usd": 0.04,
+      "use": "Sounds/New Record.ogg",
+      "prompt": "A very short modern accent sound for a drum rhythm game when the player beats their best score: a quick rising sparkle sweep into one bright, punchy synth chord stab with a crisp snare hit and a short shimmering tail. About two seconds of sound, then complete silence for the rest of the clip. Sleek, contemporary, premium sound design, no vocals. Not cheesy, not retro, no orchestral fanfare."
+    },
+    "y_game_start": {
+      "date": "2026-11-23",
+      "model": "google/lyria-3-clip-preview",
+      "cost_usd": 0.04,
+      "use": "Sounds/Game start.ogg",
+      "prompt": "One short modern stinger for a drum rhythm game when the player presses start: a punchy drum fill and a fast power-up riser that hit one big, wide synth chord with a sub-bass drop and a crash cymbal. Energetic and ready to go. About three seconds of sound, then complete silence for the rest of the clip. Sleek, contemporary, premium sound design, no vocals. Not cheesy, not retro, no orchestral fanfare."
+    },
+    "y_game_end": {
+      "date": "2026-11-23",
+      "model": "google/lyria-3-clip-preview",
+      "cost_usd": 0.04,
+      "use": "Sounds/Game end.ogg",
+      "prompt": "A short modern outro for a drum rhythm game when the player quits: a warm, wide synth chord swells in over a soft reverse cymbal, then a gentle final kick and sub-bass, fading out in a long airy reverb. Calm, warm and grateful, not sad. About five seconds of sound, then complete silence for the rest of the clip. Sleek, contemporary, premium sound design, no vocals. Not cheesy, not retro, no orchestral fanfare."
+    },
+    "y_loading": {
+      "date": "2026-11-23",
+      "model": "google/lyria-3-clip-preview",
+      "cost_usd": 0.04,
+      "use": "Sounds/Now loading.ogg",
+      "prompt": "A short modern loading sound for a drum rhythm game: tight ticking hi-hats and a pulsing sub-bass under a filtered riser that builds tension for about three and a half seconds and resolves into one soft impact. Sleek and anticipatory, premium sound design, no vocals. Not cheesy, not retro."
+    }
+  },
+  "ui": {
+    "tool": "ui_sounds.py",
+    "files": {
+      "move": "Sounds/Move.ogg",
+      "change": "Sounds/Change.ogg",
+      "decide": "Sounds/Decide.ogg",
+      "cancel": "Sounds/Cancel.ogg"
+    }
+  },
+  "jingles": {
+    "note": "Lyria の曲（music の y_*）から切り出す区間（秒）、終わりを消す長さ、重ねる声とその位置。音量は lufs（無ければ -13）",
+    "cuts": {
+      "stage_clear": {
+        "file": "Sounds/stage clear.ogg",
+        "raw": "y_clear",
+        "start": 16.02,
+        "end": 20.3,
+        "fade_out": 1.6,
+        "voice": "stage_clear",
+        "voice_at": 1.07
+      },
+      "full_combo": {
+        "file": "Sounds/Full combo.ogg",
+        "raw": "y_combo",
+        "start": 17.55,
+        "end": 21.8,
+        "fade_out": 1.6,
+        "voice": "full_combo",
+        "voice_at": 1.19
+      },
+      "excellent": {
+        "file": "Sounds/Excellent.ogg",
+        "raw": "y_excellent",
+        "start": 16.02,
+        "end": 20.2,
+        "fade_out": 1.7,
+        "voice": "excellent",
+        "voice_at": 0.8
+      },
+      "stage_failed": {
+        "file": "Sounds/Stage failed.ogg",
+        "raw": "y_failed",
+        "start": 20.89,
+        "end": 25.0,
+        "fade_out": 1.8,
+        "voice": "stage_failed",
+        "voice_at": 0.1
+      },
+      "new_record": {
+        "file": "Sounds/New Record.ogg",
+        "raw": "y_new_record",
+        "start": 9.65,
+        "end": 13.5,
+        "fade_out": 0.6,
+        "voice": "new_record",
+        "voice_at": 0.1
+      },
+      "game_start": {
+        "file": "Sounds/Game start.ogg",
+        "raw": "y_game_start",
+        "start": 4.28,
+        "end": 7.3,
+        "fade_out": 1.2,
+        "voice": "game_start",
+        "voice_at": 0.4
+      },
+      "game_end": {
+        "file": "Sounds/Game end.ogg",
+        "raw": "y_game_end",
+        "start": 15.48,
+        "end": 21.0,
+        "fade_out": 2.2,
+        "voice": "game_end",
+        "voice_at": 0.25
+      },
+      "loading": {
+        "file": "Sounds/Now loading.ogg",
+        "raw": "y_loading",
+        "start": 0.0,
+        "end": 3.0,
+        "fade_out": 0.5,
+        "lufs": -15.0
+      }
+    }
+  }
+}
