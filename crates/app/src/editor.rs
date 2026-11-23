@@ -23,12 +23,17 @@ pub enum Opened {
 
 /// 既定のブラウザでエディタを開く
 pub fn open() -> std::io::Result<Opened> {
+    open_url(URL)
+}
+
+/// 既定のブラウザでページを開く（クレジットの一覧も、ここを通して続けて開かないようにする）
+pub fn open_url(url: &str) -> std::io::Result<Opened> {
     let now = Instant::now();
     let mut last = LAST_OPENED.lock().unwrap_or_else(|e| e.into_inner());
     if !should_open(*last, now) {
         return Ok(Opened::Recently);
     }
-    webbrowser::open(URL)?;
+    webbrowser::open(url)?;
     *last = Some(now);
     Ok(Opened::Opened)
 }

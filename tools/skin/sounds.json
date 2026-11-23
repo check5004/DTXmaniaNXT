@@ -1,0 +1,165 @@
+{
+  "voice": {
+    "engine": "VOICEVOX エンジン 0.26.2（CPU 版）",
+    "character": "春日部つむぎ（ノーマル）",
+    "credit": "VOICEVOX:春日部つむぎ",
+    "speaker": 8,
+    "date": "2026-11-23",
+    "lines": {
+      "full_combo": {
+        "text": "フルコンボ！",
+        "fx": "call",
+        "inton": 1.45,
+        "speed": 1.02,
+        "pitch": 0.03
+      },
+      "excellent": {
+        "text": "エクセレント！",
+        "fx": "call",
+        "inton": 1.5,
+        "speed": 1.0,
+        "pitch": 0.04
+      },
+      "new_record": {
+        "text": "ニューレコード！",
+        "fx": "call",
+        "inton": 1.45,
+        "speed": 1.04,
+        "pitch": 0.03
+      },
+      "stage_clear": {
+        "text": "ステージクリア！",
+        "fx": "call",
+        "inton": 1.4,
+        "speed": 1.02,
+        "pitch": 0.02
+      },
+      "stage_failed": {
+        "text": "ステージ、フェイルド",
+        "fx": "call",
+        "inton": 0.9,
+        "speed": 0.92,
+        "pitch": -0.04
+      },
+      "game_start": {
+        "text": "ゲームスタート！",
+        "fx": "call",
+        "inton": 1.45,
+        "speed": 1.04,
+        "pitch": 0.03
+      },
+      "game_end": {
+        "text": "プレイしてくれて、ありがとう！またね！",
+        "fx": "call",
+        "inton": 1.3,
+        "speed": 1.02,
+        "pitch": 0.02
+      },
+      "basic": {
+        "text": "ベーシック",
+        "fx": "ui",
+        "inton": 1.3,
+        "speed": 1.08
+      },
+      "advanced": {
+        "text": "アドバンスト",
+        "fx": "ui",
+        "inton": 1.3,
+        "speed": 1.08
+      },
+      "extreme": {
+        "text": "エクストリーム",
+        "fx": "ui",
+        "inton": 1.35,
+        "speed": 1.06
+      },
+      "master": {
+        "text": "マスター",
+        "fx": "ui",
+        "inton": 1.35,
+        "speed": 1.06
+      },
+      "sort_recommended": {
+        "text": "おすすめ",
+        "fx": "ui",
+        "inton": 1.25,
+        "speed": 1.08
+      },
+      "sort_title": {
+        "text": "タイトル",
+        "fx": "ui",
+        "inton": 1.25,
+        "speed": 1.08
+      },
+      "sort_artist": {
+        "text": "アーティスト",
+        "fx": "ui",
+        "inton": 1.25,
+        "speed": 1.08
+      },
+      "sort_difficulty": {
+        "text": "難易度",
+        "fx": "ui",
+        "inton": 1.25,
+        "speed": 1.08
+      },
+      "sort_level": {
+        "text": "レベル",
+        "fx": "ui",
+        "inton": 1.25,
+        "speed": 1.08
+      },
+      "sort_player": {
+        "text": "プレイヤー",
+        "fx": "ui",
+        "inton": 1.25,
+        "speed": 1.08
+      },
+      "sort_allmusic": {
+        "text": "全曲",
+        "fx": "ui",
+        "inton": 1.25,
+        "speed": 1.08
+      },
+      "sort_skill": {
+        "text": "スキル",
+        "fx": "ui",
+        "inton": 1.25,
+        "speed": 1.08
+      }
+    },
+    "files": {
+      "basic": "Sounds/Basic.ogg",
+      "advanced": "Sounds/Advanced.ogg",
+      "extreme": "Sounds/Extreme.ogg",
+      "master": "Sounds/Master.ogg",
+      "sort_recommended": "Graphics/Sorting/recommended.wav",
+      "sort_title": "Graphics/Sorting/title.wav",
+      "sort_artist": "Graphics/Sorting/artist.wav",
+      "sort_difficulty": "Graphics/Sorting/difficulty.wav",
+      "sort_level": "Graphics/Sorting/level.wav",
+      "sort_player": "Graphics/Sorting/player.wav",
+      "sort_allmusic": "Graphics/Sorting/allmusic.wav",
+      "sort_skill": "Graphics/Sorting/skill.wav"
+    }
+  },
+  "music": {
+    "title": {
+      "use": "Sounds/Title.ogg（タイトルの画面で 1 回流す）",
+      "date": "2026-11-23",
+      "model": "google/lyria-3-clip-preview",
+      "cost_usd": 0.04,
+      "prompt": "Instrumental title-screen music for a drum practice game with a street graffiti look. Energetic funk-rock breakbeat at 112 BPM: a tight live drum kit with crisp snare, ghost notes and open hi-hats, slap bass, punchy brass section stabs, wah guitar riffs, short drum fills. Confident and stylish, polished modern studio mix, wide stereo, no vocals. It should build for a few bars, peak, and end with a clean final hit.",
+      "fade_out_sec": 3.0
+    }
+  },
+  "ui": {
+    "tool": "ui_sounds.py",
+    "files": {
+      "move": "Sounds/Move.ogg",
+      "change": "Sounds/Change.ogg",
+      "decide": "Sounds/Decide.ogg",
+      "cancel": "Sounds/Cancel.ogg"
+    }
+  }
+}
