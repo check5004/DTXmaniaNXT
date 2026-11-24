@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use library::SortKind;
 
-use crate::audio::{AudioOut, Bus, OutputLatency, Sound, load_sound, load_sound_bytes};
+use crate::audio::{AudioOut, Bus, OutputLatency, Sound, click, load_sound, load_sound_bytes};
 
 /// 効果音の種類（上流 `CSkin` のシステムサウンド）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -142,6 +142,8 @@ const SECTION_TAG: u8 = 8;
 const SECTION_GAP_MS: f64 = 600.0;
 /// 区間の音を鳴らし始めるまでの余裕（ミリ秒）。出力のバッファより先に置く
 const SECTION_LEAD_MS: f64 = 80.0;
+/// 区間の音のカウントのクリックの大きさ（練習のカウントと同じ）
+const SECTION_CLICK_GAIN: f32 = 0.8;
 
 pub struct Sfx {
     out: Option<AudioOut>,
@@ -159,6 +161,8 @@ struct SectionLoop {
     sound: Sound,
     /// 1 回の長さ（ミリ秒）
     len_ms: f64,
+    /// カウントのクリック（音の頭からのミリ秒と、鳴らす音）
+    clicks: Vec<(f64, Sound)>,
     /// 出力の時刻で、鳴らし始めた（鳴らす予定の）頭。古い順
     starts: Vec<f64>,
 }
@@ -294,8 +298,9 @@ impl Sfx {
         self.out.as_ref()?.song_ms_at(crate::time::host_us())
     }
 
-    /// 区間の音をくり返し流す（前の区間の音とプレビューは止める）。曲の音の系統の音量で鳴る
-    pub fn play_section(&mut self, sound: Sound) {
+    /// 区間の音をくり返し流す（前の区間の音とプレビューは止める）。曲の音の系統の音量で鳴る。
+    /// `clicks_ms` はカウントのクリックの時刻（音の頭からのミリ秒、最初が 1 拍目）。メトロノームの系統の音量で鳴る
+    pub fn play_section(&mut self, sound: Sound, clicks_ms: &[f64]) {
         self.stop_section();
         self.preview(None);
         let (Some(rate), Some(now)) = (self.rate(), self.out_now_ms()) else {
@@ -305,9 +310,15 @@ impl Sfx {
         if len_ms <= 0.0 {
             return;
         }
+        let clicks = clicks_ms
+            .iter()
+            .enumerate()
+            .map(|(i, &ms)| (ms, click(rate, i == 0)))
+            .collect();
         self.section = Some(SectionLoop {
             sound,
             len_ms,
+            clicks,
             starts: Vec::new(),
         });
         self.queue_section(now + SECTION_LEAD_MS);
@@ -337,6 +348,9 @@ impl Sfx {
             return;
         };
         out.play_at_tagged(&s.sound, at, 1.0, SECTION_TAG, Bus::Song);
+        for (ms, c) in &s.clicks {
+            out.play_at_tagged(c, at + ms, SECTION_CLICK_GAIN, SECTION_TAG, Bus::Click);
+        }
         s.starts.push(at);
         // 古いものは要らない
         if s.starts.len() > 4 {
