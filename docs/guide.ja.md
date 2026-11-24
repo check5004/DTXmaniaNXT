@@ -10,7 +10,7 @@
 - 新しい版は、起動したときに GitHub のリリースにあるかを確かめ、あればタイトルのメニューの下に「新しい版」の行が出ます。その行を選ぶと落とし始め（落としている間は画面の隅に % が出て、そのまま遊べます）、落とし終えたら「再起動して入れ替える」で入れ替えて起動し直します。選ばずに終了しても、そのときに入れ替わります。設定の「アプリ」の「更新」で、知らせる（既定）・自動（起動したときに落とし、終了したときに入れ替える）・確かめない を選べます。
 - 設定と記録は別のフォルダ（下の `%APPDATA%\DTXmaniaNXT`）にあるので、更新しても、入れ直しても引き継がれます。exe 単体で使っていた人も、Setup.exe で一度入れ直せばそのまま使えます（古い exe は消してかまいません）。
 - アンインストールは Windows の設定の「アプリ」から行います。設定と記録は残ります。
-- まだリリースしていない変更を試すときは、[Actions](https://github.com/check5004/DTXmaniaNXT/actions) で成功した CI の実行を開き、下の Artifacts から `dtxmanianxt-Windows`（macOS は `dtxmanianxt-macOS`）をダウンロードします。
+- まだリリースしていない変更を試すときは、[Actions](https://github.com/check5004/DTXmaniaNXT/actions) で成功した CI の実行を開き、下の Artifacts から `dtxmanianxt-Windows` をダウンロードします（macOS は CI (macOS) の実行の `dtxmanianxt-macOS`）。
 
 ## 遊び方
 
