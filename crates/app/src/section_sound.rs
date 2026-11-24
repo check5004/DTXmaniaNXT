@@ -2,6 +2,8 @@
 //!
 //! 曲の音をすべて読むのは時間がかかるので、メニューを開いたら別のスレッドで読む（読み終えるまでは絵だけ）。
 //! 区間の音は、自動で鳴らす音とドラムの音符の音を 1 本にまとめて作る（[`mix_bgm`]）。これも別のスレッドで作る。
+//! 練習と同じく、区間の頭の 1 小節前（助走）から、4 拍のカウントのクリックを付けて流す
+//! （区間だけを流すと、練習を始めたときに助走の分だけずれて聞こえる。2026-11-24 ユーザー指摘）。
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -10,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use dtx::TempoMap;
-use engine::practice::Section;
+use engine::practice::{Section, SectionTimes};
 
 use crate::audio::Sound;
 use crate::chart_sound::{AutoMix, AutoVoice, ChartSounds};
@@ -28,9 +30,18 @@ pub struct SongSounds {
     /// 鳴らす音（BGM・効果音と、ドラムの音符。時刻の順）
     voices: Vec<AutoVoice>,
     sounds: HashMap<u16, Sound>,
-    /// 小節の頭の時刻（ミリ秒）。最後は曲の終わり
-    measure_ms: Vec<f64>,
+    tempo: TempoMap,
     rate: u32,
+}
+
+/// 区間を流す音
+pub struct SectionSound {
+    /// 助走の頭から区間の終わりまでの音
+    pub sound: Sound,
+    /// カウントのクリックの時刻（音の頭からのミリ秒。最初が 1 拍目）
+    pub clicks_ms: Vec<f64>,
+    /// 音の中で区間が始まる所（頭から 0〜1）
+    pub lead: f32,
 }
 
 impl SongSounds {
@@ -49,31 +60,30 @@ impl SongSounds {
             path.parent().unwrap_or(Path::new(".")),
             rate,
         );
-        let measure_ms = (0..=tempo.measure_count())
-            .map(|m| tempo.measure_start_ms(m))
-            .collect();
         Ok(Self {
             voices: chart_sounds.auto,
             sounds,
-            measure_ms,
+            tempo,
             rate,
         })
     }
 
-    /// 区間 `s` の音（頭の小節の頭から、終わりの小節の終わりまで）
-    pub fn section(&self, s: Section) -> Option<Sound> {
-        let from = *self.measure_ms.get(s.first as usize)?;
-        let to = *self.measure_ms.get(s.last as usize + 1)?;
-        if to <= from {
+    /// 区間 `s` の音。練習の最初の周と同じく、助走（区間の 1 小節前か 4 拍前の早いほう）から区間の終わりまで
+    pub fn section(&self, s: Section) -> Option<SectionSound> {
+        if s.last as usize >= self.tempo.measure_count() {
             return None;
         }
-        Some(Sound::from_samples(mix_bgm(
-            &self.voices,
-            &self.sounds,
-            self.rate,
-            from,
-            to,
-        )))
+        let t = SectionTimes::new(&self.tempo, s);
+        let (from, to) = (t.run_up_ms, t.end_ms);
+        if to <= t.start_ms || t.start_ms < from {
+            return None;
+        }
+        let sound = Sound::from_samples(mix_bgm(&self.voices, &self.sounds, self.rate, from, to));
+        Some(SectionSound {
+            sound,
+            clicks_ms: t.count_in_ms.iter().map(|c| c - from).collect(),
+            lead: ((t.start_ms - from) / (to - from)) as f32,
+        })
     }
 }
 
@@ -89,9 +99,9 @@ pub struct SectionAudio {
     /// 選んでいる区間と、それを選んだ時刻
     wanted: Option<(Section, Instant)>,
     /// 区間の音を作っている
-    mixing: Option<(Section, Job<Option<Sound>>)>,
-    /// 流している区間
-    playing: Option<Section>,
+    mixing: Option<(Section, Job<Option<SectionSound>>)>,
+    /// 流している区間と、音の中で区間が始まる所
+    playing: Option<(Section, f32)>,
 }
 
 impl SectionAudio {
@@ -152,7 +162,7 @@ impl SectionAudio {
             self.wanted = shown.map(|s| (s, Instant::now()));
         }
         if let (Some((s, at)), Some(sounds)) = (self.wanted, &self.sounds)
-            && self.playing != Some(s)
+            && self.playing.map(|p| p.0) != Some(s)
             && self.mixing.is_none()
             && at.elapsed() >= SETTLE
         {
@@ -165,8 +175,8 @@ impl SectionAudio {
             let s = *s;
             self.mixing = None;
             if let Ok(Some(sound)) = r {
-                sfx.play_section(sound);
-                self.playing = Some(s);
+                sfx.play_section(sound.sound, &sound.clicks_ms);
+                self.playing = Some((s, sound.lead));
             }
         }
         if self.off {
@@ -174,11 +184,71 @@ impl SectionAudio {
         } else if self.sounds.is_none() {
             practice_menu::Sound::Loading
         } else {
+            // 白い線は区間の中だけ（助走のあいだは出さない）
             practice_menu::Sound::Playing(
                 self.playing
-                    .filter(|&s| Some(s) == shown)
-                    .and_then(|_| sfx.section_position()),
+                    .filter(|&(s, _)| Some(s) == shown)
+                    .and_then(|(_, lead)| in_section(sfx.section_position()?, lead)),
             )
         }
+    }
+}
+
+/// 助走から流す音の位置 `pos`（頭から 0〜1）を、区間の頭からの位置（0〜1）に直す。助走のあいだは None
+fn in_section(pos: f32, lead: f32) -> Option<f32> {
+    if pos < lead || lead >= 1.0 {
+        return None;
+    }
+    Some((pos - lead) / (1.0 - lead))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// BPM 120、4/4 で小節 0〜7 に 4 分の SD（音は鳴らさない）
+    fn sounds() -> SongSounds {
+        let mut text = String::from("#BPM: 120\n");
+        for m in 0..8 {
+            text.push_str(&format!("#{m:03}12: 01010101\n"));
+        }
+        let chart = dtx::parse(&text);
+        SongSounds {
+            voices: Vec::new(),
+            sounds: HashMap::new(),
+            tempo: TempoMap::build(&chart),
+            rate: 1000,
+        }
+    }
+
+    #[test]
+    fn a_section_plays_from_the_bar_before_with_the_count_in() {
+        // 小節 4〜5 は 8000〜12000ms。助走は小節 3 の頭（6000ms）から
+        let s = sounds().section(Section::new(4, 5)).unwrap();
+        assert_eq!(s.sound.frames(), 6000);
+        assert_eq!(s.clicks_ms, vec![0.0, 500.0, 1000.0, 1500.0]);
+        assert!((s.lead - 2000.0 / 6000.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn the_first_bar_counts_in_before_the_song() {
+        // 曲の頭の前は、テンポを延ばして 4 拍数える
+        let s = sounds().section(Section::new(0, 0)).unwrap();
+        assert_eq!(s.sound.frames(), 4000);
+        assert_eq!(s.clicks_ms, vec![0.0, 500.0, 1000.0, 1500.0]);
+        assert!((s.lead - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_section_past_the_end_has_no_sound() {
+        assert!(sounds().section(Section::new(7, 9)).is_none());
+    }
+
+    #[test]
+    fn the_white_line_shows_only_inside_the_section() {
+        assert_eq!(in_section(0.1, 0.25), None);
+        assert_eq!(in_section(0.25, 0.25), Some(0.0));
+        assert_eq!(in_section(0.625, 0.25), Some(0.5));
+        assert_eq!(in_section(0.5, 1.0), None);
     }
 }

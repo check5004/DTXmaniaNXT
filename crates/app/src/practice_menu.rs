@@ -864,7 +864,10 @@ impl PracticeMenu {
         }
         let audio = match sound {
             Sound::Loading => Some(t("♪ Loading the song…", "♪ 曲の音を読んでいます…")),
-            Sound::Playing(_) => Some(t("♪ Playing this part", "♪ この所の音を流しています")),
+            Sound::Playing(_) => Some(t(
+                "♪ Playing with the count-in, as in practice",
+                "♪ 練習と同じく、カウントから流しています",
+            )),
             Sound::Off => None,
         };
         if let Some(a) = audio
