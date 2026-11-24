@@ -1,0 +1,31 @@
+name: CI (macOS)
+
+# ci.yml の macOS 版。GitHub の macOS の実行機が無いとき CI 全体が赤くならないよう分けている
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: macos-latest
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test --all
+      - run: cargo build --release -p dtxmanianxt
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dtxmanianxt-macOS
+          path: target/release/dtxmanianxt
+          if-no-files-found: error
