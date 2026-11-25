@@ -90,6 +90,9 @@ pub struct Config {
     /// 書いていない設定のファイルは英語版の前からの人なので日本語にする（[`Config::load`]、2026-11-22 ユーザーが選んだ）
     #[serde(skip_serializing_if = "String::is_empty")]
     pub language: String,
+    /// 他の DTXMania から引き継ぐ画面を一度見せた（タイトルの「見つかりました」の知らせを出さない）
+    #[serde(skip_serializing_if = "is_false")]
+    pub import_offered: bool,
     /// 全画面とボーダーレスを出すモニター（`None` なら窓のあるモニター）。ウィンドウのときは、起動したときにこの真ん中に開く
     #[serde(skip_serializing_if = "Option::is_none")]
     pub monitor: Option<MonitorPick>,
@@ -187,6 +190,7 @@ impl Default for Config {
             language: String::new(),
             monitor: None,
             window: None,
+            import_offered: false,
             settings: Values::default(),
         }
     }

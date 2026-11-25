@@ -36,6 +36,7 @@ use crate::settings::{self, Group, Kind};
 use crate::settings_ui::{self as ui, Icon, Pad};
 use crate::sfx::Se;
 use crate::stretch::Pitch;
+use crate::takeover::{self, Part};
 use crate::text::Style;
 use crate::title_view::draw_scanning;
 use crate::update::UpdateMode;
@@ -201,6 +202,10 @@ pub enum Page {
     Pause,
     /// 音量ミキサー（全体と系統ごとの音量。よく使う・簡易設定・一時停止から開く）
     Mixer,
+    /// 他の DTXMania から引き継ぐ: どの DTXMania から（見つけたものと、自分で選ぶ）
+    Import,
+    /// 他の DTXMania から引き継ぐ: 引き継ぐ項目を選ぶ
+    ImportItems,
 }
 
 /// 値を変えられる設定（`Config` の欄）
@@ -289,6 +294,30 @@ pub enum ItemId {
     ApplyAdvice,
     /// 全画面とボーダーレスを出すモニター（0 は窓のあるモニター、1 からはつながっているモニターの並び）
     Monitor,
+    /// 他の DTXMania から引き継ぐ（どの DTXMania からの一覧へ）
+    Import,
+    /// 引き継ぐ前の設定に戻す
+    ImportUndo,
+    /// 見つけた DTXMania（何番目か）を読む
+    ImportSource(usize),
+    /// ショートカット・exe・設定のファイルを選んで読む
+    ImportPickFile,
+    /// フォルダを選んで読む
+    ImportPickFolder,
+    /// もう一度探す
+    ImportSearch,
+    /// 見るだけの行（探しているところ、読めなかったわけ）
+    ImportNote,
+    /// 選んだ項目を引き継ぐ
+    ImportApply,
+    /// DTXMania の MIDI の機器（[`crate::takeover::Plan::midi`] の何番目か）を引き継ぐか
+    ImportMidi(usize),
+    /// その機器の割り当てを写す先
+    ImportMidiTarget(usize),
+    /// 項目（[`crate::takeover::Plan::items`] の何番目か）を引き継ぐか
+    ImportItem(usize),
+    /// 引き継げないもの（見るだけ）
+    ImportRejected(usize),
 }
 
 /// 数の見せ方
@@ -357,6 +386,8 @@ pub enum Ctl {
     Action { confirm: Option<String> },
     /// レーンの割り当て（決定してから叩いて足す・外す）
     Lane(DrumLane),
+    /// するかしないかの印（左右と決定で切り替える。他の DTXMania から引き継ぐ項目）
+    Check { on: bool },
     /// 見るだけ
     Info,
 }
@@ -394,7 +425,7 @@ impl Row {
     pub fn editable(&self) -> bool {
         matches!(
             self.ctl,
-            Ctl::Toggle { .. } | Ctl::Choice { .. } | Ctl::Number { .. }
+            Ctl::Toggle { .. } | Ctl::Choice { .. } | Ctl::Number { .. } | Ctl::Check { .. }
         )
     }
 
@@ -941,6 +972,22 @@ pub struct ConfigInfo<'a> {
     pub timing: Option<TimingInfo>,
     /// つながっているモニター（出すモニターの選択肢。左から）
     pub monitors: &'a [MonitorInfo],
+    /// 他の DTXMania からの引き継ぎ（設定の画面だけ）
+    pub import: Option<ImportInfo<'a>>,
+}
+
+/// 他の DTXMania からの引き継ぎ（設定の画面に出すもの）
+pub struct ImportInfo<'a> {
+    /// 見つけて読めた DTXMania
+    pub sources: &'a [nx::Source],
+    /// まだ探している
+    pub searching: bool,
+    /// 読んだ設定から作った項目
+    pub plan: Option<&'a takeover::Plan>,
+    /// 読めなかったわけ
+    pub error: Option<&'a str>,
+    /// 引き継ぐ前の設定を残した日時（「引き継ぐ前に戻す」を出す）
+    pub backup: Option<&'a str>,
 }
 
 /// 出すモニターの選択肢の、窓のあるモニター（選んでいない）の名前
@@ -1475,7 +1522,31 @@ pub fn rows(page: Page, info: &ConfigInfo<'_>) -> Vec<Row> {
                 ),
                 None,
             ));
+            let r = s.at(t("Import", "引き継ぎ"));
+            r.push(page_row(
+                ItemId::Import,
+                t("Import from Other DTXMania", "他の DTXMania から引き継ぐ"),
+                Page::Import,
+                t("Pads & Settings", "パッド・設定").to_owned(),
+                t("Reads the pad mapping (MIDI and keyboard), song folders, and judgment and chart settings you used in another DTXMania, such as DTXManiaNX.\nAfter reading, you choose what to bring over.", "DTXManiaNX など、ほかの DTXMania で使っていたパッドの割り当て（MIDI・キーボード）、曲のフォルダ、判定や譜面の見た目の設定を読み込みます。\n読んだあとで、引き継ぐものを選べます。")
+                    .to_owned(),
+            ));
+            if let Some(when) = info.import.as_ref().and_then(|i| i.backup) {
+                r.push(action(
+                    ItemId::ImportUndo,
+                    t("Undo Import", "引き継ぐ前に戻す"),
+                    when.to_owned(),
+                    t("Puts your settings back to how they were before the last import. Settings you changed after importing are put back too.\nThe earlier settings are kept in config.before-import.toml.", "最後に引き継ぐ前の設定に戻します。引き継いだあとに変えた設定も戻ります。\n引き継ぐ前の設定は config.before-import.toml に残してあります。")
+                        .to_owned(),
+                    Some(
+                        t("Put your settings back to how they were before the import?\nChanges made after the import are undone too.", "引き継ぐ前の設定に戻しますか？\n引き継いだあとに変えた設定も戻ります。")
+                            .to_owned(),
+                    ),
+                ));
+            }
         }
+        Page::Import => import_sources(&mut s, info),
+        Page::ImportItems => import_items(&mut s, info),
         Page::Lanes => {
             s.at("").push(Row {
                 tone: Tone::Strong,
@@ -1616,6 +1687,229 @@ pub fn rows(page: Page, info: &ConfigInfo<'_>) -> Vec<Row> {
 }
 
 /// よく使う項目（設定の画面の「よく使う」と、選曲の簡易設定）
+/// 他の DTXMania から引き継ぐ: どの DTXMania から
+fn import_sources(s: &mut Sections, info: &ConfigInfo<'_>) {
+    let Some(im) = &info.import else {
+        return;
+    };
+    if let Some(e) = im.error {
+        s.at("").push(Row {
+            tone: Tone::Danger,
+            ..row(
+                ItemId::ImportNote,
+                t("Couldn't Read", "読めませんでした"),
+                String::new(),
+                e.to_owned(),
+                Ctl::Info,
+            )
+        });
+    }
+    let r = s.at(t("Found on This PC", "見つかった DTXMania"));
+    for (i, src) in im.sources.iter().enumerate() {
+        let saved = takeover::saved_at(src).unwrap_or_default();
+        let file = src
+            .found
+            .config
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        r.push(action(
+            ItemId::ImportSource(i),
+            &src.title(),
+            takeover::found_by(&src.found),
+            tf!(
+                "Folder: {}\nSettings: {} (saved {})\n\nSelect to read the settings and list what can be imported. Nothing changes yet.",
+                "場所: {}\n設定: {}（{} に保存）\n\n決定で設定を読み、引き継げる項目を並べます。まだ何も変えません。",
+                src.found.root.display(),
+                file,
+                saved
+            ),
+            None,
+        ));
+    }
+    if im.searching {
+        r.push(row(
+            ItemId::ImportNote,
+            t("Searching…", "探しています…"),
+            String::new(),
+            t(
+                "Looking for DTXMania shortcuts on the desktop and in the Start menu, and for DTXMania folders on the desktop and in Documents and Downloads.",
+                "デスクトップとスタートメニューの DTXMania のショートカットと、デスクトップ・ドキュメント・ダウンロードの DTXMania のフォルダを探しています。",
+            )
+            .to_owned(),
+            Ctl::Info,
+        ));
+    } else if im.sources.is_empty() {
+        r.push(row(
+            ItemId::ImportNote,
+            t("None Found", "見つかりませんでした"),
+            String::new(),
+            t(
+                "No DTXMania was found in the usual places (shortcuts on the desktop and in the Start menu, folders on the desktop and in Documents and Downloads).\nChoose its shortcut, exe, or folder below.",
+                "よくある場所（デスクトップとスタートメニューのショートカット、デスクトップ・ドキュメント・ダウンロードのフォルダ）には見つかりませんでした。\n下から、ショートカットか exe かフォルダを選んでください。",
+            )
+            .to_owned(),
+            Ctl::Info,
+        ));
+    }
+    let r = s.at(t("Choose Yourself", "自分で選ぶ"));
+    r.push(action(
+        ItemId::ImportPickFile,
+        t("Choose a Shortcut or exe", "ショートカットか exe を選ぶ"),
+        ".lnk / .exe / Config.ini".to_owned(),
+        t(
+            "Opens a file picker (use the mouse). Choose a DTXMania shortcut (.lnk), its exe, or its settings file (Config.ini or Config.xml).\nYou can also drag a shortcut or folder onto this screen, including a desktop icon.",
+            "ファイルを選ぶ画面を開きます（マウスで操作します）。DTXMania のショートカット（.lnk）、exe、設定のファイル（Config.ini か Config.xml）を選びます。\nショートカットやフォルダをこの画面にドラッグしても読めます。デスクトップのアイコンをそのまま持ってきても読めます。",
+        )
+        .to_owned(),
+        None,
+    ));
+    r.push(action(
+        ItemId::ImportPickFolder,
+        t("Choose a Folder", "フォルダを選ぶ"),
+        t("DTXMania Folder", "DTXMania のフォルダ").to_owned(),
+        t(
+            "Opens a folder picker (use the mouse). Choose the folder with the DTXMania exe. If you choose a folder that holds several games, the DTXMania inside is found.",
+            "フォルダを選ぶ画面を開きます（マウスで操作します）。DTXMania の exe があるフォルダを選びます。ゲームをまとめたフォルダを選んでも、中の DTXMania を探します。",
+        )
+        .to_owned(),
+        None,
+    ));
+    if !im.searching {
+        r.push(action(
+            ItemId::ImportSearch,
+            t("Search Again", "もう一度探す"),
+            String::new(),
+            t(
+                "Searches the usual places for DTXMania again.",
+                "よくある場所の DTXMania を探し直します。",
+            )
+            .to_owned(),
+            None,
+        ));
+    }
+}
+
+/// 他の DTXMania から引き継ぐ: 引き継ぐ項目を選ぶ
+fn import_items(s: &mut Sections, info: &ConfigInfo<'_>) {
+    let Some(plan) = info.import.as_ref().and_then(|i| i.plan) else {
+        return;
+    };
+    let n = plan.selected();
+    s.at("").push(Row {
+        tone: Tone::Strong,
+        ..action(
+            ItemId::ImportApply,
+            &tf!("Import {n} Selected", "選んだ {n} 項目を引き継ぐ"),
+            tf!("{n} / {}", "{n} / {}", plan.total()),
+            tf!(
+                "Imports the {n} checked items. Your current settings are saved first, so you can put them back with Undo Import in General.",
+                "チェックした {n} 項目を引き継ぎます。今の設定は先に残すので、アプリの「引き継ぐ前に戻す」で戻せます。"
+            ),
+            None,
+        )
+    });
+    let target_labels: Vec<Cow<'static, str>> = plan
+        .targets
+        .iter()
+        .map(|t| Cow::Owned(t.label.clone()))
+        .collect();
+    for part in Part::ALL {
+        let r = s.at(part.label());
+        if part == Part::Pads {
+            for (i, m) in plan.midi.iter().enumerate() {
+                r.push(row(
+                    ItemId::ImportMidi(i),
+                    &tf!("MIDI Device {}", "{} 台目の MIDI 機器", m.device + 1),
+                    count(m.notes.len(), "note", "notes", "ノート"),
+                    tf!(
+                        "The mapping {} used for its MIDI device {}. DTXMania doesn't keep device names; the number is the device's place in Windows' list.\nChoose the device that receives it in the next row. Notes in that device's preset that aren't listed here (rims, edges, and so on) are kept.",
+                        "{} が {} 台目の MIDI 機器に使っていた割り当てです。DTXMania には機器の名前が残らず、Windows の並びの何番目かだけが分かります。\n写す機器は次の行で選びます。その機器のプリセットにあって、ここに無いノート（リムやエッジなど）は残します。",
+                        plan.product,
+                        m.device + 1
+                    ),
+                    Ctl::Check { on: m.on },
+                ));
+                if m.on {
+                    let at = m.target.min(target_labels.len().saturating_sub(1));
+                    r.push(row(
+                        ItemId::ImportMidiTarget(i),
+                        t("　→ Send To", "　→ 割り当てる機器"),
+                        target_labels.get(at).map(|l| l.to_string()).unwrap_or_default(),
+                        t(
+                            "The device that receives this mapping. Devices are in the same order as Windows lists them, so the same-numbered device is chosen at first.\nNext Device You Connect applies it to a device you connect later.",
+                            "この割り当てを写す機器です。機器は Windows と同じ並びなので、はじめは同じ番目の機器を選んでいます。\n「これからつなぐ機器」は、あとでつないだ機器に使います。",
+                        )
+                        .to_owned(),
+                        Ctl::Choice {
+                            labels: target_labels.clone(),
+                            at,
+                            default: None,
+                        },
+                    ));
+                }
+            }
+        }
+        for (i, it) in plan
+            .items
+            .iter()
+            .enumerate()
+            .filter(|(_, it)| it.part == part)
+        {
+            let value = if it.same {
+                tf!("{} (no change)", "{} のまま", it.now)
+            } else if part == Part::Songs {
+                it.to.clone()
+            } else {
+                format!("{} → {}", it.now, it.to)
+            };
+            let mut desc = tf!(
+                "Now: {}\n{}: {}",
+                "今: {}\n{} の値: {}",
+                it.now,
+                plan.product,
+                it.raw
+            );
+            if let Some(note) = &it.note {
+                desc.push('\n');
+                desc.push_str(note);
+            }
+            if it.same {
+                desc.push('\n');
+                desc.push_str(t(
+                    "(Same as now, so it's unchecked.)",
+                    "（今と同じなので、選んでいません）",
+                ));
+            } else if it.untouched {
+                desc.push('\n');
+                desc.push_str(t(
+                    "(Still the default in that app, so it's unchecked at first.)",
+                    "（前のアプリでも既定のままなので、はじめは選んでいません）",
+                ));
+            }
+            desc.push_str("\n\n");
+            desc.push_str(&it.desc);
+            r.push(row(
+                ItemId::ImportItem(i),
+                &it.name,
+                value,
+                desc,
+                Ctl::Check { on: it.on },
+            ));
+        }
+    }
+    let r = s.at(t("Can't Be Imported", "引き継げないもの"));
+    for (i, x) in plan.rejected.iter().enumerate() {
+        r.push(row(
+            ItemId::ImportRejected(i),
+            &x.name,
+            x.reason.clone(),
+            x.detail.clone(),
+            Ctl::Info,
+        ));
+    }
+}
+
 /// 一時停止の「演奏をやめる」「練習をやめる」の行
 fn quit_row(practice: bool) -> Row {
     let mut quit = action(
@@ -1697,6 +1991,11 @@ fn page_title(page: Page, info: &ConfigInfo<'_>) -> String {
         Page::Quick => t("Quick Settings", "簡易設定").to_owned(),
         Page::Pause => t("Paused", "一時停止").to_owned(),
         Page::Mixer => t("Volume", "音量").to_owned(),
+        Page::Import => t("Import from Other DTXMania", "他の DTXMania から引き継ぐ").to_owned(),
+        Page::ImportItems => match info.import.as_ref().and_then(|i| i.plan) {
+            Some(p) => tf!("From {}", "{} から", p.title),
+            None => t("Import from Other DTXMania", "他の DTXMania から引き継ぐ").to_owned(),
+        },
         Page::Lanes => t("Pad & Key Mapping", "パッドとキーの割り当て").to_owned(),
         Page::Device(i) => info.devices.get(i).map_or_else(
             || t("MIDI Devices", "MIDI 機器").to_owned(),
@@ -1857,6 +2156,41 @@ impl ConfigView {
         self.level().page
     }
 
+    /// App が一覧を開く（他の DTXMania の設定を読んだら、項目の一覧へ）
+    pub fn open_page(&mut self, page: Page) {
+        self.picker = None;
+        self.confirm = None;
+        self.focus_list = true;
+        // 同じ一覧を重ねない（読み直したとき）
+        if let Some(i) = self.stack.iter().position(|l| l.page == page) {
+            self.stack.truncate(i);
+        }
+        self.stack.push(Level { page, cursor: 0 });
+    }
+
+    /// 開いた一覧を閉じて、分類の一覧の `cursor` 行目に戻る（引き継いだあと）
+    pub fn back_to_category(&mut self, cursor: usize) {
+        self.picker = None;
+        self.confirm = None;
+        self.stack.truncate(1);
+        *self.cursor_mut() = cursor;
+    }
+
+    /// 分類 `cat` の一覧の `cursor` 行目から始め、`page` を開いた画面（初めて設定を開いたときの引き継ぎ）
+    pub fn starting_at(cat: Cat, cursor: usize, page: Page) -> Self {
+        let mut v = Self::new();
+        v.cat = CATS.iter().position(|&c| c == cat).unwrap_or(0);
+        v.focus_list = true;
+        v.stack = vec![
+            Level {
+                page: Page::Cat(cat),
+                cursor,
+            },
+            Level { page, cursor: 0 },
+        ];
+        v
+    }
+
     fn level(&self) -> Level {
         self.stack.last().copied().unwrap_or(Level {
             page: Page::Cat(CATS[self.cat]),
@@ -2014,6 +2348,9 @@ impl ConfigView {
             }
             ConfigInput::Decide => match &r.ctl {
                 Ctl::Heading | Ctl::Info => Response::default(),
+                Ctl::Check { on } => {
+                    Response::action(Se::Decide, ConfigAction::Set(id, i64::from(!on)))
+                }
                 Ctl::Toggle { on, .. } => {
                     // 混ざっているときは全部 ON に
                     let v = i64::from(*on != Some(true));
@@ -2272,6 +2609,8 @@ fn stepped(r: &Row, d: i64) -> Option<i64> {
             let to = (at + d * step).clamp(*min, *max);
             (to != *at).then_some(to)
         }
+        // 印は左右どちらでも切り替える
+        Ctl::Check { on } => Some(i64::from(!on)),
         _ => None,
     }
 }
@@ -2438,14 +2777,16 @@ fn hints_for(view: &ConfigView, row: Option<&Row>) -> Vec<ui::Hint<'static>> {
     let mut v: Vec<ui::Hint<'static>> =
         vec![(&[Pad::HT], t("Up", "上")), (&[Pad::LT], t("Down", "下"))];
     let decide = match row.map(|r| &r.ctl) {
-        Some(Ctl::Toggle { .. }) => t("Toggle (Enter)", "切り替え（Enter）"),
+        Some(Ctl::Toggle { .. } | Ctl::Check { .. }) => t("Toggle (Enter)", "切り替え（Enter）"),
         Some(Ctl::Choice { .. } | Ctl::Number { .. }) => t("Choose (Enter)", "選ぶ（Enter）"),
         Some(Ctl::Page(_)) => t("Open (Enter)", "開く（Enter）"),
         Some(Ctl::Lane(_)) => t("Add/Remove by Hitting (Enter)", "叩いて足す・外す（Enter）"),
         Some(Ctl::Action { .. }) => t("Select (Enter)", "実行（Enter）"),
         _ => t("Select (Enter)", "決定（Enter）"),
     };
-    if row.is_some_and(Row::editable) {
+    if row.is_some_and(|r| matches!(r.ctl, Ctl::Check { .. })) {
+        v.push((&[Pad::SD, Pad::FT], t("Toggle", "切り替える")));
+    } else if row.is_some_and(Row::editable) {
         v.push((&[Pad::SD, Pad::FT], t("←→ Change Value", "←→ 値を変える")));
     } else if row.is_some_and(|r| matches!(r.ctl, Ctl::Page(_))) {
         v.push((&[Pad::FT], t("→ Open", "→ 開く")));
@@ -2859,10 +3200,12 @@ fn draw_row(c: &Canvas, g: &mut Gfx, r: &Row, x: f32, y: f32, w: f32, sel: bool)
     if r.changed() {
         ui::dot(c, x + 17.0, y + ROW_H / 2.0, 3.0, ui::ORANGE);
     }
+    let unchecked = matches!(r.ctl, Ctl::Check { on: false });
     let color = match (r.tone, sel) {
         (_, true) => ui::YELLOW,
         (Tone::Strong, _) => ui::STRONG,
         (Tone::Danger, _) => ui::DANGER,
+        _ if unchecked => ui::DIM,
         _ => ui::TEXT,
     };
     let name_style = if sel || r.tone == Tone::Strong {
@@ -2870,8 +3213,17 @@ fn draw_row(c: &Canvas, g: &mut Gfx, r: &Row, x: f32, y: f32, w: f32, sel: bool)
     } else {
         ui::plain(18.0, color)
     };
-    ui::text(c, g, &r.name, x + 28.0, y + 10.0, &name_style, w * 0.5);
+    // 印の行は、名前の前に印
+    let name_x = if let Ctl::Check { on } = r.ctl {
+        ui::checkbox(c, x + 28.0, y + ROW_H / 2.0, 17.0, on, sel);
+        x + 54.0
+    } else {
+        x + 28.0
+    };
+    let name_w = ui::text(c, g, &r.name, name_x, y + 10.0, &name_style, w * 0.5);
     let right = x + w - 30.0;
+    // 値は名前に重ならない幅まで（長いときは横に縮める）
+    let room = (right - name_x - name_w - 24.0).max(60.0);
     match &r.ctl {
         Ctl::Toggle { .. } | Ctl::Choice { .. } | Ctl::Number { .. } => {
             let style = if sel {
@@ -2957,6 +3309,24 @@ fn draw_row(c: &Canvas, g: &mut Gfx, r: &Row, x: f32, y: f32, w: f32, sel: bool)
                 240.0,
             );
         }
+        Ctl::Check { on } => {
+            let color = if sel {
+                ui::YELLOW
+            } else if *on {
+                Color32::WHITE
+            } else {
+                ui::DIM
+            };
+            ui::text_right(
+                c,
+                g,
+                &r.value,
+                right,
+                y + 12.0,
+                &ui::plain(15.0, color),
+                room,
+            );
+        }
         _ => {
             ui::text_right(
                 c,
@@ -2965,9 +3335,76 @@ fn draw_row(c: &Canvas, g: &mut Gfx, r: &Row, x: f32, y: f32, w: f32, sel: bool)
                 right,
                 y + 12.0,
                 &ui::plain(15.0, ui::DIM),
-                250.0,
+                room.min(250.0),
             );
         }
+    }
+}
+
+/// 引き継ぐ MIDI の割り当て（レーンごとのノート）
+fn preview_import_midi(
+    c: &Canvas,
+    g: &mut Gfx,
+    info: &ConfigInfo<'_>,
+    i: usize,
+    (x, y, w, h): (f32, f32, f32, f32),
+) {
+    let Some(m) = info
+        .import
+        .as_ref()
+        .and_then(|im| im.plan)
+        .and_then(|p| p.midi.get(i))
+    else {
+        return;
+    };
+    ui::text(
+        c,
+        g,
+        t("Notes for Each Lane", "レーンごとのノート"),
+        x + 14.0,
+        y + 12.0,
+        &ui::plain(13.0, ui::MUTED),
+        w - 28.0,
+    );
+    let lanes: Vec<(DrumLane, Vec<u8>)> = DrumLane::ALL
+        .iter()
+        .filter_map(|&lane| {
+            let notes: Vec<u8> = m
+                .notes
+                .iter()
+                .filter(|(_, l)| *l == lane)
+                .map(|(n, _)| *n)
+                .collect();
+            (!notes.is_empty()).then_some((lane, notes))
+        })
+        .collect();
+    let col_w = (w - 28.0) / 2.0;
+    let line_h = 28.0;
+    let per_col = ((h - 44.0) / line_h).floor().max(1.0) as usize;
+    for (k, (lane, notes)) in lanes.iter().enumerate() {
+        let col = (k / per_col) as f32;
+        let ly = y + 38.0 + (k % per_col) as f32 * line_h;
+        let lx = x + 14.0 + col * col_w;
+        ui::round_fill(c, lx, ly + 2.0, 40.0, 20.0, 3.0, ui::lane_color(*lane));
+        ui::text_center(
+            c,
+            g,
+            short_lane(*lane),
+            lx + 20.0,
+            ly + 3.0,
+            &ui::bold(13.0, Color32::from_rgb(20, 20, 20)),
+            38.0,
+        );
+        let list: Vec<String> = notes.iter().map(u8::to_string).collect();
+        ui::text(
+            c,
+            g,
+            &list.join(", "),
+            lx + 48.0,
+            ly + 2.0,
+            &ui::plain(16.0, Color32::WHITE),
+            col_w - 54.0,
+        );
     }
 }
 
@@ -3050,6 +3487,9 @@ fn draw_preview(
             preview_kit(c, g, info, None, (x, y, w, h));
         }
         Some(ItemId::Lane(lane)) => preview_kit(c, g, info, Some(lane), (x, y, w, h)),
+        Some(ItemId::ImportMidi(i) | ItemId::ImportMidiTarget(i)) => {
+            preview_import_midi(c, g, info, i, (x, y, w, h));
+        }
         Some(ItemId::Table(key)) if key.starts_with("auto_") => {
             preview_auto(c, g, cfg, (x, y, w, h));
         }
@@ -3752,6 +4192,7 @@ mod tests {
             play: None,
             timing: None,
             monitors: &[],
+            import: None,
         }
     }
 
@@ -3790,6 +4231,102 @@ mod tests {
             m(r"\\.\DISPLAY1", 0, 2560, 1440, true),
             m(r"\\.\DISPLAY2", 2560, 1920, 1080, false),
         ]
+    }
+
+    #[test]
+    fn import_pages_list_sources_and_toggle_items() {
+        let c = Config::default();
+        let root = std::env::temp_dir().join("nxt-import-view");
+        let source = nx::Source {
+            found: nx::Found {
+                config: root.join("Config.ini"),
+                root,
+                format: nx::Format::Ini,
+                exe: Some("DTXManiaNX.exe".to_owned()),
+                shortcut: None,
+            },
+            ini: nx::Ini::parse(
+                "[System]\nVersion=v2.0.0 Beta (20260121)\nDamageLevel=0\nRisky=0\nSoundDeviceType=1\n[DrumsKeyAssign]\nSD=M038,J012\n",
+            ),
+            family: nx::Family::NxV2,
+            version: Some("v2.0.0 Beta (20260121)".to_owned()),
+            saved: None,
+        };
+        let japanese = |s: &str| {
+            s.chars()
+                .any(|ch| matches!(ch, '\u{3040}'..='\u{30ff}' | '\u{4e00}'..='\u{9fff}'))
+        };
+        for lang in Lang::ALL {
+            let _lang = i18n::scoped(lang);
+            let plan = takeover::plan(&source, &c, &[]);
+            let sources = [source.clone()];
+            let mut i = info(&c);
+            i.import = Some(ImportInfo {
+                sources: &sources,
+                searching: false,
+                plan: Some(&plan),
+                error: Some("x"),
+                backup: Some("11/25 18:40"),
+            });
+            // 入口と、引き継ぐ前に戻す（確かめてから）
+            let app = rows(Page::Cat(Cat::App), &i);
+            assert!(app.iter().any(|r| r.id == Some(ItemId::Import)));
+            assert!(app.iter().any(|r| r.id == Some(ItemId::ImportUndo)
+                && matches!(r.ctl, Ctl::Action { confirm: Some(_) })));
+            // どの DTXMania から
+            let from = rows(Page::Import, &i);
+            assert!(from.iter().any(|r| r.id == Some(ItemId::ImportSource(0))
+                && r.name.starts_with("DTXManiaNX v2.0.0")));
+            assert!(from.iter().any(|r| r.id == Some(ItemId::ImportPickFile)));
+            assert!(from.iter().any(|r| r.id == Some(ItemId::ImportPickFolder)));
+            // 引き継ぐ項目: 先頭は引き継ぐ、MIDI の機器と写す先、ゲージの減り方、引き継げないもの
+            let items = rows(Page::ImportItems, &i);
+            assert_eq!(items[0].id, Some(ItemId::ImportApply));
+            assert!(
+                items.iter().any(
+                    |r| r.id == Some(ItemId::ImportMidi(0)) && r.ctl == Ctl::Check { on: true }
+                )
+            );
+            assert!(
+                items
+                    .iter()
+                    .any(|r| r.id == Some(ItemId::ImportMidiTarget(0)))
+            );
+            let k = plan
+                .items
+                .iter()
+                .position(|it| it.raw == "DamageLevel=0")
+                .unwrap();
+            let damage = items
+                .iter()
+                .find(|r| r.id == Some(ItemId::ImportItem(k)))
+                .unwrap();
+            assert_eq!(damage.ctl, Ctl::Check { on: true });
+            assert!(damage.value.contains('→'));
+            assert!(
+                items
+                    .iter()
+                    .any(|r| r.id == Some(ItemId::ImportRejected(0)))
+            );
+            if lang == Lang::En {
+                for r in app.iter().chain(&from).chain(&items) {
+                    for text in [&r.name, &r.value, &r.desc] {
+                        let text = text.replace(crate::credits::VOICE, "");
+                        assert!(!japanese(&text), "{text}");
+                    }
+                }
+            }
+            // 印は左右と決定で切り替える
+            let mut view = at(Page::ImportItems, &items, ItemId::ImportItem(k));
+            for input in [ConfigInput::Right, ConfigInput::Left, ConfigInput::Decide] {
+                let r = view.input(input, &items);
+                assert_eq!(
+                    r.action,
+                    Some(ConfigAction::Set(ItemId::ImportItem(k), 0)),
+                    "{input:?}"
+                );
+            }
+        }
     }
 
     #[test]

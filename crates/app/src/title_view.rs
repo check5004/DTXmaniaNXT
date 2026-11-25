@@ -89,6 +89,8 @@ pub struct TitleView {
     updated: Option<(String, String, Option<Instant>)>,
     /// 「更新」の行の NEW の明滅と、回る輪の起点
     since: Instant,
+    /// ほかの DTXMania を見つけた（その名前。設定を開くと引き継ぐ画面から始まる）
+    found: Option<String>,
 }
 
 impl TitleView {
@@ -104,6 +106,7 @@ impl TitleView {
             update: Status::Idle,
             updated: None,
             since: now,
+            found: None,
         }
     }
 
@@ -186,6 +189,16 @@ impl TitleView {
                 self.moving = None;
             }
         }
+    }
+
+    /// ほかの DTXMania を見つけたことを知らせる（`None` で消す）
+    pub fn set_found(&mut self, title: Option<String>) {
+        self.found = title;
+    }
+
+    /// ほかの DTXMania を見つけたと知らせている
+    pub fn found(&self) -> bool {
+        self.found.is_some()
     }
 
     /// 更新して起動し直したことを知らせる（`previous` は前の版。分からなければ空）
@@ -271,13 +284,18 @@ impl TitleView {
                 self.since,
             );
         }
+        let mut updated_shown = false;
         if let Some((current, previous, shown)) = &mut self.updated {
             let t = shown
                 .get_or_insert_with(Instant::now)
                 .elapsed()
                 .as_secs_f32();
             let alpha = ((UPDATED_FOR - t) / UPDATED_FADE).clamp(0.0, 1.0);
+            updated_shown = alpha > 0.0;
             update_view::updated(c, g, current, previous, alpha);
+        }
+        if let Some(found) = &self.found {
+            update_view::found(c, g, found, updated_shown);
         }
         // 白からのフェード（出ていくときは v2 と同じくシャッターなので、白へは消さない）
         let a = 1.0 - (self.entered.elapsed().as_secs_f32() / FADE.as_secs_f32()).min(1.0);

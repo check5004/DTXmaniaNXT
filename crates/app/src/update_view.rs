@@ -135,27 +135,48 @@ pub fn applying(c: &Canvas, g: &mut Gfx, from: &str, to: &str, since: Instant) {
 
 /// 更新して起動し直したときの知らせ（左下、操作の案内の帯の上）。`previous` は前の版（分からなければ空）
 pub fn updated(c: &Canvas, g: &mut Gfx, current: &str, previous: &str, alpha: f32) {
+    let main = tf!("Updated to v{current}", "v{current} になりました");
+    let sub = (!previous.is_empty()).then(|| tf!("from v{previous}", "前は v{previous}"));
+    notice(c, g, &main, sub.as_deref(), OK, alpha, 0);
+}
+
+/// ほかの DTXMania を見つけたときの知らせ（「更新しました」の知らせがあれば、その上）
+pub fn found(c: &Canvas, g: &mut Gfx, title: &str, above: bool) {
+    let main = tf!("Found {title}", "{title} が見つかりました");
+    let sub = t(
+        "Open Settings to import its pad mapping and settings",
+        "設定を開くと、パッドの割り当てや設定を引き継ぐ画面から始まります",
+    );
+    notice(c, g, &main, Some(sub), ACCENT, 1.0, usize::from(above));
+}
+
+/// 左下の知らせ 1 つ（`row` は下から何段目か）
+fn notice(
+    c: &Canvas,
+    g: &mut Gfx,
+    main: &str,
+    sub: Option<&str>,
+    bar: Color32,
+    alpha: f32,
+    row: usize,
+) {
     if alpha <= 0.0 {
         return;
     }
     let a = |col: Color32| col.gamma_multiply(alpha);
-    let main = tf!("Updated to v{current}", "v{current} になりました");
-    let sub = (!previous.is_empty()).then(|| tf!("from v{previous}", "前は v{previous}"));
     let main_style = ui::bold(17.0, Color32::WHITE);
     let sub_style = ui::plain(14.0, SUB);
-    let mw = ui::text_width(g, &main, &main_style);
-    let sw = sub
-        .as_deref()
-        .map_or(0.0, |s| 10.0 + ui::text_width(g, s, &sub_style));
+    let mw = ui::text_width(g, main, &main_style);
+    let sw = sub.map_or(0.0, |s| 10.0 + ui::text_width(g, s, &sub_style));
     let (w, h) = (18.0 + mw + sw + 14.0, 38.0);
-    let (x, y) = (16.0, ui::LEGEND_Y - 12.0 - h);
+    let (x, y) = (16.0, ui::LEGEND_Y - 12.0 - h - row as f32 * (h + 8.0));
     ui::round_fill(c, x, y, w, h, 4.0, a(CHIP_BG));
     ui::round_frame(c, x, y, w, h, 4.0, 1.0, a(CHIP_LINE));
-    c.fill(x, y, 4.0, h, a(OK));
-    if let Some(t) = g.texts.get(&main, &main_style) {
+    c.fill(x, y, 4.0, h, a(bar));
+    if let Some(t) = g.texts.get(main, &main_style) {
         t.draw(c, x + 18.0, y + 8.0, 1.0, alpha);
     }
-    if let Some(s) = &sub
+    if let Some(s) = sub
         && let Some(t) = g.texts.get(s, &sub_style)
     {
         t.draw(c, x + 18.0 + mw + 10.0, y + 11.0, 1.0, alpha);

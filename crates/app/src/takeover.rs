@@ -156,13 +156,6 @@ impl Plan {
     pub fn total(&self) -> usize {
         self.items.len() + self.midi.len()
     }
-
-    /// MIDI の割り当てを写す機器（ポート）があるか
-    fn has_port_target(&self) -> bool {
-        self.midi
-            .iter()
-            .any(|m| m.on && self.targets.get(m.target).is_some_and(|t| t.port.is_some()))
-    }
 }
 
 /// 値の意味を確かめた範囲
@@ -656,7 +649,8 @@ const SOUND_DEVICE_KEYS: [&str; 6] = [
 
 /// `[System]` か `[PlayOption]` の値
 fn sys<'a>(ini: &'a Ini, key: &str) -> Option<&'a str> {
-    ini.get("System", key).or_else(|| ini.get("PlayOption", key))
+    ini.get("System", key)
+        .or_else(|| ini.get("PlayOption", key))
 }
 
 /// 上流 `CConversion.bONorOFF`（先頭の文字が 0 でなければ ON。空なら上流は読まない）
@@ -666,7 +660,10 @@ fn on_off(v: &str) -> Option<bool> {
 
 /// 上流の数（読めないか範囲の外なら、上流も既定を使うので `None`）
 fn number(v: &str, (min, max): (i64, i64)) -> Option<i64> {
-    v.trim().parse::<i64>().ok().filter(|n| (min..=max).contains(n))
+    v.trim()
+        .parse::<i64>()
+        .ok()
+        .filter(|n| (min..=max).contains(n))
 }
 
 /// 読んだ設定から、引き継ぐ項目を並べる。`ports` は今つながっている MIDI の機器（OS の並び）
@@ -807,7 +804,7 @@ fn pads(p: &mut Plan, ini: &Ini, config: &Config, ports: &[PortInfo]) {
     }
     if !bad_keys.is_empty() {
         p.rejected.push(Rejected {
-            name: tf!("Keys: {}", "キー: {}", bad_keys.join(", ")),
+            name: tf!("Keys: {}", "キー: {}", bad_keys.join(" / ")),
             reason: t("Used for menus here", "画面の操作に使うキー").to_owned(),
             detail: t(
                 "These keys are used to move through menus in this app (or can't be read), so they can't be mapped to pads. Map other keys in Pad & Key Mapping.",
@@ -931,8 +928,13 @@ fn songs(p: &mut Plan, ini: &Ini, root: &Path, config: &Config) {
     }
     let same = add.is_empty();
     let to = match add.as_slice() {
-        [] => t("Already added", "足してある").to_owned(),
-        [one] => format!("+ {}", one.display()),
+        [] => t("Already added", "追加済み").to_owned(),
+        [one] => format!(
+            "+ {}",
+            one.file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| one.display().to_string())
+        ),
         many => tf!("+ {} folders", "＋ {} フォルダ", many.len()),
     };
     let list: Vec<String> = add.iter().map(|d| d.display().to_string()).collect();
@@ -952,7 +954,7 @@ fn songs(p: &mut Plan, ini: &Ini, root: &Path, config: &Config) {
         } else {
             tf!(
                 "Adds these to your song folders and rescans songs. Folders you already have stay as they are.\n{}",
-                "曲のフォルダに足して、曲を探し直します。今あるフォルダはそのままです。\n{}",
+                "曲のフォルダに追加して、曲を探し直します。今あるフォルダはそのままです。\n{}",
                 list.join("\n")
             )
         },
@@ -1149,7 +1151,8 @@ fn hit_ranges(p: &mut Plan, ini: &Ini, config: &Config) {
                 continue;
             };
             let to = value.min(max);
-            let note = (to != value).then(|| tf!("Up to {max} ms here", "このアプリは {max} ms まで"));
+            let note =
+                (to != value).then(|| tf!("Up to {max} ms here", "このアプリは {max} ms まで"));
             let d = settings::def(key);
             let name = if pedal {
                 tf!("{} (Pedals)", "{}（ペダル）", d.name.get())
@@ -1219,7 +1222,7 @@ fn velocity(p: &mut Plan, ini: &Ini, config: &Config, ports: &[PortInfo]) {
             reason: tf!("Uses the lowest ({least})", "一番小さい {least} を使う"),
             detail: tf!(
                 "{}\nThis app has one value per MIDI device. To avoid dropping hits on other pads, the lowest value is used with the MIDI mapping.",
-                "{}\nこのアプリは MIDI 機器ごとに 1 つです。ほかのパッドの打撃を落とさないよう、一番小さい値を MIDI の割り当てと一緒に引き継ぎます。",
+                "{}\nこのアプリは MIDI 機器ごとに 1 つです。ほかのパッドの弱い打撃が無視されないよう、一番小さい値を MIDI の割り当てと一緒に引き継ぎます。",
                 raw.join("  ")
             ),
         });
@@ -1273,7 +1276,9 @@ fn rejected_extras(p: &mut Plan, ini: &Ini, scope: Scope, format: Format) {
             });
         }
     }
-    if scope == Scope::Full && sys(ini, "PedalLagTime").is_some_and(|v| number(v, (-100, 100)).is_some_and(|n| n != 0)) {
+    if scope == Scope::Full
+        && sys(ini, "PedalLagTime").is_some_and(|v| number(v, (-100, 100)).is_some_and(|n| n != 0))
+    {
         p.rejected.push(Rejected {
             name: t("Pedal Lag Offset", "ペダルのずれの補正").to_owned(),
             reason: t("No matching setting", "同じ設定が無い").to_owned(),
@@ -1322,7 +1327,11 @@ fn rejected_extras(p: &mut Plan, ini: &Ini, scope: Scope, format: Format) {
         p.rejected.push(Rejected {
             name: t("Guitar & Bass Settings", "ギター・ベースの設定").to_owned(),
             reason: count(guitar, "setting", "settings", "項目"),
-            detail: t("This app is for drums only.", "このアプリはドラムだけです。").to_owned(),
+            detail: t(
+                "This app is for drums only.",
+                "このアプリはドラムだけです。",
+            )
+            .to_owned(),
         });
     }
 }
@@ -1442,7 +1451,7 @@ fn slimdx_key(code: u8) -> Option<(Option<KeyCode>, &'static str)> {
         129 => (Some(K::Tab), "Tab"),
         132 => (Some(K::ArrowUp), "Up"),
         143 => (Some(K::IntlYen), "Yen"),
-        0..=144 => (None, "Other"),
+        _ if code <= 144 => (None, "Other"),
         _ => return None,
     })
 }
@@ -1674,6 +1683,51 @@ impl Search {
     }
 }
 
+/// 他の DTXMania からの引き継ぎのようす（App が持つ）
+#[derive(Default)]
+pub struct Import {
+    /// 見つけた DTXMania（起動したときと「もう一度探す」で探す）
+    pub search: Option<Search>,
+    /// 読んだ設定から作った項目
+    pub plan: Option<Plan>,
+    /// 読めなかったわけ
+    pub error: Option<String>,
+    /// 引き継ぐ前の設定を残した日時
+    pub backup: Option<String>,
+}
+
+impl Import {
+    /// 探し始める
+    pub fn start() -> Self {
+        Self {
+            search: Some(Search::start()),
+            backup: backup_time(),
+            ..Self::default()
+        }
+    }
+
+    /// 見つけて読めた DTXMania
+    pub fn sources(&self) -> &[Source] {
+        self.search.as_ref().map_or(&[], |s| s.sources.as_slice())
+    }
+
+    /// 探し終えたか見る（終えたら true を 1 回だけ）
+    pub fn poll(&mut self) -> bool {
+        self.search.as_mut().is_some_and(Search::poll)
+    }
+
+    /// 設定の画面に出すもの
+    pub fn info(&self) -> config_view::ImportInfo<'_> {
+        config_view::ImportInfo {
+            sources: self.sources(),
+            searching: self.search.as_ref().is_some_and(Search::searching),
+            plan: self.plan.as_ref(),
+            error: self.error.as_deref(),
+            backup: self.backup.as_deref(),
+        }
+    }
+}
+
 /// 指定したもの（ショートカット・exe・フォルダ・設定のファイル）から読む。読めなければ画面に出す文
 pub fn open(path: &Path) -> Result<Source, String> {
     let found = nx::locate(path).map_err(|e| locate_message(&e))?;
@@ -1738,7 +1792,14 @@ pub fn found_by(f: &Found) -> String {
                 .unwrap_or_default();
             tf!("Shortcut \"{name}\"", "ショートカット「{name}」")
         }
-        None => f.root.display().to_string(),
+        None => {
+            let name = f
+                .root
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| f.root.display().to_string());
+            tf!("Folder \"{name}\"", "フォルダ「{name}」")
+        }
     }
 }
 
