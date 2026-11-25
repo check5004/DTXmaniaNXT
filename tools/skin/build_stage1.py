@@ -96,7 +96,8 @@ wb = xy_cut(words_im.getchannel('A'))
 assert len(wb) == 3, wb
 thanks, back_w, random_w = [words_im.crop(b) for b in wb]
 
-# タイトルのロゴとメニューの板（2_background.png は透明の上に重ねる 1 枚）
+# タイトルのロゴ（2_background.png は透明の上に重ねる 1 枚）とメニューの板（2_menu_plate.png。
+# アプリがメニューの行の数に合わせて真ん中を縦に伸ばして描く）
 logo = Image.open(os.path.join(GEN, 'logo_a.png')).convert('RGBA')
 logo = logo.crop(logo.getchannel('A').point(lambda a: 255 if a > 8 else 0).getbbox())
 t = Image.new('RGBA', (1280, 720), (0, 0, 0, 0))
@@ -114,7 +115,7 @@ md = ImageDraw.Draw(mask)
 for i in range(blend * 2):
     md.line([(left.width - 1 - i, 0), (left.width - 1 - i, PH)], fill=int(255 * (i / (blend * 2))))
 plate_out.paste(left, (0, 0), Image.composite(left, Image.new('RGBA', left.size, (0, 0, 0, 0)), mask).getchannel('A'))
-t.alpha_composite(plate_out, (458, 494))
+save(plate_out, '2_menu_plate.png')
 save(t, '2_background.png')
 
 # ランク（7 枚で 1 組、各 274 角）

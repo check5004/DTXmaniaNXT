@@ -271,6 +271,8 @@ pub enum ItemId {
     OpenCredits,
     /// 簡易設定から、選んでいる曲の区間練習へ
     PracticeSong,
+    /// 簡易設定から、選んでいる曲の上達の記録へ
+    SongRecords,
     /// 簡易設定から、設定の画面へ
     AllSettings,
     /// 一時停止をやめて演奏に戻る
@@ -1198,6 +1200,17 @@ pub fn rows(page: Page, info: &ConfigInfo<'_>) -> Vec<Row> {
                 );
                 practice.tone = Tone::Strong;
                 r.push(practice);
+                r.push(action(
+                    ItemId::SongRecords,
+                    t("This Song's Records", "この曲の記録"),
+                    String::new(),
+                    t(
+                        "Shows how your accuracy on this chart has changed, and your practice time.",
+                        "選んでいる譜面の達成率の移り変わりと、練習した時間を見ます。",
+                    )
+                    .to_owned(),
+                    None,
+                ));
                 r.push(heading(" "));
             }
             r.extend(favorites(c));
@@ -4490,10 +4503,10 @@ mod tests {
         let mut info = info(&config);
         let fav = ids(&rows(Page::Cat(Cat::Fav), &info));
         let quick = ids(&rows(Page::Quick, &info));
-        // 区間練習が一番上（開いたときに選んでいる）
-        assert_eq!(quick[0], ItemId::PracticeSong);
-        assert_eq!(quick[1..=fav.len()], fav[..]);
-        assert_eq!(quick[fav.len() + 1..], [ItemId::AllSettings]);
+        // 区間練習が一番上（開いたときに選んでいる）、その下に記録
+        assert_eq!(quick[..2], [ItemId::PracticeSong, ItemId::SongRecords]);
+        assert_eq!(quick[2..fav.len() + 2], fav[..]);
+        assert_eq!(quick[fav.len() + 2..], [ItemId::AllSettings]);
         let list = rows(Page::Quick, &info);
         let mut v = ConfigView::panel(Page::Quick);
         assert_eq!(
