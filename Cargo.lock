@@ -810,6 +810,7 @@ version = "0.12.0"
 dependencies = [
  "ab_glyph",
  "anyhow",
+ "arboard",
  "chrono",
  "cpal",
  "dirs",

@@ -22,6 +22,8 @@ mod chart_sound;
 mod config;
 mod config_view;
 mod credits;
+mod dev_report;
+mod dev_view;
 mod drill;
 mod drill_hud;
 mod drill_menu;
@@ -426,6 +428,8 @@ enum Screen {
     Drills(Box<drill_menu::DrillMenu>),
     /// 上達の記録
     Records(Box<RecordsView>),
+    /// 開発者メニュー。`true` なら設定へ戻ったあと、出たら選曲へ
+    Dev(Box<dev_view::DevView>, bool),
 }
 
 struct App {
@@ -525,6 +529,8 @@ struct App {
     next_frame: Instant,
     /// 他の DTXMania からの引き継ぎ（見つけたもの、読んだ設定）
     import: takeover::Import,
+    /// 設定の「バージョン」を続けて決定した回数（7 回で開発者モード）
+    dev_taps: dev_report::Taps,
 }
 
 /// 窓に当てる設定
@@ -614,6 +620,10 @@ enum AfterClose {
     Drill(engine::drill::Run),
     /// 上達の記録へ。どこから開いたかと、選んでおく譜面
     Records(RecordsFrom, Option<PathBuf>),
+    /// 開発者メニューへ。`true` なら設定を選曲から開いていた
+    Dev(bool),
+    /// 開発者メニューから設定の「アプリ」へ戻る
+    DevBack(bool),
 }
 
 /// リプレイの一覧に出すプレイの数
@@ -750,6 +760,7 @@ impl App {
             focused: true,
             next_frame: Instant::now(),
             import: takeover::Import::start(),
+            dev_taps: dev_report::Taps::default(),
         }
     }
 
@@ -1120,11 +1131,139 @@ impl App {
             AfterClose::Replay(session) => self.open_replay(session),
             AfterClose::LeaveReplay => self.leave_replay(),
             AfterClose::Records(from, focus) => self.open_records(from, focus.as_deref()),
+            AfterClose::Dev(from_select) => self.open_dev(from_select),
+            AfterClose::DevBack(from_select) => {
+                self.open_config(from_select);
+                let cursor = self.app_row(ItemId::DevMenu);
+                let mut view = ConfigView::starting_at(
+                    config_view::Cat::App,
+                    cursor,
+                    config_view::Page::Cat(config_view::Cat::App),
+                );
+                view.back_to_category(cursor);
+                if let Screen::Config(v, _) = &mut self.screen {
+                    **v = view;
+                }
+            }
             AfterClose::Drills => self.open_drills(),
             AfterClose::Drill(run) => {
                 self.start_drill(run);
                 self.shutter.open(shutter::OPEN_DELAY);
             }
+        }
+    }
+
+    /// 開発者メニューを開く（環境の情報は開いたときの設定と機器から作る）
+    fn open_dev(&mut self, from_select: bool) {
+        let ports: Vec<String> = self.ports().iter().map(|p| p.name.clone()).collect();
+        let view = dev_view::DevView::new(self.dev_environment(), ports, Config::dir());
+        self.screen = Screen::Dev(Box::new(view), from_select);
+        self.shutter.open(CONFIG_OPEN_DELAY);
+    }
+
+    /// 開発者メニューの報告に付ける環境の情報
+    fn dev_environment(&self) -> dev_report::Environment {
+        let mut rows: Vec<(String, String)> = vec![
+            (
+                "DTXmaniaNXT".to_owned(),
+                format!(
+                    "{}{}",
+                    env!("CARGO_PKG_VERSION"),
+                    if cfg!(debug_assertions) {
+                        " (debug)"
+                    } else {
+                        ""
+                    }
+                ),
+            ),
+            (
+                "OS".to_owned(),
+                format!("{} {}", std::env::consts::OS, std::env::consts::ARCH),
+            ),
+            (
+                t("Language", "言語").to_owned(),
+                i18n::lang().code().to_owned(),
+            ),
+            (
+                t("Display", "画面").to_owned(),
+                format!(
+                    "{:?}, {:?}",
+                    self.config.settings.display_mode(),
+                    self.config.settings.vsync()
+                ),
+            ),
+        ];
+        let sound = match self.sfx.latency() {
+            Some(l) => format!(
+                "{} Hz, {} {:.1} ms, {} {:.1} ms",
+                l.rate,
+                t("latency", "遅れ"),
+                l.latency_ms,
+                t("buffer", "バッファ"),
+                l.buffer_ms
+            ),
+            None => t("No output", "出力なし").to_owned(),
+        };
+        rows.push((t("Sound Output", "音の出力").to_owned(), sound));
+        rows.push((
+            t("Hit Sounds", "叩いた音").to_owned(),
+            if self.config.drum_sounds { "ON" } else { "OFF" }.to_owned(),
+        ));
+        rows.push((
+            t("Input Offset", "入力の補正").to_owned(),
+            format!("{:+.0} ms", self.config.input_offset_ms),
+        ));
+        let info = config_info(
+            &self.config,
+            &self.midi,
+            &self.monitor,
+            &self.songs,
+            &self.monitor_list,
+        );
+        if info.devices.is_empty() {
+            rows.push(("MIDI".to_owned(), t("No devices", "機器なし").to_owned()));
+        }
+        for (i, d) in info.devices.iter().enumerate() {
+            let state = match (&d.error, d.open, d.disabled) {
+                (Some(e), _, _) => tf!("can't open: {e}", "開けない: {e}"),
+                (None, _, true) => t("not used", "使わない").to_owned(),
+                (None, true, _) => t("open", "開いている").to_owned(),
+                (None, false, _) => t("closed", "閉じている").to_owned(),
+            };
+            let channel = if d.channel == 0 {
+                t("all channels", "全チャンネル").to_owned()
+            } else {
+                format!("ch{}", d.channel)
+            };
+            rows.push((
+                format!("MIDI {}", i + 1),
+                format!(
+                    "{} ({state}, {:?}, {channel}, {} {})",
+                    d.name,
+                    d.preset,
+                    t("min velocity", "最小ベロシティ"),
+                    d.min_velocity
+                ),
+            ));
+        }
+        dev_report::Environment { rows }
+    }
+
+    /// 開発者メニューの操作（シャッターが開ききるまでは受け付けない）
+    fn dev_input(&mut self, input: dev_view::DevInput) {
+        if self.shutter.animating() {
+            return;
+        }
+        let Screen::Dev(view, from_select) = &mut self.screen else {
+            return;
+        };
+        let from_select = *from_select;
+        let r = view.input(input);
+        if let Some(se) = r.se {
+            self.sfx.play(se);
+        }
+        if r.back {
+            self.close_then(AfterClose::DevBack(from_select), Duration::ZERO);
         }
     }
 
@@ -1899,6 +2038,12 @@ impl App {
                     play.on_midi(raw, msgs);
                 }
             }
+            // 開発者メニューで MIDI を記録しているあいだは、届いたものを全部渡す（パッドで操作しない）
+            Screen::Dev(view, _) if view.wants_midi() => {
+                for (raw, _) in &received {
+                    view.feed_midi(raw);
+                }
+            }
             Screen::Config(view, _) if view.wants_raw() => {
                 // パッドの割り当て：叩いたノートを、叩いた機器の割り当てにする
                 let hit = received.iter().find_map(|(raw, msgs)| {
@@ -1941,6 +2086,11 @@ impl App {
         }
         if let Some(r) = assigned {
             self.config_response(r);
+        }
+        if let Screen::Dev(view, _) = &mut self.screen
+            && let Some(se) = view.tick()
+        {
+            self.sfx.play(se);
         }
         self.pump_loading();
         self.pump_title();
@@ -2727,6 +2877,45 @@ impl App {
                     ));
                 }
             },
+            ItemId::Version => {
+                if self.config.developer {
+                    self.config_toast(
+                        t("Developer mode is already ON", "開発者モードはもう ON です").to_owned(),
+                    );
+                    return;
+                }
+                let n = self.dev_taps.tap(Instant::now());
+                if n >= dev_report::TAPS_TO_UNLOCK {
+                    self.config.developer = true;
+                    self.config.save();
+                    log::info!("developer mode on");
+                    self.config_toast(
+                        t(
+                            "Developer mode is ON. The Developer Menu is now below.",
+                            "開発者モードになりました。下に開発者メニューが出ます",
+                        )
+                        .to_owned(),
+                    );
+                } else if n >= 3 {
+                    let left = dev_report::TAPS_TO_UNLOCK - n;
+                    self.config_toast(tf!(
+                        "{left} more to turn on developer mode",
+                        "あと {left} 回で開発者モードになります"
+                    ));
+                }
+            }
+            ItemId::DevMenu => {
+                let from_select = matches!(self.screen, Screen::Config(_, true));
+                self.close_then(AfterClose::Dev(from_select), Duration::ZERO);
+            }
+            ItemId::DevOff => {
+                self.config.developer = false;
+                self.config.save();
+                log::info!("developer mode off");
+                self.config_toast(
+                    t("Developer mode is OFF", "開発者モードを OFF にしました").to_owned(),
+                );
+            }
             ItemId::ApplyAdvice => {
                 if let Some(a) = self.timing.as_ref().map(|t| t.advice)
                     && a.changes()
@@ -2869,6 +3058,20 @@ impl App {
                     _ => return,
                 };
                 self.records_input(input);
+            }
+            Screen::Dev(..) => {
+                let input = match code {
+                    KeyCode::ArrowUp => dev_view::DevInput::Up,
+                    KeyCode::ArrowDown => dev_view::DevInput::Down,
+                    KeyCode::ArrowLeft => dev_view::DevInput::Left,
+                    KeyCode::ArrowRight => dev_view::DevInput::Right,
+                    KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space => {
+                        dev_view::DevInput::Decide
+                    }
+                    KeyCode::Escape | KeyCode::Backspace => dev_view::DevInput::Cancel,
+                    _ => return,
+                };
+                self.dev_input(input);
             }
             Screen::Result(_, view) => match code {
                 KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Escape => {
@@ -3204,6 +3407,19 @@ impl App {
                     _ => return,
                 };
                 self.records_input(input);
+            }
+            // 画面の下の帯に出す役目（`DevView::hints`）。MIDI を記録しているあいだは届かない
+            Screen::Dev(..) => {
+                let input = match lane {
+                    DrumLane::HT => dev_view::DevInput::Up,
+                    DrumLane::LT => dev_view::DevInput::Down,
+                    DrumLane::SD => dev_view::DevInput::Left,
+                    DrumLane::FT => dev_view::DevInput::Right,
+                    DrumLane::CY => dev_view::DevInput::Decide,
+                    DrumLane::LC => dev_view::DevInput::Cancel,
+                    _ => return,
+                };
+                self.dev_input(input);
             }
             Screen::Select => {
                 if self.replays.is_some() {
@@ -3746,7 +3962,9 @@ impl App {
             }
             Screen::Result(..) => Corner::TopRight(1264.0, if updating { 50.0 } else { 16.0 }),
             // 記録と基礎練習の画面は更新の印を出さないので、いつも帯の端
-            Screen::Records(_) | Screen::Drills(_) => Corner::BottomRight(1264.0, 717.0),
+            Screen::Records(_) | Screen::Drills(_) | Screen::Dev(..) => {
+                Corner::BottomRight(1264.0, 717.0)
+            }
             Screen::Title | Screen::End(_) => Corner::BottomRight(1264.0, 704.0),
             Screen::Loading(_) | Screen::Play(..) | Screen::Replay(_) => return,
         };
@@ -3808,6 +4026,13 @@ impl App {
                 e.draw(&c, &mut self.gfx);
             }
             Screen::Records(view) => {
+                let ctx = ui.ctx().clone();
+                let painter = ctx.layer_painter(egui::LayerId::background());
+                let c = Canvas::new(&painter, ctx.content_rect());
+                self.gfx.begin(&c, ctx.pixels_per_point());
+                view.draw(&c, &mut self.gfx);
+            }
+            Screen::Dev(view, _) => {
                 let ctx = ui.ctx().clone();
                 let painter = ctx.layer_painter(egui::LayerId::background());
                 let c = Canvas::new(&painter, ctx.content_rect());
@@ -4282,6 +4507,8 @@ fn run() -> Result<()> {
     // 前に V51 の値を書き換えたまま終わっていたら（落ちたなど）、ここで書き戻す
     module_link::restore_on_start();
     event_loop.run_app(&mut app)?;
+    // 開発者メニューの道具が動いていたら、後片付け（音源の設定を戻すなど）を待ってから終える
+    dev_view::shutdown(Duration::from_secs(10));
     app.updater.apply_on_exit();
     match app.startup_error.take() {
         Some(e) => Err(e),

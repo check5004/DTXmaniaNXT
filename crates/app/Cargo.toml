@@ -48,6 +48,8 @@ rust-embed = "8"
 velopack = "1.2"
 # 設定の画面から譜面エディタ（Web アプリ）を既定のブラウザで開く（egui-winit も使っている）
 webbrowser = "1"
+# 開発者メニューで、issue の下書きをクリップボードに入れる（egui-winit も使っている）
+arboard = { version = "3", default-features = false }
 
 [build-dependencies]
 # Windows の exe にアプリのアイコンと版の情報を埋め込む（build.rs。Windows SDK の rc.exe を使う）

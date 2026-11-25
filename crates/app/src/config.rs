@@ -105,6 +105,9 @@ pub struct Config {
     /// 他の DTXMania から引き継ぐ画面を一度見せた（タイトルの「見つかりました」の知らせを出さない）
     #[serde(skip_serializing_if = "is_false")]
     pub import_offered: bool,
+    /// 開発者モード（設定 ＞ アプリ の「バージョン」を 7 回続けて決定すると ON。開発者メニューが出る）
+    #[serde(skip_serializing_if = "is_false")]
+    pub developer: bool,
     /// 全画面とボーダーレスを出すモニター（`None` なら窓のあるモニター）。ウィンドウのときは、起動したときにこの真ん中に開く
     #[serde(skip_serializing_if = "Option::is_none")]
     pub monitor: Option<MonitorPick>,
@@ -207,6 +210,7 @@ impl Default for Config {
             monitor: None,
             window: None,
             import_offered: false,
+            developer: false,
             settings: Values::default(),
         }
     }
