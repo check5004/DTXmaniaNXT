@@ -48,6 +48,8 @@ mod practice_hud;
 mod practice_menu;
 mod progress;
 mod records_view;
+mod replay;
+mod replay_view;
 mod result_drill;
 mod result_training;
 mod result_view;
@@ -103,6 +105,7 @@ use crate::play_view::PlayView;
 use crate::practice::{PracticeOptions, PracticeSetup};
 use crate::practice_menu::{Done, Finished, MenuInput, MenuMouse, PracticeMenu, Spot};
 use crate::records_view::{RecordsAction, RecordsFrom, RecordsInput, RecordsView};
+use crate::replay_view::{Back, ListDone, ListInput, ReplayList, ReplayRun};
 use crate::result_view::{Page, ResultInfo, ResultView};
 use crate::section_sound::SectionAudio;
 use crate::select::{PREVIEW_WAIT, SelectView};
@@ -415,6 +418,8 @@ enum Screen {
     Play(Box<Play>, Box<PlayView>),
     /// 結果。NX の結果の画面の動きと一緒に持つ
     Result(Box<Outcome>, Box<ResultView>),
+    /// 記録したプレイのリプレイ
+    Replay(Box<ReplayRun>),
     /// 基礎練習の画面（タイトルの Drills から）
     Drills(Box<drill_menu::DrillMenu>),
     /// 上達の記録
@@ -469,6 +474,8 @@ struct App {
     menu_sound: Option<practice_menu::Sound>,
     /// 選曲の簡易設定か、演奏中の一時停止の板（設定の画面と同じ行）
     quick: Option<Box<ConfigView>>,
+    /// 選曲画面に重ねる、選んでいる曲のプレイの一覧（リプレイ）
+    replays: Option<Box<ReplayList>>,
     /// 補正の行に出す、この曲の補正とおすすめ
     timing: Option<SongTiming>,
     /// 選曲画面のマウスホイールの、まだ 1 行に満たない分
@@ -595,6 +602,10 @@ enum AfterClose {
     },
     /// 結果の画面や一時停止の板から練習メニューへ（選曲画面に開く）。今の決めごとと、終えた練習
     Setup(PathBuf, Option<PracticeOptions>, Option<Finished>),
+    /// 結果の画面かプレイの一覧から、記録したプレイ（セッションの番号）のリプレイへ
+    Replay(i64),
+    /// リプレイを閉じて、来た画面へ
+    LeaveReplay,
     /// 基礎練習の画面へ
     Drills,
     /// 基礎練習を始める
@@ -602,6 +613,9 @@ enum AfterClose {
     /// 上達の記録へ。どこから開いたかと、選んでおく譜面
     Records(RecordsFrom, Option<PathBuf>),
 }
+
+/// リプレイの一覧に出すプレイの数
+const REPLAY_LIST_LIMIT: usize = 50;
 
 /// シャッターを開き始めるまでの待ち（v2 はフレームで数える。60 で割った時間にする）。
 /// 選曲は 20 フレーム、設定は 2 フレーム、設定から出てタイトルへは 150 ミリ秒
@@ -709,6 +723,7 @@ impl App {
             section_audio: SectionAudio::default(),
             menu_sound: None,
             quick: None,
+            replays: None,
             timing: None,
             wheel: 0.0,
             show_play_info: false,
@@ -827,7 +842,10 @@ impl App {
     /// 今の 1 フレームの間（上限が無ければ `None`）
     fn frame_interval(&self) -> Option<Duration> {
         let v = &self.config.settings;
-        let playing = matches!(self.screen, Screen::Play(..) | Screen::Loading(..));
+        let playing = matches!(
+            self.screen,
+            Screen::Play(..) | Screen::Loading(..) | Screen::Replay(_)
+        );
         frame_interval(
             v.fps_limit(),
             !self.focused && !playing && v.background_low(),
@@ -900,6 +918,7 @@ impl App {
         self.sfx.stop_title();
         self.menu = None;
         self.quick = None;
+        self.replays = None;
         self.screen = Screen::Select;
         self.view.enter();
         self.shutter.open(SELECT_OPEN_DELAY);
@@ -1096,6 +1115,8 @@ impl App {
             AfterClose::Setup(path, previous, finished) => {
                 self.open_setup(path, previous, finished)
             }
+            AfterClose::Replay(session) => self.open_replay(session),
+            AfterClose::LeaveReplay => self.leave_replay(),
             AfterClose::Records(from, focus) => self.open_records(from, focus.as_deref()),
             AfterClose::Drills => self.open_drills(),
             AfterClose::Drill(run) => {
@@ -1547,6 +1568,180 @@ impl App {
         self.section_audio.forget(&mut self.sfx);
     }
 
+    /// 結果の画面の HH（キーボードは V）：今遊んだプレイのリプレイへ
+    fn result_replay(&mut self) {
+        if self.after_close.is_some() {
+            return;
+        }
+        let Screen::Result(o, _) = &self.screen else {
+            return;
+        };
+        let Some(session) = o
+            .session_id
+            .filter(|_| o.practice.is_none() && o.drill.is_none())
+        else {
+            return;
+        };
+        self.sfx.play(Se::Decide);
+        self.close_then(AfterClose::Replay(session), Duration::ZERO);
+    }
+
+    /// 選んでいる曲のプレイの一覧（リプレイ）を選曲画面に開く
+    fn open_replay_list(&mut self) {
+        let Some(path) = self.songs.selected_chart() else {
+            return;
+        };
+        let entries = self.history.plays(&path, REPLAY_LIST_LIMIT);
+        let hash = std::fs::read(&path).ok().map(|b| records::hash_bytes(&b));
+        let label = self.songs.chart_label(&path);
+        let title = match self.songs.selected_song() {
+            Some(s) if !label.is_empty() => format!("{} / {label}", s.title),
+            Some(s) => s.title.clone(),
+            None => label,
+        };
+        self.sfx.play(Se::Decide);
+        self.sfx.preview(None);
+        self.replays = Some(Box::new(ReplayList::new(title, entries, hash)));
+    }
+
+    /// プレイの一覧を操作する
+    fn replay_list_input(&mut self, input: ListInput) {
+        let Some(list) = &mut self.replays else {
+            return;
+        };
+        let (se, done) = list.input(input);
+        if let Some(se) = se {
+            self.sfx.play(se);
+        }
+        match done {
+            Some(ListDone::Play(session)) => {
+                self.close_then(AfterClose::Replay(session), Duration::ZERO);
+            }
+            Some(ListDone::Close) => self.replays = None,
+            None => {}
+        }
+    }
+
+    /// 記録したプレイのリプレイを開く（シャッターを閉じたあと。譜面と音を読むあいだ画面は止まる）。
+    /// 閉じたら、結果の画面から来たならその結果へ、一覧から来たなら一覧へ戻る
+    fn open_replay(&mut self, session: i64) {
+        let back = match std::mem::replace(&mut self.screen, Screen::Select) {
+            Screen::Result(o, v) => Some(Back::Result(o, v)),
+            other => {
+                self.screen = other;
+                self.replays.take().map(Back::List)
+            }
+        };
+        let Some(back) = back else {
+            self.go_to_select();
+            return;
+        };
+        match self.load_replay(session) {
+            Ok((mut play, when)) => {
+                let label = self.songs.chart_label(&play.path);
+                play.begin();
+                let lag = play_view::LagDigits::from_config(&self.config);
+                let looks = play_view::Looks::from_settings(&self.config.settings);
+                let view = PlayView::new(&play, &label, lag, looks);
+                self.quick = None;
+                let run = ReplayRun::new(Box::new(play), Box::new(view), back, &when);
+                self.screen = Screen::Replay(Box::new(run));
+                self.shutter.open(shutter::OPEN_DELAY);
+            }
+            Err(e) => {
+                log::error!("{e:#}");
+                self.return_to(back);
+                self.toast(tf!(
+                    "Could not open the replay: {e:#}",
+                    "リプレイを開けませんでした: {e:#}"
+                ));
+            }
+        }
+    }
+
+    /// 記録から、プレイ `session` を遊んだときの決まりで読み直す。返すのは再生する曲と、遊んだ日時
+    fn load_replay(&self, session: i64) -> Result<(Play, String)> {
+        let rec = self.history.play_takes(session).with_context(|| {
+            t(
+                "This play is not in the records",
+                "このプレイは記録にありません",
+            )
+        })?;
+        let recorded = replay::RecordedRules::parse(&rec.settings);
+        let mut rules = self.rules();
+        recorded.apply(&mut rules);
+        let path = PathBuf::from(&rec.chart_path);
+        let play = Play::load_replay(&path, &rules, recorded.song_offset_ms, &rec)?;
+        Ok((play, replay_view::when_label(rec.entry.started_at)))
+    }
+
+    /// リプレイを閉じて、来た画面へ戻る（シャッターを閉じたあと）
+    fn leave_replay(&mut self) {
+        match std::mem::replace(&mut self.screen, Screen::Select) {
+            // 再生している曲はここで捨てる（音も止まる）
+            Screen::Replay(run) => self.return_to(run.into_back()),
+            other => self.screen = other,
+        }
+    }
+
+    /// リプレイから戻る
+    fn return_to(&mut self, back: Back) {
+        match back {
+            Back::Result(o, v) => {
+                self.screen = Screen::Result(o, v);
+                self.shutter.open(shutter::OPEN_DELAY);
+            }
+            Back::List(list) => {
+                self.go_to_select();
+                self.replays = Some(list);
+            }
+        }
+    }
+
+    /// リプレイのパッドとキー
+    fn replay_input(&mut self, lane: DrumLane) {
+        if self.after_close.is_some() {
+            return;
+        }
+        let Screen::Replay(run) = &mut self.screen else {
+            return;
+        };
+        match lane {
+            DrumLane::CY => run.toggle(),
+            DrumLane::HT | DrumLane::LT => {
+                if let Some(se) = run.step(if lane == DrumLane::HT { -1 } else { 1 }) {
+                    self.sfx.play(se);
+                }
+            }
+            // 今見ている所を区間練習（練習メニューに区間を選んでおく）
+            DrumLane::RD => {
+                let (path, section) = (run.play.path.clone(), run.section());
+                let options = self.practice_options(section);
+                self.sfx.play(Se::Decide);
+                self.close_then(AfterClose::Setup(path, Some(options), None), Duration::ZERO);
+            }
+            DrumLane::LC => {
+                self.sfx.play(Se::Cancel);
+                self.close_then(AfterClose::LeaveReplay, Duration::ZERO);
+            }
+            _ => {}
+        }
+    }
+
+    /// 区間 `section` を、設定に残したほかの決めごとで練習する
+    fn practice_options(&self, section: engine::practice::Section) -> PracticeOptions {
+        let p = self.config.practice_prefs();
+        PracticeOptions {
+            section,
+            style: p.style,
+            rule: p.rule,
+            speed: p.speed,
+            pitch: p.pitch,
+            metronome: p.metronome,
+            step_laps: p.step_laps,
+        }
+    }
+
     /// 区間の練習を始める
     fn start_practice(&mut self, path: PathBuf, options: PracticeOptions) {
         self.open_loading(path, Some(options));
@@ -1578,6 +1773,7 @@ impl App {
             self.history.best_score(&p.path, session)
         };
         let mut outcome = p.outcome();
+        outcome.session_id = session;
         if let Some(d) = outcome.drill.as_mut() {
             d.best_before = best_before;
         }
@@ -1793,6 +1989,11 @@ impl App {
                 }
             }
         }
+        if let Screen::Replay(run) = &mut self.screen
+            && !closing
+        {
+            run.tick(play_view::view_ahead_ms(self.config.scroll_px_per_ms));
+        }
         if failed_out {
             self.save_unfinished();
             self.go_to_select();
@@ -1837,6 +2038,7 @@ impl App {
         if matches!(self.screen, Screen::Select)
             && self.after_close.is_none()
             && self.menu.is_none()
+            && self.replays.is_none()
         {
             // 選んでから少し待ってプレビューの音を鳴らす（上流 CActSelectPresound）
             let preview = if self.view.settled_for(&self.songs, PREVIEW_WAIT) {
@@ -1936,7 +2138,7 @@ impl App {
         };
         match self.screen {
             // タイトルは「更新」の行が変わるので知らせない（知らせはその行と重なる）
-            Screen::Title | Screen::Play(..) | Screen::Loading(_) => {}
+            Screen::Title | Screen::Play(..) | Screen::Loading(_) | Screen::Replay(_) => {}
             Screen::Config(..) => self.config_toast(text),
             _ => self.toast(text),
         }
@@ -2291,6 +2493,10 @@ impl App {
                 self.quick = None;
                 self.select_action(ui::SelectAction::Practice);
             }
+            ConfigAction::Run(ItemId::ReplaySong) => {
+                self.quick = None;
+                self.open_replay_list();
+            }
             ConfigAction::Run(ItemId::SongRecords) => {
                 self.quick = None;
                 let chart = self.songs.selected_chart();
@@ -2330,6 +2536,10 @@ impl App {
             }
             KeyCode::KeyP if !paused => {
                 self.quick_action(ConfigAction::Run(ItemId::PracticeSong));
+                return;
+            }
+            KeyCode::KeyV if !paused => {
+                self.quick_action(ConfigAction::Run(ItemId::ReplaySong));
                 return;
             }
             KeyCode::F1 if !paused => {
@@ -2669,8 +2879,22 @@ impl App {
                 KeyCode::KeyR => self.result_action(ui::ResultAction::Retry),
                 KeyCode::KeyP => self.result_action(ui::ResultAction::Practice(None)),
                 KeyCode::KeyO => self.toggle_result_advice(),
+                KeyCode::KeyV => self.result_replay(),
                 _ => {}
             },
+            Screen::Replay(_) => {
+                let lane = match code {
+                    KeyCode::Space | KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Pause => {
+                        DrumLane::CY
+                    }
+                    KeyCode::ArrowLeft | KeyCode::ArrowUp => DrumLane::HT,
+                    KeyCode::ArrowRight | KeyCode::ArrowDown => DrumLane::LT,
+                    KeyCode::KeyP => DrumLane::RD,
+                    KeyCode::Escape | KeyCode::Backspace => DrumLane::LC,
+                    _ => return,
+                };
+                self.replay_input(lane);
+            }
         }
     }
 
@@ -2796,6 +3020,7 @@ impl App {
         if !matches!(self.screen, Screen::Select)
             || self.after_close.is_some()
             || self.quick.is_some()
+            || self.replays.is_some()
         {
             self.wheel = 0.0;
             return;
@@ -2829,6 +3054,17 @@ impl App {
     fn on_select_key(&mut self, code: KeyCode) {
         if self.quick.is_some() {
             self.on_quick_key(code);
+            return;
+        }
+        if self.replays.is_some() {
+            let input = match code {
+                KeyCode::ArrowUp => ListInput::Up,
+                KeyCode::ArrowDown => ListInput::Down,
+                KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space => ListInput::Decide,
+                KeyCode::Escape | KeyCode::Backspace => ListInput::Cancel,
+                _ => return,
+            };
+            self.replay_list_input(input);
             return;
         }
         if self.menu.is_some() {
@@ -2968,6 +3204,17 @@ impl App {
                 self.records_input(input);
             }
             Screen::Select => {
+                if self.replays.is_some() {
+                    let input = match lane {
+                        DrumLane::HT => ListInput::Up,
+                        DrumLane::LT => ListInput::Down,
+                        DrumLane::CY | DrumLane::RD => ListInput::Decide,
+                        DrumLane::LC => ListInput::Cancel,
+                        _ => return,
+                    };
+                    self.replay_list_input(input);
+                    return;
+                }
                 if self.menu.is_some() {
                     // 設定の画面と同じパッドの役目（SD・FT で区間や値をその場で変える）
                     let input = match lane {
@@ -3015,8 +3262,11 @@ impl App {
                 DrumLane::FT => self.toggle_result_advice(),
                 // 選曲と同じく HT と LT で動かす
                 DrumLane::HT | DrumLane::LT => self.turn_result_page(),
+                // 今のプレイのリプレイ（キーボードは V）
+                DrumLane::HH | DrumLane::HHO => self.result_replay(),
                 _ => {}
             },
+            Screen::Replay(_) => self.replay_input(lane),
             // 設定の画面と同じパッドの役目（SD・FT でテンポ）
             Screen::Drills(_) => {
                 let input = match lane {
@@ -3209,18 +3459,7 @@ impl App {
             },
             ui::ResultAction::Practice(section) => {
                 let previous = match section {
-                    Some(section) => {
-                        let p = self.config.practice_prefs();
-                        Some(PracticeOptions {
-                            section,
-                            style: p.style,
-                            rule: p.rule,
-                            speed: p.speed,
-                            pitch: p.pitch,
-                            metronome: p.metronome,
-                            step_laps: p.step_laps,
-                        })
-                    }
+                    Some(section) => Some(self.practice_options(section)),
                     None => options,
                 };
                 self.close_then(AfterClose::Setup(path, previous, None), Duration::ZERO);
@@ -3507,7 +3746,7 @@ impl App {
             // 記録と基礎練習の画面は更新の印を出さないので、いつも帯の端
             Screen::Records(_) | Screen::Drills(_) => Corner::BottomRight(1264.0, 717.0),
             Screen::Title | Screen::End(_) => Corner::BottomRight(1264.0, 704.0),
-            Screen::Loading(_) | Screen::Play(..) => return,
+            Screen::Loading(_) | Screen::Play(..) | Screen::Replay(_) => return,
         };
         drop_view::adding_chip(c, &mut self.gfx, &w, corner);
     }
@@ -3598,6 +3837,9 @@ impl App {
                     let rows = config_view::rows(q.page(), &info);
                     q.draw_panel(&c, &mut self.gfx, &rows, &info);
                 }
+                if let Some(l) = &self.replays {
+                    l.draw(&c, &mut self.gfx);
+                }
                 if let Some(m) = &self.message {
                     ui::message_overlay(&ctx, m);
                 }
@@ -3642,6 +3884,18 @@ impl App {
                     let rows = config_view::rows(q.page(), &info);
                     q.draw_panel(&c, &mut self.gfx, &rows, &info);
                 }
+            }
+            Screen::Replay(run) => {
+                let ctx = ui.ctx().clone();
+                let painter = ctx.layer_painter(egui::LayerId::background());
+                let c = Canvas::new(&painter, ctx.content_rect());
+                self.gfx.begin(&c, ctx.pixels_per_point());
+                run.draw(
+                    &c,
+                    &mut self.gfx,
+                    self.config.scroll_px_per_ms,
+                    self.config.visual_offset_ms,
+                );
             }
             Screen::Result(o, view) => {
                 let ctx = ui.ctx().clone();

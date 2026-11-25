@@ -24,6 +24,7 @@ use crate::midi::RawMidi;
 use crate::practice::{
     CLEAR_HOLD_MS, LapSummary, Practice, PracticeOptions, StrayHint, count_per_measure,
 };
+use crate::replay::{Feed, Take};
 use crate::stretch::{SectionAudio, mix_bgm};
 use crate::time::host_us;
 
@@ -62,6 +63,9 @@ const AUTO_AHEAD_MS: f64 = 1500.0;
 
 /// 自動で叩いたときのレーンの光の強さ（ベロシティ）
 const AUTO_VELOCITY: u8 = 100;
+
+/// 最後まで遊ばなかったプレイのリプレイを、最後の判定からどれだけあとで終えるか（ミリ秒）
+const REPLAY_TAIL_MS: f64 = 1500.0;
 
 /// 練習の出来事。演奏の画面が取り出して音を鳴らし、終わったら結果へ進む
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -266,6 +270,8 @@ pub struct Outcome {
     pub drill: Option<DrillOutcome>,
     /// スネアの打ち分け（譜面にリムの音符があり、電子ドラムで叩いたときだけ）
     pub strokes: Option<StrokeTally>,
+    /// 記録に残したセッションの番号（普通のプレイなら、結果の画面からリプレイを見られる）
+    pub session_id: Option<i64>,
 }
 
 /// 練習 1 回の成績
@@ -385,6 +391,10 @@ pub struct Play {
     /// ゲージの決まり（演奏の画面が使う）
     pub gauge: GaugeRule,
     hit_sounds: HitSoundRule,
+    /// リプレイなら、組み立て直した打撃（叩いても判定しない。記録にも残さない）
+    replay: Option<Feed>,
+    /// リプレイで飛んだ先まで一度に判定しているところ（画面の効果を捨てずに全部ためる）
+    catching_up: bool,
 }
 
 impl Play {
@@ -446,6 +456,83 @@ impl Play {
         options: PracticeOptions,
     ) -> Result<Self> {
         Self::open(path, input_offset_ms, drum_sounds, rules, Some(options))
+    }
+
+    /// 記録したプレイ `rec` を再生する。`rules` は遊んだときの決まりにしたもの（[`crate::replay::RecordedRules`]）。
+    /// 判定の時刻は記録のまま使うので、入力の補正は 0 にし、この曲の補正は遊んだときの値にする
+    pub fn load_replay(
+        path: &Path,
+        rules: &Rules,
+        song_offset_ms: f64,
+        rec: &records::PlayTakes,
+    ) -> Result<Self> {
+        let mut play = Self::open(path, 0.0, true, rules, None)?;
+        play.song_offset_ms = song_offset_ms;
+        play.started_at = rec.entry.started_at;
+        let fresh = play.judge.clone();
+        let (takes, missing) = crate::replay::takes(play.judge.notes(), &rec.hits, &rec.strays);
+        let r = crate::replay::rehearse(fresh.clone(), takes);
+        let differ = crate::replay::differences(play.judge.notes(), &rec.hits, &r.judged);
+        let (was, now) = (&rec.entry.tally, &r.tally);
+        log::info!(
+            "replay of {}: {} hits, {missing} notes not in the chart, {differ} judged differently \
+             (PERFECT {} → {}, GREAT {} → {}, MISS {} → {})",
+            rec.entry.session_id,
+            r.takes.len(),
+            was.perfect,
+            now.perfect,
+            was.great,
+            now.great,
+            was.miss,
+            now.miss,
+        );
+        let sounds = r
+            .takes
+            .iter()
+            .zip(&r.matched)
+            .map(|(t, m)| match m {
+                Some(i) => {
+                    let note = play.judge.notes()[*i].clone();
+                    Some(play.hit_wav(t.lane, &note, t.ms, t.articulation))
+                }
+                None => play
+                    .stray_wav(t.lane, t.ms, t.articulation)
+                    .map(|w| (w, t.lane)),
+            })
+            .collect();
+        // 最後まで遊ばなかったプレイは、最後に判定した音符か空打ちの少しあとで終える
+        let end_ms = if rec.entry.completed {
+            play.end_ms - song_offset_ms
+        } else {
+            let index: HashMap<(dtx::NotePos, DrumLane), f64> = play
+                .judge
+                .notes()
+                .iter()
+                .map(|n| ((n.at, n.lane), n.ms))
+                .collect();
+            rec.hits
+                .iter()
+                .filter_map(|h| index.get(&(h.at, h.lane)).copied())
+                .chain(rec.strays.iter().map(|s| s.at_ms))
+                .fold(0.0, f64::max)
+                + REPLAY_TAIL_MS
+        };
+        play.replay = Some(Feed {
+            takes: r.takes,
+            matched: r.matched,
+            sounds,
+            next_hit: 0,
+            next_sound: 0,
+            end_ms,
+            fresh,
+            judged: r.judged,
+        });
+        Ok(play)
+    }
+
+    /// リプレイなら、その打撃
+    pub fn replay(&self) -> Option<&Feed> {
+        self.replay.as_ref()
     }
 
     fn open(
@@ -645,6 +732,8 @@ impl Play {
             tight,
             gauge: rules.gauge,
             hit_sounds: rules.hit_sounds,
+            replay: None,
+            catching_up: false,
         };
         play.lay_laps(start_ms);
         play.lay_auto(start_ms);
@@ -700,7 +789,7 @@ impl Play {
     }
 
     fn push_fx(&mut self, fx: Fx) {
-        if self.fx.len() >= MAX_FX {
+        if self.fx.len() >= MAX_FX && !self.catching_up {
             self.fx.drain(..MAX_FX / 2);
         }
         self.fx.push(fx);
@@ -940,6 +1029,9 @@ impl Play {
 
     /// 曲が終わった（練習は自分でやめるまで終わらない）
     pub fn finished(&self) -> bool {
+        if let Some(f) = &self.replay {
+            return self.judge_ms(self.now_ms()) > f.end_ms;
+        }
         self.practice.is_none() && self.now_ms() > self.end_ms
     }
 
@@ -988,11 +1080,51 @@ impl Play {
         }
         let now = self.now_ms();
         let to = (now + delta_ms).clamp(self.start_ms, self.end_ms.max(self.start_ms));
-        let d = to - now;
         self.skipped = true;
-        if d == 0.0 {
+        if to == now {
             return Some(to);
         }
+        self.judge.jump_to(self.judge_ms(to));
+        self.move_clock(now, to);
+        Some(to)
+    }
+
+    /// リプレイで、曲の時刻 `to` へ飛ぶ。判定を最初からやり直して `to` までの打撃を一度にかけ、
+    /// 画面の効果をすべてためる（演奏の画面は作り直してから受け取る）。止めていれば止めたまま
+    pub fn replay_jump(&mut self, to: f64) -> f64 {
+        let Some(f) = self.replay.as_mut() else {
+            return self.now_ms();
+        };
+        let to = to.clamp(
+            self.start_ms,
+            (f.end_ms + self.song_offset_ms).max(self.start_ms),
+        );
+        self.judge = f.fresh.clone();
+        f.next_hit = 0;
+        let song_offset = self.song_offset_ms;
+        f.next_sound = f.takes.partition_point(|t| t.ms + song_offset < to);
+        self.note_hits = vec![None; self.judge.notes().len()];
+        self.strays.clear();
+        self.hit_offsets.clear();
+        self.fx.clear();
+        self.catching_up = true;
+        self.feed_replay(to);
+        self.advance_to(self.judge_ms(to));
+        self.catching_up = false;
+        // 同じ所へ飛んでも、出力へ渡してある音は止めて渡し直す（次に渡す音を `to` に戻したので）
+        let now = self.now_ms();
+        self.move_clock(now, to);
+        to
+    }
+
+    /// リプレイの今の判定の時刻（譜面の音符と同じ時刻）
+    pub fn replay_ms(&self) -> f64 {
+        self.judge_ms(self.now_ms())
+    }
+
+    /// 曲の時計を `now` から `to` へ動かし、飛んだ先で鳴らす音を出力に渡し直す
+    fn move_clock(&mut self, now: f64, to: f64) {
+        let d = to - now;
         if let Some(a) = self.audio.as_mut() {
             a.seek(d);
         }
@@ -1000,7 +1132,6 @@ impl Play {
         if self.paused_ms.is_some() {
             self.paused_ms = Some(to);
         }
-        self.judge.jump_to(self.judge_ms(to));
         // 飛んだ先でまだ鳴っているはずの自動の音（長い BGM など）は途中から鳴らし直し、その先は `lay_auto` に任せる
         self.auto_next = self.chart_sounds.auto.partition_point(|v| v.ms < to);
         self.click_next = self.lines.partition_point(|l| l.ms < to);
@@ -1019,8 +1150,8 @@ impl Play {
             }
         }
         self.lay_auto(to);
+        self.lay_replay(to);
         log::info!("jumped from {now:.0}ms to {to:.0}ms");
-        Some(to)
     }
 
     /// 時間を進め、見逃しを判定する
@@ -1032,12 +1163,18 @@ impl Play {
         self.lay_laps(now);
         self.note_practice(now);
         self.lay_auto(now);
+        self.lay_replay(now);
+        self.feed_replay(now);
         // 見逃しは判定の時刻で決める（遅めに叩いても POOR の幅の中なら、見逃しより先に届いた打撃で取れるように）
-        let events = self.judge.advance(self.judge_ms(now));
+        self.advance_to(self.judge_ms(now));
+    }
+
+    /// 判定の時刻 `ms` までに来た自動の音符を取り、判定の幅を過ぎた音符を見逃しにする
+    fn advance_to(&mut self, ms: f64) {
+        let events = self.judge.advance(ms);
         // 基礎練習で叩くのをやめたら、休み（一時停止の板を出す）
-        let judge_now = self.judge_ms(now);
         if let Some(d) = self.drill.as_mut()
-            && d.check_rest(judge_now)
+            && d.check_rest(ms)
         {
             self.practice_events.push(PracticeEvent::Rest);
         }
@@ -1059,6 +1196,56 @@ impl Play {
         }
         self.record(&events, None, None);
         self.show(&events);
+    }
+
+    /// リプレイなら、曲の時刻 `now` までの打撃を判定にかける（組み立てたときと同じく、打撃ごとにその時刻まで見逃しを進める）
+    fn feed_replay(&mut self, now: f64) {
+        let until = self.judge_ms(now);
+        loop {
+            let Some(f) = self.replay.as_mut() else {
+                return;
+            };
+            let Some(&t) = f.takes.get(f.next_hit) else {
+                return;
+            };
+            if t.ms > until {
+                return;
+            }
+            f.next_hit += 1;
+            self.advance_to(t.ms);
+            self.strike(t, None);
+        }
+    }
+
+    /// リプレイなら、叩いた音のうち `now`（曲の時刻）から少し先までのものを、叩いた時刻どおりに出力へ渡す
+    fn lay_replay(&mut self, now: f64) {
+        let (Some(f), Some(a)) = (self.replay.as_mut(), self.audio.as_mut()) else {
+            return;
+        };
+        let until = now + AUTO_AHEAD_MS;
+        while let Some(t) = f.takes.get(f.next_sound) {
+            let at = t.ms + self.song_offset_ms;
+            if at >= until {
+                break;
+            }
+            let sound = f.sounds[f.next_sound];
+            f.next_sound += 1;
+            if !self.drum_sounds {
+                continue;
+            }
+            let Some((wav, sound_lane)) = sound else {
+                continue;
+            };
+            let (muting, tag) = hit_sound_tags(self.hit_sounds.muting_lp, sound_lane, t.lane);
+            if muting {
+                a.stop_at(HH_TAG, at);
+            }
+            if let Some(s) = self.sounds.get(&wav) {
+                let (gain, pan) = self.chart_sounds.gain_pan(wav);
+                let gain = gain * f32::from(t.velocity) / 127.0;
+                a.play_chip(s, at, None, (gain, pan), (Bus::Hits, tag));
+            }
+        }
     }
 
     /// ポートから届いた MIDI（`msgs` は `raw.bytes` を読んだもの）
@@ -1145,11 +1332,40 @@ impl Play {
         articulation: Option<Articulation>,
         hh_pedal: Option<u8>,
     ) {
-        // 上流と同じく、止めているあいだは叩いても何もしない
-        if self.paused() {
+        // 上流と同じく、止めているあいだは叩いても何もしない。リプレイでは叩いても数えない
+        if self.paused() || self.replay.is_some() {
             return;
         }
         let ms = self.judge_ms(self.song_ms_at(at_us));
+        let timing = HitTiming {
+            hit_us: at_us,
+            arrival_us,
+            handled_us: host_us(),
+            sound_us: None,
+        };
+        self.strike(
+            Take {
+                ms,
+                lane,
+                velocity,
+                articulation,
+                hh_pedal,
+                target: None,
+            },
+            Some(timing),
+        );
+    }
+
+    /// 判定の時刻 `t.ms` に叩いた。`live` は叩いた時刻（遊んでいるとき）。リプレイなら None で、音は先に出力へ渡してある
+    fn strike(&mut self, t: Take, live: Option<HitTiming>) {
+        let Take {
+            ms,
+            lane,
+            velocity,
+            articulation,
+            hh_pedal,
+            ..
+        } = t;
         if let Some(p) = self.practice.as_mut() {
             p.on_hit(ms);
         }
@@ -1187,13 +1403,8 @@ impl Play {
             }
         }
         self.record(&events, articulation, hh_pedal);
-        let mut timing = Some(HitTiming {
-            hit_us: at_us,
-            arrival_us,
-            handled_us: host_us(),
-            sound_us: None,
-        });
-        if self.drum_sounds {
+        let mut timing = live;
+        if self.drum_sounds && live.is_some() {
             // 取った音符の音を鳴らす。空打ちなら空打ちの音、無ければそのレーンの一番近い音符の音。
             // `sound_lane` は鳴らす音のレーン（上流が音を止めるかを決めるチップのチャンネル）
             let (wav, sound_lane) = match events.first() {
@@ -1438,6 +1649,7 @@ impl Play {
             tendencies: Vec::new(),
             started_at: self.started_at,
             strokes: self.stroke_tally(),
+            session_id: None,
             practice: self.practice.as_ref().map(|p| PracticeOutcome {
                 options: p.options,
                 laps: p.summaries(self.now_ms()),
@@ -1515,7 +1727,7 @@ impl Play {
     /// 記録に残す形にする。何も叩かず何も過ぎていなければ None（すぐやめたときは残さない）。
     /// 音符をすべて自動で叩いたときと、早送りか巻き戻しをしたときも残さない（上流と同じ）
     pub fn session(&self) -> Option<Session> {
-        if self.all_auto() || self.skipped {
+        if self.all_auto() || self.skipped || self.replay.is_some() {
             return None;
         }
         let w = self.judge.windows();
@@ -1881,6 +2093,87 @@ mod tests {
         let play = Play::load(&path, 0.0, false, rules);
         std::fs::remove_file(&path).unwrap();
         play.unwrap()
+    }
+
+    #[test]
+    fn a_saved_play_replays_with_the_same_judgements() {
+        // BPM 120 で 1 小節 2000ms。HH は 8 分、SD は 2・4 拍
+        let text = "#BPM 120\n#WAV01 hh.ogg\n#WAV02 sd.ogg\n\
+                    #00111: 0101010101010101\n#00112: 00020002\n\
+                    #00211: 0101010101010101\n#00212: 00020002\n";
+        let path = std::env::temp_dir().join(format!("nxt-replay-{}.dtx", std::process::id()));
+        std::fs::write(&path, text).unwrap();
+        let rules = Rules {
+            tight: true,
+            ..Rules::default()
+        };
+        let mut p = Play::load(&path, 0.0, false, &rules).unwrap();
+        let notes = p.judge.notes().to_vec();
+        let take = |ms: f64, lane: DrumLane| Take {
+            ms,
+            lane,
+            velocity: 90,
+            articulation: None,
+            hh_pedal: None,
+            target: None,
+        };
+        // 遊んだつもりで叩く（5 つに 1 つは抜かし、早め・遅めを混ぜ、空打ちも入れる）
+        let mut inputs: Vec<Take> = notes
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| i % 5 != 0)
+            .map(|(i, n)| take(n.ms + [-20.0, 8.0, 45.0, -70.0][i % 4], n.lane))
+            .collect();
+        inputs.push(take(4100.0, DrumLane::FT));
+        inputs.sort_by(|a, b| a.ms.total_cmp(&b.ms));
+        for t in inputs {
+            p.advance_to(t.ms);
+            p.strike(t, None);
+        }
+        p.advance_to(f64::INFINITY);
+        let tally = p.judge.tally().clone();
+        assert!(tally.miss > 0 && tally.stray == 1 && tally.great > 0);
+        let session = p.session().unwrap();
+        let lap = &session.laps[0];
+        let rec = records::PlayTakes {
+            entry: records::PlayEntry {
+                session_id: 1,
+                started_at: 0,
+                chart_hash: Some(p.chart_hash),
+                tally: lap.tally.clone(),
+                completed: true,
+                score: None,
+            },
+            chart_path: path.to_string_lossy().into_owned(),
+            settings: session.settings.clone(),
+            hits: lap.hits.clone(),
+            strays: lap.strays.clone(),
+        };
+        // 今の設定がどうでも、遊んだときの決まりで判定し直す
+        let mut now_rules = Rules {
+            auto: vec![DrumLane::HH],
+            ..Rules::default()
+        };
+        crate::replay::RecordedRules::parse(&session.settings).apply(&mut now_rules);
+        let mut r = Play::load_replay(&path, &now_rules, 0.0, &rec).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        assert!(r.session().is_none());
+        assert_eq!(r.replay().unwrap().takes.len(), notes.len() - 4 + 1);
+        let end = r.replay_jump(f64::MAX);
+        assert!(end > notes.last().unwrap().ms);
+        assert_eq!(r.judge.tally(), &tally);
+        let judged = r
+            .take_fx()
+            .iter()
+            .filter(|f| matches!(f, Fx::Judged { .. }))
+            .count();
+        assert_eq!(judged, notes.len());
+        // 戻ればまた最初から判定する
+        r.replay_jump(0.0);
+        assert_eq!(r.judge.tally().perfect + r.judge.tally().great, 0);
+        // 叩いた音は、取った音符の音（空打ちは一番近い音符の音、FT には無い）
+        let f = r.replay().unwrap();
+        assert!(f.sounds.iter().filter(|s| s.is_some()).count() == notes.len() - 4);
     }
 
     #[test]

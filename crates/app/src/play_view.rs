@@ -197,6 +197,8 @@ const LEFT_BASS_SATURATION_BD: f32 = 1.9;
 const LEFT_BASS_SATURATION_LP: f32 = 1.1;
 /// 左バスドラムの色の見本（設定の配置図に使う）
 pub const LEFT_BASS_COLOR: Color32 = Color32::from_rgb(102, 230, 255);
+/// リプレイで、音符の無い所を叩いた印の色
+const STRAY_MARK: Color32 = Color32::from_rgb(240, 96, 96);
 /// 7_chips_drums.png の BD の列の幅と、LP の列の左と幅
 const BD_CHIP_W: u32 = 70;
 const LP_CHIP_SX: u32 = 660;
@@ -959,6 +961,83 @@ impl PlayView {
         }
         // 練習は周を足すたびに音符が増える
         self.notes = play.judge.notes().len();
+    }
+
+    /// リプレイで飛んだ：数を最初から数え直す。`play` にためた出来事（飛んだ先までの判定）をまとめて受け取り、
+    /// 火花や判定の文字など、飛ぶ前からの動きは消す
+    pub fn rewind(&mut self, play: &mut Play) {
+        let now = Instant::now();
+        self.tally = Tally::default();
+        self.gauge = Gauge::new(play.gauge);
+        self.score = Score {
+            truth: 0.0,
+            shown: 0,
+            step: 0,
+            at: now,
+        };
+        for s in &mut self.sections {
+            s.hits = 0;
+        }
+        (self.early, self.late) = (0, 0);
+        self.feed(play);
+        self.score.shown = self.score.truth as i64;
+        self.hit_error = HitErrorBar::new(play.judge.windows());
+        self.flush = [None; LANES];
+        self.pads = [PadState::new(now); LANES];
+        self.fires = [None; LANES];
+        self.stars.clear();
+        self.pieces.clear();
+        self.judges = [None; LANES];
+        self.combo_jump = None;
+        // 飛んだ先までのコンボの爆発は出さない
+        self.bomb = None;
+        self.bombed = (1..=self.tally.combo / 100).collect();
+    }
+
+    /// リプレイでは、Hidden・Sudden・ステルスで音符を隠さない（見直すため）
+    pub fn show_all_chips(&mut self) {
+        self.looks.hid_sud = HidSud::Off;
+    }
+
+    /// 譜面が下から上へ流れる（Reverse）
+    pub fn reverse(&self) -> bool {
+        self.looks.reverse
+    }
+
+    /// リプレイの叩いた所を、音符と一緒に流れる白い線で描く（判定の線に着いたときに叩いている。
+    /// 音符より判定の線の側にあれば早い）。音符の無い所を叩いたものは赤い線。`now_ms` は譜面を描く時刻
+    pub fn draw_takes(&self, c: &Canvas, play: &Play, now_ms: f64, px_per_ms: f32) {
+        let Some(f) = play.replay() else {
+            return;
+        };
+        let looks = self.looks;
+        let notes = play.judge.notes();
+        let from = f.takes.partition_point(|t| t.ms < now_ms);
+        for (t, m) in f.takes.iter().zip(&f.matched).skip(from) {
+            let ahead = ((t.ms - now_ms) as f32) * px_per_ms;
+            let y = looks.ahead_y(ahead);
+            if looks.beyond_edge(y) || ahead > DRAW_AHEAD_PX + 64.0 {
+                break;
+            }
+            // 音符を取った打撃は、音符のレーンに（グループで別のパッドが取ったときも音符の上に出す）
+            let lane = m.and_then(|i| notes.get(i)).map_or(t.lane, |n| n.lane);
+            let (x, _, w, _) = chip(&looks, lane);
+            let color = if m.is_some() {
+                Color32::WHITE
+            } else {
+                STRAY_MARK
+            };
+            let (x0, x1) = (x - 3.0, x - 7.0 + w);
+            c.fill(x0, y - 1.5, x1 - x0, 3.0, color);
+            c.quad(
+                [(x0 - 6.0, y - 5.0), (x0, y), (x0, y), (x0 - 6.0, y + 5.0)],
+                color,
+            );
+            c.quad(
+                [(x1 + 6.0, y - 5.0), (x1, y), (x1, y), (x1 + 6.0, y + 5.0)],
+                color,
+            );
+        }
     }
 
     /// 火花と星と飛び散るチップを出す（上流 `CActPerfDrumsChipFireD.Start`）

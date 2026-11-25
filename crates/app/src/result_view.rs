@@ -280,7 +280,8 @@ impl ResultView {
         if o.drill.is_some() {
             return drill_hints();
         }
-        result_hints(self.page, o.practice.is_some(), o.lag.as_ref())
+        let replay = o.practice.is_none() && o.session_id.is_some();
+        result_hints(self.page, o.practice.is_some(), o.lag.as_ref(), replay)
     }
 
     /// 練習の結果の 2 ページ目（周ごとの成績の表）
@@ -464,8 +465,14 @@ fn drill_hints() -> Vec<ui::Hint<'static>> {
     ]
 }
 
-/// 結果の画面のパッドの役目（`main.rs` の結果の画面のパッドと同じ）。足のパッドは使わない
-fn result_hints(page: Page, practice: bool, lag: Option<&LagResult>) -> Vec<ui::Hint<'static>> {
+/// 結果の画面のパッドの役目（`main.rs` の結果の画面のパッドと同じ）。足のパッドは使わない。
+/// `replay` なら、今のプレイのリプレイを見られる（記録に残した普通のプレイ）
+fn result_hints(
+    page: Page,
+    practice: bool,
+    lag: Option<&LagResult>,
+    replay: bool,
+) -> Vec<ui::Hint<'static>> {
     let turn: ui::Hint<'static> = match (page, practice) {
         (Page::Summary, true) => (&[Pad::HT, Pad::LT], t("Loop Table (→)", "周ごとの表（→）")),
         (Page::Summary, false) => (&[Pad::HT, Pad::LT], t("Details (→)", "詳しい結果（→）")),
@@ -482,6 +489,9 @@ fn result_hints(page: Page, practice: bool, lag: Option<&LagResult>) -> Vec<ui::
     // 練習の結果からは練習メニューへ戻る（CY・LC・RD のどれでも）
     if !practice {
         v.push((&[Pad::RD], t("Practice a Section (P)", "区間練習（P）")));
+    }
+    if replay {
+        v.push((&[Pad::HH], t("Replay (V)", "リプレイ（V）")));
     }
     // ずれの板のおすすめ（板は 1 ページ目だけ）
     if page == Page::Summary
@@ -711,7 +721,7 @@ mod tests {
                 .map(|x| x.0.to_vec())
         };
         // 練習の結果：SD でもう一度、CY・RD・LC で練習メニューへ（選曲へは戻らない）
-        let h = result_hints(Page::Summary, true, None);
+        let h = result_hints(Page::Summary, true, None, false);
         assert_eq!(pads(&h, "もう一度"), Some(vec![Pad::SD]));
         assert_eq!(
             pads(&h, "練習メニューへ"),
@@ -733,11 +743,15 @@ mod tests {
             advice,
             applied: None,
         };
-        let h = result_hints(Page::Summary, false, Some(&lag));
+        let h = result_hints(Page::Summary, false, Some(&lag), true);
         assert_eq!(pads(&h, "区間練習"), Some(vec![Pad::RD]));
+        assert_eq!(pads(&h, "リプレイ"), Some(vec![Pad::HH]));
         assert_eq!(pads(&h, "補正をおすすめに"), Some(vec![Pad::FT]));
         assert_eq!(
-            pads(&result_hints(Page::Analysis, false, Some(&lag)), "補正"),
+            pads(
+                &result_hints(Page::Analysis, false, Some(&lag), true),
+                "補正"
+            ),
             None
         );
         let none = LagResult {
@@ -748,14 +762,25 @@ mod tests {
             ..lag
         };
         assert_eq!(
-            pads(&result_hints(Page::Summary, false, Some(&none)), "補正"),
+            pads(
+                &result_hints(Page::Summary, false, Some(&none), false),
+                "補正"
+            ),
+            None
+        );
+        // 記録に残らなかったプレイ（自動演奏で飛ばしたものなど）はリプレイを出さない
+        assert_eq!(
+            pads(
+                &result_hints(Page::Summary, false, Some(&none), false),
+                "リプレイ"
+            ),
             None
         );
         // 足のパッドは使わない
         for page in [Page::Summary, Page::Analysis] {
             for practice in [true, false] {
                 assert!(
-                    result_hints(page, practice, None)
+                    result_hints(page, practice, None, !practice)
                         .iter()
                         .all(|h| !h.0.contains(&Pad::BD))
                 );

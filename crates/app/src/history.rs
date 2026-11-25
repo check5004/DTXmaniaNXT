@@ -15,8 +15,8 @@ use engine::lag::{Advice, LagSample, advise};
 use engine::practice::Section;
 use library::Stats;
 use records::{
-    BestScore, ChartKey, ChartProgress, ClearRecord, PlayScore, PlayTime, Records, SessionKind,
-    SessionLag, time_kind,
+    BestScore, ChartKey, ChartProgress, ClearRecord, PlayEntry, PlayScore, PlayTakes, PlayTime,
+    Records, SessionKind, SessionLag, time_kind,
 };
 
 use crate::chart_picture::Marks;
@@ -268,6 +268,27 @@ impl History {
             .best_score(&path.to_string_lossy(), before)
             .map_err(|e| log::warn!("cannot read the records: {e}"))
             .ok()
+    }
+
+    /// 譜面の普通のプレイ（リプレイの一覧）。新しい順に `limit` 回まで。記録が読めなければ空
+    pub fn plays(&self, path: &Path, limit: usize) -> Vec<PlayEntry> {
+        let Some(records) = self.records.as_ref() else {
+            return Vec::new();
+        };
+        records
+            .plays(&path.to_string_lossy(), limit)
+            .map_err(|e| log::warn!("cannot read the records: {e}"))
+            .unwrap_or_default()
+    }
+
+    /// リプレイに使う、普通のプレイ 1 回の打撃。無いか読めなければ None
+    pub fn play_takes(&self, session_id: i64) -> Option<PlayTakes> {
+        self.records
+            .as_ref()?
+            .play_takes(session_id)
+            .map_err(|e| log::warn!("cannot read the records: {e}"))
+            .ok()
+            .flatten()
     }
 
     /// 基礎練習のドリルごとの記録（基礎練習の画面に出す）。記録が読めなければ空
