@@ -398,7 +398,7 @@ fn draw_dots(
         &edged(12.0, Color32::from_gray(160)),
         40.0,
     );
-    for s in 0..STEPS {
+    for (s, bpm) in o.run.bpms.iter().enumerate() {
         let sx = px + s as f32 * STEP_MEASURES as f32 * bar_w;
         if s > 0 {
             c.fill(sx, py, 1.0, ph, Color32::from_white_alpha(60));
@@ -406,7 +406,7 @@ fn draw_dots(
         ui::text_center(
             c,
             g,
-            &o.run.bpms[s].to_string(),
+            &bpm.to_string(),
             sx + STEP_MEASURES as f32 * bar_w / 2.0,
             py + ph + 6.0,
             &edged(13.0, Color32::from_gray(200)),
