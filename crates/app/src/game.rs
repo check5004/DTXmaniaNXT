@@ -340,6 +340,8 @@ pub struct Play {
     pub chart_hash: u64,
     /// 始めた時刻（UNIX 秒）
     pub started_at: i64,
+    /// 遊んだ時間を残すときの種類（[`records::time_kind`]。曲か区間練習。基礎練習などはここを変える）
+    pub time_kind: &'static str,
     notes_per_measure: Vec<usize>,
     /// 小節の頭の拍（曲頭から）。音符の拍の中の位置を出すのに使う
     measure_beats: Vec<f64>,
@@ -431,6 +433,7 @@ impl Play {
         // 記録では、テンポが違ってもドリルごとに同じ譜面として扱う
         play.chart_hash = records::hash_bytes(run.drill.id.as_bytes());
         play.artist = crate::drill::category_name(run.drill.category).to_owned();
+        play.time_kind = records::time_kind::DRILL;
         Ok(play)
     }
 
@@ -611,6 +614,11 @@ impl Play {
             hit_offsets: Vec::new(),
             chart_hash: records::hash_bytes(bytes),
             started_at: unix_now(),
+            time_kind: if practice.is_some() {
+                records::time_kind::PRACTICE
+            } else {
+                records::time_kind::PLAY
+            },
             notes_per_measure,
             measure_beats: (0..=tempo.measure_count())
                 .map(|m| tempo.measure_start_beat(m))
@@ -1355,6 +1363,33 @@ impl Play {
     /// 自動で叩くレーンがある（ベストの記録には入れない）
     pub fn has_auto(&self) -> bool {
         self.judge.has_auto()
+    }
+
+    /// 叩いていた時間（ミリ秒）。曲の時刻 `end_ms` でやめたとして、始めから数える。
+    /// 一時停止のあいだは曲の時刻が止まるので入らない。練習で叩かずに休んだ周も入れない。
+    /// 全部自動のときと、音符を 1 つも叩かなかったときは None（練習した時間に数えない）
+    pub fn played_ms(&self, end_ms: f64) -> Option<i64> {
+        let touched = self
+            .note_hits
+            .iter()
+            .flatten()
+            .any(|h| h.offset_ms.is_some());
+        if self.all_auto() || !touched {
+            return None;
+        }
+        let ms = match &self.practice {
+            None => end_ms.min(self.end_ms) - self.start_ms,
+            Some(p) => {
+                let rest: f64 = p
+                    .laps
+                    .iter()
+                    .filter(|l| l.rest)
+                    .map(|l| l.plan.end_ms - l.plan.start_ms)
+                    .sum();
+                end_ms - self.start_ms - rest
+            }
+        };
+        Some(ms.max(0.0).round() as i64)
     }
 
     /// 譜面の音符をすべて自動で叩く

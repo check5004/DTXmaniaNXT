@@ -340,6 +340,51 @@ impl SongList {
             .unwrap_or_default()
     }
 
+    /// 譜面 `path` の難易度の番号（0〜4）と、その譜面。一覧に無ければ None
+    pub fn find_chart(&self, path: &Path) -> Option<(usize, &library::SongChart)> {
+        self.library.all_songs().into_iter().find_map(|s| {
+            s.charts
+                .iter()
+                .enumerate()
+                .find_map(|(i, c)| c.as_ref().filter(|c| c.path == path).map(|c| (i, c)))
+        })
+    }
+
+    /// 譜面 `path` の曲を選ぶ（その曲のある BOX に入り、難易度も合わせる）。一覧に無ければ false
+    pub fn reveal(&mut self, path: &Path) -> bool {
+        fn walk(nodes: &[Node], path: &Path, at: &mut Vec<usize>) -> Option<(usize, usize)> {
+            for (i, n) in nodes.iter().enumerate() {
+                match n {
+                    Node::Song(s) => {
+                        let level = s
+                            .charts
+                            .iter()
+                            .position(|c| c.as_ref().is_some_and(|c| c.path == path));
+                        if let Some(level) = level {
+                            return Some((i, level));
+                        }
+                    }
+                    Node::Box(b) => {
+                        at.push(i);
+                        if let Some(found) = walk(&b.nodes, path, at) {
+                            return Some(found);
+                        }
+                        at.pop();
+                    }
+                }
+            }
+            None
+        }
+        let mut at = Vec::new();
+        let Some((i, level)) = walk(self.root(), path, &mut at) else {
+            return false;
+        };
+        self.path = at;
+        self.cursor = i + self.back_rows();
+        self.level = level;
+        true
+    }
+
     /// BOX なら入り、`<< BACK` なら出て、曲なら遊ぶ譜面を返す。`< RANDOM SELECT >` は
     /// この BOX の中（下の BOX も含む）から 1 曲選ぶ
     pub fn enter(&mut self) -> Option<PathBuf> {
@@ -469,6 +514,22 @@ mod tests {
         assert!(l.back());
         assert_eq!(l.cursor, 0);
         assert!(!l.back());
+    }
+
+    #[test]
+    fn reveal_opens_the_box_and_picks_the_level() {
+        let mut l = list();
+        assert!(l.reveal(Path::new("b1.dtx")));
+        assert_eq!(l.breadcrumbs(), vec!["BOX"]);
+        assert_eq!(l.selected_chart(), Some(PathBuf::from("b1.dtx")));
+        assert_eq!(l.level, 1);
+        assert!(l.reveal(Path::new("c2.dtx")));
+        assert!(l.breadcrumbs().is_empty());
+        assert_eq!(l.selected_chart(), Some(PathBuf::from("c2.dtx")));
+        assert!(!l.reveal(Path::new("none.dtx")));
+        assert_eq!(l.selected_chart(), Some(PathBuf::from("c2.dtx")));
+        let (level, chart) = l.find_chart(Path::new("a3.dtx")).unwrap();
+        assert_eq!((level, chart.label.as_str()), (3, "L3"));
     }
 
     #[test]

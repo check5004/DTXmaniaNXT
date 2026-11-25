@@ -45,6 +45,8 @@ mod play_view;
 mod practice;
 mod practice_hud;
 mod practice_menu;
+mod progress;
+mod records_view;
 mod result_drill;
 mod result_training;
 mod result_view;
@@ -67,7 +69,7 @@ mod update_view;
 mod window_mode;
 mod xa;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -97,6 +99,7 @@ use crate::midi::MidiIn;
 use crate::play_view::PlayView;
 use crate::practice::{PracticeOptions, PracticeSetup};
 use crate::practice_menu::{Done, Finished, MenuInput, MenuMouse, PracticeMenu, Spot};
+use crate::records_view::{RecordsAction, RecordsFrom, RecordsInput, RecordsView};
 use crate::result_view::{Page, ResultInfo, ResultView};
 use crate::section_sound::SectionAudio;
 use crate::select::{PREVIEW_WAIT, SelectView};
@@ -411,6 +414,8 @@ enum Screen {
     Result(Box<Outcome>, Box<ResultView>),
     /// 基礎練習の画面（タイトルの Drills から）
     Drills(Box<drill_menu::DrillMenu>),
+    /// 上達の記録
+    Records(Box<RecordsView>),
 }
 
 struct App {
@@ -575,6 +580,8 @@ enum AfterClose {
     Drills,
     /// 基礎練習を始める
     Drill(engine::drill::Run),
+    /// 上達の記録へ。どこから開いたかと、選んでおく譜面
+    Records(RecordsFrom, Option<PathBuf>),
 }
 
 /// シャッターを開き始めるまでの待ち（v2 はフレームで数える。60 で割った時間にする）。
@@ -921,10 +928,54 @@ impl App {
             AfterClose::Setup(path, previous, finished) => {
                 self.open_setup(path, previous, finished)
             }
+            AfterClose::Records(from, focus) => self.open_records(from, focus.as_deref()),
             AfterClose::Drills => self.open_drills(),
             AfterClose::Drill(run) => {
                 self.start_drill(run);
                 self.shutter.open(shutter::OPEN_DELAY);
+            }
+        }
+    }
+
+    /// 上達の記録の画面を開く（v2 の設定と同じく、シャッターを開いて入る）
+    fn open_records(&mut self, from: RecordsFrom, focus: Option<&Path>) {
+        self.sfx.preview(None);
+        self.quick = None;
+        self.close_menu();
+        let data = self.history.progress();
+        let view = RecordsView::new(from, data, &self.songs, focus);
+        self.screen = Screen::Records(Box::new(view));
+        self.shutter.open(CONFIG_OPEN_DELAY);
+    }
+
+    /// 上達の記録の画面の操作（シャッターが開ききるまでは受け付けない）
+    fn records_input(&mut self, input: RecordsInput) {
+        if self.shutter.animating() {
+            return;
+        }
+        let Screen::Records(view) = &mut self.screen else {
+            return;
+        };
+        let from = view.from;
+        match view.input(input) {
+            RecordsAction::None => {}
+            RecordsAction::Moved => self.sfx.play(Se::Move),
+            RecordsAction::Changed => self.sfx.play(Se::Change),
+            RecordsAction::Pick(path) => {
+                // 選曲で、この譜面の曲と難易度を選んでおく（一覧に無ければ今の場所のまま）
+                self.sfx.play(Se::Decide);
+                if !self.songs.reveal(&path) {
+                    log::info!("not in the song list: {}", path.display());
+                }
+                self.close_then(AfterClose::Select, Duration::ZERO);
+            }
+            RecordsAction::Back => {
+                self.sfx.play(Se::Cancel);
+                let next = match from {
+                    RecordsFrom::Title => AfterClose::Title,
+                    RecordsFrom::Select => AfterClose::Select,
+                };
+                self.close_then(next, Duration::ZERO);
             }
         }
     }
@@ -1339,14 +1390,17 @@ impl App {
         let Screen::Play(p, view) = &self.screen else {
             return;
         };
-        let finish = view.finish(p, at_ms.unwrap_or_else(|| p.now_ms()));
+        let end_ms = at_ms.unwrap_or_else(|| p.now_ms());
+        let finish = view.finish(p, end_ms);
         let practice = p.practice.is_some();
         let drill = p.drill.as_ref().map(|d| d.run.drill.id);
         // 基礎練習の最高は、今回を残す前の記録と比べる
         let best_before = drill.and_then(|id| self.history.drill_records().get(id)?.best);
         // Esc でやめたときも結果は出す（記録は「最後まで遊んでいない」として残す）
         let cleared = p.finished();
-        let session = self.history.save(p, Some(play_score(&finish, cleared)));
+        let session = self
+            .history
+            .save(p, Some(play_score(&finish, cleared)), end_ms);
         let stats = self.history.chart_stats();
         // New Record と前回のベストのバーは、今回より前のプレイと比べる。自動で叩くレーンがあるときと、
         // 早送りか巻き戻しをしたときは比べない
@@ -1412,7 +1466,7 @@ impl App {
         if let Screen::Play(p, view) = &self.screen {
             let now = view.frozen_ms().unwrap_or_else(|| p.now_ms());
             let finish = view.finish(p, now);
-            self.history.save(p, Some(play_score(&finish, false)));
+            self.history.save(p, Some(play_score(&finish, false)), now);
             self.songs.set_stats(self.history.chart_stats());
         }
     }
@@ -1644,6 +1698,19 @@ impl App {
                 // v2 と同じく、タイトルの音を止めてシャッターを閉じる
                 self.sfx.stop_title();
                 self.close_then(AfterClose::Select, Duration::ZERO);
+            }
+            Some(TitleItem::Drills) => {
+                self.sfx.play(Se::Decide);
+                self.sfx.stop_title();
+                self.close_then(AfterClose::Drills, Duration::ZERO);
+            }
+            Some(TitleItem::Records) => {
+                self.sfx.play(Se::Decide);
+                self.sfx.stop_title();
+                self.close_then(
+                    AfterClose::Records(RecordsFrom::Title, None),
+                    Duration::ZERO,
+                );
             }
             Some(TitleItem::Config) => {
                 self.sfx.play(Se::Decide);
@@ -2038,6 +2105,14 @@ impl App {
                 self.quick = None;
                 self.select_action(ui::SelectAction::Practice);
             }
+            ConfigAction::Run(ItemId::SongRecords) => {
+                self.quick = None;
+                let chart = self.songs.selected_chart();
+                self.close_then(
+                    AfterClose::Records(RecordsFrom::Select, chart),
+                    Duration::ZERO,
+                );
+            }
             ConfigAction::Run(ItemId::AllSettings) => {
                 self.quick = None;
                 self.sfx.preview(None);
@@ -2324,6 +2399,18 @@ impl App {
                     _ => return,
                 };
                 self.drills_input(input);
+            }
+            Screen::Records(_) => {
+                let input = match code {
+                    KeyCode::ArrowUp => RecordsInput::Up,
+                    KeyCode::ArrowDown => RecordsInput::Down,
+                    KeyCode::ArrowLeft => RecordsInput::Left,
+                    KeyCode::ArrowRight => RecordsInput::Right,
+                    KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space => RecordsInput::Decide,
+                    KeyCode::Escape | KeyCode::Backspace => RecordsInput::Cancel,
+                    _ => return,
+                };
+                self.records_input(input);
             }
             Screen::Result(_, view) => match code {
                 KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Escape => {
@@ -2621,6 +2708,19 @@ impl App {
                 self.config_input(input);
             }
             Screen::End(_) => {}
+            // 画面の下の帯に出す役目（`RecordsView::hints`）。足のパッドは使わない
+            Screen::Records(_) => {
+                let input = match lane {
+                    DrumLane::HT => RecordsInput::Up,
+                    DrumLane::LT => RecordsInput::Down,
+                    DrumLane::SD => RecordsInput::Left,
+                    DrumLane::FT => RecordsInput::Right,
+                    DrumLane::CY => RecordsInput::Decide,
+                    DrumLane::LC => RecordsInput::Cancel,
+                    _ => return,
+                };
+                self.records_input(input);
+            }
             Screen::Select => {
                 if self.menu.is_some() {
                     // 設定の画面と同じパッドの役目（SD・FT で区間や値をその場で変える）
@@ -3096,6 +3196,13 @@ impl App {
                 let c = Canvas::new(&painter, ctx.content_rect());
                 self.gfx.begin(&c, ctx.pixels_per_point());
                 e.draw(&c, &mut self.gfx);
+            }
+            Screen::Records(view) => {
+                let ctx = ui.ctx().clone();
+                let painter = ctx.layer_painter(egui::LayerId::background());
+                let c = Canvas::new(&painter, ctx.content_rect());
+                self.gfx.begin(&c, ctx.pixels_per_point());
+                view.draw(&c, &mut self.gfx);
             }
             Screen::Select => {
                 let ctx = ui.ctx().clone();

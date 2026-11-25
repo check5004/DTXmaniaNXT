@@ -933,9 +933,10 @@ save(Image.new("RGBA", (262, 150), (0, 0, 0, 0)), "6_Part.png")
 # =====================================================================
 # タイトル・設定・共通
 # =====================================================================
-# ---- タイトルのメニュー 2_menu.png（227×39 の段。0 Start、1 Options（描かない）、2 Config、3 Quit、4 カーソル、5 カーソルの光）
-mn = Image.new("RGBA", (256, 256), (0, 0, 0, 0))
-for i, text in enumerate(["Start", "Options", "Config", "Quit"]):
+# ---- タイトルのメニュー 2_menu.png（227×39 の段。0 Start、1 Options（描かない）、2 Config、3 Quit、4 カーソル、5 カーソルの光、
+#      6 Drills（基礎練習）、7 Records（上達の記録）。6 と 7 はこのアプリで足した段）
+mn = Image.new("RGBA", (256, 312), (0, 0, 0, 0))
+for i, text in [(0, "Start"), (1, "Options"), (2, "Config"), (3, "Quit"), (6, "Drills"), (7, "Records")]:
     text_on(mn, (113, i * 39 + 20), text, SPRAY, 28, WHITE, stroke=3, anchor="mm", shadow=(2, 3, 2, VIOLET, 170))
 cur = Image.new("RGBA", (227, 39), (0, 0, 0, 0))
 cm = rough_mask(227, 39, (10, 5, 216, 33), 8, 1.6)
