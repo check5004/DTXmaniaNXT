@@ -144,6 +144,8 @@ pub struct ResultInfo {
     pub tally: Tally,
     pub notes: usize,
     pub practice: bool,
+    /// 基礎練習（ページは 1 枚だけ。スコアの場所に最高のテンポ）
+    pub drill: bool,
     /// 普通のプレイを最後まで遊んだ（途中でやめたときと練習は false）
     pub cleared: bool,
     pub finish: Finish,
@@ -174,6 +176,7 @@ impl ResultView {
         // 上流：今回の達成率が前の一番より高ければ New Record（前が無ければ 0 と比べる）。練習は記録しない
         let new_record = info.cleared
             && !info.practice
+            && !info.drill
             && info
                 .best
                 .as_ref()
@@ -220,6 +223,10 @@ impl ResultView {
 
     /// ページを切り替える（←→）。練習の結果の 2 ページ目は周ごとの成績の表
     pub fn turn(&mut self) {
+        // 基礎練習の結果は 1 ページだけ
+        if self.info.drill {
+            return;
+        }
         self.page = match self.page {
             Page::Summary => Page::Analysis,
             Page::Analysis => Page::Summary,
@@ -243,15 +250,22 @@ impl ResultView {
     pub fn draw_summary(&self, c: &Canvas, g: &mut Gfx, o: &Outcome) {
         let elapsed = self.entered.elapsed();
         self.draw_panels(c, g, elapsed);
+        if let Some(d) = &o.drill {
+            // 基礎練習：スコアの場所にミスなしで叩けた一番速いテンポ、ランクとジャケットの場所に段と手ごとのずれ
+            self.draw_parameters(c, g, Top::Drill(d));
+            crate::result_drill::draw(c, g, d, &self.info.title, o.windows.perfect);
+            self.draw_title(c, g);
+            return;
+        }
         if let Some(p) = &o.practice {
             // 練習：スコアの場所にどこまでのぼったか、ランクとジャケットの場所に段と挑戦、ミスした所
-            self.draw_parameters(c, g, Some(p));
+            self.draw_parameters(c, g, Top::Practice(p));
             crate::result_training::draw_practice(c, g, p);
             self.draw_title(c, g);
             return;
         }
         self.draw_image(c, g);
-        self.draw_parameters(c, g, None);
+        self.draw_parameters(c, g, Top::Score);
         self.draw_rank(c, g, elapsed);
         crate::result_training::draw_weak(c, g, o);
         crate::lag_view::draw_result(c, g, o);
@@ -263,6 +277,9 @@ impl ResultView {
     }
 
     fn hints(&self, o: &Outcome) -> Vec<ui::Hint<'static>> {
+        if o.drill.is_some() {
+            return drill_hints();
+        }
         let replay = o.practice.is_none() && o.session_id.is_some();
         result_hints(self.page, o.practice.is_some(), o.lag.as_ref(), replay)
     }
@@ -270,7 +287,7 @@ impl ResultView {
     /// 練習の結果の 2 ページ目（周ごとの成績の表）
     pub fn draw_practice_laps(&self, c: &Canvas, g: &mut Gfx, p: &crate::game::PracticeOutcome) {
         self.draw_panels(c, g, self.entered.elapsed());
-        self.draw_parameters(c, g, Some(p));
+        self.draw_parameters(c, g, Top::Practice(p));
         crate::result_training::draw_practice_laps(c, g, p);
         self.draw_title(c, g);
     }
@@ -339,13 +356,8 @@ impl ResultView {
     }
 
     /// 左のパネル、進み具合のバー、スコア、New Record、早い遅いの数（上流 `CActResultParameterPanel`）
-    /// 練習なら `practice` を渡す（スコアの代わりに苦手の無いセットの数を出す）
-    fn draw_parameters(
-        &self,
-        c: &Canvas,
-        g: &mut Gfx,
-        practice: Option<&crate::game::PracticeOutcome>,
-    ) {
+    /// `top` はスコアの場所に出すもの（練習なら段をどこまでのぼったか、基礎練習なら最高のテンポ）
+    fn draw_parameters(&self, c: &Canvas, g: &mut Gfx, top: Top<'_>) {
         const X: f32 = 180.0;
         const Y: f32 = 260.0;
         let f = &self.info.finish;
@@ -358,23 +370,28 @@ impl ResultView {
                 rate: f.rate,
                 level: self.info.level.unwrap_or(0.0),
                 diff_panel: f.diff_panel,
+                counts_only: self.info.drill,
             },
             &LARGE_RESULT,
         );
-        if let Some(t) = g.skin.tex("Graphics/8_progress_bar_panel.png") {
-            c.draw(&t, X + 255.0, Y + 1.0);
+        // 基礎練習では進み具合のバーと早い遅いの数を出さない（右の板のずれの図が代わり）
+        if !self.info.drill {
+            if let Some(t) = g.skin.tex("Graphics/8_progress_bar_panel.png") {
+                c.draw(&t, X + 255.0, Y + 1.0);
+            }
+            draw_progress_bar(c, X + 256.0, Y + 2.0, 12.0, &f.progress);
+            let best = self
+                .info
+                .best
+                .as_ref()
+                .and_then(|b| b.progress.as_deref())
+                .unwrap_or("");
+            draw_progress_bar(c, X + 270.0, Y + 2.0, 4.0, best);
         }
-        draw_progress_bar(c, X + 256.0, Y + 2.0, 12.0, &f.progress);
-        let best = self
-            .info
-            .best
-            .as_ref()
-            .and_then(|b| b.progress.as_deref())
-            .unwrap_or("");
-        draw_progress_bar(c, X + 270.0, Y + 2.0, 4.0, best);
-        match practice {
-            Some(p) => draw_passed(c, g, p),
-            None => {
+        match top {
+            Top::Practice(p) => draw_passed(c, g, p),
+            Top::Drill(d) => crate::result_drill::draw_headline(c, g, d),
+            Top::Score => {
                 if let Some(t) = g.skin.tex("Graphics/7_score numbersGD.png") {
                     draw_score_digits(c, &t, 30.0, 58.0, 30.0, f.score);
                 }
@@ -386,6 +403,7 @@ impl ResultView {
             c.draw(&t, X + 118.0, Y + 322.0);
         }
         if let Some(swapped) = self.info.lag_counts
+            && !self.info.drill
             && let Some(t) = g.skin.tex("Graphics/7_lag numbers.png")
         {
             // Type-A（既定）は早いが青、遅いが赤
@@ -428,6 +446,25 @@ impl ResultView {
         }
     }
 }
+/// 結果の画面のスコアの場所に出すもの
+#[derive(Clone, Copy)]
+enum Top<'a> {
+    Score,
+    Practice(&'a crate::game::PracticeOutcome),
+    Drill(&'a crate::drill::DrillOutcome),
+}
+
+/// 基礎練習の結果のパッドの役目。もう一度か、基礎練習の画面へ（次に何をするかは自分で選ぶ）
+fn drill_hints() -> Vec<ui::Hint<'static>> {
+    vec![
+        (&[Pad::SD], t("Play Again (R)", "もう一度（R）")),
+        (
+            &[Pad::CY, Pad::RD, Pad::LC],
+            t("Drills (Enter)", "基礎練習へ（Enter）"),
+        ),
+    ]
+}
+
 /// 結果の画面のパッドの役目（`main.rs` の結果の画面のパッドと同じ）。足のパッドは使わない。
 /// `replay` なら、今のプレイのリプレイを見られる（記録に残した普通のプレイ）
 fn result_hints(
@@ -594,6 +631,7 @@ mod tests {
             tally: tally(9, 0, 0, 0, 1, 9),
             notes: 10,
             practice,
+            drill: false,
             cleared: !practice,
             finish: Finish {
                 score: 1000,

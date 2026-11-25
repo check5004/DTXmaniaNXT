@@ -20,6 +20,7 @@ use records::{
 };
 
 use crate::chart_picture::Marks;
+use crate::drill::DrillRecord;
 use crate::game::{Play, WeakMap};
 use crate::progress::estimate_ms;
 use crate::result_view::Rank;
@@ -123,8 +124,8 @@ impl History {
     pub fn save(&mut self, play: &Play, score: Option<PlayScore>, end_ms: f64) -> Option<i64> {
         let records = self.records.as_mut()?;
         let id = play.session().and_then(|mut session| {
-            // 自動で叩くレーンがあるプレイは、ベストの記録（スコア）に入れない
-            if play.practice.is_none() && !play.has_auto() {
+            // 自動で叩くレーンがあるプレイは、ベストの記録（スコア）に入れない。練習と基礎練習はスコアを付けない
+            if play.practice.is_none() && play.drill.is_none() && !play.has_auto() {
                 session.score = score;
             }
             let path = play.path.to_string_lossy();
@@ -288,6 +289,29 @@ impl History {
             .map_err(|e| log::warn!("cannot read the records: {e}"))
             .ok()
             .flatten()
+    }
+
+    /// 基礎練習のドリルごとの記録（基礎練習の画面に出す）。記録が読めなければ空
+    pub fn drill_records(&self) -> HashMap<&'static str, DrillRecord> {
+        let mut out = HashMap::new();
+        let Some(records) = self.records.as_ref() else {
+            return out;
+        };
+        match records.drill_sessions() {
+            Ok(rows) => {
+                for r in rows {
+                    let Some(d) = crate::drill::of_path(Path::new(&r.chart_path)) else {
+                        continue;
+                    };
+                    let best = json_number(&r.settings, "best_bpm").map(|b| b as u32);
+                    out.entry(d.id)
+                        .or_insert_with(DrillRecord::default)
+                        .add(r.started_at, best);
+                }
+            }
+            Err(e) => log::warn!("cannot read the records: {e}"),
+        }
+        out
     }
 
     /// 譜面ごとの記録（選曲画面の並べ替え、ランプ、ランク、スキル）。記録が読めなければ空

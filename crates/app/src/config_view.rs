@@ -1135,6 +1135,8 @@ fn add_timing_rows(rows: &mut Vec<Row>, t: &TimingInfo, global_ms: i64) {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PlayPos {
     pub practice: bool,
+    /// 基礎練習（決まった長さで終わる。位置を飛ばさず、クリックは切らない）
+    pub drill: bool,
     /// 曲の時刻（ミリ秒）
     pub at_ms: f64,
     /// 曲の終わり（ミリ秒）
@@ -1291,6 +1293,7 @@ pub fn rows(page: Page, info: &ConfigInfo<'_>) -> Vec<Row> {
                 None,
             ));
         }
+        Page::Pause if info.play.is_some_and(|p| p.drill) => drill_pause(&mut s, c),
         Page::Pause => {
             let practice = info.play.is_some_and(|p| p.practice);
             let r = s.at("");
@@ -1724,6 +1727,78 @@ pub fn rows(page: Page, info: &ConfigInfo<'_>) -> Vec<Row> {
         add_timing_rows(&mut out, t, get(Setting::InputAdjust, c));
     }
     out
+}
+
+/// 基礎練習の一時停止の板。続ける・やり直す・基礎練習の画面へ・やめて結果へと、演奏中に変えられる設定。
+/// 1 回は決まった長さで終わるので位置は飛ばさず、クリックが練習そのものなのでメトロノームの行は出さない
+fn drill_pause(s: &mut Sections, c: &Config) {
+    let v = &c.settings;
+    let r = s.at("");
+    let mut resume = action(
+        ItemId::Resume,
+        t("Resume", "続ける"),
+        String::new(),
+        t(
+            "Unpause and keep going from where you stopped (Esc works too).",
+            "一時停止をやめて、止めたところから続けます（Esc でも戻ります）。",
+        )
+        .to_owned(),
+        None,
+    );
+    resume.tone = Tone::Strong;
+    r.push(resume);
+    r.push(action(
+        ItemId::Retry,
+        t("Restart Drill", "はじめからやり直す"),
+        String::new(),
+        t(
+            "Starts this drill again from the count-in, at the same tempo (R on the keyboard).",
+            "同じテンポで、カウントからやり直します（キーボードなら R）。",
+        )
+        .to_owned(),
+        None,
+    ));
+    r.push(action(
+        ItemId::Reselect,
+        t("Drills Menu", "基礎練習の画面へ"),
+        String::new(),
+        t(
+            "Stops and goes back to the drill list. The steps you finished stay in your records.",
+            "やめて基礎練習の画面に戻ります。叩き終えた段は記録に残します。",
+        )
+        .to_owned(),
+        None,
+    ));
+    let mut quit = action(
+        ItemId::Quit,
+        t("Quit Drill", "やめて結果へ"),
+        String::new(),
+        t(
+            "Stop here and see the results for the steps so far.",
+            "ここでやめて、ここまでの段の結果を見ます。",
+        )
+        .to_owned(),
+        None,
+    );
+    quit.tone = Tone::Danger;
+    r.push(quit);
+    let r = s.at(t("Change During Play", "演奏中に変えられる設定"));
+    for x in [
+        Setting::ScrollSpeed,
+        Setting::InputAdjust,
+        Setting::VisualAdjust,
+        Setting::HitSound,
+    ] {
+        r.push(value_row(x, c));
+    }
+    r.push(mixer_row(c));
+    r.push(value_row(Setting::ShowLagTime, c));
+    for d in settings::ALL
+        .iter()
+        .filter(|d| d.in_play && d.key != settings::SKIP_MS && d.key != settings::METRONOME)
+    {
+        r.push(table_row(d, v));
+    }
 }
 
 /// よく使う項目（設定の画面の「よく使う」と、選曲の簡易設定）
@@ -4997,6 +5072,7 @@ mod tests {
         let mut info = info(&config);
         info.play = Some(PlayPos {
             practice: false,
+            drill: false,
             at_ms: 0.0,
             end_ms: 1000.0,
             metronome: false,
@@ -5130,6 +5206,7 @@ mod tests {
         // 演奏の一時停止も設定のメトロノーム（1 行だけ）
         info.play = Some(PlayPos {
             practice: false,
+            drill: false,
             at_ms: 0.0,
             end_ms: 1000.0,
             metronome: false,
@@ -5149,6 +5226,7 @@ mod tests {
         // 練習の一時停止は、練習の決めごとのメトロノーム。この練習で鳴らしているかを出す
         info.play = Some(PlayPos {
             practice: true,
+            drill: false,
             at_ms: 0.0,
             end_ms: 1000.0,
             metronome: false,
@@ -5170,6 +5248,7 @@ mod tests {
         let mut info = info(&config);
         info.play = Some(PlayPos {
             practice: false,
+            drill: false,
             at_ms: 83_400.0,
             end_ms: 200_000.0,
             metronome: false,
@@ -5202,6 +5281,7 @@ mod tests {
         // 練習では曲の位置の行が無い（←→ は区間をずらすキー）
         info.play = Some(PlayPos {
             practice: true,
+            drill: false,
             at_ms: 0.0,
             end_ms: 1000.0,
             metronome: false,
@@ -5220,6 +5300,29 @@ mod tests {
             ]
         );
         assert_eq!(ids(&list).iter().filter(|&&i| i == ItemId::Quit).count(), 1);
+        // 基礎練習は決まった長さで終わるので位置を飛ばさず、クリックが練習そのものなのでメトロノームも出さない
+        info.play = Some(PlayPos {
+            practice: false,
+            drill: true,
+            at_ms: 0.0,
+            end_ms: 1000.0,
+            metronome: true,
+        });
+        let list = rows(Page::Pause, &info);
+        let all = ids(&list);
+        assert_eq!(
+            all[..4],
+            [
+                ItemId::Resume,
+                ItemId::Retry,
+                ItemId::Reselect,
+                ItemId::Quit
+            ]
+        );
+        assert_eq!(list[2].name, "基礎練習の画面へ");
+        assert!(!all.contains(&ItemId::Seek));
+        assert!(!all.contains(&ItemId::Table(settings::METRONOME)));
+        assert!(!all.contains(&ItemId::Practice(Drill::Metronome)));
     }
 
     #[test]

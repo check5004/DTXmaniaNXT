@@ -36,7 +36,7 @@ const MIGRATIONS: &[&str] = &[
     CREATE TABLE sessions (
         id INTEGER PRIMARY KEY,
         chart_id INTEGER NOT NULL REFERENCES charts(id),
-        -- 'play'（普通のプレイ）か 'practice'（練習）
+        -- 'play'（普通のプレイ）か 'practice'（練習）。あとから 'imported'（NX から）と 'drill'（基礎練習）も
         kind TEXT NOT NULL,
         started_at INTEGER NOT NULL,
         -- 遊んだときの譜面のハッシュ
@@ -179,6 +179,8 @@ pub enum SessionKind {
     Practice,
     /// NX の score.ini から引き継いだプレイ（スコアと判定の数だけで、音符ごとの結果は無い。苦手の分析には使わない）
     Imported,
+    /// 基礎練習（曲を使わないドリル）。譜面のパスは `drill:<id>`、周は段ごと
+    Drill,
 }
 
 impl SessionKind {
@@ -187,14 +189,23 @@ impl SessionKind {
             Self::Play => "play",
             Self::Practice => "practice",
             Self::Imported => "imported",
+            Self::Drill => "drill",
         }
     }
 
     fn from_name(name: &str) -> Option<Self> {
-        [Self::Play, Self::Practice, Self::Imported]
+        [Self::Play, Self::Practice, Self::Imported, Self::Drill]
             .into_iter()
             .find(|k| k.name() == name)
     }
+}
+
+/// 基礎練習 1 回（[`Records::drill_sessions`]）
+#[derive(Debug, Clone, PartialEq)]
+pub struct DrillSession {
+    pub chart_path: String,
+    pub started_at: i64,
+    pub settings: String,
 }
 
 /// 等速で叩いた周 1 つぶんの、音符ごとの判定
@@ -532,6 +543,24 @@ impl Records {
             .collect()
     }
 
+    /// 基礎練習のセッション（譜面のパス、始めた時刻、設定の JSON）。古い順
+    pub fn drill_sessions(&self) -> Result<Vec<DrillSession>> {
+        let mut q = self.conn.prepare(
+            "SELECT c.path, s.started_at, s.settings
+             FROM sessions s JOIN charts c ON c.id = s.chart_id
+             WHERE s.kind = 'drill'
+             ORDER BY s.started_at, s.id",
+        )?;
+        q.query_map([], |row| {
+            Ok(DrillSession {
+                chart_path: row.get(0)?,
+                started_at: row.get(1)?,
+                settings: row.get(2)?,
+            })
+        })?
+        .collect()
+    }
+
     /// 譜面のクリアの記録。古い順
     pub fn clears(&self, chart_path: &str) -> Result<Vec<ClearRecord>> {
         let mut q = self.conn.prepare(
@@ -643,7 +672,8 @@ impl Records {
              FROM hits h JOIN laps l ON l.id = h.lap_id
              WHERE h.offset_ms IS NOT NULL AND h.beat_pos IS NOT NULL
                  AND abs(l.speed - 1.0) < 1e-6
-                 AND l.session_id IN (SELECT id FROM sessions ORDER BY started_at DESC, id DESC LIMIT ?1)",
+                 AND l.session_id IN (SELECT id FROM sessions WHERE kind IN ('play', 'practice')
+                     ORDER BY started_at DESC, id DESC LIMIT ?1)",
         )?;
         q.query_map(params![sessions as i64], |row| {
             let lane: String = row.get(0)?;
@@ -1470,6 +1500,33 @@ mod tests {
         );
         // 直近 3 回（300・400 と 200）だけなら 1 打
         assert_eq!(r.recent_timed_hits(3).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn drills_are_listed_and_stay_out_of_the_song_tendencies() {
+        let mut r = Records::open_in_memory().unwrap();
+        let drill = ChartKey {
+            path: "drill:paradiddle",
+            ..chart(5)
+        };
+        r.save(&chart(1), &play(100, 1.0, vec![hit(1, Judgement::Good)]))
+            .unwrap();
+        let mut d = play(200, 1.0, vec![hit(1, Judgement::Perfect)]);
+        d.kind = SessionKind::Drill;
+        d.settings = r#"{"drill":"paradiddle","best_bpm":90}"#.into();
+        r.save(&drill, &d).unwrap();
+        let got = r.drill_sessions().unwrap();
+        assert_eq!(
+            got,
+            vec![DrillSession {
+                chart_path: "drill:paradiddle".into(),
+                started_at: 200,
+                settings: d.settings.clone(),
+            }]
+        );
+        // ドリルの打撃は、曲を通した叩き方のくせに入れない（直近 1 回がドリルでも、曲の 1 打だけ）
+        assert_eq!(r.recent_timed_hits(1).unwrap().len(), 1);
+        assert_eq!(r.recent_timed_hits(10).unwrap().len(), 1);
     }
 
     fn scored(started_at: i64, score: i64, rate: f64, progress: &str, cleared: bool) -> Session {
