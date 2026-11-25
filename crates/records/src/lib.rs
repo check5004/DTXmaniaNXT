@@ -325,6 +325,32 @@ pub struct StrayHit {
     pub hh_pedal: Option<u8>,
 }
 
+/// 普通のプレイ 1 回（リプレイの一覧の行）
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlayEntry {
+    pub session_id: i64,
+    /// 始めた時刻（UNIX 秒）
+    pub started_at: i64,
+    /// 遊んだときの譜面のハッシュ（[`hash_bytes`]。読めなければ None）
+    pub chart_hash: Option<u64>,
+    pub tally: Tally,
+    /// 最後まで遊んだ
+    pub completed: bool,
+    /// スコアと達成率（自動で叩くレーンがあったプレイは None）
+    pub score: Option<PlayScore>,
+}
+
+/// リプレイに使う、普通のプレイ 1 回の叩いた記録
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlayTakes {
+    pub entry: PlayEntry,
+    pub chart_path: String,
+    /// 遊んだときの設定（JSON）
+    pub settings: String,
+    pub hits: Vec<NoteHit>,
+    pub strays: Vec<StrayHit>,
+}
+
 pub struct Records {
     conn: Connection,
 }
@@ -693,6 +719,115 @@ impl Records {
             .collect())
     }
 
+    /// 譜面の普通のプレイ（練習と引き継いだものは入れない）。新しい順に `limit` 回まで
+    pub fn plays(&self, chart_path: &str, limit: usize) -> Result<Vec<PlayEntry>> {
+        let mut q = self.conn.prepare(
+            "SELECT s.id, s.started_at, s.chart_hash,
+                 l.perfect, l.great, l.good, l.poor, l.miss, l.stray, l.max_combo, l.completed,
+                 p.score, p.rate, p.progress, p.cleared
+             FROM sessions s
+             JOIN charts c ON c.id = s.chart_id
+             JOIN laps l ON l.session_id = s.id AND l.lap = 0
+             LEFT JOIN play_scores p ON p.session_id = s.id
+             WHERE c.path = ?1 AND s.kind = 'play'
+             ORDER BY s.started_at DESC, s.id DESC
+             LIMIT ?2",
+        )?;
+        q.query_map(params![chart_path, limit as i64], play_entry)?
+            .collect()
+    }
+
+    /// 普通のプレイ 1 回の、音符ごとの結果と空打ち（リプレイに使う）。無いか普通のプレイでなければ None
+    pub fn play_takes(&self, session_id: i64) -> Result<Option<PlayTakes>> {
+        let mut q = self.conn.prepare(
+            "SELECT s.id, s.started_at, s.chart_hash,
+                 l.perfect, l.great, l.good, l.poor, l.miss, l.stray, l.max_combo, l.completed,
+                 p.score, p.rate, p.progress, p.cleared,
+                 c.path, s.settings, l.id
+             FROM sessions s
+             JOIN charts c ON c.id = s.chart_id
+             JOIN laps l ON l.session_id = s.id AND l.lap = 0
+             LEFT JOIN play_scores p ON p.session_id = s.id
+             WHERE s.id = ?1 AND s.kind = 'play'",
+        )?;
+        let mut rows = q.query(params![session_id])?;
+        let Some(row) = rows.next()? else {
+            return Ok(None);
+        };
+        let entry = play_entry(row)?;
+        let chart_path: String = row.get(15)?;
+        let settings: String = row.get(16)?;
+        let lap_id: i64 = row.get(17)?;
+        let mut q = self.conn.prepare(
+            "SELECT measure, pos_num, pos_den, lane, judgement, offset_ms, velocity,
+                 articulation, hh_pedal, beat_pos
+             FROM hits WHERE lap_id = ?1 ORDER BY rowid",
+        )?;
+        let hits = q
+            .query_map(params![lap_id], |row| {
+                Ok((
+                    NotePos::new(row.get(0)?, row.get(1)?, row.get(2)?),
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, Option<f64>>(5)?,
+                    row.get::<_, Option<u8>>(6)?,
+                    row.get::<_, Option<String>>(7)?,
+                    row.get::<_, Option<u8>>(8)?,
+                    row.get::<_, Option<f64>>(9)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .filter_map(
+                |(at, lane, judgement, offset_ms, velocity, art, hh_pedal, beat_pos)| {
+                    Some(NoteHit {
+                        at,
+                        lane: DrumLane::from_name(&lane)?,
+                        judgement: Judgement::from_name(&judgement)?,
+                        offset_ms,
+                        velocity,
+                        articulation: art.as_deref().and_then(Articulation::from_name),
+                        hh_pedal,
+                        beat_pos,
+                    })
+                },
+            )
+            .collect();
+        let mut q = self.conn.prepare(
+            "SELECT at_ms, lane, velocity, articulation, hh_pedal
+             FROM strays WHERE lap_id = ?1 ORDER BY rowid",
+        )?;
+        let strays = q
+            .query_map(params![lap_id], |row| {
+                Ok((
+                    row.get::<_, f64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, u8>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, Option<u8>>(4)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .filter_map(|(at_ms, lane, velocity, art, hh_pedal)| {
+                Some(StrayHit {
+                    at_ms,
+                    lane: DrumLane::from_name(&lane)?,
+                    velocity,
+                    articulation: art.as_deref().and_then(Articulation::from_name),
+                    hh_pedal,
+                })
+            })
+            .collect();
+        Ok(Some(PlayTakes {
+            entry,
+            chart_path,
+            settings,
+            hits,
+            strays,
+        }))
+    }
+
     /// 等速（100%）で叩いた周の番号と種類。新しい順（[`recent_results`](Self::recent_results) を見る）
     fn recent_lap_ids(
         &self,
@@ -728,6 +863,38 @@ impl Records {
             .filter_map(|(id, kind)| SessionKind::from_name(&kind).map(|kind| (id, kind)))
             .collect())
     }
+}
+
+/// [`Records::plays`] と [`Records::play_takes`] の行の頭 15 列を読む
+fn play_entry(row: &rusqlite::Row) -> Result<PlayEntry> {
+    let hash: String = row.get(2)?;
+    let score: Option<i64> = row.get(11)?;
+    let score = match score {
+        Some(score) => Some(PlayScore {
+            score,
+            rate: row.get(12)?,
+            progress: row.get(13)?,
+            cleared: row.get(14)?,
+        }),
+        None => None,
+    };
+    Ok(PlayEntry {
+        session_id: row.get(0)?,
+        started_at: row.get(1)?,
+        chart_hash: u64::from_str_radix(&hash, 16).ok(),
+        tally: Tally {
+            perfect: row.get(3)?,
+            great: row.get(4)?,
+            good: row.get(5)?,
+            poor: row.get(6)?,
+            miss: row.get(7)?,
+            stray: row.get(8)?,
+            max_combo: row.get(9)?,
+            ..Default::default()
+        },
+        completed: row.get(10)?,
+        score,
+    })
 }
 
 /// セッションを 1 つ書く（譜面が無ければ足す）。返すのはセッションの番号
@@ -1094,6 +1261,54 @@ mod tests {
             })
             .unwrap();
         assert_eq!(stray, (1234.5, "HH".into(), Some(10)));
+    }
+
+    #[test]
+    fn plays_are_listed_newest_first_and_keep_their_takes() {
+        let mut r = Records::open_in_memory().unwrap();
+        let old = r
+            .save(&chart(7), &play(100, 1.0, vec![hit(2, Judgement::Perfect)]))
+            .unwrap();
+        let mut scored = play(
+            200,
+            1.0,
+            vec![hit(3, Judgement::Good), hit(4, Judgement::Miss)],
+        );
+        scored.settings = "{\"input_offset_ms\":-5}".into();
+        scored.laps[0].tally.miss = 1;
+        scored.score = Some(PlayScore {
+            score: 1000,
+            rate: 12.5,
+            progress: "1".repeat(PROGRESS_SECTIONS),
+            cleared: true,
+        });
+        let new = r.save(&chart(7), &scored).unwrap();
+        // 練習はリプレイの一覧に入れない
+        let mut practice = play(300, 1.0, vec![hit(5, Judgement::Perfect)]);
+        practice.kind = SessionKind::Practice;
+        let practice = r.save(&chart(7), &practice).unwrap();
+
+        let list = r.plays("songs/a/master.dtx", 10).unwrap();
+        assert_eq!(
+            list.iter().map(|p| p.session_id).collect::<Vec<_>>(),
+            vec![new, old]
+        );
+        assert_eq!(list[0].chart_hash, Some(7));
+        assert_eq!(list[0].tally.miss, 1);
+        assert_eq!(list[0].score.as_ref().map(|s| s.score), Some(1000));
+        assert!(list[1].score.is_none());
+        assert_eq!(r.plays("songs/a/master.dtx", 1).unwrap().len(), 1);
+
+        let takes = r.play_takes(new).unwrap().unwrap();
+        assert_eq!(takes.chart_path, "songs/a/master.dtx");
+        assert_eq!(takes.settings, "{\"input_offset_ms\":-5}");
+        assert_eq!(
+            takes.hits,
+            vec![hit(3, Judgement::Good), hit(4, Judgement::Miss)]
+        );
+        assert_eq!(takes.strays, play(0, 1.0, Vec::new()).laps[0].strays);
+        assert!(r.play_takes(practice).unwrap().is_none());
+        assert!(r.play_takes(9999).unwrap().is_none());
     }
 
     #[test]

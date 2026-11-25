@@ -11,7 +11,10 @@ use engine::analysis::{
 use engine::lag::{Advice, LagSample, advise};
 use engine::practice::Section;
 use library::Stats;
-use records::{BestScore, ChartKey, ClearRecord, PlayScore, Records, SessionKind, SessionLag};
+use records::{
+    BestScore, ChartKey, ClearRecord, PlayEntry, PlayScore, PlayTakes, Records, SessionKind,
+    SessionLag,
+};
 
 use crate::chart_picture::Marks;
 use crate::game::{Play, WeakMap};
@@ -253,6 +256,27 @@ impl History {
             .best_score(&path.to_string_lossy(), before)
             .map_err(|e| log::warn!("cannot read the records: {e}"))
             .ok()
+    }
+
+    /// 譜面の普通のプレイ（リプレイの一覧）。新しい順に `limit` 回まで。記録が読めなければ空
+    pub fn plays(&self, path: &Path, limit: usize) -> Vec<PlayEntry> {
+        let Some(records) = self.records.as_ref() else {
+            return Vec::new();
+        };
+        records
+            .plays(&path.to_string_lossy(), limit)
+            .map_err(|e| log::warn!("cannot read the records: {e}"))
+            .unwrap_or_default()
+    }
+
+    /// リプレイに使う、普通のプレイ 1 回の打撃。無いか読めなければ None
+    pub fn play_takes(&self, session_id: i64) -> Option<PlayTakes> {
+        self.records
+            .as_ref()?
+            .play_takes(session_id)
+            .map_err(|e| log::warn!("cannot read the records: {e}"))
+            .ok()
+            .flatten()
     }
 
     /// 譜面ごとの記録（選曲画面の並べ替え、ランプ、ランク、スキル）。記録が読めなければ空
