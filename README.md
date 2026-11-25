@@ -28,7 +28,7 @@
 <tr>
 <td width="33%" valign="top">
 <b>🥁 Plays your DTX songs</b><br>
-Point it at your song folder, or drop the folder on the window. <code>set.def</code>, <code>box.def</code>, WAV / OGG / MP3 and old XA sounds all work.
+Point it at your song folder, or drop the folder on the window. Got a new song as a zip? Drop the zip and it's added and selected. <code>set.def</code>, <code>box.def</code>, WAV / OGG / MP3 and old XA sounds all work.
 </td>
 <td width="33%" valign="top">
 <b>🎛️ Made for electronic drums</b><br>
@@ -61,7 +61,7 @@ Screens laid out like DTXManiaNX v2.0, with new artwork and sounds. Everything i
 
 1. **Install.** Download [DTXmaniaNXT-Setup.exe](https://github.com/check5004/DTXmaniaNXT/releases/latest/download/DTXmaniaNXT-Setup.exe) and run it. It installs for your Windows user only (no admin rights) and starts right away.
    The installer isn't code-signed yet, so Windows may say “Windows protected your PC”. Click **More info**, then **Run anyway**.
-2. **Add your songs.** On the title screen choose **Config** and add your song folder, or simply drop the folder onto the window. Any folder with DTX charts works, including your DTXManiaNX `Songs` folder.
+2. **Add your songs.** On the title screen choose **Config** and add your song folder, or simply drop the folder onto the window. Any folder with DTX charts works, including your DTXManiaNX `Songs` folder. Later, drop a downloaded zip or a song folder onto the window to copy it into your song folder.
 3. **Plug in and play.** Connect your electronic drum kit by USB-MIDI before starting. It is found automatically. No kit? Use the keyboard.
 
 <details>

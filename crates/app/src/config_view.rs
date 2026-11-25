@@ -246,6 +246,8 @@ pub enum ItemId {
     Practice(Drill),
     AddSongDir,
     SongDir(usize),
+    /// ドロップした曲を写す先（決定で次の曲のフォルダへ）
+    AddTo,
     Rescan,
     /// パッドとキーの割り当ての一覧へ
     Lanes,
@@ -1420,8 +1422,20 @@ pub fn rows(page: Page, info: &ConfigInfo<'_>) -> Vec<Row> {
                 ItemId::AddSongDir,
                 t("Add Folder", "フォルダを足す"),
                 String::new(),
-                t("Adds a song folder. Select to open a folder picker (use the mouse). You can also drop a folder onto the window.", "曲のフォルダを足します。決定でフォルダを選ぶ窓を開きます（マウスで選びます）。窓にドロップしても足せます。")
+                t("Adds a song folder where it is. Select to open a folder picker (use the mouse).\nA folder you drop onto the window is copied into the Add Songs To folder instead (a folder with more than 50 songs is added where it is).", "曲のフォルダを、その場所のまま足します。決定でフォルダを選ぶ窓を開きます（マウスで選びます）。\nウィンドウにドロップしたフォルダは、「曲の追加先」へ写して追加します（50 曲より多いフォルダは、その場所のまま足します）。")
                     .to_owned(),
+                None,
+            ));
+            let dest = c.add_dest();
+            dirs.push(action(
+                ItemId::AddTo,
+                t("Add Songs To", "曲の追加先"),
+                folder_name(&dest),
+                tf!(
+                    "{}\nZip files and song folders you drop onto the window are copied here, then the song is selected. Select to switch to the next song folder.",
+                    "{}\nウィンドウにドロップした zip ファイルや曲のフォルダを、ここへ写して追加します。決定で次の曲のフォルダに変えます。",
+                    dest.display()
+                ),
                 None,
             ));
             s.at(" ").push(action(

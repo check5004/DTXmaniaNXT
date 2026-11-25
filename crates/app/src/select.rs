@@ -20,6 +20,7 @@ use library::{LEVELS, Node, Song, SongChart, SortKind};
 
 use crate::gfx::{Canvas, Gfx, Glyphs, Opt, Tex, src};
 use crate::jobs::Jobs;
+use crate::settings_ui as ui;
 use crate::songs::{Entry, SongList};
 use crate::text::{Style, Text};
 
@@ -99,6 +100,8 @@ struct Row {
     lamp: Option<usize>,
     /// 一番高いスキルと、その譜面の最大のスキルとの比
     skill: Option<(f64, f64)>,
+    /// ドロップして追加したばかりの曲（NEW の印を付ける）
+    fresh: bool,
 }
 
 #[derive(Clone)]
@@ -206,6 +209,8 @@ pub struct SelectView {
     details_jobs: Jobs<PathBuf, Option<Details>>,
     /// 左バスドラムを LP と分けて出す（密度のグラフで BD の列に数える）。設定から毎回入れる
     pub left_bass_apart: bool,
+    /// ドロップして追加した曲のフォルダ（起動しているあいだ、帯に NEW の印を付ける）
+    pub fresh: Vec<PathBuf>,
 }
 
 impl Default for SelectView {
@@ -230,6 +235,7 @@ impl SelectView {
             details: HashMap::new(),
             details_jobs: Jobs::new("chart details", 1, |path: &PathBuf| read_details(path)),
             left_bass_apart: true,
+            fresh: Vec::new(),
         }
     }
 
@@ -387,6 +393,7 @@ impl SelectView {
                 preimage: Preimage::Skin("Graphics/5_preimage backbox.png"),
                 lamp: None,
                 skill: None,
+                fresh: false,
             },
             Entry::Random => Row {
                 title: t("< Random >", "< ランダムに選ぶ >").into(),
@@ -399,6 +406,7 @@ impl SelectView {
                 preimage: Preimage::Skin("Graphics/5_preimage random.png"),
                 lamp: None,
                 skill: None,
+                fresh: false,
             },
             Entry::Node(Node::Box(b)) => {
                 let name = b.preimage.trim();
@@ -419,6 +427,7 @@ impl SelectView {
                     ),
                     lamp: None,
                     skill: None,
+                    fresh: false,
                 }
             }
             Entry::Node(Node::Song(s)) => {
@@ -458,6 +467,7 @@ impl SelectView {
                     ),
                     lamp: Some(lamp),
                     skill,
+                    fresh: self.fresh.iter().any(|d| s.dir.starts_with(d)),
                 }
             }
         }
@@ -617,6 +627,10 @@ impl SelectView {
             && let Some(t) = g.skin.tex(&format!("Graphics/Lamp/{lamp:02}.png"))
         {
             c.draw(&t, x - 40.0 - t.w / 2.0, y + 40.0 - t.h / 2.0);
+        }
+        if row.fresh {
+            // ジャケットの左下に重ねる（帯の右の端は、選んでいない帯だと画面の外にかかる）
+            draw_new_badge(c, g, x + 5.0, y + 56.0);
         }
     }
 
@@ -810,6 +824,15 @@ const SKILL_STYLE: Style = Style {
     edge: Some((Color32::from_black_alpha(160), 1.0)),
     gradient: None,
 };
+
+/// ドロップして追加したばかりの曲の印
+fn draw_new_badge(c: &Canvas, g: &mut Gfx, x: f32, y: f32) {
+    let style = ui::bold(12.0, Color32::from_rgb(24, 12, 0));
+    let label = "NEW";
+    let w = ui::text_width(g, label, &style) + 10.0;
+    ui::round_fill(c, x, y, w, 17.0, 3.0, crate::update_view::ACCENT);
+    ui::text(c, g, label, x + 5.0, y + 1.0, &style, w);
+}
 
 fn skill_text(skill: f64) -> String {
     format!("{skill:.2}")
