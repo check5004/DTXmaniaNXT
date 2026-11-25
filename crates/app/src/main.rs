@@ -42,6 +42,7 @@ mod play_view;
 mod practice;
 mod practice_hud;
 mod practice_menu;
+mod progress;
 mod result_training;
 mod result_view;
 mod rim_look;
@@ -1244,11 +1245,14 @@ impl App {
         let Screen::Play(p, view) = &self.screen else {
             return;
         };
-        let finish = view.finish(p, at_ms.unwrap_or_else(|| p.now_ms()));
+        let end_ms = at_ms.unwrap_or_else(|| p.now_ms());
+        let finish = view.finish(p, end_ms);
         let practice = p.practice.is_some();
         // Esc でやめたときも結果は出す（記録は「最後まで遊んでいない」として残す）
         let cleared = p.finished();
-        let session = self.history.save(p, Some(play_score(&finish, cleared)));
+        let session = self
+            .history
+            .save(p, Some(play_score(&finish, cleared)), end_ms);
         let stats = self.history.chart_stats();
         // New Record と前回のベストのバーは、今回より前のプレイと比べる。自動で叩くレーンがあるときと、
         // 早送りか巻き戻しをしたときは比べない
@@ -1310,7 +1314,7 @@ impl App {
         if let Screen::Play(p, view) = &self.screen {
             let now = view.frozen_ms().unwrap_or_else(|| p.now_ms());
             let finish = view.finish(p, now);
-            self.history.save(p, Some(play_score(&finish, false)));
+            self.history.save(p, Some(play_score(&finish, false)), now);
             self.songs.set_stats(self.history.chart_stats());
         }
     }
