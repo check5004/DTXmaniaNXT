@@ -25,6 +25,7 @@ mod credits;
 mod drill;
 mod drill_hud;
 mod drill_menu;
+mod drop_view;
 mod editor;
 mod fonts;
 mod frames;
@@ -58,6 +59,7 @@ mod settings_ui;
 mod sfx;
 mod shutter;
 mod skin;
+mod song_adder;
 mod songs;
 mod stretch;
 mod text;
@@ -474,6 +476,18 @@ struct App {
     show_play_info: bool,
     /// 演奏中の短い知らせ（消す時刻）
     toast: Option<(String, Instant)>,
+    /// ドロップされた zip や曲のフォルダを、曲のフォルダへ写す係
+    adder: song_adder::Adder,
+    /// 続けてドロップされた分の結果（全部終わったら 1 つの知らせにまとめ、曲を探し直す）
+    added: Vec<song_adder::Outcome>,
+    /// 探し直したあと選曲で移る、追加した曲（譜面か曲のフォルダ）
+    jump_to: Option<PathBuf>,
+    /// 追加したあとの探し直しを頼んだ（探し終えたら `reveal_ready`）
+    rescanning_for_add: bool,
+    /// 追加したあとの探し直しが終わった。選曲（かタイトル）にいれば `jump_to` へ移る
+    reveal_ready: bool,
+    /// ウィンドウに重ねているファイル（ドロップする前。重ねているあいだ画面に案内を出す）
+    drop_hover: Vec<PathBuf>,
     /// 音符をすべて自動で叩く（開発用。`DTXMANIANXT_AUTOPLAY=1`。設定の自動演奏より優先）
     autoplay: bool,
     /// 新しい版を確かめ、頼まれたら落とし、終えるときか再起動で入れ替える
@@ -552,6 +566,8 @@ const MIN_LOADING: Duration = Duration::from_millis(1500);
 
 /// 演奏中の知らせを出しておく時間
 const TOAST_FOR: Duration = Duration::from_millis(1500);
+/// 曲を追加した（できなかった）知らせを出しておく時間
+const ADD_TOAST_FOR: Duration = Duration::from_secs(5);
 /// 譜面の音を切っているときに、演奏の始めに知らせを出しておく時間
 const HIT_SOUND_NOTICE_FOR: Duration = Duration::from_secs(4);
 
@@ -694,6 +710,12 @@ impl App {
             wheel: 0.0,
             show_play_info: false,
             toast: None,
+            adder: song_adder::Adder::default(),
+            added: Vec::new(),
+            jump_to: None,
+            rescanning_for_add: false,
+            reveal_ready: false,
+            drop_hover: Vec::new(),
             autoplay: std::env::var_os("DTXMANIANXT_AUTOPLAY").is_some_and(|v| v == "1"),
             updater,
             applying: None,
@@ -1481,8 +1503,18 @@ impl App {
     /// 届いた MIDI をすべて処理し、時間を進める
     fn pump(&mut self) {
         // 曲を探し終えたら、譜面の隣の NX の score.ini をまだなら記録に引き継ぐ
-        if self.songs.poll() && self.history.import_nx_scores(&self.songs.library) > 0 {
-            self.songs.set_stats(self.history.chart_stats());
+        if self.songs.poll() {
+            if self.history.import_nx_scores(&self.songs.library) > 0 {
+                self.songs.set_stats(self.history.chart_stats());
+            }
+            if std::mem::take(&mut self.rescanning_for_add) {
+                self.reveal_ready = self.jump_to.is_some();
+            }
+        }
+        self.poll_adder();
+        if self.reveal_ready && self.can_reveal() {
+            self.reveal_ready = false;
+            self.show_added_song();
         }
         self.check_ports();
         let mut assigned = None;
@@ -2259,6 +2291,10 @@ impl App {
                     );
                 }
             }
+            ItemId::AddTo => {
+                self.config.next_add_dest();
+                self.config.save();
+            }
             ItemId::Rescan => {
                 if !self.config.song_dirs.is_empty() {
                     self.songs.rescan(self.config.song_dirs.clone());
@@ -2982,21 +3018,93 @@ impl App {
         }
     }
 
+    /// ファイルをウィンドウにドロップされた。譜面ならすぐ遊び、zip や曲のフォルダなら曲のフォルダへ写す
     fn on_drop(&mut self, path: PathBuf) {
-        // シャッターを閉じているあいだは次の画面が決まっているので、曲を始めない
-        if self.after_close.is_some() {
+        self.drop_hover.clear();
+        if ui::is_chart_file(&path) {
+            // シャッターを閉じているあいだは次の画面が決まっているので、曲を始めない
+            if self.after_close.is_none() {
+                self.start(path);
+            }
             return;
         }
-        if path.is_dir() {
-            self.add_song_dir(path);
-        } else if ui::is_chart_file(&path) {
-            self.start(path);
-        } else {
-            self.message = Some(tf!(
-                "Drop a DTX file or a song folder: {}",
-                "DTX ファイルか曲のフォルダをドロップしてください: {}",
-                path.display()
-            ));
+        log::info!("dropped: {}", path.display());
+        self.adder
+            .add(path, self.config.add_dest(), self.config.song_dirs.clone());
+    }
+
+    /// 写し終えたものを受け取る。全部終わったら曲を探し直し、知らせを出す
+    fn poll_adder(&mut self) {
+        let done = self.adder.poll();
+        if done.is_empty() {
+            return;
+        }
+        for o in done {
+            match &o {
+                song_adder::Outcome::Added { dest, added, .. } => {
+                    // 曲のフォルダが無かったときの写す先（ドキュメントの Songs）を曲のフォルダにする
+                    if self.config.add_song_dir(dest.clone()) {
+                        self.config.save();
+                    }
+                    if !added.already {
+                        self.view.fresh.push(added.dir.clone());
+                    }
+                    if self.jump_to.is_none() {
+                        self.jump_to = o.first_chart().map(std::path::Path::to_owned);
+                    }
+                }
+                song_adder::Outcome::InLibrary { dir } => {
+                    self.jump_to.get_or_insert_with(|| dir.clone());
+                }
+                song_adder::Outcome::Register { dir } => {
+                    if self.config.add_song_dir(dir.clone()) {
+                        self.config.save();
+                    }
+                    self.jump_to.get_or_insert_with(|| dir.clone());
+                }
+                song_adder::Outcome::Failed { .. } => {}
+            }
+            self.added.push(o);
+        }
+        if self.adder.busy() {
+            return;
+        }
+        let batch = std::mem::take(&mut self.added);
+        if let Some(text) = song_adder::summary(&batch) {
+            self.toast_for(text, ADD_TOAST_FOR);
+        }
+        if batch
+            .iter()
+            .any(|o| !matches!(o, song_adder::Outcome::Failed { .. }))
+        {
+            self.songs.rescan(self.config.song_dirs.clone());
+            self.rescanning_for_add = true;
+        }
+    }
+
+    /// 追加した曲へ移ってよいか。選曲（練習メニューや簡易設定を開いていない）かタイトルにいるときだけ。
+    /// 演奏や設定の途中では選んでいる曲を変えず、選曲に戻ってから移る
+    fn can_reveal(&self) -> bool {
+        self.after_close.is_none()
+            && match self.screen {
+                Screen::Title => true,
+                Screen::Select => self.menu.is_none() && self.quick.is_none(),
+                _ => false,
+            }
+    }
+
+    /// 追加した曲を選曲で選ぶ。タイトルにいれば選曲へ移る
+    fn show_added_song(&mut self) {
+        let Some(target) = self.jump_to.take() else {
+            return;
+        };
+        if !self.songs.reveal(&target) {
+            return;
+        }
+        self.view.jumped();
+        if matches!(self.screen, Screen::Title) {
+            self.sfx.stop_title();
+            self.close_then(AfterClose::Select, Duration::ZERO);
         }
     }
 
@@ -3065,6 +3173,14 @@ impl App {
                 &ctx.layer_painter(egui::LayerId::new(
                     egui::Order::Foreground,
                     egui::Id::unique("update"),
+                )),
+                ctx.content_rect(),
+            ));
+            // ドロップで曲を追加するようす（重ねているあいだの案内、写している途中の札）
+            self.draw_adding(&Canvas::overlay(
+                &ctx.layer_painter(egui::LayerId::new(
+                    egui::Order::Tooltip,
+                    egui::Id::unique("adding"),
                 )),
                 ctx.content_rect(),
             ));
@@ -3142,6 +3258,31 @@ impl App {
             let p = f32::from(*percent) / 100.0;
             update_view::chip(c, &mut self.gfx, &text, Some(p), corner, since);
         }
+    }
+
+    /// ドロップで曲を追加するようすを重ねる。ファイルを重ねているあいだは案内を、写しているあいだは隅に札を
+    /// （演奏中と読み込み中は札を出さない。終わったら知らせる）
+    fn draw_adding(&mut self, c: &Canvas) {
+        if !self.drop_hover.is_empty() {
+            drop_view::hover(c, &mut self.gfx, &self.drop_hover, &self.config.add_dest());
+            return;
+        }
+        let Some(w) = self.adder.working().cloned() else {
+            return;
+        };
+        let updating = matches!(self.updater.status(), update::Status::Downloading { .. });
+        let corner = match self.screen {
+            // 更新の印と同じ所。両方あれば上に重ねる
+            Screen::Config(..) | Screen::Select => {
+                Corner::BottomRight(1264.0, if updating { 683.0 } else { 717.0 })
+            }
+            Screen::Result(..) => Corner::TopRight(1264.0, if updating { 50.0 } else { 16.0 }),
+            // 記録と基礎練習の画面は更新の印を出さないので、いつも帯の端
+            Screen::Records(_) | Screen::Drills(_) => Corner::BottomRight(1264.0, 717.0),
+            Screen::Title | Screen::End(_) => Corner::BottomRight(1264.0, 704.0),
+            Screen::Loading(_) | Screen::Play(..) => return,
+        };
+        drop_view::adding_chip(c, &mut self.gfx, &w, corner);
     }
 
     /// 今の画面を描く
@@ -3477,6 +3618,12 @@ impl ApplicationHandler for App {
                 self.refit_window = true;
             }
             WindowEvent::DroppedFile(path) => self.on_drop(path),
+            WindowEvent::HoveredFile(path) => {
+                if !self.drop_hover.contains(&path) {
+                    self.drop_hover.push(path);
+                }
+            }
+            WindowEvent::HoveredFileCancelled => self.drop_hover.clear(),
             WindowEvent::ModifiersChanged(m) => self.modifiers = m.state(),
             WindowEvent::KeyboardInput { event, .. } => {
                 if event.state == ElementState::Pressed

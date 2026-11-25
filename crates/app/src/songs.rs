@@ -350,41 +350,6 @@ impl SongList {
         })
     }
 
-    /// 譜面 `path` の曲を選ぶ（その曲のある BOX に入り、難易度も合わせる）。一覧に無ければ false
-    pub fn reveal(&mut self, path: &Path) -> bool {
-        fn walk(nodes: &[Node], path: &Path, at: &mut Vec<usize>) -> Option<(usize, usize)> {
-            for (i, n) in nodes.iter().enumerate() {
-                match n {
-                    Node::Song(s) => {
-                        let level = s
-                            .charts
-                            .iter()
-                            .position(|c| c.as_ref().is_some_and(|c| c.path == path));
-                        if let Some(level) = level {
-                            return Some((i, level));
-                        }
-                    }
-                    Node::Box(b) => {
-                        at.push(i);
-                        if let Some(found) = walk(&b.nodes, path, at) {
-                            return Some(found);
-                        }
-                        at.pop();
-                    }
-                }
-            }
-            None
-        }
-        let mut at = Vec::new();
-        let Some((i, level)) = walk(self.root(), path, &mut at) else {
-            return false;
-        };
-        self.path = at;
-        self.cursor = i + self.back_rows();
-        self.level = level;
-        true
-    }
-
     /// BOX なら入り、`<< BACK` なら出て、曲なら遊ぶ譜面を返す。`< RANDOM SELECT >` は
     /// この BOX の中（下の BOX も含む）から 1 曲選ぶ
     pub fn enter(&mut self) -> Option<PathBuf> {
@@ -421,6 +386,47 @@ impl SongList {
         let song = songs[pick(seed, songs.len())];
         let level = self.level_for(song)?;
         song.charts[level].as_ref().map(|c| c.path.clone())
+    }
+
+    /// `target`（譜面のパスか、曲のフォルダかその上のフォルダ）の曲を選ぶ。BOX の中ならその BOX に入る。
+    /// 見つかれば true（ドロップして追加した曲へ移るとき）
+    pub fn reveal(&mut self, target: &Path) -> bool {
+        fn find(nodes: &[Node], target: &Path, path: &mut Vec<usize>) -> Option<usize> {
+            for (i, n) in nodes.iter().enumerate() {
+                match n {
+                    Node::Song(s)
+                        if s.dir.starts_with(target)
+                            || s.charts.iter().flatten().any(|c| c.path == target) =>
+                    {
+                        return Some(i);
+                    }
+                    Node::Song(_) => {}
+                    Node::Box(b) => {
+                        path.push(i);
+                        if let Some(found) = find(&b.nodes, target, path) {
+                            return Some(found);
+                        }
+                        path.pop();
+                    }
+                }
+            }
+            None
+        }
+        let mut path = Vec::new();
+        let Some(i) = find(self.root(), target, &mut path) else {
+            return false;
+        };
+        self.path = path;
+        self.cursor = self.back_rows() + i;
+        // 譜面を指したなら、その難易度に
+        if let Some(level) = self.selected_song().and_then(|s| {
+            s.charts
+                .iter()
+                .position(|c| c.as_ref().is_some_and(|c| c.path == target))
+        }) {
+            self.level = level;
+        }
+        true
     }
 
     /// BOX から出る。一番上なら false
@@ -517,19 +523,19 @@ mod tests {
     }
 
     #[test]
-    fn reveal_opens_the_box_and_picks_the_level() {
+    fn reveal_opens_the_box_and_picks_the_chart_level() {
         let mut l = list();
         assert!(l.reveal(Path::new("b1.dtx")));
         assert_eq!(l.breadcrumbs(), vec!["BOX"]);
-        assert_eq!(l.selected_chart(), Some(PathBuf::from("b1.dtx")));
+        assert_eq!(l.selected_song().unwrap().title, "b");
         assert_eq!(l.level, 1);
         assert!(l.reveal(Path::new("c2.dtx")));
         assert!(l.breadcrumbs().is_empty());
-        assert_eq!(l.selected_chart(), Some(PathBuf::from("c2.dtx")));
-        assert!(!l.reveal(Path::new("none.dtx")));
-        assert_eq!(l.selected_chart(), Some(PathBuf::from("c2.dtx")));
+        assert_eq!(l.selected_song().unwrap().title, "c");
         let (level, chart) = l.find_chart(Path::new("a3.dtx")).unwrap();
         assert_eq!((level, chart.label.as_str()), (3, "L3"));
+        assert!(!l.reveal(Path::new("nowhere.dtx")));
+        assert_eq!(l.selected_song().unwrap().title, "c");
     }
 
     #[test]
