@@ -8,6 +8,8 @@
 use std::sync::Mutex;
 use std::sync::mpsc::{Receiver, Sender, channel};
 
+use drum_module::roland::SysexAssembler;
+
 use anyhow::Result;
 use midir::{MidiInput, MidiInputConnection};
 
@@ -93,6 +95,13 @@ impl MidiIn {
         if ports.is_empty() {
             log::info!("no MIDI input ports");
         }
+        if let Ok(mut open) = OPEN_PORTS.lock() {
+            *open = ports
+                .iter()
+                .filter(|p| p.open)
+                .map(|p| p.name.clone())
+                .collect();
+        }
         Ok(Self {
             _connections: connections,
             ports,
@@ -129,6 +138,49 @@ impl MidiIn {
     }
 }
 
+/// 届いた SysEx 1 つ（音源とのやり取りで使う）
+#[derive(Debug, Clone)]
+pub struct SysexIn {
+    /// 届いたポートの名前
+    pub port: String,
+    /// F0〜F7 まで
+    pub bytes: Vec<u8>,
+}
+
+/// SysEx を待っているもの。ゲームの入力（[`MidiIn`]）と音源とのやり取りで開いた入力の両方から送る
+static SYSEX_TAPS: Mutex<Vec<Sender<SysexIn>>> = Mutex::new(Vec::new());
+
+/// [`MidiIn`] が開いているポートの名前（音源とのやり取りで、入力を自分でも開くかを決める）
+static OPEN_PORTS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// これから届く SysEx を受け取る（受け手を落とせば送らなくなる）
+pub fn subscribe_sysex() -> Receiver<SysexIn> {
+    let (tx, rx) = channel();
+    if let Ok(mut taps) = SYSEX_TAPS.lock() {
+        taps.push(tx);
+    }
+    rx
+}
+
+/// 届いた SysEx を待っているものに送る
+pub fn publish_sysex(port: &str, bytes: Vec<u8>) {
+    if let Ok(mut taps) = SYSEX_TAPS.lock() {
+        if taps.is_empty() {
+            return;
+        }
+        let msg = SysexIn {
+            port: port.to_owned(),
+            bytes,
+        };
+        taps.retain(|tx| tx.send(msg.clone()).is_ok());
+    }
+}
+
+/// [`MidiIn`] が開いている入力ポートの名前
+pub fn tapped_ports() -> Vec<String> {
+    OPEN_PORTS.lock().map(|p| p.clone()).unwrap_or_default()
+}
+
 /// 今 OS が見せている入力ポートの名前と ID（開かずに調べる。つないだり外したりを見つけるのに使う）
 pub fn list_ports() -> Vec<(String, String)> {
     let Ok(probe) = MidiInput::new("DTXmaniaNXT") else {
@@ -145,7 +197,7 @@ pub fn list_ports() -> Vec<(String, String)> {
 }
 
 /// 画面とログに出す名前。Linux（ALSA）の名前の末尾に付く `client:port` の番号は、挿すたびに変わるので除く
-fn display_name(raw: &str) -> String {
+pub fn display_name(raw: &str) -> String {
     if cfg!(target_os = "linux")
         && let Some((head, tail)) = raw.rsplit_once(' ')
         && let Some((c, p)) = tail.split_once(':')
@@ -208,13 +260,28 @@ fn open_port(
     tx: Sender<RawMidi>,
 ) -> Result<MidiInputConnection<()>> {
     let mut input = MidiInput::new("DTXmaniaNXT")?;
-    // クロックやアクティブセンシングは要らない（パッドによってはクロックを 1 秒に何十回も送ってくる）
-    input.ignore(midir::Ignore::All);
+    let name = input
+        .port_name(port)
+        .map(|n| display_name(&n))
+        .unwrap_or_default();
+    // クロックやアクティブセンシングは要らない（パッドによってはクロックを 1 秒に何十回も送ってくる）。
+    // SysEx は音源とのやり取り（[`publish_sysex`]）にだけ回す
+    input.ignore(midir::Ignore::TimeAndActiveSense);
+    let mut sysex = SysexAssembler::default();
     let conn = input
         .connect(
             port,
             "dtxmanianxt-in",
             move |stamp_us, bytes, _| {
+                if bytes.contains(&0xF0) || sysex.in_progress() {
+                    for m in sysex.feed(bytes) {
+                        publish_sysex(&name, m);
+                    }
+                }
+                if bytes.first() == Some(&0xF0) || bytes.iter().all(|&b| b < 0x80) {
+                    // SysEx だけの塊（と、その続き）はゲームの入力に要らない
+                    return;
+                }
                 let _ = tx.send(RawMidi {
                     port: index,
                     device_us: stamp_us as i64,

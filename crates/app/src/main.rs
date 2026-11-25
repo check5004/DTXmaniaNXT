@@ -39,6 +39,8 @@ mod lane_layout;
 mod loading;
 mod logging;
 mod midi;
+mod module_link;
+mod module_probe;
 mod movie;
 mod nx_import;
 mod perf;
@@ -4277,6 +4279,8 @@ fn run() -> Result<()> {
         }
     });
     let mut app = App::new(arg);
+    // 前に V51 の値を書き換えたまま終わっていたら（落ちたなど）、ここで書き戻す
+    module_link::restore_on_start();
     event_loop.run_app(&mut app)?;
     app.updater.apply_on_exit();
     match app.startup_error.take() {
