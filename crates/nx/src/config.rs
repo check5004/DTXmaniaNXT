@@ -38,7 +38,8 @@ pub enum KeyAssign {
 }
 
 impl KeyAssign {
-    fn parse(s: &str) -> Option<Self> {
+    /// 1 つ読む（`M042` など。読めなければ `None`）
+    pub fn parse(s: &str) -> Option<Self> {
         let s = s.trim().to_ascii_uppercase();
         if s.len() < 3 || !s.is_ascii() {
             return None;
@@ -60,8 +61,17 @@ impl KeyAssign {
     }
 }
 
-/// `[DrumsKeyAssign]` のキーの名前
-fn lane_of(key: &str) -> Option<DrumLane> {
+/// `[DrumsKeyAssign]` の値（`K033,M042` など。上流と同じく 16 個まで。読めないものは飛ばす）
+pub fn parse_assigns(value: &str) -> Vec<KeyAssign> {
+    value
+        .split(',')
+        .take(16)
+        .filter_map(KeyAssign::parse)
+        .collect()
+}
+
+/// `[DrumsKeyAssign]` のキーの名前のレーン
+pub fn lane_of(key: &str) -> Option<DrumLane> {
     Some(match key {
         "HH" => DrumLane::HH,
         "SD" => DrumLane::SD,
@@ -125,12 +135,7 @@ impl NxConfig {
                 },
                 "DrumsKeyAssign" => {
                     if let Some(lane) = lane_of(key) {
-                        let assigns: Vec<KeyAssign> = value
-                            .split(',')
-                            .take(16)
-                            .filter_map(KeyAssign::parse)
-                            .collect();
-                        out.drums.insert(lane, assigns);
+                        out.drums.insert(lane, parse_assigns(value));
                     }
                 }
                 _ => {}
