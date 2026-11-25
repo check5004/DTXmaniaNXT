@@ -1,5 +1,5 @@
 //! タイトルの画面（上流 `CStageTitle`）と、終わるときの画面（上流 `CStageEnd`）。
-//! スキンの 2_ の画像で、背景とロゴとメニュー（GAME START / CONFIGURATION / EXIT と、このアプリで足した Records）を出す。
+//! スキンの 2_ の画像で、背景とロゴとメニュー（GAME START / CONFIGURATION / EXIT と、このアプリで足した Drills・Records）を出す。
 //! メニューの板（2_menu_plate.png）は行の数に合わせて真ん中を縦に伸ばし、下の端をそろえて上へ広げる。
 //! 入るときは白からフェードし、決めたら App がシャッター（`shutter`）を閉じて次の画面へ移る（NX v2.0）。
 //! 曲を探しているあいだは左上に「曲を探しています」の画像を明滅させる（上流 `CActEnumSongs`）。
@@ -59,6 +59,8 @@ const END_MIN: Duration = Duration::from_millis(1000);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TitleItem {
     GameStart,
+    /// 基礎練習（このアプリで足した行）
+    Drills,
     /// 上達の記録（このアプリで足した行）
     Records,
     Config,
@@ -69,8 +71,9 @@ pub enum TitleItem {
 
 impl TitleItem {
     /// 板に並べる行（上から）。「更新」の行は板の下に別に出す
-    const MENU: [TitleItem; 4] = [
+    const MENU: [TitleItem; 5] = [
         TitleItem::GameStart,
+        TitleItem::Drills,
         TitleItem::Records,
         TitleItem::Config,
         TitleItem::Exit,
@@ -82,6 +85,7 @@ impl TitleItem {
             TitleItem::GameStart => Some(0),
             TitleItem::Config => Some(2),
             TitleItem::Exit => Some(3),
+            TitleItem::Drills => Some(6),
             TitleItem::Records => Some(7),
             TitleItem::Update => None,
         }
@@ -343,6 +347,7 @@ impl TitleView {
             vec![(&[Pad::HT], t("Up", "上")), (&[Pad::LT], t("Down", "下"))];
         let decide = match self.selected() {
             TitleItem::GameStart => Some(t("Start (Enter)", "はじめる（Enter）")),
+            TitleItem::Drills => Some(t("Open Drills (Enter)", "基礎練習を開く（Enter）")),
             TitleItem::Records => Some(t("View Records (Enter)", "記録を見る（Enter）")),
             TitleItem::Config => Some(t("Open Settings (Enter)", "設定を開く（Enter）")),
             TitleItem::Exit => Some(t("Quit (Enter)", "終わる（Enter）")),
@@ -497,6 +502,7 @@ pub fn draw_scanning(c: &Canvas, g: &mut Gfx, since: Instant) {
 fn draw_plain_menu(c: &Canvas, g: &mut Gfx, cursor: usize) {
     for (i, name) in [
         t("Start", "はじめる"),
+        t("Drills", "基礎練習"),
         t("Records", "記録"),
         t("Settings", "設定"),
         t("Quit", "終わる"),
@@ -604,7 +610,8 @@ mod tests {
         assert_eq!(MENU_Y + n * MENU_H + PLATE_BOTTOM_PAD, PLATE_BOTTOM);
         // 板はロゴのしずくより下（行を足しすぎたら気づけるように）
         const { assert!(MENU_Y - PLATE_TOP_PAD >= 410.0) };
-        // Records の行は 2_menu.png の 8 段目
+        // Drills と Records の行は 2_menu.png の 7・8 段目
+        assert_eq!(TitleItem::Drills.sprite_row(), Some(6));
         assert_eq!(TitleItem::Records.sprite_row(), Some(7));
     }
 
@@ -619,6 +626,8 @@ mod tests {
             names(&v),
             ["上", "下", "はじめる（Enter）", "終わる（Esc）"]
         );
+        v.move_by(1);
+        assert_eq!(names(&v)[2], "基礎練習を開く（Enter）");
         v.move_by(1);
         assert_eq!(names(&v)[2], "記録を見る（Enter）");
         v.move_by(1);

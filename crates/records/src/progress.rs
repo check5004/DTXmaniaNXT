@@ -175,13 +175,15 @@ impl Records {
             .collect()
     }
 
-    /// 遊んだことのある譜面すべての、これまでの記録。最後に遊んだのが新しい順
+    /// 遊んだことのある譜面すべての、これまでの記録。最後に遊んだのが新しい順。
+    /// 基礎練習の譜面（その場で作るもの）は曲ではないので入れない
     pub fn chart_progress(&self) -> Result<Vec<ChartProgress>> {
         let mut charts = self.conn.prepare(
             "SELECT c.id, c.path, c.title, c.artist, MAX(s.started_at),
                  (SELECT COALESCE(SUM(t.played_ms), 0) FROM play_time t
                   JOIN sessions u ON u.id = t.session_id WHERE u.chart_id = c.id)
              FROM charts c JOIN sessions s ON s.chart_id = c.id
+             WHERE s.kind <> 'drill'
              GROUP BY c.id
              ORDER BY MAX(s.started_at) DESC, c.id DESC",
         )?;
@@ -403,6 +405,18 @@ mod tests {
             .unwrap();
         // 基礎練習の時間は譜面の時間に入れない
         r.add_play_time(time_kind::DRILL, 260, 999_000, None)
+            .unwrap();
+        // 基礎練習の譜面は曲の一覧に出さない（いちばん新しくても）
+        let drill = Session {
+            kind: SessionKind::Drill,
+            started_at: 400,
+            settings: "{}".into(),
+            laps: vec![lap(0.7, vec![hit(1, 0)], None)],
+            clear: None,
+            score: None,
+        };
+        let d = r.save(&chart("drill:paradiddle"), &drill).unwrap();
+        r.add_play_time(time_kind::DRILL, 400, 45_000, Some(d))
             .unwrap();
 
         let got = r.chart_progress().unwrap();

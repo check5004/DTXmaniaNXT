@@ -7,9 +7,11 @@
 //! - [`lag`] は記録のずれから補正の値をすすめる
 //! - [`practice`] は練習の区間を周回ぶん並べ、セットごとに苦手の拍を数えて次の一手を決める
 //! - [`stroke`] はスネアのヘッドとリムの打ち分けを見る
+//! - [`drill`] は基礎練習の型を譜面にし、段ごとの出来と手ごとのずれをまとめる
 
 pub mod analysis;
 pub mod clock;
+pub mod drill;
 pub mod input;
 pub mod judge;
 pub mod lag;

@@ -1051,6 +1051,7 @@ impl PlayView {
         self.draw_lanes(c, g, now);
         self.draw_lines(c, g, play, now_ms, px_per_ms);
         self.draw_chips(c, g, play, now_ms, px_per_ms, now);
+        self.draw_hands(c, g, play, now_ms, px_per_ms);
         self.draw_shutters(c, g);
         if self.looks.progress {
             self.draw_progress(c, g, play, now_ms);
@@ -1072,8 +1073,10 @@ impl PlayView {
         }
         self.draw_pads(c, g, now);
         let practice = play.practice.is_some();
-        self.draw_score(c, g, now, practice);
-        self.draw_status(c, g, play, practice);
+        // 基礎練習も、スコアと達成率は出さない（スコアの場所にテンポを出す）
+        let scoreless = practice || play.drill.is_some();
+        self.draw_score(c, g, now, scoreless);
+        self.draw_status(c, g, play, scoreless);
         self.draw_gauge(c, g, px_per_ms);
         if self.looks.hit_error {
             self.hit_error.draw(c, g, now, practice);
@@ -1093,6 +1096,18 @@ impl PlayView {
                 self.looks.layout.extra_w(),
             );
         }
+        if let Some(d) = &play.drill {
+            let outcome = play.drill_outcome();
+            crate::drill_hud::draw(
+                c,
+                g,
+                d,
+                outcome.as_ref().map(|o| &o.summary),
+                now_ms,
+                self.looks.reverse,
+                self.looks.layout.extra_w(),
+            );
+        }
         self.draw_failed(c, g, now);
         // 入ってきたときのフェード
         let t = now.saturating_duration_since(self.entered).as_secs_f32() / FADE_IN.as_secs_f32();
@@ -1103,8 +1118,8 @@ impl PlayView {
 
     /// ジャケットと曲名（上流 `CActPerfPanelString`）
     fn draw_jacket(&self, c: &Canvas, g: &mut Gfx, play: &Play) {
-        // 練習中は、ジャケットの場所に段階アップのはしごを出す（practice_hud）。曲名は出す
-        if play.practice.is_none() {
+        // 練習中は、ジャケットの場所に段階アップのはしごを出す（practice_hud、基礎練習は drill_hud）。曲名は出す
+        if play.practice.is_none() && play.drill.is_none() {
             self.draw_jacket_image(c, g, play);
         }
         let edge = |px: f32| Style {
@@ -1489,6 +1504,46 @@ impl PlayView {
         }
     }
 
+    /// 基礎練習で、音符の右に叩く手（R・L）を出す。足は書かなくても分かるので出さない
+    fn draw_hands(&self, c: &Canvas, g: &mut Gfx, play: &Play, now_ms: f64, px_per_ms: f32) {
+        let Some(d) = &play.drill else {
+            return;
+        };
+        let looks = self.looks;
+        let ahead = |ms: f64| ((ms - now_ms) as f32) * px_per_ms;
+        let notes = play.judge.notes();
+        let from = notes.partition_point(|n| n.ms < now_ms - 1000.0);
+        for (i, n) in notes.iter().enumerate().skip(from) {
+            let y = looks.ahead_y(ahead(n.ms));
+            if looks.beyond_edge(y) {
+                break;
+            }
+            if play.judge.is_done(i) || ahead(n.ms) > DRAW_AHEAD_PX {
+                continue;
+            }
+            let (hand, color) = match d.hands.get(i).copied().flatten() {
+                Some(engine::drill::Hand::Right) => ("R", crate::drill::RIGHT_COLOR),
+                Some(engine::drill::Hand::Left) => ("L", crate::drill::LEFT_COLOR),
+                _ => continue,
+            };
+            let Some(alpha) = looks.chip_alpha(ahead(n.ms)) else {
+                continue;
+            };
+            let (x, _, w, _) = chip(&looks, n.lane);
+            let style = Style {
+                px: 20.0,
+                color,
+                bold: true,
+                shadow: None,
+                edge: Some((Color32::BLACK, 2.0)),
+                gradient: None,
+            };
+            if let Some(t) = g.texts.get(hand, &style) {
+                t.draw(c, x + w - 2.0, y - t.h / 2.0, 1.0, alpha);
+            }
+        }
+    }
+
     /// シャッター（上流の ShutterInPos・ShutterOutPos。7_shutter.png を上と下から 7.2 ドット × 値だけ出す）
     fn draw_shutters(&self, c: &Canvas, g: &Gfx) {
         // 出てくる側が ShutterIn（Reverse では下）
@@ -1673,6 +1728,7 @@ impl PlayView {
                 rate: self.rate(practice),
                 level: play.level.unwrap_or(0.0),
                 diff_panel: self.diff_panel,
+                counts_only: play.drill.is_some(),
             },
             &LARGE,
         );
@@ -2021,7 +2077,14 @@ pub struct PanelNumbers<'a> {
     pub level: f64,
     /// 7_Difficulty.png の切り出しの左上
     pub diff_panel: (f32, f32),
+    /// 判定の数だけを出す（基礎練習。達成率・スキル・レベルの欄を出さず、パネルを短くする）
+    pub counts_only: bool,
 }
+
+/// 7_SkillPanel.png の判定の数の欄の下の端（緑の線のすぐ下）
+const PANEL_COUNTS_H: f32 = 262.0;
+/// 7_SkillPanel.png の下の縁の高さ
+const PANEL_EDGE_H: f32 = 14.0;
 
 /// 7_SkillPanel.png と、判定の数と割合、達成率、スキル、難易度とレベル。
 /// 演奏の画面（上流 `CActPerfDrumsStatusPanel`）と結果の画面（`CActResultParameterPanel`）は
@@ -2034,7 +2097,18 @@ pub fn draw_skill_panel(
     large: &Glyphs<'_>,
 ) {
     if let Some(t) = g.skin.tex("Graphics/7_SkillPanel.png") {
-        c.draw(&t, x, y);
+        if n.counts_only {
+            // 判定の数の欄までと、下の縁だけをつなげて短いパネルにする
+            c.part(&t, x, y, src(0.0, 0.0, t.w, PANEL_COUNTS_H));
+            c.part(
+                &t,
+                x,
+                y + PANEL_COUNTS_H,
+                src(0.0, t.h - PANEL_EDGE_H, t.w, PANEL_EDGE_H),
+            );
+        } else {
+            c.draw(&t, x, y);
+        }
     }
     // 名前（上流は Config.ini の名前、無ければ GUEST）
     if let Some(t) = g.texts.get("GUEST", &Style::plain(20.0, Color32::WHITE)) {
@@ -2063,6 +2137,9 @@ pub fn draw_skill_panel(
             ry,
             &format!("{:>3}%", percent(count)),
         );
+    }
+    if n.counts_only {
+        return;
     }
     if n.rate >= 100.0 {
         if let Some(t) = g.skin.tex("Graphics/7_skill max.png") {

@@ -24,10 +24,10 @@ use crate::practice::{CLEAR_HOLD_MS, Cue, LapState, Practice, pass_line};
 use crate::text::Style;
 
 /// 周と速度の数字の場所（上流のスコアと同じ高さ）
-const LAP_X: f32 = 40.0;
-const SPEED_X: f32 = 150.0;
-const LABEL_Y: f32 = 10.0;
-const DIGIT_Y: f32 = 41.0;
+pub(crate) const LAP_X: f32 = 40.0;
+pub(crate) const SPEED_X: f32 = 150.0;
+pub(crate) const LABEL_Y: f32 = 10.0;
+pub(crate) const DIGIT_Y: f32 = 41.0;
 /// スコアの数字の 1 文字の幅と送り
 const DIGIT_W: f32 = 36.0;
 const DIGIT_H: f32 = 50.0;
@@ -37,7 +37,7 @@ const DIGIT_ADVANCE: f32 = 34.0;
 const INFO: (f32, f32, f32, f32) = (6.0, 98.0, 282.0, 148.0);
 
 /// 右の欄（ジャケットの場所）
-const CARD: (f32, f32, f32, f32) = (918.0, 296.0, 352.0, 330.0);
+pub(crate) const CARD: (f32, f32, f32, f32) = (918.0, 296.0, 352.0, 330.0);
 /// クリアのバッジ（`7_Excellent.png` の中の場所と大きさ）と縮め方
 const BADGE: (f32, f32, f32, f32) = (402.0, 274.0, 480.0, 177.0);
 const BADGE_SCALE: f32 = 0.42;
@@ -49,8 +49,8 @@ const BAR_W: f32 = 20.0;
 const BAR_H: f32 = 540.0;
 
 /// レーンの場所（知らせの帯の幅）
-const LANES_X: f32 = 296.0;
-const LANES_W: f32 = 558.0;
+pub(crate) const LANES_X: f32 = 296.0;
+pub(crate) const LANES_W: f32 = 558.0;
 /// 知らせの帯の上の端（Reverse では下の端から同じだけ離す）と高さ
 const BANNER_Y: f32 = 96.0;
 const BANNER_H: f32 = 230.0;
@@ -59,20 +59,20 @@ const BANNER_FADE_IN_MS: f64 = 150.0;
 const BANNER_FADE_OUT_MS: f64 = 200.0;
 
 /// カウントの数字を出す場所（知らせの帯より判定ラインの側）と、1 打ごとに縮む時間
-const COUNT_Y: f32 = 440.0;
-const COUNT_POP_MS: f64 = 180.0;
+pub(crate) const COUNT_Y: f32 = 440.0;
+pub(crate) const COUNT_POP_MS: f64 = 180.0;
 
 const SECTION_COLOR: Color32 = Color32::from_rgb(0x40, 0xC8, 0xFF);
 /// ノーミス・ミス 1 回
-const OK_COLOR: Color32 = Color32::from_rgb(0x70, 0xE0, 0x90);
-const SLIP_COLOR: Color32 = Color32::from_rgb(0xF0, 0xD0, 0x50);
+pub(crate) const OK_COLOR: Color32 = Color32::from_rgb(0x70, 0xE0, 0x90);
+pub(crate) const SLIP_COLOR: Color32 = Color32::from_rgb(0xF0, 0xD0, 0x50);
 /// 今の段
-const CURRENT_COLOR: Color32 = Color32::from_rgb(0xFF, 0xB8, 0x40);
+pub(crate) const CURRENT_COLOR: Color32 = Color32::from_rgb(0xFF, 0xB8, 0x40);
 const DOWN_COLOR: Color32 = SECTION_COLOR;
-const GREY: Color32 = Color32::from_gray(200);
+pub(crate) const GREY: Color32 = Color32::from_gray(200);
 const DIM: Color32 = Color32::from_gray(150);
 /// 今の段の文字（橙の上）
-const INK: Color32 = Color32::from_rgb(50, 30, 0);
+pub(crate) const INK: Color32 = Color32::from_rgb(50, 30, 0);
 
 /// 練習中の表示をすべて描く。`now` は表示の補正を足した実時間、`last_chip_ms` は曲の最後の音の時刻、
 /// `px_per_ms` は音符の落ちる速さ（判定の音符が知らせの帯に届く前に帯を消す）、`reverse` は下から上へ流すか
@@ -128,18 +128,18 @@ fn banner_top(h: f32, reverse: bool) -> f32 {
 // ---- 文字と形 ----
 
 #[derive(Clone, Copy)]
-enum Align {
+pub(crate) enum Align {
     Left,
     Right,
     Center,
 }
 
 /// 黒い縁の文字
-fn edged(px: f32, color: Color32) -> Style {
+pub(crate) fn edged(px: f32, color: Color32) -> Style {
     Style::edged(px, color, Color32::BLACK, (px / 12.0).max(1.0))
 }
 
-fn bold(px: f32, color: Color32) -> Style {
+pub(crate) fn bold(px: f32, color: Color32) -> Style {
     Style {
         bold: true,
         ..Style::edged(px, color, Color32::BLACK, (px / 10.0).max(1.5))
@@ -148,7 +148,7 @@ fn bold(px: f32, color: Color32) -> Style {
 
 /// 文字を描いて幅を返す。`y` は上の端。`max_w` を超えるときは横に縮める
 #[allow(clippy::too_many_arguments)]
-fn put(
+pub(crate) fn put(
     c: &Canvas,
     g: &mut Gfx,
     text: &str,
@@ -175,7 +175,7 @@ fn put(
 
 /// 文字を、縦の真ん中を `cy` に合わせて描く
 #[allow(clippy::too_many_arguments)]
-fn put_mid(
+pub(crate) fn put_mid(
     c: &Canvas,
     g: &mut Gfx,
     text: &str,
@@ -190,13 +190,13 @@ fn put_mid(
 }
 
 /// 角の丸い四角を塗る
-fn round_fill(c: &Canvas, (x, y, w, h): (f32, f32, f32, f32), r: f32, color: Color32) {
+pub(crate) fn round_fill(c: &Canvas, (x, y, w, h): (f32, f32, f32, f32), r: f32, color: Color32) {
     c.painter()
         .rect_filled(c.rect(x, y, w, h), r * c.scale(), color);
 }
 
 /// 角の丸い枠
-fn round_frame(c: &Canvas, (x, y, w, h): (f32, f32, f32, f32), r: f32, color: Color32) {
+pub(crate) fn round_frame(c: &Canvas, (x, y, w, h): (f32, f32, f32, f32), r: f32, color: Color32) {
     c.painter().rect_stroke(
         c.rect(x, y, w, h),
         r * c.scale(),
@@ -206,14 +206,14 @@ fn round_frame(c: &Canvas, (x, y, w, h): (f32, f32, f32, f32), r: f32, color: Co
 }
 
 /// 丸（周の印）
-fn dot(c: &Canvas, cx: f32, cy: f32, r: f32, fill: Color32, edge: Color32) {
+pub(crate) fn dot(c: &Canvas, cx: f32, cy: f32, r: f32, fill: Color32, edge: Color32) {
     let p = c.painter();
     p.circle_filled(c.pos(cx, cy), r * c.scale(), fill);
     p.circle_stroke(c.pos(cx, cy), r * c.scale(), Stroke::new(1.5, edge));
 }
 
 /// スコアの数字で `text`（数字と %）を描き、右の端を返す。スキンに無ければふつうの文字で
-fn score_digits(
+pub(crate) fn score_digits(
     c: &Canvas,
     g: &mut Gfx,
     text: &str,
@@ -414,7 +414,7 @@ fn draw_info(c: &Canvas, g: &mut Gfx, p: &Practice) {
 
 // ---- 右の欄：段 ----
 
-fn card_frame(c: &Canvas) {
+pub(crate) fn card_frame(c: &Canvas) {
     round_fill(
         c,
         CARD,
