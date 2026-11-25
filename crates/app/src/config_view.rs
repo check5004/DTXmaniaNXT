@@ -276,6 +276,12 @@ pub enum ItemId {
     OpenEditor,
     /// クレジットの一覧をブラウザで開く
     OpenCredits,
+    /// アプリの版（7 回続けて決定すると開発者モード）
+    Version,
+    /// 開発者メニューを開く（開発者モードのときだけ）
+    DevMenu,
+    /// 開発者モードを OFF にする
+    DevOff,
     /// 簡易設定から、選んでいる曲の区間練習へ
     PracticeSong,
     /// 簡易設定から、選んでいる曲のプレイの一覧（リプレイ）へ
@@ -1565,6 +1571,49 @@ pub fn rows(page: Page, info: &ConfigInfo<'_>) -> Vec<Row> {
                 ),
                 None,
             ));
+            s.at(" ").push(action(
+                ItemId::Version,
+                t("Version", "バージョン"),
+                env!("CARGO_PKG_VERSION").to_owned(),
+                if c.developer {
+                    t(
+                        "The version of DTXmaniaNXT.\nDeveloper mode is ON.",
+                        "DTXmaniaNXT の版です。\n開発者モードは ON です。",
+                    )
+                } else {
+                    t("The version of DTXmaniaNXT.", "DTXmaniaNXT の版です。")
+                }
+                .to_owned(),
+                None,
+            ));
+            if c.developer {
+                let r = s.at(t("Developer", "開発者"));
+                r.push(Row {
+                    tone: Tone::Strong,
+                    ..action(
+                        ItemId::DevMenu,
+                        t("Developer Menu", "開発者メニュー"),
+                        String::new(),
+                        t(
+                            "Records MIDI, gathers the log and environment, and runs test tools. The result becomes a draft GitHub issue you can check and send from the browser.",
+                            "MIDI の記録、ログや環境の情報、試験の道具を動かします。結果は GitHub の issue の下書きになり、中身を確かめてからブラウザで送れます。",
+                        )
+                        .to_owned(),
+                        None,
+                    )
+                });
+                r.push(action(
+                    ItemId::DevOff,
+                    t("Turn Off Developer Mode", "開発者モードを OFF にする"),
+                    String::new(),
+                    t(
+                        "Hides the developer menu. Select Version 7 times in a row to turn it on again.",
+                        "開発者メニューを隠します。もう一度 ON にするには「バージョン」を 7 回続けて決定します。",
+                    )
+                    .to_owned(),
+                    None,
+                ));
+            }
             let r = s.at(t("Import", "引き継ぎ"));
             r.push(page_row(
                 ItemId::Import,
@@ -4943,6 +4992,31 @@ mod tests {
             v.input(ConfigInput::Decide, &app).action,
             Some(ConfigAction::Run(ItemId::OpenCredits))
         );
+    }
+
+    #[test]
+    fn the_developer_menu_shows_only_in_developer_mode() {
+        // ふだんは版の行だけで、開発者メニューは出さない
+        let mut c = Config::default();
+        let app = rows(Page::Cat(Cat::App), &info(&c));
+        let i = find(&app, ItemId::Version);
+        assert_eq!(app[i].value, env!("CARGO_PKG_VERSION"));
+        assert!(app.iter().all(|r| r.id != Some(ItemId::DevMenu)));
+        let mut v = at(Page::Cat(Cat::App), &app, ItemId::Version);
+        assert_eq!(
+            v.input(ConfigInput::Decide, &app).action,
+            Some(ConfigAction::Run(ItemId::Version))
+        );
+        c.developer = true;
+        let app = rows(Page::Cat(Cat::App), &info(&c));
+        let i = find(&app, ItemId::DevMenu);
+        let mut v = at(Page::Cat(Cat::App), &app, ItemId::DevMenu);
+        assert_eq!(app[i].tone, Tone::Strong);
+        assert_eq!(
+            v.input(ConfigInput::Decide, &app).action,
+            Some(ConfigAction::Run(ItemId::DevMenu))
+        );
+        find(&app, ItemId::DevOff);
     }
 
     #[test]
