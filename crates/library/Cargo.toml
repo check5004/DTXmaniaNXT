@@ -10,6 +10,11 @@ rust-version.workspace = true
 [dependencies]
 dtx = { path = "../dtx" }
 i18n = { path = "../i18n" }
+# zip の中の Shift_JIS（CP932）の名前を読む（dtx と同じもの）
+encoding_rs = "0.8"
+log = "0.4"
+# ドロップされた zip を展開する（Deflate と Deflate64。velopack がすでに使っている版）
+zip = { version = "8", default-features = false, features = ["deflate", "deflate64"] }
 
 [lints]
 workspace = true

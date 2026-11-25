@@ -194,6 +194,8 @@ impl Entries {
             let path = e.path();
             // fs::metadata はリンクの先を見る
             match fs::metadata(&path) {
+                // 曲を追加している途中の作業フォルダは、まだ一覧に出さない
+                Ok(m) if m.is_dir() && crate::import::is_work_dir(&name) => {}
                 Ok(m) if m.is_dir() => dirs.push((name, path)),
                 Ok(m) if m.is_file() => files.push((name, path)),
                 _ => {}

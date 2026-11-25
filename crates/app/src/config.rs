@@ -27,6 +27,10 @@ pub struct Config {
     pub nx_dir: Option<PathBuf>,
     /// 曲のフォルダ
     pub song_dirs: Vec<PathBuf>,
+    /// ウィンドウにドロップした曲（zip や曲のフォルダ）を写す先。曲のフォルダのどれか。
+    /// 書いていないか、一覧から外したフォルダなら 1 つ目（[`Config::add_dest`]）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub add_songs_to: Option<PathBuf>,
     /// 入力の遅れの補正（ミリ秒）。叩いた時刻からこの分を引く
     pub input_offset_ms: f64,
     /// 表示の遅れの補正（ミリ秒）
@@ -162,6 +166,7 @@ impl Default for Config {
         Self {
             nx_dir: None,
             song_dirs: Vec::new(),
+            add_songs_to: None,
             input_offset_ms: 0.0,
             visual_offset_ms: 0.0,
             scroll_px_per_ms: 0.6,
@@ -493,6 +498,37 @@ impl Config {
         self.song_dirs.push(dir);
         true
     }
+
+    /// ドロップした曲を写す先。選んだ曲のフォルダ、無ければ 1 つ目、曲のフォルダが 1 つも無ければ
+    /// ドキュメントの DTXmaniaNXT\Songs（写したときに曲のフォルダに足す）
+    pub fn add_dest(&self) -> PathBuf {
+        self.add_songs_to
+            .as_ref()
+            .filter(|d| self.song_dirs.contains(d))
+            .or(self.song_dirs.first())
+            .cloned()
+            .unwrap_or_else(default_add_dir)
+    }
+
+    /// 写す先を次の曲のフォルダにする（1 つしか無ければそのまま）
+    pub fn next_add_dest(&mut self) {
+        let n = self.song_dirs.len();
+        if n == 0 {
+            return;
+        }
+        let now = self.add_dest();
+        let i = self.song_dirs.iter().position(|d| *d == now).unwrap_or(0);
+        self.add_songs_to = Some(self.song_dirs[(i + 1) % n].clone());
+    }
+}
+
+/// 曲のフォルダが無いときにドロップした曲を写す先（ドキュメントの DTXmaniaNXT\Songs。
+/// ドキュメントのフォルダが分からなければ設定のフォルダの Songs）
+fn default_add_dir() -> PathBuf {
+    dirs::document_dir()
+        .map(|d| d.join("DTXmaniaNXT"))
+        .or_else(Config::dir)
+        .map_or_else(|| PathBuf::from("Songs"), |d| d.join("Songs"))
 }
 
 /// 割り当ての並び（ノート → レーン、`None` は外す）。読めないレーンの名前は飛ばす
@@ -793,5 +829,30 @@ lane = \"LP\"
         // 0.5.0 までの設定（自動更新のキーはあるが、前の版を覚えていない）
         let mut c: Config = toml::from_str("auto_update = true").unwrap();
         assert_eq!(c.remember_version("0.5.1"), Some(String::new()));
+    }
+
+    #[test]
+    fn dropped_songs_go_to_the_chosen_song_folder() {
+        let mut c = Config::default();
+        // 曲のフォルダが無ければドキュメントか設定のフォルダの Songs
+        assert!(c.add_dest().ends_with("Songs"));
+        c.next_add_dest();
+        assert_eq!(c.add_songs_to, None);
+        c.song_dirs = vec![PathBuf::from("a"), PathBuf::from("b")];
+        assert_eq!(c.add_dest(), PathBuf::from("a"));
+        c.next_add_dest();
+        assert_eq!(c.add_dest(), PathBuf::from("b"));
+        let back: Config = toml::from_str(&toml::to_string(&c).unwrap()).unwrap();
+        assert_eq!(back.add_dest(), PathBuf::from("b"));
+        c.next_add_dest();
+        assert_eq!(c.add_dest(), PathBuf::from("a"));
+        // 一覧から外したフォルダは選べない（1 つ目に戻る）
+        c.add_songs_to = Some(PathBuf::from("gone"));
+        assert_eq!(c.add_dest(), PathBuf::from("a"));
+        assert!(
+            !toml::to_string(&Config::default())
+                .unwrap()
+                .contains("add_songs_to")
+        );
     }
 }

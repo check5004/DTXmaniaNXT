@@ -412,7 +412,9 @@ pub fn pick_file(title: &str, filter: (&str, &[&str])) -> Option<PathBuf> {
 
 /// 演奏の画面で、レーンの下に短い知らせを出す
 pub fn play_toast(ctx: &egui::Context, c: &Canvas, msg: &str, (x, y): (f32, f32)) {
-    egui::Area::new(egui::Id::unique("play-toast"))
+    // 文ごとに別の Id にする（egui は Area の大きさを Id ごとに覚えるので、同じ Id だと
+    // 前の短い知らせの幅で長い知らせを折り返してしまう）
+    egui::Area::new(egui::Id::unique(("play-toast", msg)))
         .fixed_pos(c.pos(x, y))
         .pivot(Align2::CENTER_TOP)
         .interactable(false)

@@ -378,6 +378,47 @@ impl SongList {
         song.charts[level].as_ref().map(|c| c.path.clone())
     }
 
+    /// `target`（譜面のパスか、曲のフォルダかその上のフォルダ）の曲を選ぶ。BOX の中ならその BOX に入る。
+    /// 見つかれば true（ドロップして追加した曲へ移るとき）
+    pub fn reveal(&mut self, target: &Path) -> bool {
+        fn find(nodes: &[Node], target: &Path, path: &mut Vec<usize>) -> Option<usize> {
+            for (i, n) in nodes.iter().enumerate() {
+                match n {
+                    Node::Song(s)
+                        if s.dir.starts_with(target)
+                            || s.charts.iter().flatten().any(|c| c.path == target) =>
+                    {
+                        return Some(i);
+                    }
+                    Node::Song(_) => {}
+                    Node::Box(b) => {
+                        path.push(i);
+                        if let Some(found) = find(&b.nodes, target, path) {
+                            return Some(found);
+                        }
+                        path.pop();
+                    }
+                }
+            }
+            None
+        }
+        let mut path = Vec::new();
+        let Some(i) = find(self.root(), target, &mut path) else {
+            return false;
+        };
+        self.path = path;
+        self.cursor = self.back_rows() + i;
+        // 譜面を指したなら、その難易度に
+        if let Some(level) = self.selected_song().and_then(|s| {
+            s.charts
+                .iter()
+                .position(|c| c.as_ref().is_some_and(|c| c.path == target))
+        }) {
+            self.level = level;
+        }
+        true
+    }
+
     /// BOX から出る。一番上なら false
     pub fn back(&mut self) -> bool {
         match self.path.pop() {
@@ -469,6 +510,20 @@ mod tests {
         assert!(l.back());
         assert_eq!(l.cursor, 0);
         assert!(!l.back());
+    }
+
+    #[test]
+    fn reveal_opens_the_box_and_picks_the_chart_level() {
+        let mut l = list();
+        assert!(l.reveal(Path::new("b1.dtx")));
+        assert_eq!(l.breadcrumbs(), vec!["BOX"]);
+        assert_eq!(l.selected_song().unwrap().title, "b");
+        assert_eq!(l.level, 1);
+        assert!(l.reveal(Path::new("c2.dtx")));
+        assert!(l.breadcrumbs().is_empty());
+        assert_eq!(l.selected_song().unwrap().title, "c");
+        assert!(!l.reveal(Path::new("nowhere.dtx")));
+        assert_eq!(l.selected_song().unwrap().title, "c");
     }
 
     #[test]
