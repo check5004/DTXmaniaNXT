@@ -43,6 +43,8 @@ mod play_view;
 mod practice;
 mod practice_hud;
 mod practice_menu;
+mod progress;
+mod records_view;
 mod replay;
 mod replay_view;
 mod result_training;
@@ -58,6 +60,7 @@ mod skin;
 mod song_adder;
 mod songs;
 mod stretch;
+mod takeover;
 mod text;
 mod time;
 mod title_view;
@@ -67,7 +70,7 @@ mod update_view;
 mod window_mode;
 mod xa;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -97,6 +100,7 @@ use crate::midi::MidiIn;
 use crate::play_view::PlayView;
 use crate::practice::{PracticeOptions, PracticeSetup};
 use crate::practice_menu::{Done, Finished, MenuInput, MenuMouse, PracticeMenu, Spot};
+use crate::records_view::{RecordsAction, RecordsFrom, RecordsInput, RecordsView};
 use crate::replay_view::{Back, ListDone, ListInput, ReplayList, ReplayRun};
 use crate::result_view::{Page, ResultInfo, ResultView};
 use crate::section_sound::SectionAudio;
@@ -412,6 +416,8 @@ enum Screen {
     Result(Box<Outcome>, Box<ResultView>),
     /// 記録したプレイのリプレイ
     Replay(Box<ReplayRun>),
+    /// 上達の記録
+    Records(Box<RecordsView>),
 }
 
 struct App {
@@ -509,6 +515,8 @@ struct App {
     focused: bool,
     /// フレームレートに上限があるとき、次に描く時刻
     next_frame: Instant,
+    /// 他の DTXMania からの引き継ぎ（見つけたもの、読んだ設定）
+    import: takeover::Import,
 }
 
 /// 窓に当てる設定
@@ -592,6 +600,8 @@ enum AfterClose {
     Replay(i64),
     /// リプレイを閉じて、来た画面へ
     LeaveReplay,
+    /// 上達の記録へ。どこから開いたかと、選んでおく譜面
+    Records(RecordsFrom, Option<PathBuf>),
 }
 
 /// リプレイの一覧に出すプレイの数
@@ -727,6 +737,7 @@ impl App {
             monitors_checked: Instant::now(),
             focused: true,
             next_frame: Instant::now(),
+            import: takeover::Import::start(),
         }
     }
 
@@ -921,8 +932,150 @@ impl App {
         };
         self.load_timing(chart.as_deref());
         self.refresh_monitors(true);
-        self.screen = Screen::Config(Box::default(), from_select);
+        // タイトルで「見つかりました」と知らせていたら、引き継ぐ画面から始める（一度だけ）
+        let view = if !from_select && self.title.found() {
+            self.title.set_found(None);
+            self.config.import_offered = true;
+            self.config.save();
+            let cursor = self.app_row(ItemId::Import);
+            ConfigView::starting_at(config_view::Cat::App, cursor, config_view::Page::Import)
+        } else {
+            ConfigView::new()
+        };
+        self.screen = Screen::Config(Box::new(view), from_select);
         self.shutter.open(CONFIG_OPEN_DELAY);
+    }
+
+    /// 設定の「アプリ」の一覧で `id` の行が何行目か（無ければ 0）
+    fn app_row(&self, id: ItemId) -> usize {
+        let mut info = config_info(
+            &self.config,
+            &self.midi,
+            &self.monitor,
+            &self.songs,
+            &self.monitor_list,
+        );
+        info.import = Some(self.import.info());
+        config_view::rows(config_view::Page::Cat(config_view::Cat::App), &info)
+            .iter()
+            .position(|r| r.id == Some(id))
+            .unwrap_or(0)
+    }
+
+    /// 他の DTXMania の設定を読んで、引き継ぐ項目の一覧を開く
+    fn import_open(&mut self, source: &nx::Source) {
+        log::info!(
+            "read {} ({:?}) at {}",
+            source.title(),
+            source.family,
+            source.found.config.display()
+        );
+        let plan = takeover::plan(source, &self.config, self.ports());
+        self.import.plan = Some(plan);
+        self.import.error = None;
+        if let Screen::Config(view, _) = &mut self.screen {
+            view.open_page(config_view::Page::ImportItems);
+        }
+    }
+
+    /// 指定したもの（ショートカット・exe・フォルダ・設定のファイル）から読む
+    fn import_from_path(&mut self, path: &std::path::Path) {
+        match takeover::open(path) {
+            Ok(source) => self.import_open(&source),
+            Err(e) => {
+                log::info!("cannot import from {}: {e}", path.display());
+                self.import.error = Some(e);
+                if let Screen::Config(view, _) = &mut self.screen
+                    && view.page() != config_view::Page::Import
+                {
+                    view.open_page(config_view::Page::Import);
+                }
+            }
+        }
+    }
+
+    /// 選んだ項目を引き継ぐ（前の設定を残してから）
+    fn import_apply(&mut self) {
+        let Some(plan) = self.import.plan.take() else {
+            return;
+        };
+        if plan.selected() == 0 {
+            self.import.plan = Some(plan);
+            self.config_toast(t("Nothing is checked", "引き継ぐ項目を選んでいません").to_owned());
+            return;
+        }
+        if !takeover::save_backup(&self.config) {
+            self.import.plan = Some(plan);
+            self.config_toast(
+                t(
+                    "Couldn't save your current settings, so nothing was imported",
+                    "今の設定を残せなかったので、引き継ぎませんでした",
+                )
+                .to_owned(),
+            );
+            return;
+        }
+        let ports = self.ports().to_vec();
+        let applied = takeover::apply(&plan, &mut self.config, &ports);
+        self.config.import_offered = true;
+        self.config.save();
+        log::info!("imported {} items from {}", applied.count, plan.title);
+        apply_volumes(&self.config);
+        if applied.pads {
+            self.reopen_midi();
+        }
+        if applied.songs {
+            self.songs.rescan(self.config.song_dirs.clone());
+        }
+        self.import.backup = takeover::backup_time();
+        let cursor = self.app_row(ItemId::ImportUndo);
+        if let Screen::Config(view, _) = &mut self.screen {
+            view.back_to_category(cursor);
+        }
+        self.config_toast(tf!(
+            "Imported {} items from {}",
+            "{1} から {0} 項目を引き継ぎました",
+            applied.count,
+            plan.product
+        ));
+    }
+
+    /// 引き継ぐ前の設定に戻す
+    fn import_undo(&mut self) {
+        let Some(before) = takeover::load_backup() else {
+            self.import.backup = None;
+            self.config_toast(
+                t(
+                    "Couldn't read the settings from before the import",
+                    "引き継ぐ前の設定を読めませんでした",
+                )
+                .to_owned(),
+            );
+            return;
+        };
+        let songs_changed = before.song_dirs != self.config.song_dirs;
+        // 窓の位置と大きさは今のまま（引き継ぎでは変えないので、戻すと窓の覚えだけが古くなる）
+        let window = self.config.window;
+        self.config = before;
+        self.config.window = window;
+        self.config.import_offered = true;
+        self.config.save();
+        takeover::remove_backup();
+        self.import.backup = None;
+        i18n::set_lang(self.config.lang());
+        apply_volumes(&self.config);
+        self.updater.set_mode(self.config.update_mode());
+        self.reopen_midi();
+        if songs_changed {
+            self.songs.rescan(self.config.song_dirs.clone());
+        }
+        self.config_toast(
+            t(
+                "Put your settings back to before the import",
+                "引き継ぐ前の設定に戻しました",
+            )
+            .to_owned(),
+        );
     }
 
     /// シャッターを閉じ、閉じ終えたら `next` へ移る（閉じているあいだは操作を受け付けない）
@@ -954,6 +1107,50 @@ impl App {
             }
             AfterClose::Replay(session) => self.open_replay(session),
             AfterClose::LeaveReplay => self.leave_replay(),
+            AfterClose::Records(from, focus) => self.open_records(from, focus.as_deref()),
+        }
+    }
+
+    /// 上達の記録の画面を開く（v2 の設定と同じく、シャッターを開いて入る）
+    fn open_records(&mut self, from: RecordsFrom, focus: Option<&Path>) {
+        self.sfx.preview(None);
+        self.quick = None;
+        self.close_menu();
+        let data = self.history.progress();
+        let view = RecordsView::new(from, data, &self.songs, focus);
+        self.screen = Screen::Records(Box::new(view));
+        self.shutter.open(CONFIG_OPEN_DELAY);
+    }
+
+    /// 上達の記録の画面の操作（シャッターが開ききるまでは受け付けない）
+    fn records_input(&mut self, input: RecordsInput) {
+        if self.shutter.animating() {
+            return;
+        }
+        let Screen::Records(view) = &mut self.screen else {
+            return;
+        };
+        let from = view.from;
+        match view.input(input) {
+            RecordsAction::None => {}
+            RecordsAction::Moved => self.sfx.play(Se::Move),
+            RecordsAction::Changed => self.sfx.play(Se::Change),
+            RecordsAction::Pick(path) => {
+                // 選曲で、この譜面の曲と難易度を選んでおく（一覧に無ければ今の場所のまま）
+                self.sfx.play(Se::Decide);
+                if !self.songs.reveal(&path) {
+                    log::info!("not in the song list: {}", path.display());
+                }
+                self.close_then(AfterClose::Select, Duration::ZERO);
+            }
+            RecordsAction::Back => {
+                self.sfx.play(Se::Cancel);
+                let next = match from {
+                    RecordsFrom::Title => AfterClose::Title,
+                    RecordsFrom::Select => AfterClose::Select,
+                };
+                self.close_then(next, Duration::ZERO);
+            }
         }
     }
 
@@ -1458,11 +1655,14 @@ impl App {
         let Screen::Play(p, view) = &self.screen else {
             return;
         };
-        let finish = view.finish(p, at_ms.unwrap_or_else(|| p.now_ms()));
+        let end_ms = at_ms.unwrap_or_else(|| p.now_ms());
+        let finish = view.finish(p, end_ms);
         let practice = p.practice.is_some();
         // Esc でやめたときも結果は出す（記録は「最後まで遊んでいない」として残す）
         let cleared = p.finished();
-        let session = self.history.save(p, Some(play_score(&finish, cleared)));
+        let session = self
+            .history
+            .save(p, Some(play_score(&finish, cleared)), end_ms);
         let stats = self.history.chart_stats();
         // New Record と前回のベストのバーは、今回より前のプレイと比べる。自動で叩くレーンがあるときと、
         // 早送りか巻き戻しをしたときは比べない
@@ -1525,7 +1725,7 @@ impl App {
         if let Screen::Play(p, view) = &self.screen {
             let now = view.frozen_ms().unwrap_or_else(|| p.now_ms());
             let finish = view.finish(p, now);
-            self.history.save(p, Some(play_score(&finish, false)));
+            self.history.save(p, Some(play_score(&finish, false)), now);
             self.songs.set_stats(self.history.chart_stats());
         }
     }
@@ -1539,6 +1739,13 @@ impl App {
 
     /// 届いた MIDI をすべて処理し、時間を進める
     fn pump(&mut self) {
+        // ほかの DTXMania を探し終えたら、まだ引き継ぐ画面を見せていなければタイトルで知らせる
+        if self.import.poll() {
+            let first = self.import.sources().first().map(nx::Source::title);
+            if !self.config.import_offered {
+                self.title.set_found(first);
+            }
+        }
         // 曲を探し終えたら、譜面の隣の NX の score.ini をまだなら記録に引き継ぐ
         if self.songs.poll() {
             if self.history.import_nx_scores(&self.songs.library) > 0 {
@@ -1765,6 +1972,14 @@ impl App {
                 self.sfx.stop_title();
                 self.close_then(AfterClose::Select, Duration::ZERO);
             }
+            Some(TitleItem::Records) => {
+                self.sfx.play(Se::Decide);
+                self.sfx.stop_title();
+                self.close_then(
+                    AfterClose::Records(RecordsFrom::Title, None),
+                    Duration::ZERO,
+                );
+            }
             Some(TitleItem::Config) => {
                 self.sfx.play(Se::Decide);
                 self.sfx.stop_title();
@@ -1837,6 +2052,7 @@ impl App {
             &self.monitor_list,
         );
         info.timing = self.timing.as_ref().map(SongTiming::info);
+        info.import = Some(self.import.info());
         let rows = config_view::rows(view.page(), &info);
         let r = view.input(input, &rows);
         self.config_response(r);
@@ -2160,6 +2376,14 @@ impl App {
                 self.quick = None;
                 self.open_replay_list();
             }
+            ConfigAction::Run(ItemId::SongRecords) => {
+                self.quick = None;
+                let chart = self.songs.selected_chart();
+                self.close_then(
+                    AfterClose::Records(RecordsFrom::Select, chart),
+                    Duration::ZERO,
+                );
+            }
             ConfigAction::Run(ItemId::AllSettings) => {
                 self.quick = None;
                 self.sfx.preview(None);
@@ -2283,6 +2507,24 @@ impl App {
                     self.refresh_pads();
                 }
             }
+            ItemId::ImportMidi(i) => {
+                if let Some(m) = self.import.plan.as_mut().and_then(|p| p.midi.get_mut(i)) {
+                    m.on = v != 0;
+                }
+            }
+            ItemId::ImportMidiTarget(i) => {
+                if let Some(p) = self.import.plan.as_mut() {
+                    let last = p.targets.len().saturating_sub(1) as i64;
+                    if let Some(m) = p.midi.get_mut(i) {
+                        m.target = v.clamp(0, last) as usize;
+                    }
+                }
+            }
+            ItemId::ImportItem(i) => {
+                if let Some(it) = self.import.plan.as_mut().and_then(|p| p.items.get_mut(i)) {
+                    it.on = v != 0;
+                }
+            }
             _ => {}
         }
     }
@@ -2375,6 +2617,44 @@ impl App {
                     ));
                 }
             }
+            ItemId::ImportSource(i) => {
+                if let Some(source) = self.import.sources().get(i).cloned() {
+                    // 探したときから変わっているかもしれないので読み直す
+                    match nx::source::read(&source.found) {
+                        Ok(s) => self.import_open(&s),
+                        Err(_) => self.import_from_path(&source.found.config.clone()),
+                    }
+                }
+            }
+            ItemId::ImportPickFile => {
+                if let Some(path) = ui::pick_file(
+                    t(
+                        "Choose a DTXMania Shortcut, exe, or Config.ini",
+                        "DTXMania のショートカット・exe・Config.ini を選ぶ",
+                    ),
+                    ("DTXMania", &["lnk", "exe", "ini", "xml", "desktop"]),
+                ) {
+                    self.import_from_path(&path);
+                }
+            }
+            ItemId::ImportPickFolder => {
+                if let Some(dir) =
+                    ui::pick_folder(t("Choose the DTXMania Folder", "DTXMania のフォルダを選ぶ"))
+                {
+                    self.import_from_path(&dir);
+                }
+            }
+            ItemId::ImportSearch => {
+                self.import.error = None;
+                self.import.search = Some(takeover::Search::start());
+                // 自分で探し直したので、タイトルで知らせなくてよい
+                if !self.config.import_offered {
+                    self.config.import_offered = true;
+                    self.config.save();
+                }
+            }
+            ItemId::ImportApply => self.import_apply(),
+            ItemId::ImportUndo => self.import_undo(),
             ItemId::ResetPads => {
                 inputs::reset_all(&mut self.config);
                 self.config.save();
@@ -2441,6 +2721,18 @@ impl App {
                 self.on_play_key(code);
             }
             Screen::Select => self.on_select_key(code),
+            Screen::Records(_) => {
+                let input = match code {
+                    KeyCode::ArrowUp => RecordsInput::Up,
+                    KeyCode::ArrowDown => RecordsInput::Down,
+                    KeyCode::ArrowLeft => RecordsInput::Left,
+                    KeyCode::ArrowRight => RecordsInput::Right,
+                    KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space => RecordsInput::Decide,
+                    KeyCode::Escape | KeyCode::Backspace => RecordsInput::Cancel,
+                    _ => return,
+                };
+                self.records_input(input);
+            }
             Screen::Result(_, view) => match code {
                 KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Escape => {
                     self.result_action(ui::ResultAction::Back);
@@ -2765,6 +3057,19 @@ impl App {
                 self.config_input(input);
             }
             Screen::End(_) => {}
+            // 画面の下の帯に出す役目（`RecordsView::hints`）。足のパッドは使わない
+            Screen::Records(_) => {
+                let input = match lane {
+                    DrumLane::HT => RecordsInput::Up,
+                    DrumLane::LT => RecordsInput::Down,
+                    DrumLane::SD => RecordsInput::Left,
+                    DrumLane::FT => RecordsInput::Right,
+                    DrumLane::CY => RecordsInput::Decide,
+                    DrumLane::LC => RecordsInput::Cancel,
+                    _ => return,
+                };
+                self.records_input(input);
+            }
             Screen::Select => {
                 if self.replays.is_some() {
                     let input = match lane {
@@ -3011,9 +3316,22 @@ impl App {
             }
             return;
         }
+        // 他の DTXMania から引き継ぐ画面なら、ショートカットやフォルダから読む
+        if self.on_import_page() {
+            self.import_from_path(&path);
+            return;
+        }
         log::info!("dropped: {}", path.display());
         self.adder
             .add(path, self.config.add_dest(), self.config.song_dirs.clone());
+    }
+
+    /// 他の DTXMania から引き継ぐページを開いている（ドロップは曲の追加でなく設定を読む）
+    fn on_import_page(&self) -> bool {
+        matches!(&self.screen, Screen::Config(view, _) if matches!(
+            view.page(),
+            config_view::Page::Import | config_view::Page::ImportItems
+        ))
     }
 
     /// 写し終えたものを受け取る。全部終わったら曲を探し直し、知らせを出す
@@ -3247,7 +3565,11 @@ impl App {
     /// （演奏中と読み込み中は札を出さない。終わったら知らせる）
     fn draw_adding(&mut self, c: &Canvas) {
         if !self.drop_hover.is_empty() {
-            drop_view::hover(c, &mut self.gfx, &self.drop_hover, &self.config.add_dest());
+            if self.on_import_page() {
+                drop_view::hover_import(c, &mut self.gfx, &self.drop_hover);
+            } else {
+                drop_view::hover(c, &mut self.gfx, &self.drop_hover, &self.config.add_dest());
+            }
             return;
         }
         let Some(w) = self.adder.working().cloned() else {
@@ -3260,6 +3582,8 @@ impl App {
                 Corner::BottomRight(1264.0, if updating { 683.0 } else { 717.0 })
             }
             Screen::Result(..) => Corner::TopRight(1264.0, if updating { 50.0 } else { 16.0 }),
+            // 記録の画面は更新の印を出さないので、いつも帯の端
+            Screen::Records(_) => Corner::BottomRight(1264.0, 717.0),
             Screen::Title | Screen::End(_) => Corner::BottomRight(1264.0, 704.0),
             Screen::Loading(_) | Screen::Play(..) | Screen::Replay(_) => return,
         };
@@ -3296,6 +3620,7 @@ impl App {
                     &self.monitor_list,
                 );
                 info.timing = self.timing.as_ref().map(SongTiming::info);
+                info.import = Some(self.import.info());
                 let rows = config_view::rows(view.page(), &info);
                 view.draw(&c, &mut self.gfx, &rows, &info);
                 if let Some(m) = &self.message {
@@ -3308,6 +3633,13 @@ impl App {
                 let c = Canvas::new(&painter, ctx.content_rect());
                 self.gfx.begin(&c, ctx.pixels_per_point());
                 e.draw(&c, &mut self.gfx);
+            }
+            Screen::Records(view) => {
+                let ctx = ui.ctx().clone();
+                let painter = ctx.layer_painter(egui::LayerId::background());
+                let c = Canvas::new(&painter, ctx.content_rect());
+                self.gfx.begin(&c, ctx.pixels_per_point());
+                view.draw(&c, &mut self.gfx);
             }
             Screen::Select => {
                 let ctx = ui.ctx().clone();
@@ -3469,6 +3801,7 @@ fn config_info<'a>(
         play: None,
         timing: None,
         monitors,
+        import: None,
     }
 }
 

@@ -402,6 +402,14 @@ pub fn pick_folder(title: &str) -> Option<PathBuf> {
     rfd::FileDialog::new().set_title(title).pick_folder()
 }
 
+/// ファイルを選ぶ（OS のダイアログ）。`filter` は名前と拡張子
+pub fn pick_file(title: &str, filter: (&str, &[&str])) -> Option<PathBuf> {
+    rfd::FileDialog::new()
+        .set_title(title)
+        .add_filter(filter.0, filter.1)
+        .pick_file()
+}
+
 /// 演奏の画面で、レーンの下に短い知らせを出す
 pub fn play_toast(ctx: &egui::Context, c: &Canvas, msg: &str, (x, y): (f32, f32)) {
     // 文ごとに別の Id にする（egui は Area の大きさを Id ごとに覚えるので、同じ Id だと

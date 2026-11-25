@@ -19,7 +19,7 @@ DTXmaniaNXT の画面の画像と効果音です。リリースのビルドで�
 `Graphics/` の次の 23 ファイルは、DTXmaniaNXT のために作ったものです。
 
 - 背景: `1_background.jpg`、`2_background.jpg`、`5_background.jpg`、`6_background.jpg`、`7_background.jpg`、`8_background.jpg`、`9_background.jpg`
-- タイトルのロゴとメニューの板: `2_background.png`
+- タイトルのロゴとメニューの板: `2_background.png`（板はあとで `2_menu_plate.png` に分けた。アプリがメニューの行の数に合わせて縦に伸ばして描く）
 - ジャケットの代わり: `5_preimage default.png`、`5_preimage backbox.png`、`5_preimage random.png`
 - 演奏: `7_shutter.png`、`7_stage_failed.jpg`
 - 結果のランク: `8_rankSS.png`、`8_rankS.png`、`8_rankA.png`、`8_rankB.png`、`8_rankC.png`、`8_rankD.png`、`8_rankE.png`

@@ -2,7 +2,10 @@
 //! 結果の画面に出す苦手な小節、練習でクリアした区間の克服、叩き方のくせを、直近の記録から出す。
 //! 記録が開けないときは残さずに遊べるようにし、苦手な小節は今回のプレイだけから出す。
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+
+use dtx::TempoMap;
 
 use engine::analysis::{
     HISTORY_PLAYS, NoteResult, Tendency, measure_weakness, overcome, play_section_score,
@@ -12,12 +15,13 @@ use engine::lag::{Advice, LagSample, advise};
 use engine::practice::Section;
 use library::Stats;
 use records::{
-    BestScore, ChartKey, ClearRecord, PlayEntry, PlayScore, PlayTakes, Records, SessionKind,
-    SessionLag,
+    BestScore, ChartKey, ChartProgress, ClearRecord, PlayEntry, PlayScore, PlayTakes, PlayTime,
+    Records, SessionKind, SessionLag, time_kind,
 };
 
 use crate::chart_picture::Marks;
 use crate::game::{Play, WeakMap};
+use crate::progress::estimate_ms;
 use crate::result_view::Rank;
 
 /// 結果の画面に出す苦手フレーズの数
@@ -113,27 +117,34 @@ impl History {
         Self { records }
     }
 
-    /// 遊んだ記録を残す。`score` は普通のプレイのスコアと達成率（演奏の画面が数えたもの）。
-    /// 返すのはセッションの番号（残せなかったら None）
-    pub fn save(&mut self, play: &Play, score: Option<PlayScore>) -> Option<i64> {
-        let (Some(records), Some(mut session)) = (self.records.as_mut(), play.session()) else {
-            return None;
-        };
-        // 自動で叩くレーンがあるプレイは、ベストの記録（スコア）に入れない
-        if play.practice.is_none() && !play.has_auto() {
-            session.score = score;
+    /// 遊んだ記録と、遊んだ時間を残す。`score` は普通のプレイのスコアと達成率（演奏の画面が数えたもの）、
+    /// `end_ms` はやめた曲の時刻。返すのはセッションの番号（残せなかったら None）。
+    /// 早送りしたプレイはセッションを残さないが、叩いていれば時間は残す
+    pub fn save(&mut self, play: &Play, score: Option<PlayScore>, end_ms: f64) -> Option<i64> {
+        let records = self.records.as_mut()?;
+        let id = play.session().and_then(|mut session| {
+            // 自動で叩くレーンがあるプレイは、ベストの記録（スコア）に入れない
+            if play.practice.is_none() && !play.has_auto() {
+                session.score = score;
+            }
+            let path = play.path.to_string_lossy();
+            let chart = ChartKey {
+                path: &path,
+                title: &play.title,
+                artist: &play.artist,
+                hash: play.chart_hash,
+            };
+            records
+                .save(&chart, &session)
+                .map_err(|e| log::warn!("cannot save the record: {e}"))
+                .ok()
+        });
+        if let Some(ms) = play.played_ms(end_ms)
+            && let Err(e) = records.add_play_time(play.time_kind, play.started_at, ms, id)
+        {
+            log::warn!("cannot save the play time: {e}");
         }
-        let path = play.path.to_string_lossy();
-        let chart = ChartKey {
-            path: &path,
-            title: &play.title,
-            artist: &play.artist,
-            hash: play.chart_hash,
-        };
-        records
-            .save(&chart, &session)
-            .map_err(|e| log::warn!("cannot save the record: {e}"))
-            .ok()
+        id
     }
 
     /// 曲の一覧の譜面の隣にある NX の score.ini を、まだなら記録に引き継ぐ。引き継いだ譜面の数を返す
@@ -452,6 +463,18 @@ impl History {
         checks
     }
 
+    /// 上達の記録に出す、遊んだ時間と譜面ごとの記録。記録が読めなければ None。
+    /// 遊んだ時間の表を足す前のセッションは、ここで譜面から長さを見積もって入れる（1 度だけ）
+    pub fn progress(&mut self) -> Option<(Vec<PlayTime>, Vec<ChartProgress>)> {
+        let records = self.records.as_mut()?;
+        fill_play_times(records);
+        let read =
+            || -> records::Result<_> { Ok((records.play_times(None)?, records.chart_progress()?)) };
+        read()
+            .map_err(|e| log::warn!("cannot read the progress: {e}"))
+            .ok()
+    }
+
     /// すべての曲を通した叩き方のくせ（等速で叩いた直近の記録から）
     pub fn tendencies(&self) -> Vec<Tendency> {
         let Some(r) = &self.records else {
@@ -464,6 +487,40 @@ impl History {
                 Vec::new()
             }
         }
+    }
+}
+
+/// 遊んだ時間の記録が無いセッションに、譜面から見積もった長さを入れる。
+/// 譜面が読めなければ 0 を入れる（次に開いたときにまた読みに行かないように）
+fn fill_play_times(records: &mut Records) {
+    let sessions = match records.untimed_sessions() {
+        Ok(s) if !s.is_empty() => s,
+        Ok(_) => return,
+        Err(e) => {
+            log::warn!("cannot read the sessions: {e}");
+            return;
+        }
+    };
+    let mut tempos: HashMap<String, Option<TempoMap>> = HashMap::new();
+    let rows: Vec<(&str, i64, i64, Option<i64>)> = sessions
+        .iter()
+        .map(|s| {
+            let tempo = tempos.entry(s.chart_path.clone()).or_insert_with(|| {
+                std::fs::read(&s.chart_path)
+                    .ok()
+                    .map(|bytes| TempoMap::build(&dtx::load(&bytes)))
+            });
+            let ms = tempo.as_ref().map_or(0, |t| estimate_ms(s, t));
+            let kind = match s.kind {
+                SessionKind::Practice => time_kind::PRACTICE,
+                _ => time_kind::PLAY,
+            };
+            (kind, s.started_at, ms, Some(s.id))
+        })
+        .collect();
+    match records.add_play_times(&rows) {
+        Ok(()) => log::info!("estimated the play time of {} old sessions", rows.len()),
+        Err(e) => log::warn!("cannot save the play times: {e}"),
     }
 }
 

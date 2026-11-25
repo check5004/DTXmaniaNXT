@@ -240,6 +240,30 @@ pub fn chevron(c: &Canvas, cx: f32, cy: f32, size: f32, width: f32, color: Color
     ));
 }
 
+/// するかしないかの印（左上ではなく真ん中の左端を `x`, `cy` で。`sel` は選んでいる行）
+pub fn checkbox(c: &Canvas, x: f32, cy: f32, size: f32, on: bool, sel: bool) {
+    let y = cy - size / 2.0;
+    if on {
+        round_fill(c, x, y, size, size, 3.0, ORANGE);
+        let pts = vec![
+            c.pos(x + size * 0.24, cy),
+            c.pos(x + size * 0.43, cy + size * 0.22),
+            c.pos(x + size * 0.78, cy - size * 0.24),
+        ];
+        c.painter().add(PathShape::line(
+            pts,
+            PathStroke::new(2.0 * c.scale(), Color32::from_rgb(30, 18, 6)),
+        ));
+    } else {
+        let line = if sel {
+            ORANGE
+        } else {
+            Color32::from_rgb(110, 106, 124)
+        };
+        round_frame(c, x, y, size, size, 3.0, 2.0, line);
+    }
+}
+
 /// 点
 pub fn dot(c: &Canvas, cx: f32, cy: f32, r: f32, color: Color32) {
     c.painter()

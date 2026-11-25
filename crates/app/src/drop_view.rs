@@ -96,6 +96,44 @@ pub fn hover(c: &Canvas, g: &mut Gfx, files: &[PathBuf], dest: &Path) {
     }
 }
 
+/// 他の DTXMania から引き継ぐ画面で、ファイルを重ねているあいだの案内（曲は追加しない）
+pub fn hover_import(c: &Canvas, g: &mut Gfx, files: &[PathBuf]) {
+    c.cover(Color32::from_rgba_unmultiplied(3, 3, 9, 200));
+    dashed_round(c, 90.0, 70.0, 1100.0, 580.0, 26.0);
+    tray(c, 640.0, 250.0, 56.0);
+    let w = 1000.0;
+    ui::text_center(
+        c,
+        g,
+        t("Drop to Read Its Settings", "ドロップして設定を読む"),
+        640.0,
+        330.0,
+        &ui::bold(46.0, Color32::WHITE),
+        w,
+    );
+    ui::text_center(
+        c,
+        g,
+        &files_label(files),
+        640.0,
+        405.0,
+        &ui::plain(24.0, SUB),
+        w,
+    );
+    ui::text_center(
+        c,
+        g,
+        t(
+            "A DTXMania shortcut, exe, settings file, or folder",
+            "DTXMania のショートカット・exe・設定のファイル・フォルダ",
+        ),
+        640.0,
+        462.0,
+        &ui::plain(18.0, HINT),
+        w,
+    );
+}
+
 /// 角の丸い点線の枠
 fn dashed_round(c: &Canvas, x: f32, y: f32, w: f32, h: f32, r: f32) {
     let corner = |cx: f32, cy: f32, from: f32| {

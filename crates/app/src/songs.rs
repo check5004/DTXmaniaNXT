@@ -340,6 +340,16 @@ impl SongList {
             .unwrap_or_default()
     }
 
+    /// 譜面 `path` の難易度の番号（0〜4）と、その譜面。一覧に無ければ None
+    pub fn find_chart(&self, path: &Path) -> Option<(usize, &library::SongChart)> {
+        self.library.all_songs().into_iter().find_map(|s| {
+            s.charts
+                .iter()
+                .enumerate()
+                .find_map(|(i, c)| c.as_ref().filter(|c| c.path == path).map(|c| (i, c)))
+        })
+    }
+
     /// BOX なら入り、`<< BACK` なら出て、曲なら遊ぶ譜面を返す。`< RANDOM SELECT >` は
     /// この BOX の中（下の BOX も含む）から 1 曲選ぶ
     pub fn enter(&mut self) -> Option<PathBuf> {
@@ -522,6 +532,8 @@ mod tests {
         assert!(l.reveal(Path::new("c2.dtx")));
         assert!(l.breadcrumbs().is_empty());
         assert_eq!(l.selected_song().unwrap().title, "c");
+        let (level, chart) = l.find_chart(Path::new("a3.dtx")).unwrap();
+        assert_eq!((level, chart.label.as_str()), (3, "L3"));
         assert!(!l.reveal(Path::new("nowhere.dtx")));
         assert_eq!(l.selected_song().unwrap().title, "c");
     }

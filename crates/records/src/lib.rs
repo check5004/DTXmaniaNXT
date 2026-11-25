@@ -12,6 +12,9 @@ use engine::input::Articulation;
 use engine::judge::{Judgement, Tally};
 use rusqlite::{Connection, Transaction, params};
 
+mod progress;
+
+pub use progress::{ChartProgress, PlayTime, ProgressPlay, UntimedLap, UntimedSession, time_kind};
 pub use rusqlite::Error;
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -141,6 +144,22 @@ const MIGRATIONS: &[&str] = &[
         -- 変えた時刻（UNIX 秒）
         updated_at INTEGER NOT NULL
     );
+    ",
+    // 6: 遊んだ時間（上達の記録の、日ごとの練習時間に使う）
+    "
+    CREATE TABLE play_time (
+        id INTEGER PRIMARY KEY,
+        -- 'play'（曲を遊んだ）・'practice'（区間練習）・'drill'（基礎練習）など
+        kind TEXT NOT NULL,
+        -- 始めた時刻（UNIX 秒）
+        started_at INTEGER NOT NULL,
+        -- 叩いていた時間（ミリ秒。一時停止のあいだは入れない）
+        played_ms INTEGER NOT NULL,
+        -- 一緒に残したセッション（記録に残さない遊びは NULL）
+        session_id INTEGER REFERENCES sessions(id)
+    );
+    CREATE INDEX play_time_by_start ON play_time(started_at);
+    CREATE INDEX play_time_by_session ON play_time(session_id);
     ",
 ];
 

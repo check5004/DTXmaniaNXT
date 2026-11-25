@@ -1,5 +1,6 @@
 //! タイトルの画面（上流 `CStageTitle`）と、終わるときの画面（上流 `CStageEnd`）。
-//! スキンの 2_ の画像で、背景とロゴとメニュー（GAME START / CONFIGURATION / EXIT）を出す。
+//! スキンの 2_ の画像で、背景とロゴとメニュー（GAME START / CONFIGURATION / EXIT と、このアプリで足した Records）を出す。
+//! メニューの板（2_menu_plate.png）は行の数に合わせて真ん中を縦に伸ばし、下の端をそろえて上へ広げる。
 //! 入るときは白からフェードし、決めたら App がシャッター（`shutter`）を閉じて次の画面へ移る（NX v2.0）。
 //! 曲を探しているあいだは左上に「曲を探しています」の画像を明滅させる（上流 `CActEnumSongs`）。
 //! 新しい版があるときだけ、メニューの下に「更新」の行を足す（このアプリだけ。見本の案 A、2026-11-22）。
@@ -18,11 +19,22 @@ use crate::text::Style;
 use crate::update::Status;
 use crate::update_view::{self, Corner};
 
-/// メニューの 1 行の高さと幅、左上（上流 `MENU_H` など）
+/// メニューの 1 行の高さと幅、左（上流 `MENU_H` など）
 const MENU_H: f32 = 39.0;
 const MENU_W: f32 = 227.0;
 const MENU_X: f32 = 506.0;
-const MENU_Y: f32 = 513.0;
+
+/// メニューの板の左と下の端（行が増えたら上へ伸ばす。3 行のときは上流と同じく行が y 513 から）、
+/// 板の上と下の、行の外の高さ
+const PLATE_X: f32 = 458.0;
+const PLATE_BOTTOM: f32 = 648.0;
+const PLATE_TOP_PAD: f32 = 19.0;
+const PLATE_BOTTOM_PAD: f32 = 18.0;
+/// 板の絵の上と下の、伸ばさない高さ（釘とスプレーの縁）
+const PLATE_CAP: f32 = 52.0;
+
+/// メニューの 1 行目の上の端
+const MENU_Y: f32 = PLATE_BOTTOM - PLATE_BOTTOM_PAD - TitleItem::MENU.len() as f32 * MENU_H;
 
 /// 白いフェードの長さ（上流 `CActFIFOWhite`：0〜100 を 5 ミリ秒ずつ）
 const FADE: Duration = Duration::from_millis(500);
@@ -47,6 +59,8 @@ const END_MIN: Duration = Duration::from_millis(1000);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TitleItem {
     GameStart,
+    /// 上達の記録（このアプリで足した行）
+    Records,
     Config,
     Exit,
     /// 新しい版があるときだけ出る行（落とす、入れ替える）
@@ -54,17 +68,29 @@ pub enum TitleItem {
 }
 
 impl TitleItem {
-    const ALL: [TitleItem; 4] = [
+    /// 板に並べる行（上から）。「更新」の行は板の下に別に出す
+    const MENU: [TitleItem; 4] = [
         TitleItem::GameStart,
+        TitleItem::Records,
         TitleItem::Config,
         TitleItem::Exit,
-        TitleItem::Update,
     ];
+
+    /// 2_menu.png の段（0 Start、1 Options（描かない）、2 Config、3 Quit、4 カーソル、5 光、6 Drills、7 Records）
+    fn sprite_row(self) -> Option<usize> {
+        match self {
+            TitleItem::GameStart => Some(0),
+            TitleItem::Config => Some(2),
+            TitleItem::Exit => Some(3),
+            TitleItem::Records => Some(7),
+            TitleItem::Update => None,
+        }
+    }
 }
 
 /// メニューの行の上の端（カーソルを置く所）。「更新」の行は板の下に離して置く
 fn row_y(i: usize) -> f32 {
-    if i < 3 {
+    if i < TitleItem::MENU.len() {
         MENU_Y + i as f32 * MENU_H
     } else {
         UPDATE_Y + (UPDATE_H - MENU_H) / 2.0
@@ -89,6 +115,8 @@ pub struct TitleView {
     updated: Option<(String, String, Option<Instant>)>,
     /// 「更新」の行の NEW の明滅と、回る輪の起点
     since: Instant,
+    /// ほかの DTXMania を見つけた（その名前。設定を開くと引き継ぐ画面から始まる）
+    found: Option<String>,
 }
 
 impl TitleView {
@@ -104,12 +132,13 @@ impl TitleView {
             update: Status::Idle,
             updated: None,
             since: now,
+            found: None,
         }
     }
 
-    /// 出している行の数（新しい版があれば「更新」の行で 4）
+    /// 出している行の数（新しい版があれば「更新」の行で 1 つ多い）
     fn len(&self) -> usize {
-        if self.update == Status::Idle { 3 } else { 4 }
+        TitleItem::MENU.len() + usize::from(self.update != Status::Idle)
     }
 
     /// 画面に入り直す（白からのフェードから。カーソルはそのまま）
@@ -154,7 +183,10 @@ impl TitleView {
 
     /// 選んでいる項目
     pub fn selected(&self) -> TitleItem {
-        TitleItem::ALL[self.cursor]
+        TitleItem::MENU
+            .get(self.cursor)
+            .copied()
+            .unwrap_or(TitleItem::Update)
     }
 
     /// 決める（v2 と同じく、EXIT のほかは App がシャッターを閉じてから移る）。
@@ -188,6 +220,16 @@ impl TitleView {
         }
     }
 
+    /// ほかの DTXMania を見つけたことを知らせる（`None` で消す）
+    pub fn set_found(&mut self, title: Option<String>) {
+        self.found = title;
+    }
+
+    /// ほかの DTXMania を見つけたと知らせている
+    pub fn found(&self) -> bool {
+        self.found.is_some()
+    }
+
     /// 更新して起動し直したことを知らせる（`previous` は前の版。分からなければ空）
     pub fn set_updated(&mut self, current: &str, previous: String) {
         self.updated = Some((current.to_owned(), previous, None));
@@ -208,7 +250,8 @@ impl TitleView {
         if let Some(t) = g.texts.get(version, &style) {
             t.draw(c, 0.0, 0.0, 1.0, 1.0);
         }
-        if self.len() > 3 {
+        draw_plate(c, g);
+        if self.len() > TitleItem::MENU.len() {
             self.draw_update_row(c);
         }
         if let Some(t) = g.skin.tex("Graphics/2_menu.png") {
@@ -216,7 +259,8 @@ impl TitleView {
             if let Some((dir, _, _)) = self.moving {
                 let v = self.move_value();
                 // 上へ動いたなら下から、下へ動いたなら上から来る（前の行の位置から今の行へ）
-                let from = row_y((self.cursor as i32 - dir).clamp(0, 3) as usize);
+                let last = self.len() as i32 - 1;
+                let from = row_y((self.cursor as i32 - dir).clamp(0, last) as usize);
                 y += ((from - y) as f64 * ((PI * v / 100.0).cos() + 1.0) / 2.0) as f32;
             }
             // カーソルの光（上流 ctカーソルフラッシュ用：0〜700 を 5 ミリ秒ずつ回し、100 から始まる）
@@ -239,17 +283,16 @@ impl TitleView {
             }
             c.part(&t, MENU_X, y, src(0.0, MENU_H * 4.0, MENU_W, MENU_H));
             // 上流と同じく OPTION の行は描かない
-            c.part(&t, MENU_X, MENU_Y, src(0.0, 0.0, MENU_W, MENU_H));
-            c.part(
-                &t,
-                MENU_X,
-                MENU_Y + MENU_H,
-                src(0.0, MENU_H * 2.0, MENU_W, MENU_H * 2.0),
-            );
+            for (i, item) in TitleItem::MENU.iter().enumerate() {
+                if let Some(row) = item.sprite_row() {
+                    let s = src(0.0, MENU_H * row as f32, MENU_W, MENU_H);
+                    c.part(&t, MENU_X, row_y(i), s);
+                }
+            }
         } else {
             draw_plain_menu(c, g, self.cursor);
         }
-        if self.len() > 3 {
+        if self.len() > TitleItem::MENU.len() {
             self.draw_update_label(c, g);
         }
         ui::legend(c, g, &self.hints());
@@ -271,13 +314,18 @@ impl TitleView {
                 self.since,
             );
         }
+        let mut updated_shown = false;
         if let Some((current, previous, shown)) = &mut self.updated {
             let t = shown
                 .get_or_insert_with(Instant::now)
                 .elapsed()
                 .as_secs_f32();
             let alpha = ((UPDATED_FOR - t) / UPDATED_FADE).clamp(0.0, 1.0);
+            updated_shown = alpha > 0.0;
             update_view::updated(c, g, current, previous, alpha);
+        }
+        if let Some(found) = &self.found {
+            update_view::found(c, g, found, updated_shown);
         }
         // 白からのフェード（出ていくときは v2 と同じくシャッターなので、白へは消さない）
         let a = 1.0 - (self.entered.elapsed().as_secs_f32() / FADE.as_secs_f32()).min(1.0);
@@ -295,6 +343,7 @@ impl TitleView {
             vec![(&[Pad::HT], t("Up", "上")), (&[Pad::LT], t("Down", "下"))];
         let decide = match self.selected() {
             TitleItem::GameStart => Some(t("Start (Enter)", "はじめる（Enter）")),
+            TitleItem::Records => Some(t("View Records (Enter)", "記録を見る（Enter）")),
             TitleItem::Config => Some(t("Open Settings (Enter)", "設定を開く（Enter）")),
             TitleItem::Exit => Some(t("Quit (Enter)", "終わる（Enter）")),
             TitleItem::Update => match &self.update {
@@ -341,7 +390,7 @@ impl TitleView {
 
     /// 「更新」の行の文字（ようすと、選んでいるかで変わる）
     fn draw_update_label(&self, c: &Canvas, g: &mut Gfx) {
-        let selected = self.cursor == 3;
+        let selected = self.selected() == TitleItem::Update;
         let (label, new) = match &self.update {
             Status::Idle => return,
             Status::Available(v) if selected => (tf!("Update to v{v}", "v{v} に更新する"), false),
@@ -398,6 +447,31 @@ impl TitleView {
     }
 }
 
+/// メニューの板。上と下（釘とスプレーの縁）はそのまま、真ん中を行の数に合わせて縦に伸ばす
+fn draw_plate(c: &Canvas, g: &mut Gfx) {
+    let Some(p) = g.skin.tex_optional("Graphics/2_menu_plate.png") else {
+        return;
+    };
+    let h = PLATE_TOP_PAD + TitleItem::MENU.len() as f32 * MENU_H + PLATE_BOTTOM_PAD;
+    let top = PLATE_BOTTOM - h;
+    let cap = PLATE_CAP.min(p.h / 2.0);
+    let mid = p.h - cap * 2.0;
+    c.part(&p, PLATE_X, top, src(0.0, 0.0, p.w, cap));
+    if mid > 0.0 {
+        c.draw_opt(
+            &p,
+            PLATE_X,
+            top + cap,
+            Opt {
+                src: Some(src(0.0, cap, p.w, mid)),
+                sy: (h - cap * 2.0).max(0.0) / mid,
+                ..Default::default()
+            },
+        );
+    }
+    c.part(&p, PLATE_X, top + h - cap, src(0.0, p.h - cap, p.w, cap));
+}
+
 /// 曲を探している印（上流 `CActEnumSongs`：0〜100 を 17 ミリ秒ずつ回し、濃さを sin で揺らす）
 pub fn draw_scanning(c: &Canvas, g: &mut Gfx, since: Instant) {
     let Some(t) = g
@@ -423,6 +497,7 @@ pub fn draw_scanning(c: &Canvas, g: &mut Gfx, since: Instant) {
 fn draw_plain_menu(c: &Canvas, g: &mut Gfx, cursor: usize) {
     for (i, name) in [
         t("Start", "はじめる"),
+        t("Records", "記録"),
         t("Settings", "設定"),
         t("Quit", "終わる"),
     ]
@@ -480,13 +555,19 @@ impl Ending {
 mod tests {
     use super::*;
 
+    /// カーソルを一番下の行（Quit）まで動かす
+    fn to_last_row(v: &mut TitleView) {
+        for _ in 1..TitleItem::MENU.len() {
+            assert!(v.move_by(1));
+        }
+    }
+
     #[test]
     fn cursor_stops_at_the_ends() {
         let mut v = TitleView::new();
         v.entered -= FADE;
         assert!(!v.move_by(-1));
-        assert!(v.move_by(1));
-        assert!(v.move_by(1));
+        to_last_row(&mut v);
         assert_eq!(v.selected(), TitleItem::Exit);
         assert!(!v.move_by(1));
     }
@@ -495,8 +576,7 @@ mod tests {
     fn the_update_row_appears_only_with_a_new_version() {
         let mut v = TitleView::new();
         v.entered -= FADE;
-        assert!(v.move_by(1));
-        assert!(v.move_by(1));
+        to_last_row(&mut v);
         assert!(!v.move_by(1));
         v.set_update(&Status::Available("9.9.9".to_owned()));
         assert!(v.move_by(1));
@@ -511,9 +591,21 @@ mod tests {
 
     #[test]
     fn the_cursor_slides_from_the_previous_row() {
+        let n = TitleItem::MENU.len();
         assert_eq!(row_y(1) - row_y(0), MENU_H);
         // 「更新」の行は板の下に離れている
-        assert!(row_y(3) > row_y(2) + MENU_H);
+        assert!(row_y(n) > row_y(n - 1) + MENU_H);
+    }
+
+    #[test]
+    fn the_plate_grows_upward_with_the_rows() {
+        let n = TitleItem::MENU.len() as f32;
+        // 行の下の端と板の下の端は、行の数によらず同じ所
+        assert_eq!(MENU_Y + n * MENU_H + PLATE_BOTTOM_PAD, PLATE_BOTTOM);
+        // 板はロゴのしずくより下（行を足しすぎたら気づけるように）
+        const { assert!(MENU_Y - PLATE_TOP_PAD >= 410.0) };
+        // Records の行は 2_menu.png の 8 段目
+        assert_eq!(TitleItem::Records.sprite_row(), Some(7));
     }
 
     #[test]
@@ -527,6 +619,8 @@ mod tests {
             names(&v),
             ["上", "下", "はじめる（Enter）", "終わる（Esc）"]
         );
+        v.move_by(1);
+        assert_eq!(names(&v)[2], "記録を見る（Enter）");
         v.move_by(1);
         assert_eq!(names(&v)[2], "設定を開く（Enter）");
         v.move_by(1);
