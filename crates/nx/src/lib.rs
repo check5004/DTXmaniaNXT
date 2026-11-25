@@ -19,7 +19,7 @@ mod skin;
 pub mod source;
 mod xml;
 
-pub use config::{KeyAssign, NxConfig};
+pub use config::{KeyAssign, NxConfig, lane_of, parse_assigns};
 pub use ini::{Ini, Section};
 pub use locate::{Format, Found, LocateError, discover, locate};
 pub use score_ini::{ScoreIni, ScoreRecord};

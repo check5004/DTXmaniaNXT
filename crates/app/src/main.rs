@@ -54,6 +54,7 @@ mod shutter;
 mod skin;
 mod songs;
 mod stretch;
+mod takeover;
 mod text;
 mod time;
 mod title_view;

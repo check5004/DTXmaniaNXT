@@ -576,6 +576,12 @@ pub fn set(s: Setting, c: &mut Config, v: i64) {
     }
 }
 
+/// `Config` の欄の項目の名前、値の見せ方、説明（他の DTXMania からの引き継ぎに出す）
+pub fn value_text(s: Setting, c: &Config) -> (String, String, String) {
+    let r = value_row(s, c);
+    (r.name, r.value, r.desc)
+}
+
 /// `Config` の欄の項目の行
 fn value_row(s: Setting, c: &Config) -> Row {
     let d = Config::default();
