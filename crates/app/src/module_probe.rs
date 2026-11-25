@@ -3,7 +3,7 @@
 //! V51 の値（TOM1 HEAD の音量と音色、今のキット）を書き換えてから叩いた音が変わるまでの時間などを、
 //! V51 の USB の音を録って測る。叩くのは MIDI のノートオンで、人は何もしなくてよい。
 //! 書き換える前の値は必ず記録に残し（[`crate::module_link`]）、終わったら（途中でやめても、失敗しても）
-//! 書き戻して読み直す。結果は issue に貼る Markdown（[`Finding`]）で返す。
+//! 書き戻して読み直す。結果は issue に貼る Markdown（[`Finding`]）で返す（題の印と本文の長さの上限は開発者モードの側で扱う）。
 //!
 //! 録った音はこの中で調べ、数字だけを返す（音そのものは送らない）。
 
@@ -18,35 +18,27 @@ use cpal::{FromSample, SampleFormat, SizedSample};
 use drum_module::listen::{self, FrameClock, Shape};
 use drum_module::roland::{self, Address};
 use drum_module::v51::{self, Block, Layer, Unit};
-use i18n::{Tr, t, tf, tr};
+use i18n::{t, tf, tr};
 
+use crate::dev_report::{Finding, Tool};
 use crate::module_link::{self, V51};
 use crate::time::host_us;
 
-/// 開発者モードから issue に送る結果
-#[derive(Debug, Clone)]
-#[allow(dead_code)] // 開発者モードの一覧（dev_report::TOOLS）に足すまで、読むのはテストだけ
-pub struct Finding {
-    pub title: String,
-    /// Markdown（5 万文字以内）
-    pub body: String,
-}
-
-/// 開発者モードの一覧に出す名前と説明、動かす前に出す確かめ、issue に付けるラベル
-#[allow(dead_code)] // 開発者モードの一覧（dev_report::TOOLS）に足すまで
-pub const NAME: Tr = tr("V51 Sound Switch Test", "V51 の音の切り替えテスト");
-#[allow(dead_code)]
-pub const DESC: Tr = tr(
-    "Briefly changes the V51's TOM1 volume, TOM1 sound and kit, plays notes over MIDI, and records the V51's USB audio to see how fast each change takes effect. Everything is put back at the end.",
-    "V51 の TOM1 の音量と音色、キットを一時的に変えて MIDI で鳴らし、V51 の USB の音を録って、変えてから効くまでの時間を測ります。終わったら元に戻します。",
-);
-#[allow(dead_code)]
-pub const CONFIRM: Tr = tr(
-    "The V51 will play drum sounds for about a minute. Turn the volume down if you're on headphones, and don't touch the V51 until it's done.",
-    "V51 からドラムの音が 1 分ほど鳴ります。ヘッドホンの方は音量を下げ、終わるまで V51 に触らないでください。",
-);
-#[allow(dead_code)]
-pub const LABELS: &[&str] = &["v51"];
+/// 開発者メニューに並べる道具（[`crate::dev_report::TOOLS`]）
+pub const TOOL: Tool = Tool {
+    key: "v51-probe",
+    name: tr("V51 Sound Switch Test", "V51 の音の切り替えテスト"),
+    desc: tr(
+        "Briefly changes the V51's TOM1 volume, TOM1 sound and kit, plays notes over MIDI, and records the V51's USB audio to see how fast each change takes effect. Everything is put back at the end.",
+        "V51 の TOM1 の音量と音色、キットを一時的に変えて MIDI で鳴らし、V51 の USB の音を録って、変えてから効くまでの時間を測ります。終わったら元に戻します。",
+    ),
+    confirm: Some(tr(
+        "The V51 will play drum sounds for about a minute. Turn the volume down if you're on headphones, and don't touch the V51 until it's done.",
+        "V51 からドラムの音が 1 分ほど鳴ります。ヘッドホンの方は音量を下げ、終わるまで V51 に触らないでください。",
+    )),
+    labels: &["v51"],
+    run: run_v51_probe,
+};
 
 /// 鳴らす強さ
 const VELOCITY: u8 = 100;
@@ -77,7 +69,6 @@ impl std::fmt::Display for Cancelled {
 impl std::error::Error for Cancelled {}
 
 /// 開発者モードから呼ぶ。`progress` には今していることを 1 行ずつ渡す。`cancel` が立ったらやめる（書き戻しはする）
-#[allow(dead_code)] // 開発者モードの一覧（dev_report::TOOLS）に足すまで
 pub fn run_v51_probe(cancel: &AtomicBool, progress: &mut dyn FnMut(String)) -> Finding {
     let started = Instant::now();
     let mut r = Report::default();
@@ -99,11 +90,6 @@ pub fn run_v51_probe(cancel: &AtomicBool, progress: &mut dyn FnMut(String)) -> F
     };
     let mut body = format!("## V51 の測定\n\n{status}\n\n");
     body.push_str(&r.out);
-    // issue の本文の上限に収める（表が長くなりすぎたとき）
-    if body.chars().count() > 50_000 {
-        body = body.chars().take(49_900).collect();
-        body.push_str("\n\n（長すぎるので切った）\n");
-    }
     Finding { title, body }
 }
 
