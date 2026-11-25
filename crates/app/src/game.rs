@@ -1,5 +1,6 @@
 //! 1 曲を遊ぶ。譜面・音・判定・入力をまとめ、曲の時刻で動かす。
 //! 練習（区間ループ）も同じ形で動かす。練習の時計は「始めてからの実時間」で、周ごとに音符と BGM を後ろへ足す。
+//! 基礎練習（ドリル）は型から作った譜面を、ふつうの演奏と同じ時計と判定で動かす。
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -17,6 +18,7 @@ use records::{Lap, NoteHit, SectionClear, Session, SessionKind, StrayHit};
 
 use crate::audio::{AudioOut, Bus, HitTiming, Sound, click, load_sound};
 use crate::chart_sound::{AutoMix, ChartSounds, Hat};
+use crate::drill::{DrillOutcome, DrillPlay};
 use crate::history::OvercomeCheck;
 use crate::midi::RawMidi;
 use crate::practice::{
@@ -40,6 +42,11 @@ const METRONOME_GAIN: f32 = 0.45;
 /// 練習でない演奏のメトロノームの音量（小節の頭、拍。上流の Metronome と同じく拍は小節の頭の 4 割）
 const METRONOME_BAR_GAIN: f32 = 1.0;
 const METRONOME_BEAT_GAIN: f32 = 0.4;
+/// 基礎練習のクリックの拍の音量（クリックに合わせて叩くので、曲のときより大きく）
+const DRILL_BEAT_GAIN: f32 = 0.7;
+
+/// 基礎練習で、最後の小節が終わってから結果へ移るまで（ミリ秒）
+const DRILL_TAIL_MS: f64 = 1000.0;
 
 /// メトロノームの音に付ける目印（一時停止の板で切ったとき、鳴らす予定の音を取りやめる）
 const METRONOME_TAG: u8 = 2;
@@ -255,6 +262,8 @@ pub struct Outcome {
     pub started_at: i64,
     /// 練習なら、その決めごとと周ごとの成績
     pub practice: Option<PracticeOutcome>,
+    /// 基礎練習なら、段ごとの出来と手ごとのずれ
+    pub drill: Option<DrillOutcome>,
     /// スネアの打ち分け（譜面にリムの音符があり、電子ドラムで叩いたときだけ）
     pub strokes: Option<StrokeTally>,
 }
@@ -336,6 +345,8 @@ pub struct Play {
     measure_beats: Vec<f64>,
     /// 練習なら周の並びと集計
     pub practice: Option<Practice>,
+    /// 基礎練習なら、段と手順とクリックの消える小節
+    pub drill: Option<DrillPlay>,
     /// 練習の区間の BGM（速度ごとに伸ばしたもの）。音が出ないときは None
     section_audio: Option<SectionAudio>,
     /// 判定の線より上に見えている時間（ミリ秒）。練習の周をこれより前に並べる。画面の高さと落ちる速さから決める
@@ -394,6 +405,35 @@ impl Play {
         Self::open(path, input_offset_ms, drum_sounds, rules, None)
     }
 
+    /// 基礎練習を始める。譜面は型から作る（ファイルは読まない）。空打ちの MISS は使わず、クリックはいつも鳴らす
+    pub fn load_drill(
+        run: engine::drill::Run,
+        input_offset_ms: f64,
+        drum_sounds: bool,
+        rules: &Rules,
+    ) -> Result<Self> {
+        let path = crate::drill::chart_path(run.drill);
+        let text = run.to_dtx(crate::drill::name(run.drill));
+        let rules = Rules {
+            tight: false,
+            metronome: true,
+            ..rules.clone()
+        };
+        let mut play = Self::build(
+            &path,
+            text.as_bytes(),
+            input_offset_ms,
+            drum_sounds,
+            &rules,
+            None,
+            Some(run),
+        )?;
+        // 記録では、テンポが違ってもドリルごとに同じ譜面として扱う
+        play.chart_hash = records::hash_bytes(run.drill.id.as_bytes());
+        play.artist = crate::drill::category_name(run.drill.category).to_owned();
+        Ok(play)
+    }
+
     /// 区間を練習する
     pub fn load_practice(
         path: &Path,
@@ -412,10 +452,31 @@ impl Play {
         rules: &Rules,
         practice: Option<PracticeOptions>,
     ) -> Result<Self> {
-        let auto = rules.auto.as_slice();
         let bytes = std::fs::read(path)
             .with_context(|| tf!("Cannot read {}", "{} を読めません", path.display()))?;
-        let chart = dtx::load(&bytes);
+        Self::build(
+            path,
+            &bytes,
+            input_offset_ms,
+            drum_sounds,
+            rules,
+            practice,
+            None,
+        )
+    }
+
+    /// 譜面の中身 `bytes` から作る。`path` は記録と音のファイルを探すのに使う
+    fn build(
+        path: &Path,
+        bytes: &[u8],
+        input_offset_ms: f64,
+        drum_sounds: bool,
+        rules: &Rules,
+        practice: Option<PracticeOptions>,
+        drill: Option<engine::drill::Run>,
+    ) -> Result<Self> {
+        let auto = rules.auto.as_slice();
+        let chart = dtx::load(bytes);
         for w in &chart.warnings {
             log::warn!("{}:{}: {}", path.display(), w.line, w.message);
         }
@@ -428,7 +489,10 @@ impl Play {
             .iter()
             .map(|c| tempo.chip_ms(c))
             .fold(0.0, f64::max);
-        let end_ms = last_chip_ms + 2000.0;
+        let end_ms = match &drill {
+            Some(run) => tempo.measure_start_ms(run.measure_count() as usize) + DRILL_TAIL_MS,
+            None => last_chip_ms + 2000.0,
+        };
         let mut chart_sounds = ChartSounds::mixed(&chart, &tempo, rules.auto_mix);
         // 自動で叩くレーンの音は、BGM と同じく時刻を決めて鳴らす（叩いた音の設定に関わらず）
         chart_sounds.add_auto_notes(
@@ -459,6 +523,7 @@ impl Play {
         };
         judge.set_auto(auto);
         judge.set_pedal_windows(rules.pedal_windows);
+        let drill = drill.map(|run| DrillPlay::new(run, &tempo, judge.notes()));
         let tight = rules.tight && practice.is_none();
         let start_ms = practice
             .as_ref()
@@ -544,13 +609,14 @@ impl Play {
             last_input: None,
             hh_pedal: None,
             hit_offsets: Vec::new(),
-            chart_hash: records::hash_bytes(&bytes),
+            chart_hash: records::hash_bytes(bytes),
             started_at: unix_now(),
             notes_per_measure,
             measure_beats: (0..=tempo.measure_count())
                 .map(|m| tempo.measure_start_beat(m))
                 .collect(),
             practice,
+            drill,
             section_audio,
             view_ahead_ms: 2000.0,
             clicks,
@@ -765,10 +831,14 @@ impl Play {
                 break;
             }
             self.click_next += 1;
-            let (click, gain) = if l.bar {
-                (accent, METRONOME_BAR_GAIN)
-            } else {
-                (plain, METRONOME_BEAT_GAIN)
+            // 基礎練習は、クリックの消える小節と終わったあとは鳴らさない
+            if self.drill.as_ref().is_some_and(|d| !d.clicks_at(l.ms)) {
+                continue;
+            }
+            let (click, gain) = match (l.bar, self.drill.is_some()) {
+                (true, _) => (accent, METRONOME_BAR_GAIN),
+                (false, false) => (plain, METRONOME_BEAT_GAIN),
+                (false, true) => (plain, DRILL_BEAT_GAIN),
             };
             a.play_at_tagged(click, l.ms, gain, METRONOME_TAG, Bus::Click);
         }
@@ -875,6 +945,11 @@ impl Play {
                 }
                 // 音が出ないときの時計は、止めていたぶん起点を後ろへずらす
                 self.fallback_origin_us = host_us() - ((ms - self.start_ms) * 1000.0) as i64;
+                // 基礎練習は、続けたときから叩かない時間を数え直す
+                let at = self.judge_ms(ms);
+                if let Some(d) = self.drill.as_mut() {
+                    d.resume_at(at);
+                }
                 false
             }
             None => {
@@ -900,7 +975,7 @@ impl Play {
     /// 曲の時刻を `delta_ms` だけ先へ（マイナスなら前へ）飛ぶ（上流 SkipForward / SkipBackward）。
     /// 練習では使わない（None）。飛んだプレイは上流と同じく練習扱いで、記録に残さない。飛んだ先の時刻を返す
     pub fn seek(&mut self, delta_ms: f64) -> Option<f64> {
-        if self.practice.is_some() {
+        if self.practice.is_some() || self.drill.is_some() {
             return None;
         }
         let now = self.now_ms();
@@ -951,11 +1026,21 @@ impl Play {
         self.lay_auto(now);
         // 見逃しは判定の時刻で決める（遅めに叩いても POOR の幅の中なら、見逃しより先に届いた打撃で取れるように）
         let events = self.judge.advance(self.judge_ms(now));
+        // 基礎練習で叩くのをやめたら、休み（一時停止の板を出す）
+        let judge_now = self.judge_ms(now);
+        if let Some(d) = self.drill.as_mut()
+            && d.check_rest(judge_now)
+        {
+            self.practice_events.push(PracticeEvent::Rest);
+        }
         // 自動で叩いた音符は、叩いたときと同じくレーンを光らせる（音は時刻を決めて鳴らしてある）
         for e in &events {
             let note = &self.judge.notes()[e.note];
             let lane = note.lane;
             if e.offset_ms.is_none() && self.judge.is_auto(lane) {
+                if let Some(d) = self.drill.as_mut() {
+                    d.on_hit(note.ms);
+                }
                 let rim = self.is_rim_note(note);
                 self.push_fx(Fx::Hit {
                     lane,
@@ -1059,6 +1144,9 @@ impl Play {
         let ms = self.judge_ms(self.song_ms_at(at_us));
         if let Some(p) = self.practice.as_mut() {
             p.on_hit(ms);
+        }
+        if let Some(d) = self.drill.as_mut() {
+            d.on_hit(ms);
         }
         let rim = lane == DrumLane::SD
             && matches!(
@@ -1328,7 +1416,32 @@ impl Play {
                 offset: p.offset_mean(),
                 picture: p.picture.clone(),
             }),
+            drill: self.drill_outcome(),
         }
+    }
+
+    /// 基礎練習の今までの成績（基礎練習でなければ None）
+    pub fn drill_outcome(&self) -> Option<DrillOutcome> {
+        let d = self.drill.as_ref()?;
+        let now = self.judge_ms(self.now_ms());
+        let results: Vec<engine::drill::NoteOutcome> = self
+            .note_hits
+            .iter()
+            .flatten()
+            .map(|h| engine::drill::NoteOutcome {
+                at: h.at,
+                lane: h.lane,
+                judgement: h.judgement,
+                offset_ms: h.offset_ms,
+            })
+            .collect();
+        let summary = engine::drill::summarize(&d.run, &results, d.measure_at(now));
+        Some(DrillOutcome {
+            run: d.run,
+            summary,
+            elapsed_ms: (now - d.measure_start_ms(0)).max(0.0),
+            best_before: None,
+        })
     }
 
     /// 判定の結果を音符ごとの記録に書く
@@ -1430,7 +1543,34 @@ impl Play {
                 p.cleared()
             );
         }
+        if let Some(d) = &self.drill {
+            let run = &d.run;
+            let bpms: Vec<String> = run.bpms.iter().map(u32::to_string).collect();
+            settings += &format!(
+                ",\"drill\":\"{}\",\"bpms\":[{}],\"target_bpm\":{}",
+                run.drill.id,
+                bpms.join(","),
+                run.target()
+            );
+            if let Some(best) = self.drill_outcome().and_then(|o| o.best_now()) {
+                settings += &format!(",\"best_bpm\":{best}");
+            }
+        }
         settings.push('}');
+        if self.drill.is_some() {
+            let laps = self.drill_laps();
+            if laps.is_empty() {
+                return None;
+            }
+            return Some(Session {
+                kind: SessionKind::Drill,
+                started_at: self.started_at,
+                settings,
+                laps,
+                clear: None,
+                score: None,
+            });
+        }
         let laps = match &self.practice {
             None => {
                 let hits: Vec<NoteHit> = self.note_hits.iter().flatten().cloned().collect();
@@ -1496,6 +1636,44 @@ impl Play {
             // スコアは演奏の画面が数えている（History::save で入れる）
             score: None,
         })
+    }
+
+    /// 基礎練習の段ごとの周（音符を 1 つでも判定した段だけ）。速度は目標のテンポに対する段のテンポ
+    fn drill_laps(&self) -> Vec<Lap> {
+        let (Some(d), Some(o)) = (&self.drill, self.drill_outcome()) else {
+            return Vec::new();
+        };
+        let target = f64::from(d.run.target().max(1));
+        o.summary
+            .steps
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| s.notes > 0)
+            .map(|(i, s)| {
+                let measures = d.step_measures(i);
+                Lap {
+                    speed: f64::from(s.bpm) / target,
+                    completed: s.completed,
+                    passed: s.grade().map(|g| g == engine::drill::Grade::Clean),
+                    tally: s.tally.clone(),
+                    offset_mean_ms: s.offset_mean_ms,
+                    offset_sd_ms: s.offset_sd_ms,
+                    hits: self
+                        .note_hits
+                        .iter()
+                        .flatten()
+                        .filter(|h| measures.contains(&h.at.measure))
+                        .cloned()
+                        .collect(),
+                    strays: self
+                        .strays
+                        .iter()
+                        .filter(|x| measures.contains(&d.measure_at(x.at_ms)))
+                        .cloned()
+                        .collect(),
+                }
+            })
+            .collect()
     }
 
     /// スネアの打ち分けの数。譜面にリムの音符が無いか、電子ドラムでスネアを叩いていなければ `None`
@@ -1829,6 +2007,62 @@ mod tests {
         p.song_offset_ms = 10.0;
         // 合わせて 13 ms 遅く叩くのがちょうど
         assert_eq!(p.judge_ms(4013.0), 4000.0);
+    }
+
+    #[test]
+    fn drills_play_a_made_chart_with_the_click_on() {
+        use engine::drill::{Drill, Run};
+        let rules = Rules {
+            metronome: false,
+            tight: true,
+            ..Default::default()
+        };
+        let run = Run::new(Drill::find("paradiddle").unwrap(), 100, 10);
+        let mut play = Play::load_drill(run, 0.0, false, &rules).unwrap();
+        play.audio = None;
+        // 1 小節 16 打 × 4 段 × 4 小節。クリックはいつも鳴らし、空打ちの MISS は使わない
+        assert_eq!(play.judge.notes().len(), 16 * 16);
+        assert!(play.metronome());
+        assert!(!play.tight);
+        assert_eq!(play.path, crate::drill::chart_path(run.drill));
+        assert_eq!(play.seek(1000.0), None);
+        // 記録ではテンポが違っても同じ譜面
+        let faster = Play::load_drill(Run::new(run.drill, 120, 10), 0.0, false, &rules).unwrap();
+        assert_eq!(faster.chart_hash, play.chart_hash);
+        // 何も叩いていなければ残さない
+        assert!(play.session().is_none());
+        // 最初の段（70）をミスなしで叩き、最後まで時間を進める
+        let first: Vec<(f64, DrumLane)> = play
+            .judge
+            .notes()
+            .iter()
+            .filter(|n| (1..5).contains(&n.at.measure))
+            .map(|n| (n.ms, n.lane))
+            .collect();
+        for (ms, lane) in first {
+            let events = play.judge.hit(Hit {
+                ms: ms + 4.0,
+                lane,
+                velocity: 100,
+            });
+            play.record(&events, None, None);
+        }
+        play.fallback_origin_us = host_us() - 120_000_000;
+        play.update();
+        assert!(play.finished());
+        let o = play.drill_outcome().unwrap();
+        assert_eq!(o.best_now(), Some(70));
+        let session = play.session().unwrap();
+        assert_eq!(session.kind, SessionKind::Drill);
+        assert!(session.score.is_none());
+        assert!(session.settings.contains("\"drill\":\"paradiddle\""));
+        assert!(session.settings.contains("\"best_bpm\":70"));
+        // 段ごとの周。叩いていない段は見逃しだけなので入る（16 打の MISS）
+        assert_eq!(session.laps.len(), 4);
+        assert_eq!(session.laps[0].speed, 0.7);
+        assert_eq!(session.laps[0].passed, Some(true));
+        assert_eq!(session.laps[0].hits.len(), 64);
+        assert_eq!(session.laps[1].passed, Some(false));
     }
 
     #[test]

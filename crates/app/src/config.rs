@@ -56,6 +56,14 @@ pub struct Config {
     pub practice_metronome: bool,
     /// 練習の 1 段の周の数（0.5 の 1 セットの周の数 practice_set_laps とは別。そちらは読まない）
     pub practice_step_laps: u32,
+    /// 基礎練習で最後に選んだドリル（[`engine::drill::Drill::id`]）
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub drill: String,
+    /// 基礎練習の 1 段ごとのテンポの上げ幅（0・5・10・15）
+    pub drill_rise: u32,
+    /// 基礎練習のドリルごとの目標のテンポ（既定から変えたものだけ）
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub drill_bpm: std::collections::BTreeMap<String, u32>,
     /// ゲージが尽きたら途中で終わる（STAGE FAILED）。書いていなければ ON（上流の既定）
     pub stage_failed: Option<bool>,
     /// 判定の下のずれの数字（0 は出さない、1 は出す、2 は PERFECT 以外だけ。上流 `ShowLagTime`）
@@ -173,6 +181,9 @@ impl Default for Config {
             practice_pitch: Pitch::default().name().to_owned(),
             practice_metronome: true,
             practice_step_laps: STEP_LAPS,
+            drill: String::new(),
+            drill_rise: engine::drill::DEFAULT_RISE,
+            drill_bpm: std::collections::BTreeMap::new(),
             stage_failed: None,
             show_lag_time: 1,
             show_lag_time_color: 0,
@@ -442,6 +453,21 @@ impl Config {
     }
 
     /// 練習の決めごとを残す（次の練習でも使う）
+    /// 基礎練習の画面で覚えておく値
+    pub fn drill_prefs(&self) -> crate::drill_menu::Prefs {
+        crate::drill_menu::Prefs {
+            last: self.drill.clone(),
+            rise: self.drill_rise,
+            bpm: self.drill_bpm.clone(),
+        }
+    }
+
+    pub fn set_drill_prefs(&mut self, p: crate::drill_menu::Prefs) {
+        self.drill = p.last;
+        self.drill_rise = p.rise;
+        self.drill_bpm = p.bpm;
+    }
+
     pub fn set_practice_prefs(&mut self, p: PracticePrefs) {
         self.practice_style = p.style.name().to_owned();
         self.practice_rule = p.rule.name().to_owned();
@@ -546,6 +572,26 @@ mod tests {
         assert_eq!(c.pass_rule(), PassRule::Normal);
         assert_eq!(c.speed_plan(), SpeedPlan::default());
         assert_eq!(c.pitch(), Pitch::Keep);
+    }
+
+    #[test]
+    fn drill_prefs_round_trip_through_the_file() {
+        let mut c = Config::default();
+        assert_eq!(c.drill_prefs().rise, engine::drill::DEFAULT_RISE);
+        let mut p = c.drill_prefs();
+        p.last = "paradiddle".into();
+        p.rise = 5;
+        p.bpm.insert("paradiddle".into(), 135);
+        c.set_drill_prefs(p.clone());
+        // 表（[drill_bpm]）があっても、あとの項目と一緒に書ける
+        c.language = "ja".into();
+        let text = toml::to_string_pretty(&c).unwrap();
+        let back: Config = toml::from_str(&text).unwrap();
+        assert_eq!(back.drill_prefs(), p);
+        assert_eq!(back.language, "ja");
+        // 書いていなければ既定
+        let old: Config = toml::from_str("level = 3\n").unwrap();
+        assert_eq!(old.drill_prefs(), crate::drill_menu::Prefs::default());
     }
 
     #[test]

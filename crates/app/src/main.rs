@@ -22,6 +22,9 @@ mod chart_sound;
 mod config;
 mod config_view;
 mod credits;
+mod drill;
+mod drill_hud;
+mod drill_menu;
 mod editor;
 mod fonts;
 mod frames;
@@ -42,6 +45,7 @@ mod play_view;
 mod practice;
 mod practice_hud;
 mod practice_menu;
+mod result_drill;
 mod result_training;
 mod result_view;
 mod rim_look;
@@ -405,6 +409,8 @@ enum Screen {
     Play(Box<Play>, Box<PlayView>),
     /// 結果。NX の結果の画面の動きと一緒に持つ
     Result(Box<Outcome>, Box<ResultView>),
+    /// 基礎練習の画面（タイトルの Drills から）
+    Drills(Box<drill_menu::DrillMenu>),
 }
 
 struct App {
@@ -565,6 +571,10 @@ enum AfterClose {
     },
     /// 結果の画面や一時停止の板から練習メニューへ（選曲画面に開く）。今の決めごとと、終えた練習
     Setup(PathBuf, Option<PracticeOptions>, Option<Finished>),
+    /// 基礎練習の画面へ
+    Drills,
+    /// 基礎練習を始める
+    Drill(engine::drill::Run),
 }
 
 /// シャッターを開き始めるまでの待ち（v2 はフレームで数える。60 で割った時間にする）。
@@ -911,7 +921,88 @@ impl App {
             AfterClose::Setup(path, previous, finished) => {
                 self.open_setup(path, previous, finished)
             }
+            AfterClose::Drills => self.open_drills(),
+            AfterClose::Drill(run) => {
+                self.start_drill(run);
+                self.shutter.open(shutter::OPEN_DELAY);
+            }
         }
+    }
+
+    /// 基礎練習の画面を開く（遊んでいる途中なら、そこまでの記録を残してから）。カーソルとテンポは前のまま
+    fn open_drills(&mut self) {
+        self.save_unfinished();
+        self.sfx.stop_title();
+        self.sfx.preview(None);
+        self.quick = None;
+        self.message = None;
+        let menu =
+            drill_menu::DrillMenu::new(&self.config.drill_prefs(), self.history.drill_records());
+        self.screen = Screen::Drills(Box::new(menu));
+        self.shutter.open(CONFIG_OPEN_DELAY);
+    }
+
+    /// 基礎練習の画面の操作
+    fn drills_input(&mut self, input: drill_menu::Input) {
+        let Screen::Drills(m) = &mut self.screen else {
+            return;
+        };
+        let r = m.input(input);
+        let prefs = r.changed.then(|| m.prefs());
+        if let Some(se) = r.se {
+            self.sfx.play(se);
+        }
+        if let Some(p) = prefs {
+            self.config.set_drill_prefs(p);
+            self.config.save();
+        }
+        match r.done {
+            Some(drill_menu::Done::Start(run)) => {
+                self.close_then(AfterClose::Drill(run), Duration::ZERO);
+            }
+            Some(drill_menu::Done::Back) => self.close_then(AfterClose::Title, Duration::ZERO),
+            None => {}
+        }
+    }
+
+    /// 基礎練習の譜面を作る（すぐできるので、読み込みの画面は出さない）
+    fn load_drill(&self, run: engine::drill::Run) -> Result<Play> {
+        let path = drill::chart_path(run.drill);
+        let s = self.load_settings(&path);
+        let mut p = Play::load_drill(run, s.input_offset_ms, s.drum_sounds, &s.rules)?;
+        p.set_inputs(s.inputs);
+        Ok(p)
+    }
+
+    /// 基礎練習を始める（やり直しも）。遊んでいる途中なら、そこまでの記録を残す
+    fn start_drill(&mut self, run: engine::drill::Run) {
+        self.save_unfinished();
+        self.quick = None;
+        // 前の演奏の音を止めてから作る
+        self.screen = Screen::Title;
+        match self.load_drill(run) {
+            Ok(p) => self.enter_play(p),
+            Err(e) => {
+                log::error!("{e:#}");
+                self.open_drills();
+                self.message = Some(tf!("Could not start: {e:#}", "始められませんでした: {e:#}"));
+            }
+        }
+    }
+
+    /// 演奏中の曲（練習と基礎練習も）を、同じ決めごとではじめからやり直す
+    fn restart_current(&mut self) {
+        let Screen::Play(play, _) = &self.screen else {
+            return;
+        };
+        if let Some(d) = &play.drill {
+            let run = d.run;
+            self.start_drill(run);
+            return;
+        }
+        let path = play.path.clone();
+        let practice = play.practice.as_ref().map(|p| p.restart_options());
+        self.restart(path, practice);
     }
 
     /// 終わる前の画面を出す（終わりの音が鳴り終えたら閉じる）
@@ -950,7 +1041,11 @@ impl App {
             || self.ports_checked.elapsed() < PORT_CHECK_EVERY
             || !matches!(
                 self.screen,
-                Screen::Title | Screen::Config(..) | Screen::Select | Screen::Result(..)
+                Screen::Title
+                    | Screen::Config(..)
+                    | Screen::Select
+                    | Screen::Result(..)
+                    | Screen::Drills(_)
             )
         {
             return;
@@ -1246,6 +1341,9 @@ impl App {
         };
         let finish = view.finish(p, at_ms.unwrap_or_else(|| p.now_ms()));
         let practice = p.practice.is_some();
+        let drill = p.drill.as_ref().map(|d| d.run.drill.id);
+        // 基礎練習の最高は、今回を残す前の記録と比べる
+        let best_before = drill.and_then(|id| self.history.drill_records().get(id)?.best);
         // Esc でやめたときも結果は出す（記録は「最後まで遊んでいない」として残す）
         let cleared = p.finished();
         let session = self.history.save(p, Some(play_score(&finish, cleared)));
@@ -1258,7 +1356,10 @@ impl App {
             self.history.best_score(&p.path, session)
         };
         let mut outcome = p.outcome();
-        if !practice {
+        if let Some(d) = outcome.drill.as_mut() {
+            d.best_before = best_before;
+        }
+        if !practice && drill.is_none() {
             let weak = self.history.weak_map(
                 &outcome.path,
                 &outcome.notes_per_measure,
@@ -1296,7 +1397,8 @@ impl App {
             tally: outcome.tally.clone(),
             notes: outcome.notes,
             practice,
-            cleared: cleared && !practice,
+            drill: drill.is_some(),
+            cleared: cleared && !practice && drill.is_none(),
             finish,
             best,
             lag_counts,
@@ -1437,7 +1539,11 @@ impl App {
                     }
                 }
                 view.feed(play);
-                if stage_failed && play.practice.is_none() && !play.skipped() && view.gauge_empty()
+                if stage_failed
+                    && play.practice.is_none()
+                    && play.drill.is_none()
+                    && !play.skipped()
+                    && view.gauge_empty()
                 {
                     // 上流と同じく、音を止めて STAGE FAILED を出し、選曲に戻る（記録は残す）
                     view.start_failure(play.view_ms(self.config.visual_offset_ms));
@@ -1458,15 +1564,20 @@ impl App {
             self.close_then(AfterClose::Result { at_ms }, Duration::ZERO);
         } else if rested && self.quick.is_none() && self.after_close.is_none() {
             // ドラムだけで止められるように、叩くのをやめたら一時停止する（叩かなかった周は数えない）
+            let drill = matches!(&self.screen, Screen::Play(p, _) if p.drill.is_some());
             self.open_pause();
-            self.toast_for(
+            let text = if drill {
+                t(
+                    "Paused because you stopped playing",
+                    "叩いていないので止めました",
+                )
+            } else {
                 t(
                     "Paused because you stopped playing\nThis loop won't count",
                     "叩いていないので止めました\nこの周は数えません",
                 )
-                .to_owned(),
-                Duration::from_secs(4),
-            );
+            };
+            self.toast_for(text.to_owned(), Duration::from_secs(4));
         }
         if self.shutter.is_closed()
             && let Some(next) = self.after_close.take()
@@ -1896,12 +2007,8 @@ impl App {
                 }
             }
             ConfigAction::Run(ItemId::Retry) => {
-                if let Screen::Play(play, _) = &self.screen {
-                    let path = play.path.clone();
-                    let practice = play.practice.as_ref().map(|p| p.restart_options());
-                    self.quick = None;
-                    self.restart(path, practice);
-                }
+                self.quick = None;
+                self.restart_current();
             }
             ConfigAction::Run(ItemId::Quit) => {
                 if let Screen::Play(play, _) = &self.screen {
@@ -1910,6 +2017,12 @@ impl App {
                     self.quick = None;
                     self.close_then(AfterClose::Result { at_ms }, Duration::ZERO);
                 }
+            }
+            ConfigAction::Run(ItemId::Reselect) if matches!(&self.screen, Screen::Play(p, _) if p.drill.is_some()) =>
+            {
+                // 基礎練習の画面へ（ここまでの段は記録に残す。open_drills）
+                self.quick = None;
+                self.close_then(AfterClose::Drills, Duration::ZERO);
             }
             ConfigAction::Run(ItemId::Reselect) => {
                 if let Screen::Play(play, _) = &self.screen
@@ -2198,6 +2311,20 @@ impl App {
                 self.on_play_key(code);
             }
             Screen::Select => self.on_select_key(code),
+            Screen::Drills(_) => {
+                let input = match code {
+                    KeyCode::ArrowUp => drill_menu::Input::Up,
+                    KeyCode::ArrowDown => drill_menu::Input::Down,
+                    KeyCode::ArrowLeft => drill_menu::Input::Left,
+                    KeyCode::ArrowRight => drill_menu::Input::Right,
+                    KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space => {
+                        drill_menu::Input::Decide
+                    }
+                    KeyCode::Escape | KeyCode::Backspace => drill_menu::Input::Cancel,
+                    _ => return,
+                };
+                self.drills_input(input);
+            }
             Screen::Result(_, view) => match code {
                 KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Escape => {
                     self.result_action(ui::ResultAction::Back);
@@ -2229,9 +2356,7 @@ impl App {
                 return;
             }
             KeyCode::KeyR => {
-                let path = play.path.clone();
-                let practice = play.practice.as_ref().map(|p| p.restart_options());
-                self.restart(path, practice);
+                self.restart_current();
                 return;
             }
             KeyCode::ArrowLeft | KeyCode::ArrowRight if play.practice.is_some() => {
@@ -2546,6 +2671,19 @@ impl App {
                 DrumLane::HT | DrumLane::LT => self.turn_result_page(),
                 _ => {}
             },
+            // 設定の画面と同じパッドの役目（SD・FT でテンポ）
+            Screen::Drills(_) => {
+                let input = match lane {
+                    DrumLane::HT => drill_menu::Input::Up,
+                    DrumLane::LT => drill_menu::Input::Down,
+                    DrumLane::SD => drill_menu::Input::Left,
+                    DrumLane::FT => drill_menu::Input::Right,
+                    DrumLane::CY | DrumLane::RD => drill_menu::Input::Decide,
+                    DrumLane::LC => drill_menu::Input::Cancel,
+                    _ => return,
+                };
+                self.drills_input(input);
+            }
             Screen::Loading(_) | Screen::Play(..) => {}
         }
     }
@@ -2686,6 +2824,21 @@ impl App {
         let Screen::Result(o, _) = &self.screen else {
             return;
         };
+        // 基礎練習の結果からは、もう一度か基礎練習の画面へ
+        if let Some(d) = &o.drill {
+            let run = d.run;
+            match action {
+                ui::ResultAction::Retry => {
+                    self.sfx.play(Se::Decide);
+                    self.close_then(AfterClose::Drill(run), Duration::ZERO);
+                }
+                _ => {
+                    self.sfx.play(Se::Cancel);
+                    self.close_then(AfterClose::Drills, Duration::ZERO);
+                }
+            }
+            return;
+        }
         let path = o.path.clone();
         let options = o.practice.as_ref().map(|p| p.options);
         let finished = o.practice.as_ref().map(|p| Finished {
@@ -2908,6 +3061,16 @@ impl App {
                 self.gfx.begin(&c, ctx.pixels_per_point());
                 self.title.draw(&c, &mut self.gfx, scanning);
             }
+            Screen::Drills(m) => {
+                let ctx = ui.ctx().clone();
+                let painter = ctx.layer_painter(egui::LayerId::background());
+                let c = Canvas::new(&painter, ctx.content_rect());
+                self.gfx.begin(&c, ctx.pixels_per_point());
+                m.draw(&c, &mut self.gfx);
+                if let Some(msg) = &self.message {
+                    ui::message_overlay(&ctx, msg);
+                }
+            }
             Screen::Config(view, _) => {
                 let ctx = ui.ctx().clone();
                 let painter = ctx.layer_painter(egui::LayerId::background());
@@ -3033,6 +3196,7 @@ impl App {
 fn play_pos(play: &Play) -> PlayPos {
     PlayPos {
         practice: play.practice.is_some(),
+        drill: play.drill.is_some(),
         at_ms: play.now_ms(),
         end_ms: play.end_ms,
         metronome: play.metronome(),

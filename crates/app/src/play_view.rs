@@ -1051,6 +1051,7 @@ impl PlayView {
         self.draw_lanes(c, g, now);
         self.draw_lines(c, g, play, now_ms, px_per_ms);
         self.draw_chips(c, g, play, now_ms, px_per_ms, now);
+        self.draw_hands(c, g, play, now_ms, px_per_ms);
         self.draw_shutters(c, g);
         if self.looks.progress {
             self.draw_progress(c, g, play, now_ms);
@@ -1072,8 +1073,10 @@ impl PlayView {
         }
         self.draw_pads(c, g, now);
         let practice = play.practice.is_some();
-        self.draw_score(c, g, now, practice);
-        self.draw_status(c, g, play, practice);
+        // 基礎練習も、スコアと達成率は出さない（スコアの場所にテンポを出す）
+        let scoreless = practice || play.drill.is_some();
+        self.draw_score(c, g, now, scoreless);
+        self.draw_status(c, g, play, scoreless);
         self.draw_gauge(c, g, px_per_ms);
         if self.looks.hit_error {
             self.hit_error.draw(c, g, now, practice);
@@ -1093,6 +1096,18 @@ impl PlayView {
                 self.looks.layout.extra_w(),
             );
         }
+        if let Some(d) = &play.drill {
+            let outcome = play.drill_outcome();
+            crate::drill_hud::draw(
+                c,
+                g,
+                d,
+                outcome.as_ref().map(|o| &o.summary),
+                now_ms,
+                self.looks.reverse,
+                self.looks.layout.extra_w(),
+            );
+        }
         self.draw_failed(c, g, now);
         // 入ってきたときのフェード
         let t = now.saturating_duration_since(self.entered).as_secs_f32() / FADE_IN.as_secs_f32();
@@ -1103,8 +1118,8 @@ impl PlayView {
 
     /// ジャケットと曲名（上流 `CActPerfPanelString`）
     fn draw_jacket(&self, c: &Canvas, g: &mut Gfx, play: &Play) {
-        // 練習中は、ジャケットの場所に段階アップのはしごを出す（practice_hud）。曲名は出す
-        if play.practice.is_none() {
+        // 練習中は、ジャケットの場所に段階アップのはしごを出す（practice_hud、基礎練習は drill_hud）。曲名は出す
+        if play.practice.is_none() && play.drill.is_none() {
             self.draw_jacket_image(c, g, play);
         }
         let edge = |px: f32| Style {
@@ -1486,6 +1501,46 @@ impl PlayView {
                     ..Default::default()
                 },
             );
+        }
+    }
+
+    /// 基礎練習で、音符の右に叩く手（R・L）を出す。足は書かなくても分かるので出さない
+    fn draw_hands(&self, c: &Canvas, g: &mut Gfx, play: &Play, now_ms: f64, px_per_ms: f32) {
+        let Some(d) = &play.drill else {
+            return;
+        };
+        let looks = self.looks;
+        let ahead = |ms: f64| ((ms - now_ms) as f32) * px_per_ms;
+        let notes = play.judge.notes();
+        let from = notes.partition_point(|n| n.ms < now_ms - 1000.0);
+        for (i, n) in notes.iter().enumerate().skip(from) {
+            let y = looks.ahead_y(ahead(n.ms));
+            if looks.beyond_edge(y) {
+                break;
+            }
+            if play.judge.is_done(i) || ahead(n.ms) > DRAW_AHEAD_PX {
+                continue;
+            }
+            let (hand, color) = match d.hands.get(i).copied().flatten() {
+                Some(engine::drill::Hand::Right) => ("R", crate::drill::RIGHT_COLOR),
+                Some(engine::drill::Hand::Left) => ("L", crate::drill::LEFT_COLOR),
+                _ => continue,
+            };
+            let Some(alpha) = looks.chip_alpha(ahead(n.ms)) else {
+                continue;
+            };
+            let (x, _, w, _) = chip(&looks, n.lane);
+            let style = Style {
+                px: 20.0,
+                color,
+                bold: true,
+                shadow: None,
+                edge: Some((Color32::BLACK, 2.0)),
+                gradient: None,
+            };
+            if let Some(t) = g.texts.get(hand, &style) {
+                t.draw(c, x + w - 2.0, y - t.h / 2.0, 1.0, alpha);
+            }
         }
     }
 

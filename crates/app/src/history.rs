@@ -2,6 +2,7 @@
 //! 結果の画面に出す苦手な小節、練習でクリアした区間の克服、叩き方のくせを、直近の記録から出す。
 //! 記録が開けないときは残さずに遊べるようにし、苦手な小節は今回のプレイだけから出す。
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use engine::analysis::{
@@ -14,6 +15,7 @@ use library::Stats;
 use records::{BestScore, ChartKey, ClearRecord, PlayScore, Records, SessionKind, SessionLag};
 
 use crate::chart_picture::Marks;
+use crate::drill::DrillRecord;
 use crate::game::{Play, WeakMap};
 use crate::result_view::Rank;
 
@@ -116,8 +118,8 @@ impl History {
         let (Some(records), Some(mut session)) = (self.records.as_mut(), play.session()) else {
             return None;
         };
-        // 自動で叩くレーンがあるプレイは、ベストの記録（スコア）に入れない
-        if play.practice.is_none() && !play.has_auto() {
+        // 自動で叩くレーンがあるプレイは、ベストの記録（スコア）に入れない。練習と基礎練習はスコアを付けない
+        if play.practice.is_none() && play.drill.is_none() && !play.has_auto() {
             session.score = score;
         }
         let path = play.path.to_string_lossy();
@@ -253,6 +255,29 @@ impl History {
             .best_score(&path.to_string_lossy(), before)
             .map_err(|e| log::warn!("cannot read the records: {e}"))
             .ok()
+    }
+
+    /// 基礎練習のドリルごとの記録（基礎練習の画面に出す）。記録が読めなければ空
+    pub fn drill_records(&self) -> HashMap<&'static str, DrillRecord> {
+        let mut out = HashMap::new();
+        let Some(records) = self.records.as_ref() else {
+            return out;
+        };
+        match records.drill_sessions() {
+            Ok(rows) => {
+                for r in rows {
+                    let Some(d) = crate::drill::of_path(Path::new(&r.chart_path)) else {
+                        continue;
+                    };
+                    let best = json_number(&r.settings, "best_bpm").map(|b| b as u32);
+                    out.entry(d.id)
+                        .or_insert_with(DrillRecord::default)
+                        .add(r.started_at, best);
+                }
+            }
+            Err(e) => log::warn!("cannot read the records: {e}"),
+        }
+        out
     }
 
     /// 譜面ごとの記録（選曲画面の並べ替え、ランプ、ランク、スキル）。記録が読めなければ空
