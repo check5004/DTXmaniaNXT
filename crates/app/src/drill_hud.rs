@@ -157,6 +157,7 @@ fn draw_card(c: &Canvas, g: &mut Gfx, d: &DrillPlay, summary: Option<&Summary>, 
         &d.run.bpms,
         current,
         &grades,
+        true,
         (x + 16.0, y + 50.0, w - 32.0, 150.0),
     );
     if done {
@@ -289,13 +290,14 @@ fn draw_gap(c: &Canvas, g: &mut Gfx, d: &DrillPlay, m: u32, cycle: u32) {
 }
 
 /// 段の絵。高さで上がっていくことを見せ、中にテンポ。今の段（`current`）は橙に「いまここ」、
-/// 終えた段は出来の色（`grades`）、いちばん上の段に旗
+/// 終えた段は出来の色（`grades`）と、`marks` なら中に出来の印、いちばん上の段に旗
 pub fn stairs(
     c: &Canvas,
     g: &mut Gfx,
     bpms: &[u32; STEPS],
     current: Option<usize>,
     grades: &[Option<Grade>; STEPS],
+    marks: bool,
     (x, y, w, h): (f32, f32, f32, f32),
 ) {
     let n = STEPS as f32;
@@ -303,9 +305,12 @@ pub fn stairs(
     let sw = (w - gap * (n - 1.0)) / n;
     let rise = (h - 30.0) / n;
     let px = (sw * 0.22).clamp(12.0, 17.0);
+    // テンポが変わらない回は段にせず、同じ高さに並べる
+    let flat = bpms.iter().all(|&b| b == bpms[0]);
+    let level = |i: usize| if flat { 2.0 } else { i as f32 + 1.0 };
     for (i, &bpm) in bpms.iter().enumerate() {
         let bx = x + i as f32 * (sw + gap);
-        let top = y + h - (i as f32 + 1.0) * rise;
+        let top = y + h - level(i) * rise;
         let cell = (bx, top, sw, y + h - top);
         let ink = if Some(i) == current {
             round_fill(
@@ -339,26 +344,37 @@ pub fn stairs(
         } else {
             edged(px, ink)
         };
+        let mark = grades[i].filter(|_| marks && Some(i) != current);
+        // 段が低くて数字の下に印が入らないときは、数字と印を横に並べる
+        let side = mark.is_some() && y + h - top < 44.0;
+        let (num_x, num_w) = if side {
+            (bx + sw * 0.36, sw * 0.6)
+        } else {
+            (bx + sw / 2.0, sw - 4.0)
+        };
         put_mid(
             c,
             g,
             &bpm.to_string(),
             &style,
-            bx + sw / 2.0,
+            num_x,
             top + 15.0,
             Align::Center,
-            sw - 4.0,
+            num_w,
         );
-        if let Some(gr) = grades[i].filter(|_| Some(i) != current)
-            && y + h - top >= 44.0
-        {
+        if let Some(gr) = mark {
+            let (mx, my) = if side {
+                (bx + sw * 0.78, top + 15.0)
+            } else {
+                (bx + sw / 2.0, top + 38.0)
+            };
             put_mid(
                 c,
                 g,
                 grade_mark(gr),
                 &edged(px + 4.0, Color32::WHITE),
-                bx + sw / 2.0,
-                top + 38.0,
+                mx,
+                my,
                 Align::Center,
                 sw,
             );
@@ -366,7 +382,7 @@ pub fn stairs(
     }
     // いちばん上の段（目標）に旗
     let bx = x + (n - 1.0) * (sw + gap);
-    let top = y + h - n * rise;
+    let top = y + h - level(STEPS - 1) * rise;
     let fx = bx + sw - 12.0;
     let pnt = c.painter();
     pnt.line_segment(

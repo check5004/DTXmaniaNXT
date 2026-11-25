@@ -369,20 +369,24 @@ impl ResultView {
                 rate: f.rate,
                 level: self.info.level.unwrap_or(0.0),
                 diff_panel: f.diff_panel,
+                counts_only: self.info.drill,
             },
             &LARGE_RESULT,
         );
-        if let Some(t) = g.skin.tex("Graphics/8_progress_bar_panel.png") {
-            c.draw(&t, X + 255.0, Y + 1.0);
+        // 基礎練習では進み具合のバーと早い遅いの数を出さない（右の板のずれの図が代わり）
+        if !self.info.drill {
+            if let Some(t) = g.skin.tex("Graphics/8_progress_bar_panel.png") {
+                c.draw(&t, X + 255.0, Y + 1.0);
+            }
+            draw_progress_bar(c, X + 256.0, Y + 2.0, 12.0, &f.progress);
+            let best = self
+                .info
+                .best
+                .as_ref()
+                .and_then(|b| b.progress.as_deref())
+                .unwrap_or("");
+            draw_progress_bar(c, X + 270.0, Y + 2.0, 4.0, best);
         }
-        draw_progress_bar(c, X + 256.0, Y + 2.0, 12.0, &f.progress);
-        let best = self
-            .info
-            .best
-            .as_ref()
-            .and_then(|b| b.progress.as_deref())
-            .unwrap_or("");
-        draw_progress_bar(c, X + 270.0, Y + 2.0, 4.0, best);
         match top {
             Top::Practice(p) => draw_passed(c, g, p),
             Top::Drill(d) => crate::result_drill::draw_headline(c, g, d),
@@ -398,6 +402,7 @@ impl ResultView {
             c.draw(&t, X + 118.0, Y + 322.0);
         }
         if let Some(swapped) = self.info.lag_counts
+            && !self.info.drill
             && let Some(t) = g.skin.tex("Graphics/7_lag numbers.png")
         {
             // Type-A（既定）は早いが青、遅いが赤

@@ -623,6 +623,7 @@ impl DrillMenu {
             &run.bpms,
             None,
             &none,
+            false,
             (x + 300.0, y + 250.0, w - 324.0, 150.0),
         );
         let secs = run_seconds(&run).round() as u32;
@@ -668,7 +669,11 @@ impl DrillMenu {
             Some(b) => best_pill(
                 c,
                 g,
-                &tf!("✓ up to {b}", "✓ {b} まで"),
+                &if d.fixed_tempo() {
+                    tf!("✓ clean at {b}", "✓ {b} でミスなし")
+                } else {
+                    tf!("✓ up to {b}", "✓ {b} まで")
+                },
                 x + 250.0,
                 y + 478.0,
                 16.0,

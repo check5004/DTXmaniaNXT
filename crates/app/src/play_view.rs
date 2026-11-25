@@ -1728,6 +1728,7 @@ impl PlayView {
                 rate: self.rate(practice),
                 level: play.level.unwrap_or(0.0),
                 diff_panel: self.diff_panel,
+                counts_only: play.drill.is_some(),
             },
             &LARGE,
         );
@@ -2076,7 +2077,14 @@ pub struct PanelNumbers<'a> {
     pub level: f64,
     /// 7_Difficulty.png の切り出しの左上
     pub diff_panel: (f32, f32),
+    /// 判定の数だけを出す（基礎練習。達成率・スキル・レベルの欄を出さず、パネルを短くする）
+    pub counts_only: bool,
 }
+
+/// 7_SkillPanel.png の判定の数の欄の下の端（緑の線のすぐ下）
+const PANEL_COUNTS_H: f32 = 262.0;
+/// 7_SkillPanel.png の下の縁の高さ
+const PANEL_EDGE_H: f32 = 14.0;
 
 /// 7_SkillPanel.png と、判定の数と割合、達成率、スキル、難易度とレベル。
 /// 演奏の画面（上流 `CActPerfDrumsStatusPanel`）と結果の画面（`CActResultParameterPanel`）は
@@ -2089,7 +2097,18 @@ pub fn draw_skill_panel(
     large: &Glyphs<'_>,
 ) {
     if let Some(t) = g.skin.tex("Graphics/7_SkillPanel.png") {
-        c.draw(&t, x, y);
+        if n.counts_only {
+            // 判定の数の欄までと、下の縁だけをつなげて短いパネルにする
+            c.part(&t, x, y, src(0.0, 0.0, t.w, PANEL_COUNTS_H));
+            c.part(
+                &t,
+                x,
+                y + PANEL_COUNTS_H,
+                src(0.0, t.h - PANEL_EDGE_H, t.w, PANEL_EDGE_H),
+            );
+        } else {
+            c.draw(&t, x, y);
+        }
     }
     // 名前（上流は Config.ini の名前、無ければ GUEST）
     if let Some(t) = g.texts.get("GUEST", &Style::plain(20.0, Color32::WHITE)) {
@@ -2118,6 +2137,9 @@ pub fn draw_skill_panel(
             ry,
             &format!("{:>3}%", percent(count)),
         );
+    }
+    if n.counts_only {
+        return;
     }
     if n.rate >= 100.0 {
         if let Some(t) = g.skin.tex("Graphics/7_skill max.png") {

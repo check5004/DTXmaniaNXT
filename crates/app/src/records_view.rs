@@ -275,7 +275,8 @@ impl RecordsView {
             (PRACTICE, t("Section Practice", "区間練習")),
         ];
         if total.other > 0 {
-            keys.push((OTHER, t("Other", "そのほか")));
+            // いまは基礎練習のほかに時間を残す遊びが無い
+            keys.push((OTHER, t("Drills", "基礎練習")));
         }
         color_keys(c, g, x + 18.0 + tw + 24.0, y + 13.0, &keys);
         let today = self.log.day(self.today);

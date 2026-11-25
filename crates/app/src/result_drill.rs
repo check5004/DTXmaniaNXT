@@ -22,6 +22,8 @@ const LAG_RANGE_MS: f64 = 40.0;
 const DOT_RANGE_MS: f64 = 60.0;
 const FOOT_COLOR: Color32 = Color32::from_gray(200);
 const ACCENT: Color32 = Color32::from_rgb(0xFF, 0xB8, 0x40);
+/// クリックの消えた小節の地の色
+const SILENT_COLOR: Color32 = Color32::from_rgba_premultiplied(40, 26, 70, 90);
 
 fn edged(px: f32, color: Color32) -> Style {
     Style::edged(px, color, Color32::BLACK, (px / 12.0).max(1.0))
@@ -31,6 +33,14 @@ fn bold(px: f32, color: Color32) -> Style {
     Style {
         bold: true,
         ..edged(px, color)
+    }
+}
+
+/// 色の札の上の文字（縁取りなし。暗い文字に黒い縁を付けるとつぶれる）
+fn pill_text(px: f32, color: Color32) -> Style {
+    Style {
+        bold: true,
+        ..Style::plain(px, color)
     }
 }
 
@@ -57,6 +67,10 @@ fn ms_text(v: f64) -> String {
 pub fn draw_headline(c: &Canvas, g: &mut Gfx, o: &DrillOutcome) {
     g.heading(c, 30.0, 28.0, t("Drill Result", "基礎練習の結果"));
     let (text, color) = match o.best_now() {
+        // テンポを上げない回（クリックの消えるドリル、上げ幅 0）は「まで」と言わない
+        Some(b) if o.run.bpms.iter().all(|&v| v == b) => {
+            (tf!("Clean at {b} ✓", "{b} でミスなし ✓"), Color32::WHITE)
+        }
         Some(b) => (tf!("Clean up to {b} ✓", "{b} まで ✓"), Color32::WHITE),
         None => (
             t("No clean step this time", "ミスなしの段はまだ").to_owned(),
@@ -81,7 +95,7 @@ pub fn draw_headline(c: &Canvas, g: &mut Gfx, o: &DrillOutcome) {
         Some(b) => tf!("New best (was {b})", "最高を更新（前は {b}）"),
         None => t("First clean record", "はじめての記録").to_owned(),
     };
-    let st = bold(14.0, Color32::from_rgb(40, 24, 0));
+    let st = pill_text(15.0, Color32::from_rgb(40, 24, 0));
     let pw = ui::text_width(g, &label, &st) + 20.0;
     let (px, py) = (40.0 + w, 64.0);
     ui::round_fill(c, px, py, pw, 28.0, 14.0, ACCENT);
@@ -129,7 +143,16 @@ pub fn draw(c: &Canvas, g: &mut Gfx, o: &DrillOutcome, name: &str, perfect_ms: f
         std::array::from_fn(|i| o.summary.steps.get(i).and_then(|s| s.grade()));
     let sx = x + 22.0;
     let sw = 300.0;
-    stairs(c, g, &run.bpms, None, &grades, (sx, y + 66.0, sw, 120.0));
+    // 出来の印は段の下に色付きで出す
+    stairs(
+        c,
+        g,
+        &run.bpms,
+        None,
+        &grades,
+        false,
+        (sx, y + 66.0, sw, 120.0),
+    );
     let cell = (sw - 8.0 * 3.0) / STEPS as f32;
     for (i, gr) in grades.iter().enumerate() {
         let cx = sx + i as f32 * (cell + 8.0) + cell / 2.0;
@@ -259,10 +282,12 @@ fn draw_hands(c: &Canvas, g: &mut Gfx, o: &DrillOutcome, (x, y, w, _h): (f32, f3
                 Lean::Early => t("early", "早め"),
                 Lean::Late => t("late", "遅め"),
             };
-            let st = bold(13.0, Color32::from_rgb(10, 20, 40));
+            // ずれの数字の下に札を置く（数字の横だと「ms」に重なる）
+            let st = pill_text(12.0, Color32::from_rgb(10, 20, 40));
             let pw = ui::text_width(g, label, &st) + 16.0;
-            ui::round_fill(c, x + w - pw, ry + 2.0, pw, 22.0, 11.0, color);
-            ui::text(c, g, label, x + w - pw + 8.0, ry + 4.0, &st, pw);
+            let px = bx + bw + 12.0;
+            ui::round_fill(c, px, ry + 25.0, pw, 19.0, 9.5, color);
+            ui::text(c, g, label, px + 8.0, ry + 26.0, &st, pw);
         }
     }
 }
@@ -287,21 +312,37 @@ fn draw_dots(
     );
     // 凡例
     let mut lx = x + w;
-    let legend: Vec<(&str, Color32)> = {
+    let gap = o.run.drill.gap.is_some();
+    // （名前、色、四角の見本か）
+    let legend: Vec<(&str, Color32, bool)> = {
         let mut v = Vec::new();
         for lag in &o.summary.hands {
-            v.push((hand_name(lag.hand), hand_color(Some(lag.hand))));
+            v.push((hand_name(lag.hand), hand_color(Some(lag.hand)), false));
         }
-        v.push((t("miss", "ミス"), MANY_COLOR));
+        v.push((t("miss", "ミス"), MANY_COLOR, false));
+        if gap {
+            v.push((t("no click", "クリックなし"), SILENT_COLOR, true));
+        }
         v
     };
-    for (label, color) in legend.iter().rev() {
+    for (label, color, square) in legend.iter().rev() {
         let st = edged(13.0, Color32::from_gray(210));
         let tw = ui::text_width(g, label, &st);
         lx -= tw;
         ui::text(c, g, label, lx, y, &st, tw + 2.0);
-        c.painter()
-            .circle_filled(c.pos(lx - 9.0, y + 9.0), 4.0 * c.scale(), *color);
+        if *square {
+            c.fill(lx - 15.0, y + 3.0, 11.0, 12.0, *color);
+            c.frame(
+                lx - 15.0,
+                y + 3.0,
+                11.0,
+                12.0,
+                Color32::from_white_alpha(90),
+            );
+        } else {
+            c.painter()
+                .circle_filled(c.pos(lx - 9.0, y + 9.0), 4.0 * c.scale(), *color);
+        }
         lx -= 30.0;
     }
     let (px, py, pw, ph) = (x + 40.0, y + 26.0, w - 40.0, h - 50.0);
@@ -314,6 +355,16 @@ fn draw_dots(
         6.0,
         Color32::from_rgba_unmultiplied(4, 4, 10, 200),
     );
+    let bars = (STEPS as u32 * STEP_MEASURES) as f32;
+    let bar_w = pw / bars;
+    // クリックの消えた小節に色を敷く（拍を保てたかを見る所）
+    if gap {
+        for m in 0..STEPS as u32 * STEP_MEASURES {
+            if !o.run.clicks(m + COUNT_IN_MEASURES) {
+                c.fill(px + m as f32 * bar_w, py, bar_w, ph, SILENT_COLOR);
+            }
+        }
+    }
     let cy = py + ph / 2.0;
     let sy = ph / 2.0 / DOT_RANGE_MS as f32;
     // PERFECT の幅
@@ -347,8 +398,6 @@ fn draw_dots(
         &edged(12.0, Color32::from_gray(160)),
         40.0,
     );
-    let bars = (STEPS as u32 * STEP_MEASURES) as f32;
-    let bar_w = pw / bars;
     for s in 0..STEPS {
         let sx = px + s as f32 * STEP_MEASURES as f32 * bar_w;
         if s > 0 {
