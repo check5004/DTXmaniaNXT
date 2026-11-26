@@ -15,6 +15,7 @@ i18n = { path = "../i18n" }
 records = { path = "../records" }
 nx = { path = "../nx" }
 video = { path = "../video" }
+drum_module = { path = "../drum_module" }
 anyhow = "1"
 cpal = "0.18"
 egui = "0.37"

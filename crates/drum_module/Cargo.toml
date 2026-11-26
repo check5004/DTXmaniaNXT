@@ -1,0 +1,16 @@
+[package]
+name = "drum_module"
+description = "Talking to electronic drum sound modules (Roland V51) over MIDI for DTXmaniaNXT"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+toml = "1"
+rustfft = "6"
+
+[lints]
+workspace = true

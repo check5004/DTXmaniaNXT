@@ -41,6 +41,8 @@ mod lane_layout;
 mod loading;
 mod logging;
 mod midi;
+mod module_link;
+mod module_probe;
 mod movie;
 mod nx_import;
 mod perf;
@@ -4502,6 +4504,8 @@ fn run() -> Result<()> {
         }
     });
     let mut app = App::new(arg);
+    // 前に V51 の値を書き換えたまま終わっていたら（落ちたなど）、ここで書き戻す
+    module_link::restore_on_start();
     event_loop.run_app(&mut app)?;
     // 開発者メニューの道具が動いていたら、後片付け（音源の設定を戻すなど）を待ってから終える
     dev_view::shutdown(Duration::from_secs(10));

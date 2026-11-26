@@ -787,6 +787,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8b14ccef22fc6f5a8f4d7d768562a182c04ce9a3b3157b91390b52ddfdf1a76"
 
 [[package]]
+name = "drum_module"
+version = "0.12.0"
+dependencies = [
+ "rustfft",
+ "serde",
+ "toml",
+]
+
+[[package]]
 name = "dtx"
 version = "0.12.0"
 dependencies = [
@@ -805,6 +814,7 @@ dependencies = [
  "chrono",
  "cpal",
  "dirs",
+ "drum_module",
  "dtx",
  "egui",
  "egui-wgpu",

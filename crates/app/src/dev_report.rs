@@ -60,7 +60,7 @@ pub struct Tool {
 
 /// 開発者メニューの道具（組み込みの「環境の情報」「MIDI を記録」「ログ」のほか）。
 /// 新しい道具はここに足す
-pub const TOOLS: &[Tool] = &[];
+pub const TOOLS: &[Tool] = &[crate::module_probe::TOOL];
 
 /// 環境の節に出す行（名前と値）。App が今の設定と機器から作る
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
