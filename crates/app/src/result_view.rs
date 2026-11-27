@@ -689,10 +689,19 @@ fn draw_passed(c: &Canvas, g: &mut Gfx, p: &crate::game::PracticeOutcome) {
         .filter(|a| a.passed == Some(true))
         .map(|a| a.speed)
         .max();
-    let (text, color) = if p.cleared {
+    let stops = p.options.stops.len();
+    let (text, color) = if p.cleared || p.toured {
+        let text = if p.toured {
+            t("TOUR COMPLETE", "ひと回り")
+        } else {
+            t("CLEAR", "クリア")
+        };
+        (text.to_owned(), Color32::from_rgb(0x70, 0xE0, 0x90))
+    } else if p.options.way.tours() {
+        let done = p.attempts.iter().filter(|a| a.laps > 0).count();
         (
-            t("CLEAR", "クリア").to_owned(),
-            Color32::from_rgb(0x70, 0xE0, 0x90),
+            tf!("{done} of {stops} spots", "{done} / {stops} か所"),
+            Color32::from_rgb(0xFF, 0xB8, 0x40),
         )
     } else if let Some(s) = top {
         (

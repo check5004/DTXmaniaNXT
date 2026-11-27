@@ -11,7 +11,7 @@ use engine::analysis::{NoteResult, Tendency, WeakPhrase, mean_and_sd};
 use engine::clock::MidiTimestampMapper;
 use engine::input::{Articulation, InputEvent, MidiMessage, MidiProfile, Normalizer, Pad};
 use engine::judge::{Hit, HitWindows, Judge, JudgeEvent, Judgement, LaneGroups, Tally};
-use engine::practice::{Attempt, SpeedPlan, place};
+use engine::practice::{Attempt, Section, SectionTimes, SpeedPlan, place};
 use engine::practice_way::{Way, cut_span};
 use engine::stroke::{Stroke, StrokeTally};
 use i18n::tf;
@@ -60,6 +60,29 @@ const METRONOME_TAG: u8 = 2;
 
 /// 練習の区間の BGM をまとめるとき、助走の前と着地のあとに足す余白（曲のミリ秒）。伸ばした音の端のにじみを周に入れないため
 const SECTION_MARGIN_MS: f64 = 1000.0;
+
+/// 区間の音を作る曲の時刻の範囲。区間ごとに助走の頭から着地のあとまで（前後に余白）。重なる範囲は 1 つにまとめる
+fn audio_ranges(tempo: &TempoMap, sections: &[Section]) -> Vec<(f64, f64)> {
+    let mut v: Vec<(f64, f64)> = sections
+        .iter()
+        .map(|&s| {
+            let t = SectionTimes::new(tempo, s);
+            (
+                t.run_up_ms - SECTION_MARGIN_MS,
+                t.tail_ms.max(t.end_ms) + SECTION_MARGIN_MS,
+            )
+        })
+        .collect();
+    v.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut out: Vec<(f64, f64)> = Vec::new();
+    for (a, b) in v {
+        match out.last_mut() {
+            Some(last) if a <= last.1 => last.1 = last.1.max(b),
+            _ => out.push((a, b)),
+        }
+    }
+    out
+}
 
 /// 落ちてくる音符が見え始めるより、これだけ前に周を並べる（ミリ秒）
 const LAY_MARGIN_MS: f64 = 500.0;
@@ -295,6 +318,8 @@ pub struct PracticeOutcome {
     pub cleared: bool,
     /// 時間の区切りを過ぎて終えた（今日のメニュー）
     pub timed_out: bool,
+    /// めぐるやり方で、最後の所まで叩き終えた
+    pub toured: bool,
     /// 空打ちが偏っているパッド（拾いすぎの疑い）
     pub strays: Option<StrayHint>,
     /// 最後まで叩いた周のずれの平均（ミリ秒）と打った数
@@ -368,7 +393,8 @@ pub struct Play {
     /// 基礎練習なら、段と手順とクリックの消える小節
     pub drill: Option<DrillPlay>,
     /// 練習の区間の BGM（速度ごとに伸ばしたもの）。音が出ないときは None
-    section_audio: Option<SectionAudio>,
+    /// 区間の音（めぐるやり方は所ごと。重なる所は 1 つにまとめる）
+    section_audio: Vec<SectionAudio>,
     /// 判定の線より上に見えている時間（ミリ秒）。練習の周をこれより前に並べる。画面の高さと落ちる速さから決める
     pub view_ahead_ms: f64,
     /// カウントのクリック（1 拍目、ほか）
@@ -678,24 +704,26 @@ impl Play {
             }
             None => HashMap::new(),
         };
-        let mut section_audio = None;
+        let mut section_audio = Vec::new();
         // 練習でなければ、自動で鳴らす音（BGM・効果音など）は時刻が近づいたものから出力に渡す（`lay_auto`）。
-        // 練習は区間の自動で鳴らす音を 1 本にまとめ、周の速度に伸ばして鳴らす
+        // 練習は区間の自動で鳴らす音を 1 本にまとめ、周の速度に伸ばして鳴らす（めぐるやり方は所ごとに）
         if let (Some(a), Some(p)) = (audio.as_ref(), &practice) {
-            let t = p.times();
-            let from = t.run_up_ms - SECTION_MARGIN_MS;
-            let to = t.tail_ms.max(t.end_ms) + SECTION_MARGIN_MS;
             let started = std::time::Instant::now();
             let first = p.speed();
-            section_audio = Some(SectionAudio::new(
-                mix_bgm(&chart_sounds.auto, &sounds, a.rate(), from, to),
-                from,
-                a.rate(),
-                p.options.pitch,
-                first,
-            ));
+            // 1 周目の音はすぐ作り、ほかの所の音は別のスレッドで作る（次の所へ移るときに、できるまで待つ）
+            let first_ms = p.times().run_up_ms;
+            for (from, to) in audio_ranges(&tempo, &p.audio_sections()) {
+                let mix = mix_bgm(&chart_sounds.auto, &sounds, a.rate(), from, to);
+                let make = if (from..to).contains(&first_ms) {
+                    SectionAudio::new
+                } else {
+                    SectionAudio::later
+                };
+                section_audio.push(make(mix, from, a.rate(), p.options.pitch, first));
+            }
             log::info!(
-                "section audio at {first}%: {:.0}ms",
+                "section audio at {first}% ({} pieces): {:.0}ms",
+                section_audio.len(),
                 started.elapsed().as_secs_f64() * 1000.0
             );
         }
@@ -792,7 +820,7 @@ impl Play {
         {
             log::warn!("audio is off: {e:#}");
             self.audio = None;
-            self.section_audio = None;
+            self.section_audio.clear();
         }
         self.fallback_origin_us = host_us();
     }
@@ -813,19 +841,23 @@ impl Play {
             return;
         };
         for a in &p.done[self.seen_attempts.min(p.done.len())..] {
-            if a.passed == Some(true) {
-                self.practice_events
-                    .push(if p.cleared() && a.index + 1 == p.done.len() {
-                        PracticeEvent::Cleared
-                    } else {
-                        PracticeEvent::StepUp
-                    });
+            let last = a.index + 1 == p.done.len();
+            // めぐり終えたら、最後の所の出来に関わらずクリアの音
+            if last && p.toured() {
+                self.practice_events.push(PracticeEvent::Cleared);
+            } else if a.passed == Some(true) {
+                self.practice_events.push(if p.cleared() && last {
+                    PracticeEvent::Cleared
+                } else {
+                    PracticeEvent::StepUp
+                });
             }
         }
         self.seen_attempts = p.done.len();
-        // クリアは「クリア！」を見せてから、時間の区切りは「時間です」を見せてから結果へ
+        // クリアとめぐり終えたのは見せてから、時間の区切りは「時間です」を見せてから結果へ
         let end = p
             .cleared_at_ms
+            .or(p.toured_at_ms)
             .map(|at| at + CLEAR_HOLD_MS)
             .or(p.timed_out_at_ms.map(|at| at + TIME_UP_HOLD_MS));
         if let Some(end) = end
@@ -850,7 +882,7 @@ impl Play {
         let Some(p) = self.practice.as_mut() else {
             return;
         };
-        if let Some(sa) = self.section_audio.as_mut() {
+        for sa in &mut self.section_audio {
             sa.poll();
         }
         p.settle(now_ms);
@@ -861,8 +893,8 @@ impl Play {
         // 新しい速度の音ができていなければ取り下げない（前の速度で回し、できてから変える）
         let ready = self
             .section_audio
-            .as_ref()
-            .is_none_or(|sa| sa.get(p.speed()).is_some());
+            .iter()
+            .all(|sa| sa.get(p.speed()).is_some());
         if ready {
             while let Some(w) = p.withdraw_stale(now_ms) {
                 if !self.judge.truncate(w.notes_from) {
@@ -879,17 +911,13 @@ impl Play {
             // 決めた速度の音がまだできていなければ、できるまで前の周の速度で回す
             let want = p.speed();
             // セットの始めは、選んだ速度の音ができるまで並べない（前の速度で始めると知らせと合わない）
-            if p.resume_pending()
-                && self
-                    .section_audio
-                    .as_ref()
-                    .is_some_and(|sa| sa.get(want).is_none())
-            {
+            if p.resume_pending() && self.section_audio.iter().any(|sa| sa.get(want).is_none()) {
                 break;
             }
-            let speed = match &self.section_audio {
-                Some(sa) if sa.get(want).is_none() => p.last_speed().unwrap_or(want),
-                _ => want,
+            let speed = if self.section_audio.iter().any(|sa| sa.get(want).is_none()) {
+                p.last_speed().unwrap_or(want)
+            } else {
+                want
             };
             let (lap, notes) = p.next_lap(speed, now_ms + ahead);
             log::info!(
@@ -916,7 +944,12 @@ impl Play {
             let cuts = p.break_windows(&lap);
             let demo = p.take_demo();
             if let Some(a) = self.audio.as_mut() {
-                if let Some(sa) = &self.section_audio
+                // 周の音の範囲を含む区間の音（めぐるやり方は今の所の音）
+                let piece = self.section_audio.iter().find(|sa| {
+                    sa.from_ms <= lap.audio.from_ms + 1.0
+                        && lap.audio.to_ms <= sa.from_ms + sa.song_len_ms + 1.0
+                });
+                if let Some(sa) = piece
                     && let Some(s) = sa.get(speed)
                 {
                     for span in cut_span(lap.audio, &cuts, lap.speed) {
@@ -955,7 +988,7 @@ impl Play {
             }
             p.push_lap(lap, range);
         }
-        if let Some(sa) = self.section_audio.as_mut() {
+        for sa in &mut self.section_audio {
             for s in p.speeds_to_prepare() {
                 sa.request(s);
             }
@@ -1407,7 +1440,7 @@ impl Play {
     /// 音を止める（STAGE FAILED）。時計はシステム時刻になるが、もう譜面は進めない
     pub fn silence(&mut self) {
         self.audio = None;
-        self.section_audio = None;
+        self.section_audio.clear();
     }
 
     pub fn on_key(&mut self, lane: DrumLane, at_us: i64) {
@@ -1760,6 +1793,7 @@ impl Play {
                     .map_or(0.0, |l| (self.now_ms() - l.plan.audio.at_ms).max(0.0)),
                 cleared: p.cleared(),
                 timed_out: p.timed_out_at_ms.is_some(),
+                toured: p.toured(),
                 strays: p.stray_hint(),
                 offset: p.offset_mean(),
                 picture: p.picture.clone(),
@@ -1927,6 +1961,15 @@ impl Play {
                 }
                 Way::Build => {
                     settings += &format!(",\"way\":\"build\",\"build\":\"{}\"", o.build.key());
+                }
+                w if w.tours() => {
+                    let stops: Vec<String> = p
+                        .stops()
+                        .iter()
+                        .map(|s| format!("[{},{}]", s.first, s.last))
+                        .collect();
+                    settings +=
+                        &format!(",\"way\":\"{}\",\"stops\":[{}]", w.key(), stops.join(","));
                 }
                 w => settings += &format!(",\"way\":\"{}\"", w.key()),
             }
@@ -2692,6 +2735,7 @@ mod tests {
             way: Default::default(),
             part: Default::default(),
             build: Default::default(),
+            stops: Default::default(),
         };
         let play = Play::load_practice(&path, 0.0, false, &rules, options);
         std::fs::remove_file(&path).unwrap();

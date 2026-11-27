@@ -14,8 +14,12 @@ use crate::chart_picture::Look;
 use crate::game::{Outcome, PracticeOutcome};
 use crate::gfx::{Canvas, Gfx};
 use crate::inputs::lane_label;
-use crate::practice::{LapSummary, StrayHint, WEAK_VELOCITY, section_label, style_label};
+use crate::practice::{
+    LapSummary, StrayHint, WEAK_VELOCITY, mark_line, section_label, style_label, way_label,
+};
+use crate::practice_hud::mark_color;
 use crate::text::Style;
+use engine::practice_way::Mark;
 
 const PASS_COLOR: Color32 = Color32::from_rgb(0x70, 0xE0, 0x90);
 /// ミスした周・ミス 1 回の拍
@@ -259,47 +263,170 @@ fn draw_stairs(c: &Canvas, g: &mut Gfx, p: &PracticeOutcome, (x, y, w, h): (f32,
     }
 }
 
-/// 練習の結果。段と挑戦の印、時間と周の数、ミスした所の譜面の絵、いちばんミスした所、気づいたこと
+/// めぐった所ごとの出来（めぐる順。まだの所と、最後まで叩いた周の無い所は None）
+pub fn stop_marks(p: &PracticeOutcome) -> Vec<Option<Mark>> {
+    (0..p.options.stops.len())
+        .map(|i| p.attempts.iter().find(|a| a.index == i).and_then(Mark::of))
+        .collect()
+}
+
+/// めぐった所の並び。所ごとに小節と出来の印、ミスの数
+fn draw_route(c: &Canvas, g: &mut Gfx, p: &PracticeOutcome, (x, y, w, h): (f32, f32, f32, f32)) {
+    let stops = p.options.stops;
+    let n = stops.len().max(1) as f32;
+    let marks = stop_marks(p);
+    let gap = 10.0;
+    let cw = (w - gap * (n - 1.0)) / n;
+    for (i, s) in stops.as_slice().iter().enumerate() {
+        let bx = x + i as f32 * (cw + gap);
+        let cell = (bx, y, cw, h);
+        let mark = marks.get(i).copied().flatten();
+        match mark {
+            Some(m) => {
+                round_fill(c, cell, 6.0, mark_color(m).gamma_multiply(0.18));
+                round_frame(c, cell, 6.0, mark_color(m));
+            }
+            None => {
+                round_fill(c, cell, 6.0, Color32::from_white_alpha(14));
+                round_frame(c, cell, 6.0, Color32::from_white_alpha(60));
+            }
+        }
+        let px = (cw * 0.14).clamp(12.0, 16.0);
+        centered(
+            c,
+            g,
+            &tf!("Spot {}", "{} か所目", i + 1),
+            bx + cw / 2.0,
+            y + 16.0,
+            px - 2.0,
+            Color32::from_gray(190),
+            cw - 6.0,
+        );
+        centered(
+            c,
+            g,
+            &section_text(*s),
+            bx + cw / 2.0,
+            y + 40.0,
+            px,
+            Color32::WHITE,
+            cw - 6.0,
+        );
+        let (sym, color) = match mark {
+            Some(m) => (m.symbol(), mark_color(m)),
+            None => ("-", Color32::from_gray(150)),
+        };
+        centered(c, g, sym, bx + cw / 2.0, y + h * 0.58, 52.0, color, cw);
+        let misses = p
+            .attempts
+            .iter()
+            .find(|a| a.index == i)
+            .map(|a| a.missed)
+            .filter(|_| mark.is_some());
+        if let Some(m) = misses {
+            let line = match m {
+                0 => t("No misses", "ノーミス").to_owned(),
+                1 => t("1 miss", "ミス 1 回").to_owned(),
+                m => tf!("{m} misses", "ミス {m} 回"),
+            };
+            centered(
+                c,
+                g,
+                &line,
+                bx + cw / 2.0,
+                y + h - 18.0,
+                px - 2.0,
+                Color32::from_gray(210),
+                cw - 6.0,
+            );
+        }
+    }
+}
+
+/// めぐるやり方で、ミスした所の絵に出す所：いちばんミスした所（無ければ最初の所）
+fn worst_stop(p: &PracticeOutcome) -> Section {
+    let stops = p.options.stops;
+    let worst = (0..stops.len())
+        .filter_map(|i| {
+            let a = p.attempts.iter().find(|a| a.index == i)?;
+            (a.missed > 0).then_some((i, a.missed))
+        })
+        .max_by(|a, b| a.1.cmp(&b.1).then(b.0.cmp(&a.0)));
+    stops
+        .as_slice()
+        .get(worst.map_or(0, |w| w.0))
+        .copied()
+        .unwrap_or(p.options.section)
+}
+
+/// 練習の結果。段と挑戦の印、時間と周の数、ミスした所の譜面の絵、いちばんミスした所、気づいたこと。
+/// めぐるやり方は、段の代わりにめぐった所ごとの出来
 pub fn draw_practice(c: &Canvas, g: &mut Gfx, p: &PracticeOutcome) {
     let (x, y, w, _) = PRACTICE;
     panel(c, PRACTICE);
     let left = x + 20.0;
     let o = p.options;
-    let head = tf!(
-        "{}   Target {}%   {}",
-        "{}　目標 {}%　{}",
-        section_text(o.section),
-        o.speed.goal(),
-        style_label(o.style)
-    );
+    let tours = o.way.tours();
+    let head = if tours {
+        let n = count(o.stops.len(), "spot", "spots", "か所");
+        let speed = p
+            .attempts
+            .first()
+            .map_or(o.speed.first_speed(), |a| a.speed);
+        tf!("{}   {n}   {speed}%", "{}　{n}　{speed}%", way_label(o.way))
+    } else {
+        tf!(
+            "{}   Target {}%   {}",
+            "{}　目標 {}%　{}",
+            section_text(o.section),
+            o.speed.goal(),
+            style_label(o.style)
+        )
+    };
     text(c, g, &head, left, y + 14.0, 20.0, Color32::WHITE);
-    // 段（左）と数（右）
-    draw_stairs(c, g, p, (left + 6.0, y + 58.0, 500.0, 190.0));
+    // 段（左）と数（右）。めぐるやり方は、めぐった所
+    if tours {
+        draw_route(c, g, p, (left, y + 70.0, 520.0, 190.0));
+    } else {
+        draw_stairs(c, g, p, (left + 6.0, y + 58.0, 500.0, 190.0));
+    }
     let legend_y = y + 278.0;
     let dot = |c: &Canvas, cx: f32, color: Color32| {
         c.painter()
             .circle_filled(c.pos(cx, legend_y + 8.0), 5.0 * c.scale(), color);
     };
-    dot(c, left + 10.0, PASS_COLOR);
-    let w1 = text(
-        c,
-        g,
-        "OK",
-        left + 20.0,
-        legend_y,
-        13.0,
-        Color32::from_gray(200),
-    );
-    dot(c, left + 34.0 + w1, WEAK_COLOR);
-    text(
-        c,
-        g,
-        t("Again", "もう一度"),
-        left + 44.0 + w1,
-        legend_y,
-        13.0,
-        Color32::from_gray(200),
-    );
+    if tours {
+        text(
+            c,
+            g,
+            &mark_line(),
+            left,
+            legend_y,
+            13.0,
+            Color32::from_gray(200),
+        );
+    } else {
+        dot(c, left + 10.0, PASS_COLOR);
+        let w1 = text(
+            c,
+            g,
+            "OK",
+            left + 20.0,
+            legend_y,
+            13.0,
+            Color32::from_gray(200),
+        );
+        dot(c, left + 34.0 + w1, WEAK_COLOR);
+        text(
+            c,
+            g,
+            t("Again", "もう一度"),
+            left + 44.0 + w1,
+            legend_y,
+            13.0,
+            Color32::from_gray(200),
+        );
+    }
     let done: Vec<&LapSummary> = p.laps.iter().filter(|l| l.completed).collect();
     let clean = done.iter().filter(|l| l.passed == Some(true)).count();
     let nums = [
@@ -331,21 +458,32 @@ pub fn draw_practice(c: &Canvas, g: &mut Gfx, p: &PracticeOutcome) {
     let worst = spots.weak(1);
     let marks = crate::practice::marks_of(done.iter().map(|l| &l.missed_notes));
     let map_y = y + 306.0;
-    text(
-        c,
-        g,
-        t("Misses (all loops)", "ミスした所（全部の周）"),
-        left,
-        map_y,
-        15.0,
-        Color32::WHITE,
-    );
+    // めぐるやり方は、いちばんミスした拍のある所（無ければミスの多い所）の絵
+    let (map_title, map_section) = if tours {
+        let s = worst
+            .first()
+            .and_then(|(b, _)| {
+                o.stops
+                    .as_slice()
+                    .iter()
+                    .copied()
+                    .find(|s| s.contains(b.measure))
+            })
+            .unwrap_or_else(|| worst_stop(p));
+        (tf!("Misses ({})", "ミスした所（{}）", section_text(s)), s)
+    } else {
+        (
+            t("Misses (all loops)", "ミスした所（全部の周）").to_owned(),
+            o.section,
+        )
+    };
+    text(c, g, &map_title, left, map_y, 15.0, Color32::WHITE);
     let picture = (left - 4.0, map_y + 26.0, w - 32.0, 150.0);
     p.picture.draw(
         c,
         g,
         picture,
-        o.section,
+        map_section,
         &marks,
         Look {
             beat: worst.first().map(|(b, _)| (b.measure, b.beat)),
@@ -415,12 +553,17 @@ pub fn draw_practice_laps(c: &Canvas, g: &mut Gfx, p: &PracticeOutcome) {
     let left = x + 20.0;
     let heading_w = g.heading(c, left, y + 10.0, t("Loop Results", "周ごとの成績"));
     let o = p.options;
-    let head = tf!(
-        "{}   {}",
-        "{}　{}",
-        section_text(o.section),
-        plan_text(o.speed)
-    );
+    let head = if o.way.tours() {
+        let n = count(o.stops.len(), "spot", "spots", "か所");
+        tf!("{}   {n}", "{}　{n}", way_label(o.way))
+    } else {
+        tf!(
+            "{}   {}",
+            "{}　{}",
+            section_text(o.section),
+            plan_text(o.speed)
+        )
+    };
     text(
         c,
         g,
