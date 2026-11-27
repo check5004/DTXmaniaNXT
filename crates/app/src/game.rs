@@ -12,6 +12,7 @@ use engine::clock::MidiTimestampMapper;
 use engine::input::{Articulation, InputEvent, MidiMessage, MidiProfile, Normalizer, Pad};
 use engine::judge::{Hit, HitWindows, Judge, JudgeEvent, Judgement, LaneGroups, Tally};
 use engine::practice::{Attempt, SpeedPlan, place};
+use engine::practice_way::{Way, cut_span};
 use engine::stroke::{Stroke, StrokeTally};
 use i18n::tf;
 use records::{Lap, NoteHit, SectionClear, Session, SessionKind, StrayHit};
@@ -406,6 +407,8 @@ pub struct Play {
     replay: Option<Feed>,
     /// リプレイで飛んだ先まで一度に判定しているところ（画面の効果を捨てずに全部ためる）
     catching_up: bool,
+    /// お手本の周の音符を、ここまで（曲の時刻）レーンを光らせた
+    demo_seen_ms: f64,
 }
 
 impl Play {
@@ -577,7 +580,16 @@ impl Play {
         practice: Option<PracticeOptions>,
         drill: Option<engine::drill::Run>,
     ) -> Result<Self> {
-        let auto = rules.auto.as_slice();
+        // パート練習は、選んだパートの外のレーンも自動で叩く
+        let mut auto = rules.auto.clone();
+        if let Some(o) = practice.filter(|o| o.way == Way::Part) {
+            for l in o.part.auto_lanes() {
+                if !auto.contains(&l) {
+                    auto.push(l);
+                }
+            }
+        }
+        let auto = auto.as_slice();
         let chart = dtx::load(bytes);
         for w in &chart.warnings {
             log::warn!("{}:{}: {}", path.display(), w.line, w.message);
@@ -766,6 +778,7 @@ impl Play {
             hit_sounds: rules.hit_sounds,
             replay: None,
             catching_up: false,
+            demo_seen_ms: f64::NEG_INFINITY,
         };
         play.lay_laps(start_ms);
         play.lay_auto(start_ms);
@@ -899,12 +912,18 @@ impl Play {
             }
             let range = self.judge.extend(notes);
             self.note_hits.resize(self.judge.notes().len(), None);
+            // 曲のブレイクで音を消す所（曲の時刻）
+            let cuts = p.break_windows(&lap);
+            let demo = p.take_demo();
             if let Some(a) = self.audio.as_mut() {
                 if let Some(sa) = &self.section_audio
                     && let Some(s) = sa.get(speed)
-                    && let Some(at) = place(sa.from_ms, sa.song_len_ms, lap.audio, lap.speed)
                 {
-                    a.play_placed(s, &at, 1.0, Bus::Song);
+                    for span in cut_span(lap.audio, &cuts, lap.speed) {
+                        if let Some(at) = place(sa.from_ms, sa.song_len_ms, span, lap.speed) {
+                            a.play_placed(s, &at, 1.0, Bus::Song);
+                        }
+                    }
                 }
                 if let Some((accent, plain)) = &self.clicks {
                     for (i, &c) in lap.clicks.iter().enumerate() {
@@ -913,9 +932,24 @@ impl Play {
                     }
                     if self.metronome {
                         for &(c, bar) in &lap.beats {
+                            let song = lap.song_ms(c);
+                            if cuts.iter().any(|&(x, y)| song >= x && song < y) {
+                                continue;
+                            }
                             let click = if bar { accent } else { plain };
                             a.play_at_tagged(click, c, METRONOME_GAIN, METRONOME_TAG, Bus::Click);
                         }
+                    }
+                }
+                // お手本の周は、譜面の音を時刻どおりに鳴らす（叩いた音の設定に関わらず）
+                for n in &demo {
+                    let hat = Hat::of_lane(n.lane);
+                    if self.hit_sounds.muting_lp && hat.is_some_and(Hat::mutes) {
+                        a.stop_at(HH_TAG, n.ms);
+                    }
+                    if let Some(s) = self.sounds.get(&n.wav) {
+                        let (gain, pan) = self.chart_sounds.gain_pan(n.wav);
+                        a.play_chip(s, n.ms, None, (gain, pan), (Bus::Song, hat_tag(hat)));
                     }
                 }
             }
@@ -1011,7 +1045,12 @@ impl Play {
                     return;
                 };
                 for lap in &p.laps {
+                    let cuts = p.break_windows(&lap.plan);
                     for &(c, bar) in lap.plan.beats.iter().filter(|b| b.0 >= now) {
+                        let song = lap.plan.song_ms(c);
+                        if cuts.iter().any(|&(x, y)| song >= x && song < y) {
+                            continue;
+                        }
                         let click = if bar { accent } else { plain };
                         a.play_at_tagged(click, c, METRONOME_GAIN, METRONOME_TAG, Bus::Click);
                     }
@@ -1198,12 +1237,35 @@ impl Play {
         }
         let now = self.now_ms();
         self.lay_laps(now);
+        self.flash_demo(now);
         self.note_practice(now);
         self.lay_auto(now);
         self.lay_replay(now);
         self.feed_replay(now);
         // 見逃しは判定の時刻で決める（遅めに叩いても POOR の幅の中なら、見逃しより先に届いた打撃で取れるように）
         self.advance_to(self.judge_ms(now));
+    }
+
+    /// お手本の周の音符が時刻 `now` までに来たら、自動で叩いたのと同じくレーンを光らせる
+    fn flash_demo(&mut self, now: f64) {
+        let Some(p) = &self.practice else {
+            return;
+        };
+        let from = self.demo_seen_ms;
+        let hits: Vec<(DrumLane, bool)> = p
+            .demo
+            .iter()
+            .filter(|d| d.0 > from && d.0 <= now)
+            .map(|&(_, lane, wav)| (lane, self.is_rim(lane, wav)))
+            .collect();
+        self.demo_seen_ms = now;
+        for (lane, rim) in hits {
+            self.push_fx(Fx::Hit {
+                lane,
+                velocity: AUTO_VELOCITY,
+                rim,
+            });
+        }
     }
 
     /// 判定の時刻 `ms` までに来た自動の音符を取り、判定の幅を過ぎた音符を見逃しにする
@@ -1858,6 +1920,16 @@ impl Play {
                 p.attempts().len(),
                 p.cleared()
             );
+            match o.way {
+                Way::Climb => {}
+                Way::Part => {
+                    settings += &format!(",\"way\":\"part\",\"part\":\"{}\"", o.part.key());
+                }
+                Way::Build => {
+                    settings += &format!(",\"way\":\"build\",\"build\":\"{}\"", o.build.key());
+                }
+                w => settings += &format!(",\"way\":\"{}\"", w.key()),
+            }
         }
         if let Some(d) = &self.drill {
             let run = &d.run;
@@ -2617,6 +2689,9 @@ mod tests {
             metronome: false,
             step_laps: 2,
             time_box_s: None,
+            way: Default::default(),
+            part: Default::default(),
+            build: Default::default(),
         };
         let play = Play::load_practice(&path, 0.0, false, &rules, options);
         std::fs::remove_file(&path).unwrap();

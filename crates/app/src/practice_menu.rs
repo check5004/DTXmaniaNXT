@@ -2,7 +2,8 @@
 //!
 //! 左に苦手な所（遊んだ記録から）を譜面の小さな絵つきで並べ、右に選んでいる所の大きな絵を出す。
 //! よくミスする音には印を付け、選んでいる所の音（BGM とドラム）は App が流す（[`PracticeMenu::shown`]）。
-//! 苦手な所の下に「自分で選ぶ」（区間と長さ）、「速度・つなぎ方」（開くと右に行が出る）、「選曲に戻る」。
+//! 苦手な所の下に「やり方」（パート練習・お手本と交互など。パートや向きを選ぶやり方はその下に 1 行）、
+//! 「自分で選ぶ」（区間と長さ）、「速度・つなぎ方」（開くと右に行が出る）、「選曲に戻る」。
 //!
 //! 練習の結果からはここに戻る。苦手な所の並びは開いたときのまま変えず（練習で苦手度が下がっても消えない）、
 //! クリアした所には印を付け、カーソルを次のまだクリアしていない所に移す。勝手には始めない。
@@ -14,12 +15,16 @@ use std::time::{Duration, Instant};
 
 use egui::{Color32, Pos2, Stroke, StrokeKind};
 use engine::practice::{LoopStyle, STEP_SPEED, Section, SpeedPlan};
+use engine::practice_way::{Build, Way};
 use i18n::{count, t, tf};
 
 use crate::band::{Band, BandData, CLEARED_COLOR};
 use crate::chart_picture::{Look, WEAK_COLOR};
 use crate::gfx::{Canvas, Gfx};
-use crate::practice::{PracticeOptions, PracticeSetup, pass_line, section_label, style_label};
+use crate::practice::{
+    PracticeOptions, PracticeSetup, build_label, part_label, pass_line, section_label, style_label,
+    way_help, way_label,
+};
 use crate::settings_ui::{self as ui, Pad};
 use crate::sfx::Se;
 use crate::stretch::Pitch;
@@ -79,6 +84,10 @@ pub struct Finished {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Item {
     Spot(usize),
+    /// やり方（SD・FT で切り替える）
+    Way,
+    /// パート練習で叩くパート、積み上げの向き（そのやり方のときだけ出る）
+    WayOption,
     /// 自分で選ぶ区間（SD・FT で 1 小節ずつ動かす）
     Section,
     /// 自分で選ぶ区間の長さ
@@ -91,7 +100,10 @@ enum Item {
 impl Item {
     /// 決めると練習を始める行
     fn starts(self) -> bool {
-        matches!(self, Item::Spot(_) | Item::Section | Item::Length)
+        matches!(
+            self,
+            Item::Spot(_) | Item::Way | Item::WayOption | Item::Section | Item::Length
+        )
     }
 }
 
@@ -256,8 +268,18 @@ impl PracticeMenu {
     fn items(&self) -> Vec<Item> {
         (0..self.spots.len())
             .map(Item::Spot)
-            .chain([Item::Section, Item::Length, Item::Settings, Item::Back])
+            .chain(self.rows())
             .collect()
+    }
+
+    /// 苦手な所の下の行
+    fn rows(&self) -> Vec<Item> {
+        let mut v = vec![Item::Way];
+        if matches!(self.setup.way, Way::Part | Way::Build) {
+            v.push(Item::WayOption);
+        }
+        v.extend([Item::Section, Item::Length, Item::Settings, Item::Back]);
+        v
     }
 
     fn item(&self) -> Item {
@@ -304,7 +326,7 @@ impl PracticeMenu {
         let s = match self.item() {
             Item::Spot(i) => Some(self.spots[i].section),
             Item::Section | Item::Length => self.custom,
-            Item::Settings | Item::Back => return,
+            Item::Way | Item::WayOption | Item::Settings | Item::Back => return,
         };
         self.setup.section = s;
         self.shown = s;
@@ -334,6 +356,14 @@ impl PracticeMenu {
             }
             MenuInput::Left | MenuInput::Right => {
                 let d = if input == MenuInput::Left { -1 } else { 1 };
+                match item {
+                    Item::Way => {
+                        self.setup.way = self.setup.way.step(d);
+                        return Response::se(Se::Move);
+                    }
+                    Item::WayOption => return self.change_option(d),
+                    _ => {}
+                }
                 let before = self.setup.section;
                 match item {
                     Item::Section => self.setup.shift(d),
@@ -364,6 +394,30 @@ impl PracticeMenu {
                 },
             },
         }
+    }
+
+    /// パート練習のパート、積み上げの向きを `d`（-1 か 1）動かす。パートは曲に音符のあるものだけ
+    fn change_option(&mut self, d: i64) -> Response {
+        let s = &mut self.setup;
+        match s.way {
+            Way::Part => {
+                let parts = s.parts();
+                let i = parts.iter().position(|&p| p == s.part).unwrap_or(0) as i64;
+                let next = parts[(i + d).rem_euclid(parts.len() as i64) as usize];
+                if next == s.part {
+                    return Response::se(Se::Cancel);
+                }
+                s.part = next;
+            }
+            Way::Build => {
+                s.build = match s.build {
+                    Build::Forward => Build::Backward,
+                    Build::Backward => Build::Forward,
+                };
+            }
+            _ => return Response::default(),
+        }
+        Response::se(Se::Move)
     }
 
     fn start(&self) -> Response {
@@ -501,11 +555,19 @@ impl PracticeMenu {
         Response::default()
     }
 
+    /// 苦手な所の札の間（札の高さと間）。下の行が増えたら、板に収まるよう札を低くする
+    fn card_pitch(&self) -> f32 {
+        let n = self.spots.len().max(1) as f32;
+        let room = LIST.1 + LIST.3 - 8.0 - CARD_Y - 10.0 - self.rows().len() as f32 * ROW_H;
+        (CARD_H + CARD_GAP).min(room / n)
+    }
+
     /// 一覧の行の場所（y と高さ）
     fn item_rect(&self, i: usize) -> (f32, f32) {
         let n = self.spots.len();
         if i < n {
-            (CARD_Y + i as f32 * (CARD_H + CARD_GAP), CARD_H)
+            let pitch = self.card_pitch();
+            (CARD_Y + i as f32 * pitch, pitch - CARD_GAP)
         } else {
             (self.rows_top() + (i - n) as f32 * ROW_H, ROW_H)
         }
@@ -518,7 +580,7 @@ impl PracticeMenu {
             // 苦手な所が無いことを書く 2 行の下
             CARD_Y + 56.0
         } else {
-            CARD_Y + n as f32 * (CARD_H + CARD_GAP) + 10.0
+            CARD_Y + n as f32 * self.card_pitch() + 10.0
         }
     }
 
@@ -674,7 +736,7 @@ impl PracticeMenu {
                 tx.draw(c, bar.0 + bar.2 + 6.0, cy + 24.0, 1.0, 1.0);
             }
             if let Some(speed) = self.cleared_speed(spot.section) {
-                let badge = (tx_x, cy + 40.0, 84.0, 18.0);
+                let badge = (tx_x, cy + (ch - 18.0).min(40.0), 84.0, 18.0);
                 round_fill(c, badge, 10.0, CLEARED_COLOR);
                 let st = Style {
                     bold: true,
@@ -701,10 +763,7 @@ impl PracticeMenu {
             Color32::from_white_alpha(50),
         );
         let n = self.spots.len();
-        for (k, item) in [Item::Section, Item::Length, Item::Settings, Item::Back]
-            .into_iter()
-            .enumerate()
-        {
+        for (k, item) in self.rows().into_iter().enumerate() {
             let (ry, rh) = self.item_rect(n + k);
             let on = current == item;
             if on {
@@ -729,6 +788,9 @@ impl PracticeMenu {
                 }
             };
             let label = match item {
+                Item::Way => t("Mode", "やり方"),
+                Item::WayOption if self.setup.way == Way::Part => t("Your Part", "叩くパート"),
+                Item::WayOption => t("Direction", "向き"),
                 Item::Section => t("Pick Your Own", "自分で選ぶ"),
                 Item::Length => t("Length", "長さ"),
                 Item::Settings => t("Speed & Looping", "速度・くり返し方"),
@@ -738,6 +800,11 @@ impl PracticeMenu {
                 tx.draw(c, x + 30.0, ry + (rh - tx.h) / 2.0 - 1.0, 1.0, 1.0);
             }
             let value = match item {
+                Item::Way => way_label(self.setup.way).to_owned(),
+                Item::WayOption if self.setup.way == Way::Part => {
+                    part_label(self.setup.part).to_owned()
+                }
+                Item::WayOption => build_label(self.setup.build).to_owned(),
                 Item::Section => self.custom.map(section_label).unwrap_or_default(),
                 Item::Length => self
                     .custom
@@ -762,7 +829,12 @@ impl PracticeMenu {
                     let right = x + w - 40.0;
                     tx.draw(c, right - tx.w, ry + (rh - tx.h) / 2.0 - 1.0, 1.0, 1.0);
                 }
-                if on && matches!(item, Item::Section | Item::Length) {
+                if on
+                    && matches!(
+                        item,
+                        Item::Way | Item::WayOption | Item::Section | Item::Length
+                    )
+                {
                     let cy = ry + rh / 2.0 - 1.0;
                     let vw = g.texts.get(&value, &vs).map_or(60.0, |tx| tx.w);
                     ui::triangle(c, x + w - 52.0 - vw, cy, 10.0, -1, ink);
@@ -882,7 +954,7 @@ impl PracticeMenu {
             1.0,
             Color32::from_white_alpha(50),
         );
-        // のぼる段と決まり
+        // のぼる段と決まり（ほかのやり方は、やり方の説明）
         let s = &self.setup;
         let steps = s.speed.steps();
         let path = steps
@@ -896,20 +968,41 @@ impl PracticeMenu {
             tf!("{path}% (1 step)", "{path}%（1 段）")
         };
         let accent = Style::edged(18.0, ORANGE, Color32::BLACK, 1.5);
-        let py = ly + 42.0;
-        if let Some(tx) = g.texts.get(&head, &accent) {
-            tx.draw_fit(c, left, py, right - left);
-        }
-        let rule = tf!(
-            "{} loops per step. Pass the {}% step to clear. {}",
-            "1 段 {} 周。{}% の段を越えたらクリア。{}",
-            s.step_laps,
-            s.speed.goal(),
-            style_label(s.style)
-        );
         let grey = Style::edged(14.0, GREY, Color32::BLACK, 1.0);
-        if let Some(tx) = g.texts.get(&rule, &grey) {
-            tx.draw_fit(c, left, py + 28.0, right - left);
+        let py = ly + 42.0;
+        let mut below = py + 54.0;
+        if s.way == Way::Climb {
+            if let Some(tx) = g.texts.get(&head, &accent) {
+                tx.draw_fit(c, left, py, right - left);
+            }
+            let rule = tf!(
+                "{} loops per step. Pass the {}% step to clear. {}",
+                "1 段 {} 周。{}% の段を越えたらクリア。{}",
+                s.step_laps,
+                s.speed.goal(),
+                style_label(s.style)
+            );
+            if let Some(tx) = g.texts.get(&rule, &grey) {
+                tx.draw_fit(c, left, py + 28.0, right - left);
+            }
+        } else {
+            let mut hx = left;
+            if let Some(tx) = g.texts.get(way_label(s.way), &accent) {
+                tx.draw(c, left, py, 1.0, 1.0);
+                hx += tx.w + 16.0;
+            }
+            let speed = Style::edged(14.0, Color32::from_gray(225), Color32::BLACK, 1.0);
+            if let Some(tx) = g.texts.get(&head, &speed) {
+                tx.draw_fit(c, hx, py + 3.0, right - hx);
+            }
+            let help = way_help(s.way, s.part, s.build, section.measures());
+            let lines = g.texts.wrap(&help, 14.0, right - left);
+            for (i, line) in lines.iter().take(3).enumerate() {
+                if let Some(tx) = g.texts.get(line, &grey) {
+                    tx.draw(c, left, py + 28.0 + i as f32 * 19.0, 1.0, 1.0);
+                }
+            }
+            below = py + 28.0 + lines.len().min(3) as f32 * 19.0 + 6.0;
         }
         if let Some(speed) = self.cleared_speed(section) {
             let st = Style::edged(14.0, CLEARED_COLOR, Color32::BLACK, 1.0);
@@ -917,19 +1010,24 @@ impl PracticeMenu {
                 .texts
                 .get(&tf!("Cleared at {speed}%", "クリア済み（{speed}%）"), &st)
             {
-                tx.draw(c, left, py + 54.0, 1.0, 1.0);
+                tx.draw(c, left, below, 1.0, 1.0);
             }
         }
         // 練習を始めるボタン（音符が無ければ知らせる）
-        if s.notes_in(section) == 0 {
-            let st = Style::edged(15.0, WEAK_COLOR, Color32::BLACK, 1.0);
-            if let Some(tx) = g.texts.get(
+        if !s.playable(section) {
+            let text = if s.notes_in(section) == 0 {
                 t(
                     "This section has no notes.",
                     "この区間には音符がありません。",
-                ),
-                &st,
-            ) {
+                )
+            } else {
+                t(
+                    "This section has no notes for your part.",
+                    "この区間には、選んだパートの音符がありません。",
+                )
+            };
+            let st = Style::edged(15.0, WEAK_COLOR, Color32::BLACK, 1.0);
+            if let Some(tx) = g.texts.get(text, &st) {
                 tx.draw(c, right - tx.w, START.1 + 14.0, 1.0, 1.0);
             }
             return;
@@ -1185,6 +1283,8 @@ impl PracticeMenu {
         }
         let item = self.item();
         match item {
+            Item::Way => v.push((&[Pad::SD, Pad::FT], t("←→ Mode", "←→ やり方を変える"))),
+            Item::WayOption => v.push((&[Pad::SD, Pad::FT], t("←→ Change", "←→ 変える"))),
             Item::Section => v.push((&[Pad::SD, Pad::FT], t("←→ Move", "←→ 区間を動かす"))),
             Item::Length => v.push((&[Pad::SD, Pad::FT], t("←→ Length", "←→ 長さを変える"))),
             _ => {}
@@ -1320,6 +1420,7 @@ mod tests {
             title: String::new(),
             artist: String::new(),
             notes_per_measure: vec![4; measures],
+            lanes_per_measure: Vec::new(),
             weak: WeakMap {
                 weakness: vec![None; measures],
                 phrases: vec![
@@ -1355,6 +1456,9 @@ mod tests {
             pitch: Pitch::Keep,
             metronome: true,
             step_laps: engine::practice::STEP_LAPS,
+            way: Default::default(),
+            part: Default::default(),
+            build: Default::default(),
         }
     }
 
@@ -1506,5 +1610,74 @@ mod tests {
         let m = PracticeMenu::new(s, None, None);
         assert_eq!(m.item(), Item::Section);
         assert_eq!(m.shown(), Some(Section::new(0, 3)));
+    }
+
+    #[test]
+    fn the_mode_row_switches_ways_and_shows_the_part_or_direction() {
+        use dtx::DrumLane;
+        use engine::practice_way::{Part, lane_mask};
+        let mut s = setup(16, None);
+        s.lanes_per_measure = vec![lane_mask([DrumLane::SD, DrumLane::BD]); 16];
+        let mut m = PracticeMenu::new(s, None, None);
+        // やり方の行は苦手な所のすぐ下
+        assert_eq!(m.items()[3], Item::Way);
+        m.cursor = m.item_index(Item::Way);
+        assert!(!m.items().contains(&Item::WayOption));
+        m.input(MenuInput::Right);
+        assert_eq!(m.setup.way, Way::Part);
+        // パート練習は、叩くパートの行が出る（曲に音符のあるパートだけ）
+        assert!(m.items().contains(&Item::WayOption));
+        m.input(MenuInput::Down);
+        assert_eq!(m.item(), Item::WayOption);
+        assert_eq!(m.setup.part, Part::Hands);
+        m.input(MenuInput::Right);
+        assert_eq!(m.setup.part, Part::Feet);
+        m.input(MenuInput::Right);
+        assert_eq!(m.setup.part, Part::Snare);
+        m.input(MenuInput::Right);
+        assert_eq!(m.setup.part, Part::Hands);
+        // 決めると、絵に出していた区間をそのやり方で始める
+        assert!(matches!(
+            m.input(MenuInput::Decide).done,
+            Some(Done::Start(o)) if o.way == Way::Part && o.section == Section::new(4, 5)
+        ));
+        // 積み上げは向きの行
+        m.cursor = m.item_index(Item::Way);
+        m.input(MenuInput::Right);
+        m.input(MenuInput::Right);
+        assert_eq!(m.setup.way, Way::Build);
+        m.input(MenuInput::Down);
+        m.input(MenuInput::Left);
+        assert_eq!(m.setup.build, Build::Backward);
+        // 左の端からは右の端へ回る
+        m.cursor = m.item_index(Item::Way);
+        for _ in 0..3 {
+            m.input(MenuInput::Left);
+        }
+        assert_eq!(m.setup.way, Way::Climb);
+        m.input(MenuInput::Left);
+        assert_eq!(m.setup.way, Way::Fade);
+        assert!(!m.items().contains(&Item::WayOption));
+    }
+
+    #[test]
+    fn five_spots_and_every_row_fit_in_the_list() {
+        let mut s = setup(16, None);
+        for k in 0..2 {
+            s.weak.phrases.push(engine::analysis::WeakPhrase {
+                first: k,
+                last: k,
+                weakness: 0.2,
+                notes: 4,
+            });
+        }
+        s.way = Way::Part;
+        let m = PracticeMenu::new(s, None, None);
+        assert_eq!(m.spots().len(), 5);
+        let last = m.items().len() - 1;
+        let (y, h) = m.item_rect(last);
+        assert!(y + h <= LIST.1 + LIST.3, "{} > {}", y + h, LIST.1 + LIST.3);
+        let (_, card) = m.item_rect(0);
+        assert!(card >= 54.0, "{card}");
     }
 }

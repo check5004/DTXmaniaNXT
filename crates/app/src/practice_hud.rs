@@ -21,8 +21,12 @@ use crate::chart_picture::Look;
 use crate::drill_hud::clock;
 use crate::gfx::{Canvas, Gfx, Opt, src};
 use crate::play_view::JUDGE_LINE_Y;
-use crate::practice::{CLEAR_HOLD_MS, Cue, LapState, Practice, TIME_UP_HOLD_MS, pass_line};
+use crate::practice::{
+    CLEAR_HOLD_MS, Cue, LapState, Practice, TIME_UP_HOLD_MS, part_label, pass_line, section_label,
+    way_label,
+};
 use crate::text::Style;
+use engine::practice_way::Way;
 
 /// 周と速度の数字の場所（上流のスコアと同じ高さ）
 pub(crate) const LAP_X: f32 = 40.0;
@@ -72,6 +76,8 @@ pub(crate) const CURRENT_COLOR: Color32 = Color32::from_rgb(0xFF, 0xB8, 0x40);
 const DOWN_COLOR: Color32 = SECTION_COLOR;
 pub(crate) const GREY: Color32 = Color32::from_gray(200);
 const DIM: Color32 = Color32::from_gray(150);
+/// お手本の周（自動で叩く）
+pub(crate) const DEMO_COLOR: Color32 = Color32::from_rgb(0xB4, 0x8C, 0xFF);
 /// 今の段の文字（橙の上）
 pub(crate) const INK: Color32 = Color32::from_rgb(50, 30, 0);
 
@@ -99,6 +105,30 @@ pub fn draw(
     draw_clear(c, g, ln, p, now, reverse);
     draw_time_up(c, g, ln, p, now, reverse);
     draw_count_in(c, g, ln, p, now, reverse);
+    draw_demo_tag(c, g, ln, p, now, reverse);
+}
+
+/// お手本の周のあいだ、レーンの上の端に「お手本」の札（叩かない周なので重ねてよい）
+fn draw_demo_tag(c: &Canvas, g: &mut Gfx, ln: Lanes, p: &Practice, now: f64, reverse: bool) {
+    let Some(lap) = p.current_lap(now).and_then(|i| p.laps.get(i)) else {
+        return;
+    };
+    if !lap.demo || now < lap.plan.start_ms || now >= lap.plan.end_ms {
+        return;
+    }
+    let text = t("DEMO: watch and listen", "お手本：見て聞く周です");
+    let style = Style {
+        bold: true,
+        ..Style::plain(18.0, Color32::from_rgb(30, 10, 60))
+    };
+    let Some(tx) = g.texts.get(text, &style) else {
+        return;
+    };
+    let (w, h) = (tx.w + 36.0, 34.0);
+    let y = if reverse { 720.0 - 24.0 - h } else { 24.0 };
+    let x = ln.cx() - w / 2.0;
+    round_fill(c, (x, y, w, h), h / 2.0, DEMO_COLOR.gamma_multiply(0.85));
+    tx.draw(c, x + 18.0, y + (h - tx.h) / 2.0, 1.0, 1.0);
 }
 
 /// レーンの横の広がり（左バスドラムのレーンを足すと右へ広がる）
@@ -484,6 +514,14 @@ fn draw_card(c: &Canvas, g: &mut Gfx, p: &Practice, now: f64) {
         let cx = x + 16.0 + r + i as f32 * pitch;
         let cy = y + 256.0;
         match laps.get(i) {
+            Some(l) if l.demo => {
+                let fill = if i == playing {
+                    DEMO_COLOR
+                } else {
+                    DEMO_COLOR.gamma_multiply(0.45)
+                };
+                dot(c, cx, cy, r, fill, DEMO_COLOR);
+            }
             Some(l) if l.complete() => {
                 let fill = if l.clean() { OK_COLOR } else { SLIP_COLOR };
                 dot(c, cx, cy, r, fill, fill);
@@ -523,6 +561,20 @@ fn draw_card(c: &Canvas, g: &mut Gfx, p: &Practice, now: f64) {
         w - 28.0,
         1.0,
     );
+    // やり方（今日のメニューの曲は、いつも段をのぼる）
+    if let Some((text, color)) = way_line(p, now) {
+        put(
+            c,
+            g,
+            &text,
+            &edged(13.0, color),
+            x + 14.0,
+            y + 311.0,
+            Align::Left,
+            w - 28.0,
+            1.0,
+        );
+    }
     // 今日のメニューの曲は、時間の区切りまでの残り
     if let Some(left) = p.time_left_ms(now) {
         let text = if p.timed_out_at_ms.is_some() || left <= 0.0 {
@@ -550,6 +602,69 @@ fn draw_card(c: &Canvas, g: &mut Gfx, p: &Practice, now: f64) {
             1.0,
         );
     }
+}
+
+/// 右の欄の下に出す、やり方の今の様子（段をのぼるだけなら None）
+fn way_line(p: &Practice, now: f64) -> Option<(String, Color32)> {
+    let o = &p.options;
+    let name = way_label(o.way);
+    let text = match o.way {
+        Way::Climb => return None,
+        Way::Part => tf!(
+            "{name}: {} (the rest plays itself)",
+            "{name}：{}（ほかは自動）",
+            part_label(o.part)
+        ),
+        Way::Demo => {
+            let demo = p
+                .current_lap(now)
+                .and_then(|i| p.laps.get(i))
+                .or(p.laps.first())
+                .is_some_and(|l| l.demo);
+            if demo {
+                return Some((
+                    tf!("{name}: watch and listen", "{name}：見て聞きましょう"),
+                    DEMO_COLOR,
+                ));
+            }
+            tf!("{name}: your turn", "{name}：自分で叩く番です")
+        }
+        Way::Build => {
+            let (lengths, stage) = p.build_stage()?;
+            let path: Vec<String> = lengths.iter().map(u32::to_string).collect();
+            let path = path.join(" → ");
+            tf!(
+                "{name}: {} measures now ({path} measures)",
+                "{name}：いま {} 小節（{path} 小節）",
+                lengths[stage]
+            )
+        }
+        Way::Break => {
+            let state = if p.in_break(now) {
+                t("music off now", "いま消えています")
+            } else {
+                t("off every other 2 measures", "2 小節ずつ消えます")
+            };
+            match p.break_offset() {
+                Some((mean, n)) if n >= 4 => tf!(
+                    "{name}: {state} · while off {:+.0} ms",
+                    "{name}：{state}・消えている間のずれ {:+.0} ms",
+                    mean
+                ),
+                _ => tf!("{name}: {state}", "{name}：{state}"),
+            }
+        }
+        Way::Fade => {
+            let i = p.current_lap(now).unwrap_or(0);
+            let share = p.fade_share_of(i).unwrap_or(1.0);
+            tf!(
+                "{name}: {:.0}% of the notes shown",
+                "{name}：見える音符 {:.0}%",
+                share * 100.0
+            )
+        }
+    };
+    Some((text, CURRENT_COLOR))
 }
 
 /// 段の絵。越えた段は緑に ✓、今の段（`current`）は橙に「いまここ」、いちばん上の段に旗
@@ -787,12 +902,18 @@ fn draw_banner(
             let s = format!("{speed}%");
             let w = score_digits_width(g, &s, 0.9);
             score_digits(c, g, &s, ln.cx() - w / 2.0, top + 84.0, 0.9, alpha);
-            let rule = tf!(
-                "{} loops per step. {}",
-                "1 段 {} 周。{}",
-                p.step_laps(),
-                pass_line(p.options.rule)
-            );
+            let rule = match p.options.way {
+                Way::Climb => tf!(
+                    "{} loops per step. {}",
+                    "1 段 {} 周。{}",
+                    p.step_laps(),
+                    pass_line(p.options.rule)
+                ),
+                w => match start_line(p) {
+                    Some(l) => format!("{}：{l}", way_label(w)),
+                    None => way_label(w).to_owned(),
+                },
+            };
             line(
                 c,
                 g,
@@ -924,6 +1045,32 @@ fn draw_banner(
             }
             Next::Clear => {}
         },
+        Cue::Grow { from, to } => {
+            banner_frame(c, ln, top, BANNER_H, OK_COLOR, alpha);
+            line(c, g, ln, "OK!", &bold(64.0, OK_COLOR), top + 22.0, alpha);
+            line(
+                c,
+                g,
+                ln,
+                &tf!("Next: {from} → {to} measures", "次は {from} → {to} 小節"),
+                &bold(34.0, Color32::WHITE),
+                top + 112.0,
+                alpha,
+            );
+            line(
+                c,
+                g,
+                ln,
+                &tf!(
+                    "{} at the same speed ({speed}%)",
+                    "{} を同じ速度（{speed}%）で",
+                    section_label(lap.section)
+                ),
+                &edged(16.0, GREY),
+                top + 172.0,
+                alpha,
+            );
+        }
         Cue::Manual { from } => {
             banner_frame(c, ln, top, BANNER_H, Color32::WHITE, alpha);
             line(
@@ -959,6 +1106,39 @@ fn draw_banner(
             );
         }
     }
+}
+
+/// 始めの知らせに出す、やり方のひとこと
+fn start_line(p: &Practice) -> Option<String> {
+    let o = &p.options;
+    Some(match o.way {
+        Way::Climb => return None,
+        Way::Part => tf!(
+            "{}. The rest plays itself",
+            "{}。ほかは自動で鳴ります",
+            part_label(o.part)
+        ),
+        Way::Demo => t(
+            "Watch the first loop, then play the next",
+            "1 周目は見て聞き、2 周目に叩きます",
+        )
+        .to_owned(),
+        Way::Build => tf!(
+            "Starting with {}",
+            "{} から始めます",
+            section_label(p.current_section())
+        ),
+        Way::Break => t(
+            "The music drops out every other 2 measures",
+            "曲の音が 2 小節ずつ消えます",
+        )
+        .to_owned(),
+        Way::Fade => t(
+            "Notes thin out loop by loop",
+            "周ごとに音符が減っていきます",
+        )
+        .to_owned(),
+    })
 }
 
 /// 目標の段を越えたら、結果の画面へ進むまでレーンの真ん中に「クリア！」

@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use dtx::DrumLane;
 use engine::input::MidiProfile;
 use engine::practice::{LoopStyle, PassRule, STEP_LAPS, STEP_LAPS_CHOICES, SpeedPlan, snap_speed};
+use engine::practice_way::{Build, Part, Way};
 use i18n::Lang;
 use serde::{Deserialize, Serialize};
 
@@ -60,6 +61,15 @@ pub struct Config {
     pub practice_metronome: bool,
     /// 練習の 1 段の周の数（0.5 の 1 セットの周の数 practice_set_laps とは別。そちらは読まない）
     pub practice_step_laps: u32,
+    /// 曲の練習のやり方（[`engine::practice_way::Way::key`]。空なら段をのぼる）
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub practice_way: String,
+    /// パート練習で叩くパート（[`engine::practice_way::Part::key`]。空なら手）
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub practice_part: String,
+    /// 積み上げの向き（[`engine::practice_way::Build::key`]。空なら前から）
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub practice_build: String,
     /// 基礎練習で最後に選んだドリル（[`engine::drill::Drill::id`]）
     #[serde(skip_serializing_if = "String::is_empty")]
     pub drill: String,
@@ -204,6 +214,9 @@ impl Default for Config {
             practice_pitch: Pitch::default().name().to_owned(),
             practice_metronome: true,
             practice_step_laps: STEP_LAPS,
+            practice_way: String::new(),
+            practice_part: String::new(),
+            practice_build: String::new(),
             drill: String::new(),
             drill_rise: engine::drill::DEFAULT_RISE,
             drill_way: String::new(),
@@ -479,6 +492,9 @@ impl Config {
             pitch: self.pitch(),
             metronome: self.practice_metronome,
             step_laps: self.step_laps(),
+            way: Way::from_key(&self.practice_way).unwrap_or_default(),
+            part: Part::from_key(&self.practice_part).unwrap_or_default(),
+            build: Build::from_key(&self.practice_build).unwrap_or_default(),
         }
     }
 
@@ -525,6 +541,17 @@ impl Config {
         self.practice_pitch = p.pitch.name().to_owned();
         self.practice_metronome = p.metronome;
         self.practice_step_laps = p.step_laps;
+        // 既定の値は書かない（今までの設定のファイルと同じに見えるように）
+        let key = |k: &str, default: &str| {
+            if k == default {
+                String::new()
+            } else {
+                k.to_owned()
+            }
+        };
+        self.practice_way = key(p.way.key(), Way::default().key());
+        self.practice_part = key(p.part.key(), Part::default().key());
+        self.practice_build = key(p.build.key(), Build::default().key());
     }
 
     /// 練習の 1 段の周の数（選べる数のうち一番近いもの）
@@ -679,6 +706,9 @@ mod tests {
             pitch: Pitch::Tape,
             metronome: false,
             step_laps: 6,
+            way: Way::Part,
+            part: Part::Toms,
+            build: Build::Backward,
         };
         c.set_practice_prefs(p);
         assert_eq!(c.practice_prefs(), p);
