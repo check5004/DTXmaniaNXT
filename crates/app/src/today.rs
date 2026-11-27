@@ -730,9 +730,7 @@ mod tests {
         assert_eq!(g.next_after(1), Some(3));
         assert_eq!(g.next_after(n - 1), Some(1));
         assert_eq!(g.first_open(), 1);
-        for d in &mut g.done {
-            *d = true;
-        }
+        g.done.fill(true);
         assert!(g.complete());
         assert_eq!(g.next_after(0), None);
         assert_eq!(g.done_count(), n);
