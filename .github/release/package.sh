@@ -68,11 +68,17 @@ pack_unix "$linux" linux-x64
 (cd dist && sha256sum -- * > SHA256SUMS.txt)
 ls -l dist/
 
-# リリースの説明。載せられたファイルだけ並べる
+# リリースの説明。載せられたファイルだけ並べる。その版で変わったことは changes/<version>.md に書いておくと先頭に入る
 {
+  if [ -f "$here/changes/$version.md" ]; then
+    echo "## このバージョンの主な変更"
+    echo
+    cat "$here/changes/$version.md"
+    echo
+  fi
   echo "## ダウンロード"
   echo
-  echo "- **Windows（64 ビット）**: [DTXmaniaNXT-Setup.exe]($download/DTXmaniaNXT-Setup.exe)。Windows はこれ 1 つだけです。ダブルクリックするとインストールして起動します（管理者の権限は要りません）。次からはスタートメニューかデスクトップの DTXmaniaNXT から起動します。新しい版が出ると、タイトルのメニューの下に知らせが出て、そこから更新できます。"
+  echo "- **Windows（64 ビット）**: [DTXmaniaNXT-Setup.exe]($download/DTXmaniaNXT-Setup.exe)。Windows はこれ 1 つだけです。ダブルクリックするとインストールして起動します（管理者の権限は要りません）。次からはスタートメニューかデスクトップの DTXmaniaNXT から起動します。新しいバージョンが出ると、タイトル画面のメニューの下に表示され、そこからアップデートできます。"
   if [ -f "dist/DTXmaniaNXT-$tag-macos-arm64.tar.gz" ]; then
     echo "- macOS（Apple シリコン）: [DTXmaniaNXT-$tag-macos-arm64.tar.gz]($download/DTXmaniaNXT-$tag-macos-arm64.tar.gz)"
   fi
@@ -80,7 +86,7 @@ ls -l dist/
     echo "- Linux（x86_64）: [DTXmaniaNXT-$tag-linux-x64.tar.gz]($download/DTXmaniaNXT-$tag-linux-x64.tar.gz)（ALSA の \`libasound2\` が要ります）"
   fi
   echo
-  echo "下の一覧のほかのファイルは、ダウンロードしなくてかまいません（\`.nupkg\` と \`releases.win.json\` はアプリが自動更新に使う材料、\`THIRD-PARTY-LICENSES.html\` は使っているライブラリのライセンスの表記、\`SHA256SUMS.txt\` はダウンロードしたファイルの確かめ用、Source code は GitHub が自動で付けるソースです）。"
+  echo "下の一覧のほかのファイルは、ダウンロードしなくてかまいません（\`.nupkg\` と \`releases.win.json\` はアプリがアップデートに使うファイル、\`THIRD-PARTY-LICENSES.html\` は使っているライブラリのライセンスの表記、\`SHA256SUMS.txt\` はダウンロードしたファイルの確認用、Source code は GitHub が自動で付けるソースです）。"
   echo
   cat "$here/notes.md"
 } > notes.md
