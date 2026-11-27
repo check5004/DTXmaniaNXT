@@ -913,11 +913,12 @@ fn draw_pattern(c: &Canvas, g: &mut Gfx, d: &Drill, (x, y, w, h): (f32, f32, f32
     let rows_h = if one_lane { h - 56.0 } else { h - 32.0 };
     let row_h = rows_h / lanes.len() as f32;
     let mw = gw / measures as f32;
-    // 小節の区切りと拍の番号
+    // 小節の区切りと拍の番号（拍子どおり。7/8 などはクリックのまとまりごと）
+    let beats = d.count_in_clicks();
     for m in 0..measures {
         let mx = gx + m as f32 * mw;
-        for b in 0..4 {
-            let bx = mx + b as f32 * mw / 4.0;
+        for (b, &(pos, _)) in beats.iter().enumerate() {
+            let bx = mx + pos as f32 * mw;
             ui::text(
                 c,
                 g,
@@ -977,7 +978,7 @@ fn draw_pattern(c: &Canvas, g: &mut Gfx, d: &Drill, (x, y, w, h): (f32, f32, f32
                     letter,
                     cx,
                     y + h - 30.0,
-                    &bold(15.0, hand_color),
+                    &bold((cell_w * 1.25).clamp(9.0, 15.0), hand_color),
                     cell_w.max(12.0),
                 );
             } else if size >= 14.0 && !n.hand.is_foot() {
