@@ -146,7 +146,7 @@ pub fn name(d: &Drill) -> &'static str {
         ),
         "gap_2" => t("Gap Click (2 Bars)", "2 小節ごとにクリックが消える"),
         "gap_4" => t("Gap Click (4 Bars)", "4 小節ごとにクリックが消える"),
-        "gap_long" => t("Gap Click (6 Bars)", "6 小節クリックが消える"),
+        "gap_long" => t("Gap Click (6 Bars)", "クリックが 6 小節消える"),
         "groove_gap" => t("8-Beat with Gap Click", "8 ビートでクリックが消える"),
         "click_two_four" => t("Click on 2 and 4", "クリックは 2・4 拍目だけ"),
         "click_one" => t("Click on 1 Only", "クリックは 1 拍目だけ"),
@@ -214,7 +214,7 @@ pub fn hand_letter(h: Hand) -> &'static str {
 pub fn pattern_line(d: &Drill) -> String {
     let lanes = d.lanes();
     let feel = if d.measures() > 1 {
-        t("Mixed", "いろいろ")
+        t("Mixed", "ミックス")
     } else {
         match finest_division(d) {
             Some(1) => t("Quarter Notes", "4 分音符"),
@@ -223,7 +223,7 @@ pub fn pattern_line(d: &Drill) -> String {
             Some(4) => t("16th Notes", "16 分音符"),
             Some(5) => t("Quintuplets", "5 連符"),
             Some(6) => t("Sextuplets", "6 連符"),
-            _ => t("Mixed", "いろいろ"),
+            _ => t("Mixed", "ミックス"),
         }
     };
     let pads = if lanes == [DrumLane::SD] {

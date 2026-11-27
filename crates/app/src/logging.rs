@@ -130,7 +130,7 @@ fn message(error: &str, log: Option<&Path>) -> String {
     if let Some(p) = log {
         text.push_str(&tf!(
             "\n\nSee the log for details. If you report this bug, please attach this file.\n{}",
-            "\n\nくわしくはログをご覧ください。不具合を知らせるときは、このファイルを添えてください。\n{}",
+            "\n\n詳しくはログをご覧ください。不具合を報告するときは、このファイルを添付してください。\n{}",
             p.display()
         ));
     }

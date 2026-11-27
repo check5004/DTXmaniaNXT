@@ -148,7 +148,7 @@ fn draw_card(c: &Canvas, g: &mut Gfx, d: &DrillPlay, summary: Option<&Summary>, 
     let head = match run.way {
         Way::Climb => tf!("Target {}", "目標 {}", run.target()),
         Way::Limit => match summary.and_then(Summary::best_clean_bpm) {
-            Some(b) => tf!("Best {b}", "最高 {b}"),
+            Some(b) => tf!("Best {b}", "ベスト {b}"),
             None => tf!("From {}", "{} から", run.target()),
         },
         _ => tf!("Tempo {}", "テンポ {}", run.target()),
@@ -167,7 +167,7 @@ fn draw_card(c: &Canvas, g: &mut Gfx, d: &DrillPlay, summary: Option<&Summary>, 
     // 見出し（右）。終わり、あと何段、持久は残りの時間
     let left = run.steps() - 1 - step;
     let (right, color) = if done {
-        (t("Done", "おわり").to_owned(), OK_COLOR)
+        (t("Done", "終了").to_owned(), OK_COLOR)
     } else if let Way::Endurance(_) = run.way {
         let end = d.measure_start_ms(run.measure_count());
         let rest = (end - now.max(d.measure_start_ms(COUNT_IN_MEASURES))).max(0.0);
@@ -498,7 +498,7 @@ fn draw_gap(c: &Canvas, g: &mut Gfx, d: &DrillPlay, m: u32, cycle: u32) {
         (
             t(
                 "No click now. Keep the beat.",
-                "いまはクリックなし。拍を保って",
+                "今はクリックなし。テンポを保って",
             ),
             CURRENT_COLOR,
         )

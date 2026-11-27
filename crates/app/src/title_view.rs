@@ -308,7 +308,7 @@ impl TitleView {
                 g,
                 &tf!(
                     "Downloading v{version}… {percent}%",
-                    "v{version} を落としています {percent}%"
+                    "v{version} をダウンロード中 {percent}%"
                 ),
                 Some(f32::from(*percent) / 100.0),
                 Corner::TopLeft(6.0, y),
@@ -343,16 +343,18 @@ impl TitleView {
         let mut v: Vec<ui::Hint<'static>> =
             vec![(&[Pad::HT], t("Up", "上")), (&[Pad::LT], t("Down", "下"))];
         let decide = match self.selected() {
-            TitleItem::GameStart => Some(t("Start (Enter)", "はじめる（Enter）")),
+            TitleItem::GameStart => Some(t("Start (Enter)", "スタート（Enter）")),
             TitleItem::Drills => Some(t("Open Drills (Enter)", "基礎練習を開く（Enter）")),
             TitleItem::Config => Some(t("Open Settings (Enter)", "設定を開く（Enter）")),
-            TitleItem::Exit => Some(t("Quit (Enter)", "終わる（Enter）")),
+            TitleItem::Exit => Some(t("Quit (Enter)", "終了（Enter）")),
             TitleItem::Update => match &self.update {
-                Status::Available(_) => Some(t("Update (Enter)", "更新する（Enter）")),
-                Status::Failed(_) => Some(t("Retry Download (Enter)", "もう一度落とす（Enter）")),
+                Status::Available(_) => Some(t("Update (Enter)", "アップデート（Enter）")),
+                Status::Failed(_) => {
+                    Some(t("Retry Download (Enter)", "もう一度ダウンロード（Enter）"))
+                }
                 Status::Ready(_) => Some(t(
                     "Restart to Update (Enter)",
-                    "再起動して入れ替える（Enter）",
+                    "再起動してアップデート（Enter）",
                 )),
                 // 落としている間は、決めても何もしない
                 Status::Downloading { .. } | Status::Idle => None,
@@ -361,7 +363,7 @@ impl TitleView {
         if let Some(d) = decide {
             v.push((&[Pad::CY, Pad::RD], d));
         }
-        v.push((&[], t("Quit (Esc)", "終わる（Esc）")));
+        v.push((&[], t("Quit (Esc)", "終了（Esc）")));
         v
     }
 
@@ -394,20 +396,26 @@ impl TitleView {
         let selected = self.selected() == TitleItem::Update;
         let (label, new) = match &self.update {
             Status::Idle => return,
-            Status::Available(v) if selected => (tf!("Update to v{v}", "v{v} に更新する"), false),
-            Status::Available(v) => (tf!("v{v} Available", "新しい版 v{v}"), true),
+            Status::Available(v) if selected => {
+                (tf!("Update to v{v}", "v{v} にアップデート"), false)
+            }
+            Status::Available(v) => (tf!("v{v} Available", "新しいバージョン v{v}"), true),
             Status::Downloading { percent, .. } => (
-                tf!("Downloading… {percent}%", "落としています {percent}%"),
+                tf!("Downloading… {percent}%", "ダウンロード中 {percent}%"),
                 false,
             ),
             Status::Ready(_) => (
-                t("Restart to Update", "再起動して入れ替える").to_owned(),
+                t("Restart to Update", "再起動してアップデート").to_owned(),
                 false,
             ),
-            Status::Failed(_) if selected => {
-                (t("Retry Download", "もう一度落とす").to_owned(), false)
-            }
-            Status::Failed(_) => (t("Download Failed", "落とせませんでした").to_owned(), false),
+            Status::Failed(_) if selected => (
+                t("Retry Download", "もう一度ダウンロード").to_owned(),
+                false,
+            ),
+            Status::Failed(_) => (
+                t("Download Failed", "ダウンロードに失敗しました").to_owned(),
+                false,
+            ),
         };
         let style = Style {
             bold: true,
@@ -497,10 +505,10 @@ pub fn draw_scanning(c: &Canvas, g: &mut Gfx, since: Instant) {
 /// スキンが無いときのメニュー（「更新」の行の文字は別に描く）
 fn draw_plain_menu(c: &Canvas, g: &mut Gfx, cursor: usize) {
     for (i, name) in [
-        t("Start", "はじめる"),
+        t("Start", "スタート"),
         t("Drills", "基礎練習"),
         t("Settings", "設定"),
-        t("Quit", "終わる"),
+        t("Quit", "終了"),
     ]
     .iter()
     .enumerate()
@@ -616,25 +624,22 @@ mod tests {
             |v: &TitleView| -> Vec<&'static str> { v.hints().iter().map(|h| h.1).collect() };
         let mut v = TitleView::new();
         v.entered -= FADE;
-        assert_eq!(
-            names(&v),
-            ["上", "下", "はじめる（Enter）", "終わる（Esc）"]
-        );
+        assert_eq!(names(&v), ["上", "下", "スタート（Enter）", "終了（Esc）"]);
         v.move_by(1);
         assert_eq!(names(&v)[2], "基礎練習を開く（Enter）");
         v.move_by(1);
         assert_eq!(names(&v)[2], "設定を開く（Enter）");
         v.move_by(1);
-        assert_eq!(names(&v)[2], "終わる（Enter）");
+        assert_eq!(names(&v)[2], "終了（Enter）");
         v.set_update(&Status::Available("9.9.9".to_owned()));
         v.move_by(1);
-        assert_eq!(names(&v)[2], "更新する（Enter）");
+        assert_eq!(names(&v)[2], "アップデート（Enter）");
         // 落としている間は決めても何もしないので、決定は出さない
         v.set_update(&Status::Downloading {
             version: "9.9.9".to_owned(),
             percent: 40,
         });
-        assert_eq!(names(&v), ["上", "下", "終わる（Esc）"]);
+        assert_eq!(names(&v), ["上", "下", "終了（Esc）"]);
         // 足のパッドと LC は使わない（決定は CY と RD）
         for (pads, _) in v.hints() {
             assert!(!pads.iter().any(|p| matches!(p, Pad::BD | Pad::LC)));

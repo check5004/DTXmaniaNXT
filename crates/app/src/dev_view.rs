@@ -153,7 +153,7 @@ impl Item {
         match self {
             Item::Env => t(
                 "Gathers the version, OS, sound output, and MIDI devices. Every report ends with this too.",
-                "版・OS・音の出力・MIDI 機器をまとめます。どの報告にも最後に付きます。",
+                "バージョン・OS・音の出力・MIDI 機器をまとめます。どの報告にも最後に付きます。",
             ),
             Item::Midi => t(
                 "Records every MIDI message received for 10 seconds: which device, the bytes, and the timing.\nWhile recording, pad hits are recorded instead of moving the menu. Press Enter to finish early or Esc to cancel.",
@@ -165,7 +165,7 @@ impl Item {
             ),
             Item::PrevLog => t(
                 "The log from the last time the game ran. Use this after a crash.",
-                "前回起動したときのログです。落ちたあとに送るときに使います。",
+                "前回起動したときのログです。クラッシュしたあとに送るときに使います。",
             ),
             Item::Tool(i) => TOOLS[i].desc.get(),
         }
@@ -176,7 +176,7 @@ impl Item {
         match self {
             Item::Env => t(
                 "Version, OS, sound, and MIDI devices",
-                "版・OS・音・MIDI 機器",
+                "バージョン・OS・音・MIDI 機器",
             ),
             Item::Midi => t(
                 "Every message received for 10 seconds",
@@ -188,7 +188,7 @@ impl Item {
             ),
             Item::PrevLog => t(
                 "The last run's log, for crashes",
-                "前回のログ。落ちたあとに",
+                "前回のログ。クラッシュしたあとに",
             ),
             Item::Tool(i) => TOOLS[i].desc.get().lines().next().unwrap_or(""),
         }
@@ -276,11 +276,11 @@ impl Button {
             ),
             Button::Copy => t(
                 "Copies the title and report to the clipboard.",
-                "題と本文をクリップボードに入れます。",
+                "タイトルと本文をクリップボードにコピーします。",
             ),
             Button::File => t(
                 "Shows the saved file. Drag it onto an issue to attach it.",
-                "保存したファイルを見せます。issue にドラッグすれば添えられます。",
+                "保存したファイルを表示します。issue にドラッグすると添付できます。",
             ),
         }
     }
@@ -385,7 +385,7 @@ impl DevView {
                                     "{}\n\n```text\n{}\n```",
                                     t(
                                         "The tool stopped with an error. The log has the details. Progress so far:",
-                                        "道具がエラーで止まりました。くわしくはログにあります。止まるまでの進み具合:",
+                                        "ツールがエラーで止まりました。詳しくはログにあります。止まるまでの進み具合:",
                                     ),
                                     run.lines.join("\n")
                                 ),
@@ -480,7 +480,7 @@ impl DevView {
                     self.toast(
                         t(
                             "The previous tool is still finishing. Try again in a moment.",
-                            "前の道具がまだ終わっていません。少し待ってからもう一度どうぞ",
+                            "前のツールがまだ終わっていません。少し待ってからもう一度どうぞ",
                         )
                         .to_owned(),
                     );
@@ -551,7 +551,7 @@ impl DevView {
                     self.toast(
                         t(
                             "Went back without waiting. The tool finishes in the background.",
-                            "止まるのを待たずに戻りました。道具は後ろで終わります。",
+                            "終わるのを待たずに戻りました。ツールはバックグラウンドで終了します。",
                         )
                         .to_owned(),
                     );
@@ -564,7 +564,7 @@ impl DevView {
                 DevInput::Decide => DevResponse::se(self.finish_recording()),
                 DevInput::Cancel => {
                     self.mode = Mode::Idle;
-                    self.toast(t("Stopped recording", "記録を取りやめました").to_owned());
+                    self.toast(t("Stopped recording", "記録をキャンセルしました").to_owned());
                     DevResponse::se(Se::Cancel)
                 }
                 _ => DevResponse::default(),
@@ -679,7 +679,7 @@ impl DevView {
                         true,
                         t(
                             "Too long for the link, so it's on your clipboard. Paste it into the issue.",
-                            "本文が長いのでクリップボードに入れました。issue の本文の欄に貼り付けてください",
+                            "本文が長いのでクリップボードにコピーしました。issue の本文の欄に貼り付けてください",
                         )
                         .to_owned(),
                     ),
@@ -710,7 +710,7 @@ impl DevView {
             Button::Copy => match dev_report::copy(&report.markdown()) {
                 Ok(()) => (
                     true,
-                    t("Copied to the clipboard", "クリップボードに入れました").to_owned(),
+                    t("Copied to the clipboard", "クリップボードにコピーしました").to_owned(),
                 ),
                 Err(e) => {
                     log::warn!("could not copy the report: {e}");
@@ -752,23 +752,23 @@ impl DevView {
         match &self.mode {
             Mode::Confirm => vec![
                 (&[Pad::CY], t("Start (Enter)", "始める（Enter）")),
-                (&[Pad::LC], t("Cancel (Esc)", "やめる（Esc）")),
+                (&[Pad::LC], t("Cancel (Esc)", "キャンセル（Esc）")),
             ],
             Mode::Running(run) => vec![(
                 &[Pad::LC],
                 if run.cancel.load(Ordering::SeqCst) {
                     t("Back Without Waiting (Esc)", "待たずに戻る（Esc）")
                 } else {
-                    t("Cancel (Esc)", "取りやめる（Esc）")
+                    t("Cancel (Esc)", "キャンセル（Esc）")
                 },
             )],
             Mode::Recording(_) => vec![
-                (&[], t("Enter: Finish Now", "Enter: ここで終える")),
-                (&[], t("Esc: Cancel", "Esc: 取りやめる")),
+                (&[], t("Enter: Finish Now", "Enter: ここで終了")),
+                (&[], t("Esc: Cancel", "Esc: キャンセル")),
             ],
             Mode::Idle if self.on_report && self.ready_here().is_some() => vec![
                 (&[Pad::SD, Pad::FT], t("Buttons (←→)", "ボタン（←→）")),
-                (&[Pad::HT, Pad::LT], t("Scroll (↑↓)", "本文を送る（↑↓）")),
+                (&[Pad::HT, Pad::LT], t("Scroll (↑↓)", "スクロール（↑↓）")),
                 (&[Pad::CY], t("Select (Enter)", "決定（Enter）")),
                 (&[Pad::LC], t("To the List (Esc)", "一覧へ（Esc）")),
             ],
@@ -857,9 +857,9 @@ impl DevView {
                 ui::text(c, g, item.name(), x + 16.0, y + 14.0, &head, w - 32.0);
                 let secs = run.started.elapsed().as_secs();
                 let state = if run.cancel.load(Ordering::SeqCst) {
-                    tf!("Cancelling… {secs} s", "取りやめています… {secs} 秒")
+                    tf!("Cancelling… {secs} s", "キャンセルしています… {secs} 秒")
                 } else {
-                    tf!("Running… {secs} s", "動かしています… {secs} 秒")
+                    tf!("Running… {secs} s", "実行中… {secs} 秒")
                 };
                 ui::text(
                     c,
@@ -897,12 +897,12 @@ impl DevView {
                     if self.ports.is_empty() {
                         t(
                             "No MIDI input device is connected. Esc cancels.",
-                            "MIDI の入力機器がつながっていません。Esc で取りやめます。",
+                            "MIDI の入力機器がつながっていません。Esc でキャンセルします。",
                         )
                     } else {
                         t(
                             "Hit the pads. Enter finishes now, Esc cancels.",
-                            "パッドを叩いてください。Enter でここで終え、Esc で取りやめます。",
+                            "パッドを叩いてください。Enter で終了、Esc でキャンセルします。",
                         )
                     },
                     x + 16.0,
@@ -1087,7 +1087,7 @@ impl DevView {
             g,
             t(
                 "CY (Enter) to start · LC (Esc) to cancel",
-                "CY（Enter）で始める ・ LC（Esc）でやめる",
+                "CY（Enter）で始める ・ LC（Esc）でキャンセル",
             ),
             x + 24.0,
             y + h - 44.0,

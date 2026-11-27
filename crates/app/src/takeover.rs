@@ -869,7 +869,7 @@ fn add_keys(
     let now = if config.keys.is_empty() {
         t("Default", "既定").to_owned()
     } else {
-        t("Changed", "変えてある").to_owned()
+        t("Changed", "変更あり").to_owned()
     };
     p.items.push(Item {
         part: Part::Pads,
@@ -908,10 +908,10 @@ fn songs(p: &mut Plan, ini: &Ini, root: &Path, config: &Config) {
         if !dir.is_dir() {
             p.rejected.push(Rejected {
                 name: tf!("Song Folder {}", "曲のフォルダ {}", dir.display()),
-                reason: t("Not found", "見つからない").to_owned(),
+                reason: t("Not found", "見つかりません").to_owned(),
                 detail: tf!(
                     "The folder {} doesn't exist (it may have been moved or deleted, or the drive isn't connected).",
-                    "フォルダ {} がありません（動かしたか消したか、ドライブがつながっていないようです）。",
+                    "フォルダ {} がありません（移動・削除されたか、ドライブが接続されていない可能性があります）。",
                     dir.display()
                 ),
             });
@@ -954,7 +954,7 @@ fn songs(p: &mut Plan, ini: &Ini, root: &Path, config: &Config) {
         } else {
             tf!(
                 "Adds these to your song folders and rescans songs. Folders you already have stay as they are.\n{}",
-                "曲のフォルダに追加して、曲を探し直します。今あるフォルダはそのままです。\n{}",
+                "曲のフォルダに追加して、曲を再読み込みします。今あるフォルダはそのままです。\n{}",
                 list.join("\n")
             )
         },
@@ -1236,7 +1236,7 @@ fn velocity(p: &mut Plan, ini: &Ini, config: &Config, ports: &[PortInfo]) {
         note: None,
         desc: t(
             "Hits softer than this are ignored (to filter crosstalk). Applied to the devices that receive the MIDI mapping above.",
-            "これより弱い打撃を捨てます（となりのパッドにつられて鳴る音を除く）。上の MIDI の割り当てを写す機器に使います。",
+            "これより弱い打撃を無視します（隣のパッドにつられて入る信号を防ぎます）。上の MIDI の割り当てを使う機器に設定します。",
         )
         .to_owned(),
         same: now == to,
@@ -1266,11 +1266,11 @@ fn rejected_extras(p: &mut Plan, ini: &Ini, scope: Scope, format: Format) {
                 reason: if others > 0 {
                     count(others, "setting", "settings", "項目")
                 } else {
-                    t("Not read", "読まない").to_owned()
+                    t("Not read", "引き継がない").to_owned()
                 },
                 detail: t(
-                    "For this version of DTXMania, only settings whose meaning has been checked against its source are imported (pad mapping and song folders, plus a few more for XG).",
-                    "この DTXMania では、ソースで値の意味を確かめた項目だけを引き継ぎます（パッドの割り当てと曲のフォルダ。XG はほかにもいくつか）。",
+                    "From this version of DTXMania, only settings whose meaning is certain are imported (pad mapping and song folders, plus a few more for XG).",
+                    "この DTXMania からは、値の意味が確かな項目だけを引き継ぎます（パッドの割り当てと曲のフォルダ。XG はほかにもいくつか）。",
                 )
                 .to_owned(),
             });
@@ -1281,7 +1281,7 @@ fn rejected_extras(p: &mut Plan, ini: &Ini, scope: Scope, format: Format) {
     {
         p.rejected.push(Rejected {
             name: t("Pedal Lag Offset", "ペダルのずれの補正").to_owned(),
-            reason: t("No matching setting", "同じ設定が無い").to_owned(),
+            reason: t("No matching setting", "対応する設定なし").to_owned(),
             detail: format!(
                 "PedalLagTime={}\n{}",
                 sys(ini, "PedalLagTime").unwrap_or_default(),
@@ -1329,7 +1329,7 @@ fn rejected_extras(p: &mut Plan, ini: &Ini, scope: Scope, format: Format) {
             reason: count(guitar, "setting", "settings", "項目"),
             detail: t(
                 "This app is for drums only.",
-                "このアプリはドラムだけです。",
+                "このアプリはドラム専用です。",
             )
             .to_owned(),
         });
@@ -1739,7 +1739,7 @@ pub fn open(path: &Path) -> Result<Source, String> {
         ),
         ReadError::NotDtxmania => tf!(
             "{} isn't a DTXMania settings file.",
-            "{} は DTXMania の設定ではありません。",
+            "{} は DTXMania の設定ファイルではありません。",
             found.config.display()
         ),
     })
@@ -1756,12 +1756,12 @@ fn locate_message(e: &LocateError) -> String {
         ),
         LocateError::ShortcutTargetMissing { target, .. } => tf!(
             "The shortcut points to {}, which no longer exists. Choose the DTXMania folder instead.",
-            "ショートカットの行き先 {} がありません。DTXMania のフォルダを選んでください。",
+            "ショートカットのリンク先 {} がありません。DTXMania のフォルダを選んでください。",
             target.display()
         ),
         LocateError::NoConfig { root } => tf!(
             "No settings file in {}. Start that DTXMania once, then try again.",
-            "{} に設定のファイルがありません。その DTXMania を一度起動してから、もう一度読んでください。",
+            "{} に設定ファイルがありません。その DTXMania を一度起動してから、もう一度読み込んでください。",
             root.display()
         ),
         LocateError::NotDtxmania(p) => tf!(

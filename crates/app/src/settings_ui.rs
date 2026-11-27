@@ -550,7 +550,7 @@ pub fn pad_roles(c: &Canvas, g: &mut Gfx, x: f32, y: f32, w: f32, h: f32) {
         g,
         t(
             "Pad controls for drums-only navigation",
-            "ドラムだけで操作するときのパッドの役目",
+            "ドラムで操作するときのパッドの役目",
         ),
         x + 12.0,
         y + h - 22.0,

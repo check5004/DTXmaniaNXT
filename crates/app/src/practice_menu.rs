@@ -731,7 +731,7 @@ impl PracticeMenu {
             let label = match item {
                 Item::Section => t("Pick Your Own", "自分で選ぶ"),
                 Item::Length => t("Length", "長さ"),
-                Item::Settings => t("Speed & Looping", "速度・つなぎ方"),
+                Item::Settings => t("Speed & Looping", "速度・くり返し方"),
                 _ => t("Back to Song Select", "選曲に戻る"),
             };
             if let Some(tx) = g.texts.get(label, &name) {
@@ -863,7 +863,7 @@ impl PracticeMenu {
             tx.draw(c, left + 28.0, ly, 1.0, 1.0);
         }
         let audio = match sound {
-            Sound::Loading => Some(t("♪ Loading the song…", "♪ 曲の音を読んでいます…")),
+            Sound::Loading => Some(t("♪ Loading the song…", "♪ 曲を読み込んでいます…")),
             Sound::Playing(_) => Some(t(
                 "♪ Playing with the count-in, as in practice",
                 "♪ 練習と同じく、カウントから流しています",
@@ -983,7 +983,7 @@ impl PracticeMenu {
         panel(c, DETAIL);
         let left = x + 20.0;
         let right = x + w - 20.0;
-        g.heading(c, left, y + 12.0, t("Speed & Looping", "速度・つなぎ方"));
+        g.heading(c, left, y + 12.0, t("Speed & Looping", "速度・くり返し方"));
         for (i, &row) in SET_ROWS.iter().enumerate() {
             let (ry, rh) = (set_row_y(i), ROW_H);
             let on = i == cursor;
@@ -1055,7 +1055,7 @@ impl PracticeMenu {
 
     fn set_name(&self, row: SetRow) -> &'static str {
         match row {
-            SetRow::Loop => t("Looping", "つなぎ方"),
+            SetRow::Loop => t("Looping", "くり返し方"),
             SetRow::Speed => t("Speed Mode", "速度の決め方"),
             SetRow::SpeedValue => match self.setup.speed {
                 SpeedPlan::Ladder { .. } => t("Start Speed", "始めの速度"),
@@ -1087,12 +1087,7 @@ impl PracticeMenu {
                 Pitch::Tape => t("Lower", "一緒に下げる"),
             }
             .to_owned(),
-            SetRow::Metronome => if s.metronome {
-                t("On", "オン")
-            } else {
-                t("Off", "オフ")
-            }
-            .to_owned(),
+            SetRow::Metronome => if s.metronome { "ON" } else { "OFF" }.to_owned(),
             SetRow::Done => String::new(),
         }
     }
@@ -1107,8 +1102,8 @@ impl PracticeMenu {
                     "切れ目なく: 区間の終わりから切れ目なく頭へ戻ります（ビート向き）。",
                 ),
                 LoopStyle::Restart => t(
-                    "Restart Each Loop: you play through the first hit of the next measure, then it restarts with a lead-in. Good for fills.",
-                    "毎回区切る: 次の小節の頭の 1 打まで叩き、助走からやり直します（フィル向き）。",
+                    "Restart Each Loop: you play through the first hit of the next measure, then it restarts from one measure before the section. Good for fills.",
+                    "毎回区切る: 次の小節の頭の 1 打まで叩き、区間の 1 小節前からやり直します（フィル向き）。",
                 ),
             }
             .to_owned(),
@@ -1158,13 +1153,13 @@ impl PracticeMenu {
             }
             .to_owned(),
             SetRow::Metronome => t(
-                "When on, a soft click plays on every beat of the section (louder on the first beat of each measure). The 4-beat count-in before each step plays even when off.",
-                "オンなら区間のあいだ拍ごとに小さく鳴らします（小節の頭は強く）。段の頭の 4 拍のカウントは、オフでも鳴ります。",
+                "When ON, a soft click plays on every beat of the section (louder on the first beat of each measure). The 4-beat count-in before each step plays even when OFF.",
+                "ON なら、区間のあいだ拍ごとに小さくクリックを鳴らします（小節の頭は強く）。各段の始めの 4 拍のカウントは、OFF でも鳴ります。",
             )
             .to_owned(),
             SetRow::Done => t(
                 "Back to the list. These settings are kept for next time.",
-                "一覧に戻ります。この決めごとは次の練習でも使います。",
+                "一覧に戻ります。この設定は次の練習でも使います。",
             )
             .to_owned(),
         }

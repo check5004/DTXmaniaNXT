@@ -149,7 +149,7 @@ impl Gpu {
         let instance = wgpu::Instance::default();
         let surface = instance.create_surface(window.clone()).context(t(
             "Cannot prepare the window for drawing (surface)",
-            "窓に描く準備（サーフェス）ができません",
+            "ウィンドウに描画する準備（サーフェス）ができません",
         ))?;
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
@@ -163,13 +163,13 @@ impl Gpu {
             required_limits: wgpu::Limits::default().using_resolution(adapter.limits()),
             ..Default::default()
         }))
-        .context(t("Cannot set up the GPU", "GPU を使う準備ができません"))?;
+        .context(t("Cannot set up the GPU", "GPU を初期化できません"))?;
         let size = window.inner_size();
         let mut config = surface
             .get_default_config(&adapter, size.width.max(1), size.height.max(1))
             .context(t(
                 "This GPU cannot draw to the window",
-                "この GPU では窓に描けません",
+                "この GPU ではウィンドウに描画できません",
             ))?;
         // egui は sRGB でない形式を前提に色を作るので、選べるならそちらにする
         let caps = surface.get_capabilities(&adapter);
@@ -1037,7 +1037,7 @@ impl App {
             self.config_toast(
                 t(
                     "Couldn't save your current settings, so nothing was imported",
-                    "今の設定を残せなかったので、引き継ぎませんでした",
+                    "今の設定を保存できなかったため、引き継ぎを中止しました",
                 )
                 .to_owned(),
             );
@@ -1202,7 +1202,7 @@ impl App {
             Some(l) => format!(
                 "{} Hz, {} {:.1} ms, {} {:.1} ms",
                 l.rate,
-                t("latency", "遅れ"),
+                t("latency", "遅延"),
                 l.latency_ms,
                 t("buffer", "バッファ"),
                 l.buffer_ms
@@ -2154,12 +2154,12 @@ impl App {
             let text = if drill {
                 t(
                     "Paused because you stopped playing",
-                    "叩いていないので止めました",
+                    "叩いていないので一時停止しました",
                 )
             } else {
                 t(
                     "Paused because you stopped playing\nThis loop won't count",
-                    "叩いていないので止めました\nこの周は数えません",
+                    "叩いていないので一時停止しました\nこの周は数えません",
                 )
             };
             self.toast_for(text.to_owned(), Duration::from_secs(4));
@@ -2268,9 +2268,12 @@ impl App {
         let text = match event {
             update::Event::Ready(v) => tf!(
                 "v{v} downloaded. It will be installed when you quit.",
-                "v{v} を落としました。終了すると入れ替わります"
+                "v{v} をダウンロードしました。終了するとアップデートします"
             ),
-            update::Event::Failed(v) => tf!("Could not download v{v}", "v{v} を落とせませんでした"),
+            update::Event::Failed(v) => tf!(
+                "Could not download v{v}",
+                "v{v} のダウンロードに失敗しました"
+            ),
         };
         match self.screen {
             // タイトルは「更新」の行が変わるので知らせない（知らせはその行と重なる）
@@ -2345,7 +2348,7 @@ impl App {
                 self.config_toast(if added {
                     tf!(
                         "Added note {note} to {} ({device})",
-                        "ノート {note} を{}に足しました（{device}）",
+                        "ノート {note} を{}に追加しました（{device}）",
                         inputs::lane_label(lane)
                     )
                 } else {
@@ -2364,7 +2367,7 @@ impl App {
                 self.config_toast(if added {
                     tf!(
                         "Added key {key} to {}",
-                        "キー {key} を{}に足しました",
+                        "キー {key} を{}に追加しました",
                         inputs::lane_label(lane)
                     )
                 } else {
@@ -2398,7 +2401,7 @@ impl App {
                 self.refresh_pads();
                 self.config_toast(tf!(
                     "Cleared everything assigned to {}",
-                    "{}の割り当てを全部外しました",
+                    "{}の割り当てをすべて外しました",
                     inputs::lane_label(lane)
                 ));
             }
@@ -2853,7 +2856,11 @@ impl App {
             ItemId::Version => {
                 if self.config.developer {
                     self.config_toast(
-                        t("Developer mode is already ON", "開発者モードはもう ON です").to_owned(),
+                        t(
+                            "Developer mode is already ON",
+                            "開発者モードはすでに ON です",
+                        )
+                        .to_owned(),
                     );
                     return;
                 }
@@ -2896,7 +2903,7 @@ impl App {
                     self.apply_advice(&a);
                     self.config_toast(tf!(
                         "Applied the suggested offset (global {:+} ms, this song {:+} ms)",
-                        "補正をおすすめにしました（全体 {:+} ms、この曲 {:+} ms）",
+                        "おすすめの補正にしました（全体 {:+} ms、この曲 {:+} ms）",
                         a.global_ms,
                         a.song_ms
                     ));
@@ -3132,8 +3139,8 @@ impl App {
                 play.nudge_speed(if code == KeyCode::Comma { -1 } else { 1 });
                 let speed = play.practice.as_ref().map_or(100, |p| p.speed());
                 tf!(
-                    "Speed {speed}% (from the next loop, after the lead-in; this step starts over from loop 1)",
-                    "速度 {speed}%（次の周から、助走のあと。この段は 1 周目から数え直し）"
+                    "Speed {speed}% (from the next loop; this step starts over from loop 1)",
+                    "速度 {speed}%（次の周から。この段は 1 周目から数え直します）"
                 )
             }
             HIT_SOUND_KEY => {
@@ -3879,7 +3886,7 @@ impl App {
         if let Some(path) = saved {
             self.toast(tf!(
                 "Screenshot saved ({})",
-                "画面を残しました（{}）",
+                "スクリーンショットを保存しました（{}）",
                 path.display()
             ));
         }
@@ -3901,7 +3908,7 @@ impl App {
             if let Some(v) = self.updater.pending_on_exit() {
                 let text = tf!(
                     "v{v} will be installed after you quit",
-                    "終わったあと v{v} に入れ替えます"
+                    "終了後に v{v} にアップデートします"
                 );
                 update_view::chip(
                     c,
@@ -3923,7 +3930,7 @@ impl App {
         if let update::Status::Downloading { version, percent } = self.updater.status() {
             let text = tf!(
                 "Downloading v{version}… {percent}%",
-                "v{version} を落としています {percent}%"
+                "v{version} をダウンロード中 {percent}%"
             );
             let p = f32::from(*percent) / 100.0;
             update_view::chip(c, &mut self.gfx, &text, Some(p), corner, since);
@@ -4243,7 +4250,8 @@ impl ApplicationHandler for App {
             Ok(w) => Arc::new(w),
             Err(e) => {
                 self.startup_error = Some(
-                    anyhow::Error::new(e).context(t("Cannot open the window", "窓を開けません")),
+                    anyhow::Error::new(e)
+                        .context(t("Cannot open the window", "ウィンドウを開けません")),
                 );
                 event_loop.exit();
                 return;
@@ -4268,7 +4276,7 @@ impl ApplicationHandler for App {
             Ok(gpu) => self.gpu = Some(gpu),
             Err(e) => {
                 self.startup_error =
-                    Some(e.context(t("Cannot start the GPU", "GPU を使い始められません")));
+                    Some(e.context(t("Cannot start the GPU", "GPU を初期化できません")));
                 event_loop.exit();
                 return;
             }

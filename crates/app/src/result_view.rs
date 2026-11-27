@@ -500,12 +500,12 @@ fn result_hints(
         if lag.applied.is_some() {
             v.push((
                 &[Pad::FT],
-                t("Undo Suggested Offset (O)", "おすすめを戻す（O）"),
+                t("Undo Suggested Offset (O)", "補正を元に戻す（O）"),
             ));
         } else if lag.advice.changes() {
             v.push((
                 &[Pad::FT],
-                t("Use Suggested Offset (O)", "補正をおすすめに（O）"),
+                t("Use Suggested Offset (O)", "おすすめの補正にする（O）"),
             ));
         }
     }
@@ -746,7 +746,7 @@ mod tests {
         let h = result_hints(Page::Summary, false, Some(&lag), true);
         assert_eq!(pads(&h, "区間練習"), Some(vec![Pad::RD]));
         assert_eq!(pads(&h, "リプレイ"), Some(vec![Pad::HH]));
-        assert_eq!(pads(&h, "補正をおすすめに"), Some(vec![Pad::FT]));
+        assert_eq!(pads(&h, "おすすめの補正にする"), Some(vec![Pad::FT]));
         assert_eq!(
             pads(
                 &result_hints(Page::Analysis, false, Some(&lag), true),

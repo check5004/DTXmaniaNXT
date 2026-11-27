@@ -358,7 +358,7 @@ pub fn draw_result(c: &Canvas, g: &mut Gfx, o: &Outcome) {
             g,
             &tf!(
                 "All songs (median of {n}) {}",
-                "全部の曲（{n} 曲の真ん中）{}",
+                "すべての曲（{n} 曲の中央値）{}",
                 signed_ms(r)
             ),
             x + 14.0,
@@ -370,8 +370,8 @@ pub fn draw_result(c: &Canvas, g: &mut Gfx, o: &Outcome) {
     let (bx, by, bw, bh) = (x + 12.0, y + ph - 52.0, pw - 24.0, 40.0);
     let orange = Color32::from_rgb(0xFF, 0xB8, 0x40);
     let (label, hint) = match (lag.applied, advice_text(a)) {
-        (Some(_), Some(text)) => (text, t("Undo", "もとに戻す")),
-        (None, Some(text)) => (text, t("Apply", "そうする")),
+        (Some(_), Some(text)) => (text, t("Undo", "元に戻す")),
+        (None, Some(text)) => (text, t("Apply", "適用する")),
         (_, None) => {
             if a.song.is_some_and(|s| s.enough()) {
                 draw_text(
@@ -393,7 +393,7 @@ pub fn draw_result(c: &Canvas, g: &mut Gfx, o: &Outcome) {
     c.fill(bx, by, bw, bh, with_alpha(orange, 0.12));
     c.frame(bx, by, bw, bh, orange);
     let head = if lag.applied.is_some() {
-        t("Applied", "変えました")
+        t("Applied", "適用しました")
     } else {
         t("Suggested", "おすすめ")
     };

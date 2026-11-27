@@ -550,7 +550,7 @@ impl Play {
         practice: Option<PracticeOptions>,
     ) -> Result<Self> {
         let bytes = std::fs::read(path)
-            .with_context(|| tf!("Cannot read {}", "{} を読めません", path.display()))?;
+            .with_context(|| tf!("Cannot read {}", "{} を読み込めません", path.display()))?;
         Self::build(
             path,
             &bytes,

@@ -373,7 +373,7 @@ fn draw_info(c: &Canvas, g: &mut Gfx, p: &Practice) {
                 let laps = count(last.laps, "loop", "loops", "周");
                 tf!(
                     "Misses (last step, {laps})",
-                    "ミスした所（さっきの {laps}）"
+                    "ミスした所（前の段の {laps}）"
                 )
             },
             p.marks_of_attempt(last.index),

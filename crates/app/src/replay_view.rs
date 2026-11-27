@@ -415,7 +415,7 @@ impl ReplayRun {
         );
         let section = section_label(Section::new(first, last));
         let title = if self.ended {
-            tf!("End of Replay · {section}", "再生し終えました　{section}")
+            tf!("End of Replay · {section}", "再生終了　{section}")
         } else {
             tf!("Paused · {section}", "一時停止　{section}")
         };
@@ -629,15 +629,7 @@ impl ReplayRun {
         lx += ui::text(c, g, t("Your Hit", "叩いた所"), lx, ly, &small, 100.0) + 14.0;
         if strays {
             c.fill(lx, ly - 2.0, 2.0, 20.0, MISS_RED);
-            ui::text(
-                c,
-                g,
-                t("Extra Hit", "音符の無い所"),
-                lx + 8.0,
-                ly,
-                &small,
-                100.0,
-            );
+            ui::text(c, g, t("Stray Hit", "空打ち"), lx + 8.0, ly, &small, 100.0);
         }
 
         // ずれ（横は時刻、縦はずれ。上が遅い・下が早い）
