@@ -886,6 +886,8 @@ impl PlayView {
     pub fn feed(&mut self, play: &mut Play) {
         let now = Instant::now();
         let practice = play.practice.is_some();
+        // 待ちモードは点を付けないので、判定の文字とずれは出さない（火花だけ）
+        let waits = play.waits();
         for fx in play.take_fx() {
             match fx {
                 Fx::Hit {
@@ -910,6 +912,12 @@ impl PlayView {
                     note_ms,
                 } => {
                     let l = self.looks.lane_of(lane);
+                    if waits {
+                        if !matches!(judgement, Judgement::Poor | Judgement::Miss) {
+                            self.start_fire(l, self.looks.left_bass_tinted(lane), now);
+                        }
+                        continue;
+                    }
                     match offset_ms {
                         Some(o) if o > 0.0 => self.late += 1,
                         Some(_) => self.early += 1,
@@ -1129,6 +1137,7 @@ impl PlayView {
         self.draw_jacket(c, g, play);
         self.draw_lanes(c, g, now);
         self.draw_lines(c, g, play, now_ms, px_per_ms);
+        self.draw_waiting(c, play, now);
         self.draw_chips(c, g, play, now_ms, px_per_ms, now);
         self.draw_hands(c, g, play, now_ms, px_per_ms);
         self.draw_shutters(c, g);
@@ -1250,6 +1259,29 @@ impl PlayView {
     }
 
     /// レーンの枠と光（上流 `CActPerfDrumsLaneFlushD`）
+    /// 待ちモードで止まっているあいだ、叩くパッドのレーンの判定の線のあたりを脈打つように光らせる
+    fn draw_waiting(&self, c: &Canvas, play: &Play, now: Instant) {
+        let lanes = play.waiting_lanes();
+        if lanes.is_empty() {
+            return;
+        }
+        let secs = now.saturating_duration_since(self.entered).as_secs_f32();
+        let pulse = 0.5 + 0.5 * (secs * std::f32::consts::TAU * 1.2).sin();
+        let y = self.looks.judge_y();
+        let (top, h) = if self.looks.reverse {
+            (y - 10.0, 120.0)
+        } else {
+            (y - 110.0, 120.0)
+        };
+        let color = Color32::from_rgb(0xFF, 0xB8, 0x40);
+        for lane in lanes {
+            let (lx, lw) = self.looks.layout.judge[self.looks.lane_of(lane).i()];
+            let (x, w) = (lx as f32 + 2.0, lw as f32 - 4.0);
+            c.fill(x, top, w, h, color.gamma_multiply(0.18 + 0.22 * pulse));
+            c.frame(x, top, w, h, color.gamma_multiply(0.6 + 0.4 * pulse));
+        }
+    }
+
     fn draw_lanes(&mut self, c: &Canvas, g: &Gfx, now: Instant) {
         // レーンを暗くするなら暗いほうの絵（上流 `nLaneDisp`）
         let paret = if self.looks.dark_lanes {

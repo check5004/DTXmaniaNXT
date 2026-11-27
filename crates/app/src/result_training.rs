@@ -15,11 +15,12 @@ use crate::game::{Outcome, PracticeOutcome};
 use crate::gfx::{Canvas, Gfx};
 use crate::inputs::lane_label;
 use crate::practice::{
-    LapSummary, StrayHint, WEAK_VELOCITY, mark_line, section_label, style_label, way_label,
+    LapSummary, StrayHint, WEAK_VELOCITY, mark_line, section_label, style_label, wait_progress,
+    way_label, wrong_pads,
 };
 use crate::practice_hud::mark_color;
 use crate::text::Style;
-use engine::practice_way::Mark;
+use engine::practice_way::{Mark, Way};
 
 const PASS_COLOR: Color32 = Color32::from_rgb(0x70, 0xE0, 0x90);
 /// ミスした周・ミス 1 回の拍
@@ -343,6 +344,57 @@ fn draw_route(c: &Canvas, g: &mut Gfx, p: &PracticeOutcome, (x, y, w, h): (f32, 
     }
 }
 
+/// 待ちモードの周ごとの行。周ごとにかかった時間と、違うパッドを叩いた回数。下に 1 周目からの変わり方
+fn draw_wait_laps(
+    c: &Canvas,
+    g: &mut Gfx,
+    laps: &[&LapSummary],
+    (x, y, w, h): (f32, f32, f32, f32),
+) {
+    let n = laps.len().max(1);
+    let rh = ((h - 40.0) / n as f32 - 8.0).min(46.0);
+    for (i, l) in laps.iter().enumerate() {
+        let top = y + i as f32 * (rh + 8.0);
+        let color = if l.wrong == 0 { PASS_COLOR } else { SLIP_COLOR };
+        round_fill(c, (x, top, w, rh), 6.0, color.gamma_multiply(0.14));
+        round_frame(c, (x, top, w, rh), 6.0, color.gamma_multiply(0.8));
+        let mid = top + rh / 2.0 - 11.0;
+        text(
+            c,
+            g,
+            &tf!("Loop {}", "{} 周目", i + 1),
+            x + 14.0,
+            mid,
+            18.0,
+            Color32::WHITE,
+        );
+        let took = l
+            .took_ms
+            .map_or_else(|| "-".to_owned(), crate::drill_hud::clock);
+        text(c, g, &took, x + 130.0, mid - 3.0, 24.0, Color32::WHITE);
+        let tail = wrong_pads(l.wrong);
+        let tw = g
+            .texts
+            .get(&tail, &Style::edged(17.0, color, Color32::BLACK, 1.5))
+            .map_or(0.0, |t| t.w);
+        text(c, g, &tail, x + w - 14.0 - tw, mid, 17.0, color);
+    }
+    if let (Some(a), Some(b)) = (laps.first(), laps.last())
+        && laps.len() >= 2
+    {
+        let line = wait_progress((a.took_ms, a.wrong), (b.took_ms, b.wrong));
+        text(
+            c,
+            g,
+            &line,
+            x,
+            y + n as f32 * (rh + 8.0) + 6.0,
+            16.0,
+            NOTE_COLOR,
+        );
+    }
+}
+
 /// めぐるやり方で、ミスした所の絵に出す所：いちばんミスした所（無ければ最初の所）
 fn worst_stop(p: &PracticeOutcome) -> Section {
     let stops = p.options.stops;
@@ -367,7 +419,19 @@ pub fn draw_practice(c: &Canvas, g: &mut Gfx, p: &PracticeOutcome) {
     let left = x + 20.0;
     let o = p.options;
     let tours = o.way.tours();
-    let head = if tours {
+    let waits = o.way == Way::Wait;
+    let head = if waits {
+        let speed = p
+            .attempts
+            .first()
+            .map_or(o.speed.first_speed(), |a| a.speed);
+        tf!(
+            "{}   {}   {speed}%",
+            "{}　{}　{speed}%",
+            way_label(o.way),
+            section_text(o.section)
+        )
+    } else if tours {
         let n = count(o.stops.len(), "spot", "spots", "か所");
         let speed = p
             .attempts
@@ -384,8 +448,11 @@ pub fn draw_practice(c: &Canvas, g: &mut Gfx, p: &PracticeOutcome) {
         )
     };
     text(c, g, &head, left, y + 14.0, 20.0, Color32::WHITE);
-    // 段（左）と数（右）。めぐるやり方は、めぐった所
-    if tours {
+    // 段（左）と数（右）。めぐるやり方は、めぐった所。待ちモードは周ごとの時間
+    let done: Vec<&LapSummary> = p.laps.iter().filter(|l| l.completed).collect();
+    if waits {
+        draw_wait_laps(c, g, &done, (left, y + 60.0, 520.0, 200.0));
+    } else if tours {
         draw_route(c, g, p, (left, y + 70.0, 520.0, 190.0));
     } else {
         draw_stairs(c, g, p, (left + 6.0, y + 58.0, 500.0, 190.0));
@@ -395,7 +462,20 @@ pub fn draw_practice(c: &Canvas, g: &mut Gfx, p: &PracticeOutcome) {
         c.painter()
             .circle_filled(c.pos(cx, legend_y + 8.0), 5.0 * c.scale(), color);
     };
-    if tours {
+    if waits {
+        text(
+            c,
+            g,
+            t(
+                "Wait Mode has no scoring. The picture shows where you hit a wrong pad.",
+                "待ちモードは点を付けません。違うパッドを叩いた所を下の絵に出します。",
+            ),
+            left,
+            legend_y,
+            13.0,
+            Color32::from_gray(200),
+        );
+    } else if tours {
         text(
             c,
             g,
@@ -427,15 +507,24 @@ pub fn draw_practice(c: &Canvas, g: &mut Gfx, p: &PracticeOutcome) {
             Color32::from_gray(200),
         );
     }
-    let done: Vec<&LapSummary> = p.laps.iter().filter(|l| l.completed).collect();
-    let clean = done.iter().filter(|l| l.passed == Some(true)).count();
+    let (clean, clean_label) = if waits {
+        (
+            done.iter().filter(|l| l.wrong == 0).count(),
+            t("Loops with no wrong pads", "迷いなしの周"),
+        )
+    } else {
+        (
+            done.iter().filter(|l| l.passed == Some(true)).count(),
+            t("Clean loops", "ノーミスの周"),
+        )
+    };
     let nums = [
         (
             duration_text(p.elapsed_ms),
             t("Practice time", "練習した時間"),
         ),
         (done.len().to_string(), t("Loops played", "叩いた周")),
-        (clean.to_string(), t("Clean loops", "ノーミスの周")),
+        (clean.to_string(), clean_label),
     ];
     for (i, (v, k)) in nums.iter().enumerate() {
         let ny = y + 56.0 + i as f32 * 74.0;
@@ -471,6 +560,15 @@ pub fn draw_practice(c: &Canvas, g: &mut Gfx, p: &PracticeOutcome) {
             })
             .unwrap_or_else(|| worst_stop(p));
         (tf!("Misses ({})", "ミスした所（{}）", section_text(s)), s)
+    } else if waits {
+        (
+            t(
+                "Wrong pads (where you hesitated)",
+                "迷った所（違うパッドを叩いた音）",
+            )
+            .to_owned(),
+            o.section,
+        )
     } else {
         (
             t("Misses (all loops)", "ミスした所（全部の周）").to_owned(),
@@ -495,26 +593,34 @@ pub fn draw_practice(c: &Canvas, g: &mut Gfx, p: &PracticeOutcome) {
     match worst.first() {
         Some((b, spot)) => {
             let lanes: Vec<&str> = spot.lanes.iter().map(|l| l.name()).collect();
-            let misses = count(spot.laps, "miss", "misses", "回");
-            let line = tf!(
-                "Most missed: measure {}, beat {} ({})  {misses}",
-                "いちばんミスした所: {} 小節目の {} 拍目（{}）　{misses}",
-                b.measure,
-                b.beat + 1,
-                lanes.join(t("/", "・"))
-            );
+            let line = if waits {
+                let loops = count(spot.laps, "loop", "loops", "周");
+                tf!(
+                    "Hesitated most: measure {}, beat {} ({})  {loops}",
+                    "いちばん迷った所: {} 小節目の {} 拍目（{}）　{loops}",
+                    b.measure,
+                    b.beat + 1,
+                    lanes.join(t("/", "・"))
+                )
+            } else {
+                let misses = count(spot.laps, "miss", "misses", "回");
+                tf!(
+                    "Most missed: measure {}, beat {} ({})  {misses}",
+                    "いちばんミスした所: {} 小節目の {} 拍目（{}）　{misses}",
+                    b.measure,
+                    b.beat + 1,
+                    lanes.join(t("/", "・"))
+                )
+            };
             text(c, g, &line, left, line_y, 16.0, WEAK_COLOR);
         }
         None if !done.is_empty() => {
-            text(
-                c,
-                g,
-                t("No misses", "ミスなし"),
-                left,
-                line_y,
-                16.0,
-                PASS_COLOR,
-            );
+            let ok = if waits {
+                t("No wrong pads", "迷いなし")
+            } else {
+                t("No misses", "ミスなし")
+            };
+            text(c, g, ok, left, line_y, 16.0, PASS_COLOR);
         }
         None => {
             text(
@@ -536,7 +642,8 @@ pub fn draw_practice(c: &Canvas, g: &mut Gfx, p: &PracticeOutcome) {
     if let Some(hint) = &p.strays {
         notes.push(stray_note(hint));
     }
-    if let Some(note) = p.offset.and_then(offset_note) {
+    // 待ちモードは止まった所で叩くので、ずれは見ない
+    if let Some(note) = p.offset.filter(|_| !waits).and_then(offset_note) {
         notes.push(note);
     }
     let mut ny = line_y + 28.0;
@@ -553,7 +660,14 @@ pub fn draw_practice_laps(c: &Canvas, g: &mut Gfx, p: &PracticeOutcome) {
     let left = x + 20.0;
     let heading_w = g.heading(c, left, y + 10.0, t("Loop Results", "周ごとの成績"));
     let o = p.options;
-    let head = if o.way.tours() {
+    let head = if o.way == Way::Wait {
+        tf!(
+            "{}   {}",
+            "{}　{}",
+            way_label(o.way),
+            section_text(o.section)
+        )
+    } else if o.way.tours() {
         let n = count(o.stops.len(), "spot", "spots", "か所");
         tf!("{}   {n}", "{}　{n}", way_label(o.way))
     } else {
@@ -603,6 +717,10 @@ pub fn draw_practice_laps(c: &Canvas, g: &mut Gfx, p: &PracticeOutcome) {
             18.0,
             Color32::WHITE,
         );
+    } else if o.way == Way::Wait {
+        // 待ちモードは判定の数を付けないので、周ごとの時間と違うパッドの回数
+        let w = PRACTICE.2 - 40.0;
+        draw_wait_laps(c, g, &done, (left, ty, w, y + h - 44.0 - ty));
     } else {
         lap_table(c, g, &done, left, ty, y + h - 44.0);
     }

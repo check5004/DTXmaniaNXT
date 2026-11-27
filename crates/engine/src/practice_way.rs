@@ -5,6 +5,9 @@
 //!
 //! 苦手めぐり・フィルだけ・つなぎ目は、いくつかの所（[`Stops`]）を 1 か所 [`TOUR_LAPS`] 周ずつ順にめぐる。
 //! めぐる所は、苦手めぐりは記録の苦手な所、フィルだけは [`find_fills`]、つなぎ目は [`find_seams`] が譜面から探す。
+//!
+//! 待ちモードは、正しいパッドを叩くまで譜面が止まる。時間は気にせず、順番と叩き分けだけを覚える。
+//! 点は付けず、[`WAIT_LAPS`] 周で終える（譜面を止めるのは演奏の側）。
 
 use dtx::{DrumLane, DrumNote, NotePos};
 
@@ -32,14 +35,17 @@ pub enum Way {
     Fills,
     /// つなぎ目。形が変わる所（A メロからサビなど）の前後 1 小節ずつを、順にめぐる
     Seams,
+    /// 待ちモード。正しいパッドを叩くまで譜面が止まる。点は付けない
+    Wait,
 }
 
 impl Way {
     /// 選ぶ順（SD・FT で順に回す）
-    pub const ALL: [Way; 9] = [
+    pub const ALL: [Way; 10] = [
         Self::Climb,
         Self::Part,
         Self::Demo,
+        Self::Wait,
         Self::Tour,
         Self::Build,
         Self::Fills,
@@ -60,6 +66,7 @@ impl Way {
             Self::Tour => "tour",
             Self::Fills => "fills",
             Self::Seams => "seams",
+            Self::Wait => "wait",
         }
     }
 
@@ -80,12 +87,13 @@ impl Way {
     }
 
     /// 1 段の周の数（`step_laps` は選んだ数）。お手本と交互は、お手本と自分を 1 組にするので偶数に切り上げる。
-    /// めぐるやり方は、1 か所 [`TOUR_LAPS`] 周
+    /// めぐるやり方は、1 か所 [`TOUR_LAPS`] 周。待ちモードは [`WAIT_LAPS`] 周
     pub fn laps_per_step(self, step_laps: u32) -> u32 {
         let n = step_laps.max(1);
         match self {
             Self::Demo => n.div_ceil(2) * 2,
             w if w.tours() => TOUR_LAPS,
+            Self::Wait => WAIT_LAPS,
             _ => n,
         }
     }
@@ -288,6 +296,8 @@ pub fn fade_rank(at: NotePos, lane: DrumLane) -> f64 {
 pub const TOUR_LAPS: u32 = 2;
 /// めぐる所の数の上限
 pub const MAX_STOPS: usize = 5;
+/// 待ちモードの周の数。3 周目には順番が体に入っている
+pub const WAIT_LAPS: u32 = 3;
 
 /// めぐる所（めぐる順）。練習の決めごとに入れて写せるよう、決まった大きさの入れ物にする
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -659,6 +669,7 @@ mod tests {
         assert_eq!(Way::Demo.laps_per_step(3), 4);
         assert_eq!(Way::Demo.laps_per_step(4), 4);
         assert_eq!(Way::Climb.laps_per_step(3), 3);
+        assert_eq!(Way::Wait.laps_per_step(5), WAIT_LAPS);
         assert!(Way::Demo.demo_lap(1) && !Way::Demo.demo_lap(2) && Way::Demo.demo_lap(3));
         assert!(!Way::Climb.demo_lap(1));
     }

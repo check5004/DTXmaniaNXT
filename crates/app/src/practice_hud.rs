@@ -23,10 +23,10 @@ use crate::gfx::{Canvas, Gfx, Opt, src};
 use crate::play_view::JUDGE_LINE_Y;
 use crate::practice::{
     CLEAR_HOLD_MS, Cue, LapState, Practice, TIME_UP_HOLD_MS, mark_label, mark_line, part_label,
-    pass_line, section_label, way_label,
+    pass_line, section_label, wait_progress, way_label, wrong_pads,
 };
 use crate::text::Style;
-use engine::practice_way::{Mark, TOUR_LAPS, Way};
+use engine::practice_way::{Mark, TOUR_LAPS, WAIT_LAPS, Way};
 
 /// 周と速度の数字の場所（上流のスコアと同じ高さ）
 pub(crate) const LAP_X: f32 = 40.0;
@@ -116,6 +116,7 @@ pub fn draw(
     draw_clear(c, g, ln, p, now, reverse);
     draw_time_up(c, g, ln, p, now, reverse);
     draw_toured(c, g, ln, p, now, reverse);
+    draw_waited(c, g, ln, p, now, reverse);
     draw_count_in(c, g, ln, p, now, reverse);
     draw_demo_tag(c, g, ln, p, now, reverse);
 }
@@ -335,6 +336,10 @@ fn score_digits_width(g: &Gfx, text: &str, scale: f32) -> f32 {
 
 /// 今の段の何周目か（1 から）。段の変わり目の助走のあいだは 1
 fn lap_in_attempt(p: &Practice, now: f64) -> usize {
+    // めぐり終えた・待ちモードを叩き終えたら、最後の周のまま
+    if p.toured() || p.waited() {
+        return p.step_laps();
+    }
     let started = p
         .attempt_laps()
         .iter()
@@ -412,6 +417,18 @@ fn draw_info(c: &Canvas, g: &mut Gfx, p: &Practice) {
     c.frame(x, y, w, h, Color32::from_white_alpha(60));
     let started = p.attempt_laps().iter().any(|l| l.judged > 0);
     let (title, marks) = match p.done.last() {
+        // 待ちモードは、止まっているときに違うパッドを叩いた音（周はひと続き）
+        _ if p.options.way == Way::Wait => (
+            t(
+                "Wrong pads (where you hesitated)",
+                "迷った所（違うパッドを叩いた音）",
+            )
+            .to_owned(),
+            match p.done.last() {
+                Some(last) if !started => p.marks_of_attempt(last.index),
+                _ => p.attempt_marks(),
+            },
+        ),
         // めぐるやり方は、次の所の絵に前の所の印を出さない
         Some(last) if !started && !p.options.way.tours() => (
             {
@@ -483,6 +500,10 @@ fn draw_card(c: &Canvas, g: &mut Gfx, p: &Practice, now: f64) {
     let (x, y, w, _) = CARD;
     if p.options.way.tours() {
         draw_tour_card(c, g, p, now);
+        return;
+    }
+    if p.options.way == Way::Wait {
+        draw_wait_card(c, g, p, now);
         return;
     }
     let goal = p.plan().goal();
@@ -785,6 +806,163 @@ fn draw_tour_card(c: &Canvas, g: &mut Gfx, p: &Practice, now: f64) {
     draw_way_and_time(c, g, p, now);
 }
 
+/// 待ちモードの右の欄。周ごとにかかった時間と、違うパッドを叩いた回数
+fn draw_wait_card(c: &Canvas, g: &mut Gfx, p: &Practice, now: f64) {
+    let (x, y, w, _) = CARD;
+    let laps = p.attempt_laps();
+    let laps = if laps.is_empty() && p.waited() {
+        // 叩き終えたら、終えた周を出したまま
+        let first = p.done.last().map_or(0, |d| d.index);
+        p.laps
+            .iter()
+            .filter(|l| l.attempt == first)
+            .collect::<Vec<_>>()
+    } else {
+        laps.iter().collect()
+    };
+    put(
+        c,
+        g,
+        way_label(Way::Wait),
+        &bold(19.0, Color32::WHITE),
+        x + 14.0,
+        y + 10.0,
+        Align::Left,
+        w / 2.0,
+        1.0,
+    );
+    let done = laps.iter().filter(|l| l.complete()).count();
+    let n = p.step_laps();
+    let (right, color) = if p.waited() {
+        (t("DONE", "おしまい").to_owned(), OK_COLOR)
+    } else {
+        let left = count(n - done.min(n), "loop", "loops", "周");
+        (tf!("{left} to go", "あと {left}"), CURRENT_COLOR)
+    };
+    put(
+        c,
+        g,
+        &right,
+        &bold(22.0, color),
+        x + w - 14.0,
+        y + 7.0,
+        Align::Right,
+        w / 2.0,
+        1.0,
+    );
+    put(
+        c,
+        g,
+        t(
+            "The notes stop until you hit the right pad",
+            "合うパッドを叩くまで譜面が止まります",
+        ),
+        &edged(13.0, GREY),
+        x + 14.0,
+        y + 44.0,
+        Align::Left,
+        w - 28.0,
+        1.0,
+    );
+    // 周ごとの行。叩き終えた周は時間と違うパッドの回数、今の周は「いまここ」
+    let playing = lap_in_attempt(p, now) - 1;
+    let (rx, rw, rh) = (x + 14.0, w - 28.0, 40.0);
+    for i in 0..n {
+        let top = y + 74.0 + i as f32 * (rh + 8.0);
+        let cell = (rx, top, rw, rh);
+        let lap = laps.get(i);
+        let current = !p.waited() && i == playing && lap.is_some_and(|l| !l.complete());
+        if current {
+            round_fill(c, cell, 5.0, CURRENT_COLOR.gamma_multiply(0.95));
+        } else {
+            round_fill(c, cell, 5.0, Color32::from_white_alpha(18));
+            round_frame(c, cell, 5.0, Color32::from_white_alpha(70));
+        }
+        let ink = if current { INK } else { Color32::WHITE };
+        let style = |px: f32, color: Color32| {
+            if current {
+                Style {
+                    bold: true,
+                    ..Style::plain(px, ink)
+                }
+            } else {
+                bold(px, color)
+            }
+        };
+        put_mid(
+            c,
+            g,
+            &tf!("Loop {}", "{} 周目", i + 1),
+            &style(15.0, ink),
+            rx + 12.0,
+            top + rh / 2.0,
+            Align::Left,
+            90.0,
+        );
+        let (mid, tail, tail_color) = match lap {
+            _ if current => {
+                // 叩いている周は、違うパッドを叩いたときだけ回数を出す
+                let wrong = lap.map_or(0, |l| l.wrong);
+                let tail = if wrong > 0 {
+                    wrong_pads(wrong)
+                } else {
+                    String::new()
+                };
+                (t("NOW", "いまここ").to_owned(), tail, ink)
+            }
+            Some(l) if l.complete() => {
+                let took = l.took_ms().map_or_else(|| "-".to_owned(), clock);
+                let color = if l.wrong == 0 { OK_COLOR } else { SLIP_COLOR };
+                (took, wrong_pads(l.wrong), color)
+            }
+            _ => ("-".to_owned(), String::new(), GREY),
+        };
+        put_mid(
+            c,
+            g,
+            &mid,
+            &style(17.0, Color32::WHITE),
+            rx + 104.0,
+            top + rh / 2.0,
+            Align::Left,
+            80.0,
+        );
+        put_mid(
+            c,
+            g,
+            &tail,
+            &style(14.0, tail_color),
+            rx + rw - 12.0,
+            top + rh / 2.0,
+            Align::Right,
+            rw - 200.0,
+        );
+    }
+    // 前の周と比べる（2 周目からの励み）
+    let finished: Vec<&&LapState> = laps.iter().filter(|l| l.complete()).collect();
+    let note = match (finished.first(), finished.last()) {
+        (Some(a), Some(b)) if finished.len() >= 2 => {
+            wait_progress((a.took_ms(), a.wrong), (b.took_ms(), b.wrong))
+        }
+        _ => t(
+            "No scoring. Just learn the order and the pads",
+            "点は付けません。叩く順番と叩き分けを覚えましょう",
+        )
+        .to_owned(),
+    };
+    put(
+        c,
+        g,
+        &note,
+        &edged(13.0, Color32::WHITE),
+        x + 14.0,
+        y + 300.0,
+        Align::Left,
+        w - 28.0,
+        1.0,
+    );
+}
+
 /// 右の欄の下に出す、やり方の今の様子（段をのぼるだけなら None）
 fn way_line(p: &Practice, now: f64) -> Option<(String, Color32)> {
     let o = &p.options;
@@ -851,6 +1029,10 @@ fn way_line(p: &Practice, now: f64) -> Option<(String, Color32)> {
                 section_label(p.current_section())
             )
         }
+        Way::Wait => tf!(
+            "{name}: the notes wait for the right pad",
+            "{name}：合うパッドを叩くまで止まります"
+        ),
     };
     Some((text, CURRENT_COLOR))
 }
@@ -1111,19 +1293,21 @@ fn draw_banner(
                 top + 160.0,
                 alpha,
             );
-            // ドラムだけで止める方法（キーボードなら Esc）
-            line(
-                c,
-                g,
-                ln,
+            // ドラムだけで止める方法（キーボードなら Esc）。待ちモードは止まって待つので、待った時間で
+            let stop = if p.options.way == Way::Wait {
+                tf!(
+                    "To stop, just stop playing (pauses after {} seconds)",
+                    "止めるときは、叩くのをやめる（{} 秒で一時停止）",
+                    crate::game::WAIT_REST_S
+                )
+            } else {
                 t(
                     "To stop, just stop playing (pauses after one loop)",
                     "止めるときは、叩くのをやめる（1 周で一時停止）",
-                ),
-                &edged(14.0, GREY),
-                top + 190.0,
-                alpha,
-            );
+                )
+                .to_owned()
+            };
+            line(c, g, ln, &stop, &edged(14.0, GREY), top + 190.0, alpha);
         }
         Cue::Step { next, from } => match next {
             Next::Up(to) => {
@@ -1384,6 +1568,10 @@ fn start_line(p: &Practice) -> Option<String> {
                 "{n}を {TOUR_LAPS} 周ずつめぐります"
             )
         }
+        Way::Wait => tf!(
+            "The notes wait for the right pad. {WAIT_LAPS} loops",
+            "合うパッドを叩くまで止まります。{WAIT_LAPS} 周"
+        ),
     })
 }
 
@@ -1536,6 +1724,69 @@ fn draw_toured(c: &Canvas, g: &mut Gfx, ln: Lanes, p: &Practice, now: f64, rever
         t("Results coming up…", "まもなく結果へ"),
         &edged(13.0, GREY),
         top + 150.0,
+        alpha,
+    );
+}
+
+/// 待ちモードの周を叩き終えたら、結果の画面へ進むまでレーンの真ん中に「おつかれさま」と周ごとの時間
+fn draw_waited(c: &Canvas, g: &mut Gfx, ln: Lanes, p: &Practice, now: f64, reverse: bool) {
+    let Some(at) = p.waited_at_ms else {
+        return;
+    };
+    let since = now - at;
+    if !(0.0..CLEAR_HOLD_MS + 500.0).contains(&since) {
+        return;
+    }
+    let alpha = (since / BANNER_FADE_IN_MS).clamp(0.0, 1.0) as f32;
+    let h = 200.0;
+    let top = banner_top(h, reverse);
+    banner_frame(c, ln, top, h, OK_COLOR, alpha);
+    let laps: Vec<&LapState> = p
+        .laps
+        .iter()
+        .filter(|l| l.complete() && !l.notes.is_empty())
+        .collect();
+    line(
+        c,
+        g,
+        ln,
+        &tf!("{} LOOPS DONE!", "{} 周叩けました！", laps.len()),
+        &bold(40.0, OK_COLOR),
+        top + 18.0,
+        alpha,
+    );
+    // 周ごとの時間を「0:42 → 0:31 → 0:25」と並べる
+    let times: Vec<String> = laps
+        .iter()
+        .map(|l| l.took_ms().map_or_else(|| "-".to_owned(), clock))
+        .collect();
+    line(
+        c,
+        g,
+        ln,
+        &times.join("  →  "),
+        &bold(26.0, Color32::WHITE),
+        top + 82.0,
+        alpha,
+    );
+    if let (Some(a), Some(b)) = (laps.first(), laps.last()) {
+        line(
+            c,
+            g,
+            ln,
+            &wait_progress((a.took_ms(), a.wrong), (b.took_ms(), b.wrong)),
+            &edged(15.0, Color32::WHITE),
+            top + 122.0,
+            alpha,
+        );
+    }
+    line(
+        c,
+        g,
+        ln,
+        t("Results coming up…", "まもなく結果へ"),
+        &edged(13.0, GREY),
+        top + 160.0,
         alpha,
     );
 }

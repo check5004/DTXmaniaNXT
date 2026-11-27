@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 
 use egui::{Color32, Pos2, Stroke, StrokeKind};
 use engine::practice::{LoopStyle, STEP_SPEED, Section, SpeedPlan};
-use engine::practice_way::{Build, Way};
+use engine::practice_way::{Build, WAIT_LAPS, Way};
 use i18n::{count, t, tf};
 
 use crate::band::{Band, BandData, CLEARED_COLOR};
@@ -1058,6 +1058,12 @@ impl PracticeMenu {
                 "{}% のまま・{time}",
                 s.speed.first_speed()
             )
+        } else if s.way == Way::Wait {
+            tf!(
+                "{}% · {WAIT_LAPS} loops",
+                "{}%・{WAIT_LAPS} 周",
+                s.speed.first_speed()
+            )
         } else {
             head
         };
@@ -1739,7 +1745,7 @@ mod tests {
         ));
         // 積み上げは向きの行
         m.cursor = m.item_index(Item::Way);
-        for _ in 0..3 {
+        for _ in 0..4 {
             m.input(MenuInput::Right);
         }
         assert_eq!(m.setup.way, Way::Build);
@@ -1748,7 +1754,7 @@ mod tests {
         assert_eq!(m.setup.build, Build::Backward);
         // 左の端からは右の端へ回る
         m.cursor = m.item_index(Item::Way);
-        for _ in 0..4 {
+        for _ in 0..5 {
             m.input(MenuInput::Left);
         }
         assert_eq!(m.setup.way, Way::Climb);
@@ -1763,10 +1769,14 @@ mod tests {
         s.fills = vec![Section::new(3, 3), Section::new(7, 7)];
         let mut m = PracticeMenu::new(s, None, None);
         m.cursor = m.item_index(Item::Way);
-        // 苦手めぐり：苦手な所 3 か所を、まぜた順にめぐる
+        // 待ちモードは、選んだ区間を使う（区間を選ぶ行がある）
         for _ in 0..3 {
             m.input(MenuInput::Right);
         }
+        assert_eq!(m.setup.way, Way::Wait);
+        assert!(m.items().contains(&Item::Section));
+        // 苦手めぐり：苦手な所 3 か所を、まぜた順にめぐる
+        m.input(MenuInput::Right);
         assert_eq!(m.setup.way, Way::Tour);
         assert_eq!(m.item(), Item::Way);
         let mut tour: Vec<Section> = m.cards().iter().map(|c| c.section).collect();
