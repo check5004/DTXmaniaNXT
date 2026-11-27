@@ -7,8 +7,9 @@
 use std::path::PathBuf;
 
 use dtx::{DrumLane, TempoMap};
-use engine::drill::{Category, Drill, Hand, Run, STEP_MEASURES, Summary};
-use i18n::t;
+use engine::drill::{Category, Drill, Hand, MANY_MISSES, Run, Summary, Way};
+use engine::judge::Judgement;
+use i18n::{t, tf};
 
 /// 右手と左手の色（音符の横の文字、結果のずれ）
 pub const RIGHT_COLOR: egui::Color32 = egui::Color32::from_rgb(0xFF, 0x96, 0x46);
@@ -169,6 +170,26 @@ pub fn category_name(c: Category) -> &'static str {
     }
 }
 
+/// やり方の名前（基礎練習の画面の札、結果の見出し）
+pub fn way_name(w: Way) -> String {
+    match w {
+        Way::Climb => t("Speed Up", "テンポを上げる").to_owned(),
+        Way::Limit => t("Limit Test", "限界チャレンジ").to_owned(),
+        Way::Endurance(m) => tf!("Endurance {m} min", "持久 {m} 分"),
+        Way::Blind => t("Eyes Off", "見ないで").to_owned(),
+        Way::Echo => t("Call and Response", "聞いてまねる").to_owned(),
+    }
+}
+
+/// 手順の名前（右から・左から）
+pub fn lead_name(lefty: bool) -> &'static str {
+    if lefty {
+        t("Left Lead", "左から")
+    } else {
+        t("Right Lead", "右から")
+    }
+}
+
 /// 手足の名前（結果の行）
 pub fn hand_name(h: Hand) -> &'static str {
     match h {
@@ -245,6 +266,10 @@ pub struct DrillPlay {
     last_hit_ms: Option<f64>,
     /// 休みを知らせた
     rest_sent: bool,
+    /// 段ごとの落とした数（POOR と MISS。限界チャレンジで終わるかを見る）
+    misses: Vec<u32>,
+    /// 限界チャレンジで終えた段と、その時刻（判定の時刻）
+    pub stopped: Option<(usize, f64)>,
 }
 
 /// これだけ叩かなかったら止める（ミリ秒）。1 小節より短いときは 1 小節
@@ -256,13 +281,62 @@ impl DrillPlay {
             .map(|m| tempo.measure_start_ms(m))
             .collect();
         let hands = notes.iter().map(|n| run.hand_at(n.at, n.lane)).collect();
+        let misses = vec![0; run.steps()];
         Self {
             run,
             measure_ms,
             hands,
             last_hit_ms: None,
             rest_sent: false,
+            misses,
+            stopped: None,
         }
+    }
+
+    /// お手本の音の時刻（譜面の時刻）とレーン。聞いてまねるだけ
+    pub fn demo_hits(&self) -> Vec<(f64, DrumLane)> {
+        self.run
+            .demo_notes()
+            .into_iter()
+            .map(|(m, pos, lane)| {
+                let (from, to) = (self.measure_start_ms(m), self.measure_start_ms(m + 1));
+                (from + pos * (to - from), lane)
+            })
+            .collect()
+    }
+
+    /// 譜面の小節 `m` の音符を、譜面の時刻 `now_ms` に描く濃さ。見ないでは段ごとに薄く、
+    /// 聞いてまねるはお手本を聞いている間は先の小節を出さない（自分の小節が始まってから出す）
+    pub fn note_alpha(&self, m: u32, now_ms: f64) -> f32 {
+        if self.run.way == Way::Echo && self.measure_at(now_ms) < m {
+            return 0.0;
+        }
+        self.run.note_alpha(m)
+    }
+
+    /// 音符を判定した（自動で叩いた音符は呼ばない）。限界チャレンジで同じ段に 3 つ落としたら、
+    /// そのときだけ true（そこで終える）
+    pub fn on_judged(&mut self, measure: u32, judgement: Judgement, ms: f64) -> bool {
+        if self.run.way != Way::Limit
+            || self.stopped.is_some()
+            || !matches!(judgement, Judgement::Poor | Judgement::Miss)
+        {
+            return false;
+        }
+        let Some(s) = self.run.step_of(measure) else {
+            return false;
+        };
+        self.misses[s] += 1;
+        if self.misses[s] >= MANY_MISSES {
+            self.stopped = Some((s, ms));
+            return true;
+        }
+        false
+    }
+
+    /// 段 `step` で落とした数
+    pub fn misses_in(&self, step: usize) -> u32 {
+        self.misses.get(step).copied().unwrap_or(0)
     }
 
     /// 譜面の時刻 `ms` の小節（カウントは 0。終わりを過ぎたら最後の次）
@@ -277,8 +351,11 @@ impl DrillPlay {
         self.measure_ms[(m as usize).min(last)]
     }
 
-    /// 譜面の時刻 `ms` でクリックを鳴らすか（最後の小節が終わったら鳴らさない）
+    /// 譜面の時刻 `ms` でクリックを鳴らすか（最後の小節が終わったら、限界チャレンジで終えたら鳴らさない）
     pub fn clicks_at(&self, ms: f64) -> bool {
+        if self.stopped.is_some_and(|(_, at)| ms > at) {
+            return false;
+        }
         let m = self.measure_at(ms + 0.5);
         m < self.run.measure_count() && self.run.clicks(m)
     }
@@ -314,8 +391,7 @@ impl DrillPlay {
 
     /// 段 `step` の小節の範囲（譜面の小節）
     pub fn step_measures(&self, step: usize) -> std::ops::Range<u32> {
-        let first = engine::drill::COUNT_IN_MEASURES + step as u32 * STEP_MEASURES;
-        first..first + STEP_MEASURES
+        self.run.step_range(step)
     }
 
     /// 叩いた（判定の時刻）
@@ -324,9 +400,10 @@ impl DrillPlay {
         self.rest_sent = false;
     }
 
-    /// 叩くのをやめたか。最初の音符から 1 小節（4 秒より短ければ 4 秒）叩かなければ 1 回だけ true
+    /// 叩くのをやめたか。最初の音符から 1 小節（4 秒より短ければ 4 秒）叩かなければ 1 回だけ true。
+    /// 聞いてまねるのお手本の小節は叩かないので、自分の小節の頭から数える
     pub fn check_rest(&mut self, now_ms: f64) -> bool {
-        if self.rest_sent {
+        if self.rest_sent || self.stopped.is_some() {
             return false;
         }
         let first = self.measure_ms[1];
@@ -335,8 +412,14 @@ impl DrillPlay {
             return false;
         }
         let m = self.measure_at(now_ms).max(1);
+        if self.run.is_demo(m) {
+            return false;
+        }
         let bar = self.measure_start_ms(m + 1) - self.measure_start_ms(m);
-        let since = self.last_hit_ms.unwrap_or(first).max(first);
+        let mut since = self.last_hit_ms.unwrap_or(first).max(first);
+        if self.run.is_demo(m - 1) {
+            since = since.max(self.measure_start_ms(m));
+        }
         if now_ms - since >= bar.max(REST_MS) {
             self.rest_sent = true;
             return true;
@@ -350,6 +433,12 @@ impl DrillPlay {
         self.rest_sent = false;
     }
 }
+
+/// ドリルの記録の引き方（ドリルの id と、手順を左からにしたか）。右からと左からは別に数える
+pub type RecordKey = (&'static str, bool);
+
+/// ドリルごとのこれまでの記録
+pub type DrillRecords = std::collections::HashMap<RecordKey, DrillRecord>;
 
 /// 線に出す、これまでの回の数
 pub const TRAIL_RUNS: usize = 8;
@@ -412,6 +501,7 @@ impl DrillOutcome {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use engine::drill::Way;
 
     fn play(id: &str, target: u32, rise: u32) -> DrillPlay {
         let run = Run::new(Drill::find(id).unwrap(), target, rise);
@@ -476,6 +566,24 @@ mod tests {
         assert_eq!(p.count_in_beat(2000.0), None);
         assert_eq!(p.measure_at(2000.0), 1);
         assert_eq!(p.step_measures(1), 5..9);
+    }
+
+    #[test]
+    fn call_and_response_shows_your_bar_only_once_it_starts() {
+        let run = Run::with(Drill::find("eighth").unwrap(), Way::Echo, 120, 10, false);
+        let chart = dtx::parse(&run.to_dtx("echo"));
+        let tempo = TempoMap::build(&chart);
+        let notes = tempo.drum_notes(&chart);
+        let p = DrillPlay::new(run, &tempo, &notes);
+        // 120 BPM で 1 小節 2 秒。小節 1 はお手本、小節 2 が自分
+        assert_eq!(p.note_alpha(2, 3000.0), 0.0);
+        assert_eq!(p.note_alpha(2, 4000.0), 1.0);
+        assert_eq!(p.note_alpha(2, 5000.0), 1.0);
+        // お手本の音は小節 1 と 3 に 8 つずつ
+        let heard = p.demo_hits();
+        assert_eq!(heard.len(), 8 * 8);
+        assert_eq!(heard[0], (2000.0, DrumLane::SD));
+        assert_eq!(heard[8].0, 6000.0);
     }
 
     #[test]

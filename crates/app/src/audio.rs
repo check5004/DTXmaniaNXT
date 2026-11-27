@@ -54,6 +54,92 @@ pub fn click(rate: u32, accent: bool) -> Sound {
     Sound(Arc::from(samples))
 }
 
+/// 聞いてまねるのお手本に鳴らすドラムの音。基礎練習の譜面には音が無いので作る。
+/// ねらいは本物らしさより、どのパッドを叩いたかが耳で分かること（バスドラ・スネア・タムの高さ・金物）
+pub fn drum_voice(rate: u32, lane: dtx::DrumLane) -> Sound {
+    use dtx::DrumLane as L;
+    let r = f64::from(rate);
+    let tau = std::f64::consts::TAU;
+    // 決まった種の雑音（毎回同じ音になるように）
+    let mut seed: u32 = 0x9E37_79B9 ^ u32::from(lane.channel()).wrapping_mul(0x85EB_CA6B);
+    let mut noise = move || {
+        seed ^= seed << 13;
+        seed ^= seed >> 17;
+        seed ^= seed << 5;
+        f64::from(seed) / f64::from(u32::MAX) * 2.0 - 1.0
+    };
+    // 音の長さ（秒）、雑音の高域を通す周波数（Hz、0 なら通さない）
+    let (len, cut) = match lane {
+        L::BD | L::LBD => (0.45, 0.0),
+        L::SD => (0.3, 1500.0),
+        L::HH => (0.12, 7000.0),
+        L::HHO => (0.7, 7000.0),
+        L::LP => (0.08, 7000.0),
+        L::HT | L::LT | L::FT => (0.5, 0.0),
+        L::RD => (1.2, 5000.0),
+        _ => (1.6, 4000.0),
+    };
+    let frames = (r * len) as usize;
+    let dt = 1.0 / r;
+    let hp = if cut > 0.0 {
+        let rc = 1.0 / (tau * cut);
+        rc / (rc + dt)
+    } else {
+        0.0
+    };
+    let (mut last_x, mut last_y) = (0.0, 0.0);
+    let mut phase = 0.0;
+    let tom = |base: f64, t: f64| base * (1.0 + 0.4 * (-t / 0.05).exp());
+    let mut samples = Vec::with_capacity(frames * 2);
+    for i in 0..frames {
+        let t = i as f64 * dt;
+        let x = noise();
+        let y = hp * (last_y + x - last_x);
+        (last_x, last_y) = (x, y);
+        let v = match lane {
+            L::BD | L::LBD => {
+                phase += tau * (45.0 + 65.0 * (-t / 0.03).exp()) * dt;
+                phase.sin() * (-t / 0.25).exp() * 0.9 + x * (-t / 0.003).exp() * 0.3
+            }
+            L::SD => {
+                (tau * 185.0 * t).sin() * (-t / 0.06).exp() * 0.45
+                    + (tau * 330.0 * t).sin() * (-t / 0.04).exp() * 0.2
+                    + y * (-t / 0.12).exp() * 0.7
+            }
+            L::HH => y * (-t / 0.035).exp() * 0.5,
+            L::HHO => y * (-t / 0.35).exp() * 0.4,
+            L::LP => y * (-t / 0.02).exp() * 0.35,
+            L::HT | L::LT | L::FT => {
+                let base = match lane {
+                    L::HT => 210.0,
+                    L::LT => 150.0,
+                    _ => 105.0,
+                };
+                phase += tau * tom(base, t) * dt;
+                phase.sin() * (-t / 0.28).exp() * 0.8 + x * (-t / 0.01).exp() * 0.2
+            }
+            L::RD => {
+                let bell: f64 = [470.0, 1150.0, 2350.0, 3650.0]
+                    .iter()
+                    .map(|f| (tau * f * t).sin())
+                    .sum();
+                bell * (-t / 0.9).exp() * 0.08 + y * (-t / 0.25).exp() * 0.15
+            }
+            _ => {
+                let ring: f64 = [540.0, 800.0, 1230.0, 1710.0, 2620.0, 3930.0]
+                    .iter()
+                    .map(|f| (tau * f * t).sin().signum())
+                    .sum();
+                y * (-t / 0.9).exp() * 0.35 + ring * (-t / 0.7).exp() * 0.02
+            }
+        };
+        // 頭のぷつっという音を消す
+        let v = (v * (t / 0.001).min(1.0)) as f32;
+        samples.extend([v, v]);
+    }
+    Sound(Arc::from(samples))
+}
+
 /// 音のファイルを読み、ステレオ・`rate` Hz にそろえる。
 /// BandJAM XA（`.xa`）は名前ではなく中身の頭で見分ける（symphonia は読めない）
 pub fn load_sound(path: &Path, rate: u32) -> Result<Sound> {

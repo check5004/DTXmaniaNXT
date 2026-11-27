@@ -1,7 +1,10 @@
 //! 基礎練習（ドリル）。曲を使わず、クリックに合わせて決まった型を叩く。
 //!
-//! 1 回は、1 小節のカウントのあと 4 段でテンポを上げ、1 段 4 小節ずつ叩いて終わる（約 45 秒）。
+//! 1 回は、1 小節のカウントのあと段に分けて叩いて終わる。段の分け方は「やり方」（[`Way`]）で決まる。
+//! 既定の「テンポを上げる」は 4 段でテンポを上げ、1 段 4 小節ずつ叩く（約 45 秒）。
 //! ミスで段をくり返さず、どの段で崩れたかは結果で見せる（2026-11-25 の見本）。
+//! やり方はほかに、限界チャレンジ・持久・見ないで・聞いてまねる（2026-11-27 の見本）。
+//! 「左から」は型の R と L を入れ替える（どのやり方とも合わせられる）。
 //! 型はレーンごとの文字列で書き、譜面（DTX の文字）にしてふつうの演奏と同じ判定に流す。
 //! 型の小節 0 はカウントで、音符は 1 小節目から置く。
 //!
@@ -27,6 +30,17 @@ pub const RISES: [u32; 4] = [0, 5, 10, 15];
 pub const DEFAULT_RISE: u32 = 10;
 /// 平均のずれがこれ以上なら「早め」「遅め」と見せる（叩き方のくせと同じ）
 pub const LEAN_MS: f64 = 8.0;
+/// 段の出来が「× 3 つ以上」になるミスの数。限界チャレンジは同じ段でこれだけ落としたら終わる
+pub const MANY_MISSES: u32 = 3;
+/// 限界チャレンジ: 1 段の小節の数、1 段ごとの上げ幅、段の数の上限
+pub const LIMIT_STEP_MEASURES: u32 = 2;
+pub const LIMIT_RISE: u32 = 5;
+pub const LIMIT_MAX_STEPS: usize = 24;
+/// 持久: 選べる長さ（分）と、ずれを見る区切りの長さ（秒）
+pub const ENDURANCE_MINUTES: [u32; 3] = [1, 2, 3];
+pub const ENDURANCE_SEGMENT_S: f64 = 30.0;
+/// 見ないで: 段ごとの音符の濃さ（最後の段は見えない）
+pub const BLIND_ALPHA: [f32; STEPS] = [1.0, 0.55, 0.25, 0.0];
 
 /// 叩く手足
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -65,6 +79,83 @@ impl Hand {
     /// 足か
     pub fn is_foot(self) -> bool {
         matches!(self, Self::Foot | Self::LeftFoot)
+    }
+
+    /// 右手と左手を入れ替えた手（「左から」の手順）。足はそのまま
+    pub fn mirrored(self) -> Self {
+        match self {
+            Self::Right => Self::Left,
+            Self::Left => Self::Right,
+            h => h,
+        }
+    }
+}
+
+/// 1 回のやり方
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Way {
+    /// 4 段でテンポを上げる（1 段 4 小節。上げ幅は選べる）
+    Climb,
+    /// 限界チャレンジ。2 小節ごとに +5 し、同じ段で 3 つ落としたら終わる
+    Limit,
+    /// 持久。テンポを変えずに決めた分数（1〜3 分）叩き続け、30 秒ごとに区切って見る
+    Endurance(u32),
+    /// 見ないで。段が進むごとに音符が薄くなり、最後の段は見えない（テンポは変えない）
+    Blind,
+    /// 聞いてまねる。お手本の 1 小節（音だけ、譜面は出さない）と自分の 1 小節を交互に（テンポは変えない）
+    Echo,
+}
+
+impl Way {
+    /// 選ぶ順（HH で順に回す）
+    pub const ALL: [Way; 7] = [
+        Self::Climb,
+        Self::Limit,
+        Self::Endurance(1),
+        Self::Endurance(2),
+        Self::Endurance(3),
+        Self::Blind,
+        Self::Echo,
+    ];
+
+    /// 設定と記録に書く名前
+    pub fn key(self) -> String {
+        match self {
+            Self::Climb => "climb".to_owned(),
+            Self::Limit => "limit".to_owned(),
+            Self::Endurance(m) => format!("endurance{m}"),
+            Self::Blind => "blind".to_owned(),
+            Self::Echo => "echo".to_owned(),
+        }
+    }
+
+    pub fn from_key(s: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|w| w.key() == s)
+    }
+
+    /// ドリル `d` で使えるか。クリックの消えるドリルは、テンポを上げ続ける限界チャレンジと、
+    /// 小節ごとに交代する聞いてまねるには使わない（消える小節と重なって分からなくなるので）
+    pub fn fits(self, d: &Drill) -> bool {
+        !(d.gap.is_some() && matches!(self, Self::Limit | Self::Echo))
+    }
+
+    /// ドリル `d` で選んだとき実際に使うやり方（使えなければテンポを上げる）
+    pub fn for_drill(self, d: &Drill) -> Self {
+        if self.fits(d) { self } else { Self::Climb }
+    }
+
+    /// 次のやり方（ドリル `d` で使えないものは飛ばす。最後の次は最初）
+    pub fn next_for(self, d: &Drill) -> Self {
+        let i = Self::ALL.iter().position(|&w| w == self).unwrap_or(0);
+        (1..=Self::ALL.len())
+            .map(|k| Self::ALL[(i + k) % Self::ALL.len()])
+            .find(|w| w.fits(d))
+            .unwrap_or(Self::Climb)
+    }
+
+    /// 段ごとにテンポが変わるか
+    pub fn changes_tempo(self) -> bool {
+        matches!(self, Self::Climb | Self::Limit)
     }
 }
 
@@ -1262,42 +1353,143 @@ pub fn nudge_bpm(bpm: u32, steps: i32) -> u32 {
     v.clamp(i64::from(BPM_MIN), i64::from(BPM_MAX)) as u32
 }
 
-/// 1 回の基礎練習（ドリルと段ごとのテンポ）
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// 1 回の基礎練習（ドリル、やり方、手順、段ごとのテンポ）
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Run {
     pub drill: &'static Drill,
-    pub bpms: [u32; STEPS],
+    pub way: Way,
+    /// 型の R と L を入れ替える（左から）
+    pub lefty: bool,
+    /// 選んだテンポ。テンポを上げるなら最後の段、限界チャレンジは始めの段、ほかはどの段も
+    target: u32,
+    /// 段ごとのテンポ
+    pub bpms: Vec<u32>,
+    /// 1 段の小節の数
+    pub step_measures: u32,
 }
 
 impl Run {
+    /// テンポを上げる 1 回（右から）
     pub fn new(drill: &'static Drill, target: u32, rise: u32) -> Self {
+        Self::with(drill, Way::Climb, target, rise, false)
+    }
+
+    /// やり方 `way` の 1 回。`rise` はテンポを上げるときの 1 段ごとの上げ幅。
+    /// ドリルで使えないやり方はテンポを上げる 1 回にする
+    pub fn with(drill: &'static Drill, way: Way, target: u32, rise: u32, lefty: bool) -> Self {
+        let way = way.for_drill(drill);
+        let target = target.clamp(BPM_MIN, BPM_MAX);
+        let (bpms, step_measures) = match way {
+            Way::Climb => (step_bpms(drill, target, rise).to_vec(), STEP_MEASURES),
+            Way::Limit => {
+                let n = (((BPM_MAX - target) / LIMIT_RISE) as usize + 1).min(LIMIT_MAX_STEPS);
+                let bpms = (0..n as u32).map(|i| target + LIMIT_RISE * i).collect();
+                (bpms, LIMIT_STEP_MEASURES)
+            }
+            Way::Endurance(minutes) => {
+                // 30 秒に近い小節の数で区切り、全体が `minutes` 分に近くなる区切りの数にする
+                let bar_s = drill.bar_len() * 4.0 * 60.0 / f64::from(target);
+                let per = (ENDURANCE_SEGMENT_S / bar_s).round().max(1.0) as u32;
+                let n = (f64::from(minutes.max(1)) * 60.0 / (f64::from(per) * bar_s))
+                    .round()
+                    .max(1.0) as usize;
+                (vec![target; n], per)
+            }
+            Way::Blind | Way::Echo => (vec![target; STEPS], STEP_MEASURES),
+        };
         Self {
             drill,
-            bpms: step_bpms(drill, target, rise),
+            way,
+            lefty,
+            target,
+            bpms,
+            step_measures,
         }
     }
 
-    /// 目標のテンポ（最後の段）
+    /// 選んだテンポ（テンポを上げるなら最後の段、限界チャレンジは始めの段）
     pub fn target(&self) -> u32 {
-        self.bpms[STEPS - 1]
+        self.target
+    }
+
+    /// 段の数
+    pub fn steps(&self) -> usize {
+        self.bpms.len()
     }
 
     /// 譜面の小節の数（カウントを入れて）
     pub fn measure_count(&self) -> u32 {
-        COUNT_IN_MEASURES + STEPS as u32 * STEP_MEASURES
+        COUNT_IN_MEASURES + self.steps() as u32 * self.step_measures
     }
 
     /// 譜面の小節 `measure` が何段目か（カウントは None）
     pub fn step_of(&self, measure: u32) -> Option<usize> {
         let m = measure.checked_sub(COUNT_IN_MEASURES)?;
-        let s = (m / STEP_MEASURES) as usize;
-        (s < STEPS).then_some(s)
+        let s = (m / self.step_measures) as usize;
+        (s < self.steps()).then_some(s)
     }
 
     /// 段の中の何小節目か（0 から。カウントは None）
     pub fn measure_in_step(&self, measure: u32) -> Option<u32> {
         self.step_of(measure)?;
-        Some((measure - COUNT_IN_MEASURES) % STEP_MEASURES)
+        Some((measure - COUNT_IN_MEASURES) % self.step_measures)
+    }
+
+    /// 段 `step` の譜面の小節の範囲
+    pub fn step_range(&self, step: usize) -> std::ops::Range<u32> {
+        let first = COUNT_IN_MEASURES + step as u32 * self.step_measures;
+        first..first + self.step_measures
+    }
+
+    /// お手本の小節か（聞いてまねるの、段の中の 1・3 小節目）
+    pub fn is_demo(&self, measure: u32) -> bool {
+        self.way == Way::Echo && self.measure_in_step(measure).is_some_and(|i| i % 2 == 0)
+    }
+
+    /// 譜面の小節 `measure` の型の小節（お手本の小節は流す型の小節。カウントと終わりの後は None）。
+    /// 聞いてまねるは、お手本と自分の 2 小節で型の同じ小節を使う
+    pub fn pattern_measure(&self, measure: u32) -> Option<u32> {
+        self.step_of(measure)?;
+        let i = measure - COUNT_IN_MEASURES;
+        let i = if self.way == Way::Echo { i / 2 } else { i };
+        Some(i % self.drill.measures())
+    }
+
+    /// 型の音符（左からなら R と L を入れ替えて）
+    pub fn notes(&self) -> Vec<PatternNote> {
+        let mut v = self.drill.notes();
+        if self.lefty {
+            for n in &mut v {
+                n.hand = n.hand.mirrored();
+            }
+        }
+        v
+    }
+
+    /// 譜面の小節 `measure` の音符の濃さ（見ないでは段ごとに薄く、ほかは 1）
+    pub fn note_alpha(&self, measure: u32) -> f32 {
+        match (self.way, self.step_of(measure)) {
+            (Way::Blind, Some(s)) => BLIND_ALPHA[s.min(STEPS - 1)],
+            _ => 1.0,
+        }
+    }
+
+    /// お手本の音（譜面の小節、小節の中の位置 0〜1、レーン）。聞いてまねるの、お手本の小節だけ
+    pub fn demo_notes(&self) -> Vec<(u32, f64, DrumLane)> {
+        if self.way != Way::Echo {
+            return Vec::new();
+        }
+        let notes = self.drill.notes();
+        (COUNT_IN_MEASURES..self.measure_count())
+            .filter(|&m| self.is_demo(m))
+            .flat_map(|m| {
+                let pm = self.pattern_measure(m);
+                notes
+                    .iter()
+                    .filter(move |n| Some(n.measure) == pm)
+                    .map(move |n| (m, n.pos(), n.lane))
+            })
+            .collect()
     }
 
     /// 譜面の小節 `measure` でクリックを鳴らすか（カウントはいつも鳴らす）
@@ -1322,11 +1514,13 @@ impl Run {
         }
     }
 
-    /// 譜面の音符（小節と位置、レーン）を叩く手足。型に無い音符は None
+    /// 譜面の音符（小節と位置、レーン）を叩く手足。型に無い音符とお手本の小節は None
     pub fn hand_at(&self, at: NotePos, lane: DrumLane) -> Option<Hand> {
-        let m = at.measure.checked_sub(COUNT_IN_MEASURES)?;
-        let pm = m % self.drill.measures();
-        self.drill.notes().into_iter().find_map(|n| {
+        if self.is_demo(at.measure) {
+            return None;
+        }
+        let pm = self.pattern_measure(at.measure)?;
+        self.notes().into_iter().find_map(|n| {
             (n.measure == pm
                 && n.lane == lane
                 && u64::from(n.cell) * u64::from(at.den) == u64::from(at.num) * u64::from(n.cells))
@@ -1334,7 +1528,8 @@ impl Run {
         })
     }
 
-    /// 譜面の文字（DTX）。0 小節目はカウントで音符を置かず、段の頭でテンポを変える
+    /// 譜面の文字（DTX）。0 小節目はカウントで音符を置かず、段の頭でテンポを変える。
+    /// お手本の小節にも音符を置かない（音は `demo_notes` から鳴らし、判定しない）
     pub fn to_dtx(&self, title: &str) -> String {
         let mut s = String::new();
         s += &format!(
@@ -1342,7 +1537,7 @@ impl Run {
             self.bpms[0]
         );
         for (i, b) in self.bpms.iter().enumerate() {
-            s += &format!("#BPM{:02}: {b}\n", i + 1);
+            s += &format!("#BPM{}: {b}\n", base36x2(i + 1));
         }
         s += "#00008: 01\n";
         if self.drill.meter != (4, 4) {
@@ -1351,15 +1546,19 @@ impl Run {
                 s += &format!("#{m:03}02: {len}\n");
             }
         }
-        let pattern_measures = self.drill.measures();
-        for step in 0..STEPS {
-            let first = COUNT_IN_MEASURES + step as u32 * STEP_MEASURES;
-            s += &format!("#{first:03}08: {:02}\n", step + 1);
+        for step in 0..self.steps() {
+            let first = self.step_range(step).start;
+            s += &format!("#{first:03}08: {}\n", base36x2(step + 1));
         }
         for m in COUNT_IN_MEASURES..self.measure_count() {
-            let pm = ((m - COUNT_IN_MEASURES) % pattern_measures) as usize;
+            if self.is_demo(m) {
+                continue;
+            }
+            let Some(pm) = self.pattern_measure(m) else {
+                continue;
+            };
             for &(lane, text) in self.drill.lanes {
-                let Some(bar) = text.split('|').nth(pm) else {
+                let Some(bar) = text.split('|').nth(pm as usize) else {
                     continue;
                 };
                 let cells: String = bar
@@ -1382,6 +1581,13 @@ impl Run {
     }
 }
 
+/// DTX の 2 桁の 36 進数（`#BPMzz` の番号）
+fn base36x2(n: usize) -> String {
+    const DIGITS: &[u8] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    let n = n.min(36 * 36 - 1);
+    format!("{}{}", DIGITS[n / 36] as char, DIGITS[n % 36] as char)
+}
+
 // ---- 結果 ----
 
 /// 段の出来
@@ -1400,7 +1606,7 @@ impl Grade {
     pub fn of(misses: u32) -> Self {
         match misses {
             0 => Self::Clean,
-            1..=2 => Self::Few,
+            m if m < MANY_MISSES => Self::Few,
             _ => Self::Many,
         }
     }
@@ -1434,8 +1640,11 @@ impl StepResult {
         self.tally.poor + self.tally.miss
     }
 
-    /// 最後まで叩いた段の出来（途中の段は None）
+    /// 最後まで叩いた段の出来（途中の段は None）。3 つ落とした段は、途中でも × に決まる
     pub fn grade(&self) -> Option<Grade> {
+        if self.misses() >= MANY_MISSES {
+            return Some(Grade::Many);
+        }
         (self.completed && self.notes > 0).then(|| Grade::of(self.misses()))
     }
 }
@@ -1503,7 +1712,7 @@ impl Summary {
 
     /// 全部の段を最後まで叩いた
     pub fn finished(&self) -> bool {
-        self.steps.len() == STEPS && self.steps.iter().all(|s| s.completed)
+        !self.steps.is_empty() && self.steps.iter().all(|s| s.completed)
     }
 }
 
@@ -1513,23 +1722,21 @@ pub fn summarize(run: &Run, results: &[NoteOutcome], now_measure: u32) -> Summar
         .bpms
         .iter()
         .enumerate()
-        .map(|(i, &bpm)| {
-            let last = COUNT_IN_MEASURES + (i as u32 + 1) * STEP_MEASURES - 1;
-            StepResult {
-                bpm,
-                tally: Tally::default(),
-                notes: 0,
-                completed: now_measure > last,
-                offset_mean_ms: None,
-                offset_sd_ms: None,
-            }
+        .map(|(i, &bpm)| StepResult {
+            bpm,
+            tally: Tally::default(),
+            notes: 0,
+            completed: now_measure >= run.step_range(i).end,
+            offset_mean_ms: None,
+            offset_sd_ms: None,
         })
         .collect();
-    let mut step_offsets: Vec<Vec<f64>> = vec![Vec::new(); STEPS];
+    let mut step_offsets: Vec<Vec<f64>> = vec![Vec::new(); run.steps()];
     let mut hand_offsets: Vec<(Hand, Vec<f64>)> = Vec::new();
+    let notes = run.notes();
     let pattern_hands: Vec<Hand> = Hand::ALL
         .into_iter()
-        .filter(|h| run.drill.notes().iter().any(|n| n.hand == *h))
+        .filter(|h| notes.iter().any(|n| n.hand == *h))
         .collect();
     for &h in &pattern_hands {
         hand_offsets.push((h, Vec::new()));
@@ -1827,6 +2034,162 @@ mod tests {
             .map(|n| run.hand_at(n.at, n.lane).unwrap().letter())
             .collect();
         assert_eq!(hands, "RLRRLRLL");
+    }
+
+    /// 小節 `m` の長さ（ミリ秒）
+    fn bar_ms(tempo: &dtx::TempoMap, m: usize) -> f64 {
+        tempo.measure_start_ms(m + 1) - tempo.measure_start_ms(m)
+    }
+
+    #[test]
+    fn ways_go_round_and_skip_what_does_not_fit() {
+        let para = drill("paradiddle");
+        let mut seen = vec![Way::Climb];
+        let mut w = Way::Climb;
+        for _ in 0..Way::ALL.len() - 1 {
+            w = w.next_for(para);
+            seen.push(w);
+        }
+        assert_eq!(seen, Way::ALL);
+        assert_eq!(Way::Echo.next_for(para), Way::Climb);
+        // クリックの消えるドリルは限界チャレンジと聞いてまねるを飛ばす
+        let gap = drill("gap_2");
+        assert_eq!(Way::Climb.next_for(gap), Way::Endurance(1));
+        assert_eq!(Way::Blind.next_for(gap), Way::Climb);
+        assert_eq!(Way::Limit.for_drill(gap), Way::Climb);
+        assert_eq!(Run::with(gap, Way::Echo, 100, 10, false).way, Way::Climb);
+        for w in Way::ALL {
+            assert_eq!(Way::from_key(&w.key()), Some(w));
+        }
+        assert_eq!(Way::from_key("nope"), None);
+    }
+
+    #[test]
+    fn the_limit_test_adds_five_every_two_bars_up_to_the_cap() {
+        let run = Run::with(drill("paradiddle"), Way::Limit, 100, 10, false);
+        assert_eq!(run.target(), 100);
+        assert_eq!(run.step_measures, LIMIT_STEP_MEASURES);
+        assert_eq!(run.steps(), LIMIT_MAX_STEPS);
+        assert_eq!(run.bpms[..3], [100, 105, 110]);
+        assert_eq!(run.measure_count(), 1 + 2 * LIMIT_MAX_STEPS as u32);
+        assert_eq!(run.step_of(3), Some(1));
+        assert_eq!(run.step_range(1), 3..5);
+        // 上の端で止まる
+        let top = Run::with(drill("paradiddle"), Way::Limit, 230, 10, false);
+        assert_eq!(top.bpms, vec![230, 235, 240]);
+        // 段が 10 を超えても譜面のテンポが合う（#BPM の番号は 36 進数）
+        let chart = dtx::parse(&run.to_dtx("limit"));
+        let tempo = dtx::TempoMap::build(&chart);
+        for (i, &bpm) in run.bpms.iter().enumerate() {
+            let m = run.step_range(i).start as usize;
+            let want = 4.0 * 60_000.0 / f64::from(bpm);
+            assert!((bar_ms(&tempo, m) - want).abs() < 1e-6, "step {i}");
+        }
+        // 3 つ落とした段は、途中でも × に決まる
+        let step = StepResult {
+            bpm: 100,
+            tally: Tally {
+                miss: 3,
+                ..Default::default()
+            },
+            notes: 5,
+            completed: false,
+            offset_mean_ms: None,
+            offset_sd_ms: None,
+        };
+        assert_eq!(step.grade(), Some(Grade::Many));
+    }
+
+    #[test]
+    fn endurance_keeps_the_tempo_in_about_thirty_second_parts() {
+        let run = Run::with(drill("eighth"), Way::Endurance(2), 100, 10, false);
+        assert!(run.bpms.iter().all(|&b| b == 100));
+        // 100 BPM の 4/4 は 1 小節 2.4 秒。13 小節（31.2 秒）ずつ 4 つで約 2 分
+        assert_eq!(run.step_measures, 13);
+        assert_eq!(run.steps(), 4);
+        for d in [drill("eighth"), drill("waltz"), drill("seven_eight")] {
+            for minutes in ENDURANCE_MINUTES {
+                for bpm in [BPM_MIN, 90, 160, BPM_MAX] {
+                    let run = Run::with(d, Way::Endurance(minutes), bpm, 0, false);
+                    let bar_s = d.bar_len() * 4.0 * 60.0 / f64::from(bpm);
+                    let total = f64::from(run.measure_count() - 1) * bar_s;
+                    let part = f64::from(run.step_measures) * bar_s;
+                    let want = f64::from(minutes) * 60.0;
+                    assert!(
+                        (total - want).abs() <= want * 0.2,
+                        "{} {minutes} {bpm}: {total}",
+                        d.id
+                    );
+                    assert!((15.0..=45.0).contains(&part), "{} {bpm}: {part}", d.id);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn eyes_off_fades_the_notes_step_by_step() {
+        let run = Run::with(drill("paradiddle"), Way::Blind, 100, 10, false);
+        assert!(run.bpms.iter().all(|&b| b == 100));
+        let alpha: Vec<f32> = (0..run.steps())
+            .map(|i| run.note_alpha(run.step_range(i).start))
+            .collect();
+        assert_eq!(alpha, BLIND_ALPHA);
+        assert_eq!(run.note_alpha(0), 1.0);
+        let climb = Run::new(drill("paradiddle"), 100, 10);
+        assert_eq!(climb.note_alpha(16), 1.0);
+    }
+
+    #[test]
+    fn call_and_response_alternates_a_heard_bar_and_your_bar() {
+        let run = Run::with(drill("eight_beat"), Way::Echo, 100, 10, false);
+        assert!(run.bpms.iter().all(|&b| b == 100));
+        let demo: Vec<bool> = (0..6).map(|m| run.is_demo(m)).collect();
+        assert_eq!(demo, [false, true, false, true, false, true]);
+        assert_eq!(run.pattern_measure(1), run.pattern_measure(2));
+        let chart = dtx::parse(&run.to_dtx("echo"));
+        let tempo = dtx::TempoMap::build(&chart);
+        let notes = tempo.drum_notes(&chart);
+        // 譜面の音符は自分の小節だけ（8 小節）
+        assert!(notes.iter().all(|n| !run.is_demo(n.at.measure)));
+        let per_bar = drill("eight_beat").notes().len();
+        assert_eq!(notes.len(), per_bar * 8);
+        // お手本の音は、お手本の小節に同じ数だけ
+        let heard = run.demo_notes();
+        assert_eq!(heard.len(), per_bar * 8);
+        assert!(heard.iter().all(|&(m, _, _)| run.is_demo(m)));
+        assert!(notes.iter().all(|n| run.hand_at(n.at, n.lane).is_some()));
+        // 4 小節の型は、お手本と自分の 2 小節ごとに次の小節へ
+        let fill = drill("fill_four_bars");
+        assert_eq!(fill.measures(), 4);
+        let run = Run::with(fill, Way::Echo, 100, 10, false);
+        let pm: Vec<Option<u32>> = (0..6).map(|m| run.pattern_measure(m)).collect();
+        assert_eq!(pm, [None, Some(0), Some(0), Some(1), Some(1), Some(2)]);
+    }
+
+    #[test]
+    fn left_lead_swaps_the_hands_but_not_the_feet() {
+        let run = Run::with(drill("paradiddle"), Way::Climb, 100, 10, true);
+        let chart = dtx::parse(&run.to_dtx("lefty"));
+        let notes = dtx::TempoMap::build(&chart).drum_notes(&chart);
+        let hands: String = notes[..8]
+            .iter()
+            .map(|n| run.hand_at(n.at, n.lane).unwrap().letter())
+            .collect();
+        assert_eq!(hands, "LRLLRLRR");
+        let groove = Run::with(drill("eight_beat"), Way::Climb, 100, 10, true);
+        let feet = groove.notes().iter().filter(|n| n.hand.is_foot()).count();
+        let before = drill("eight_beat")
+            .notes()
+            .iter()
+            .filter(|n| n.hand.is_foot())
+            .count();
+        assert_eq!(feet, before);
+        assert!(
+            groove
+                .notes()
+                .iter()
+                .all(|n| n.lane != HH || n.hand == Hand::Left)
+        );
     }
 
     #[test]
