@@ -316,6 +316,26 @@ impl History {
         out
     }
 
+    /// 最近遊んだ曲の譜面（新しい順、`limit` まで）。基礎練習と、もう無いファイルは入れない
+    pub fn recent_charts(&self, limit: usize) -> Vec<PathBuf> {
+        let Some(records) = self.records.as_ref() else {
+            return Vec::new();
+        };
+        let mut rows = match records.last_played() {
+            Ok(rows) => rows,
+            Err(e) => {
+                log::warn!("cannot read the records: {e}");
+                return Vec::new();
+            }
+        };
+        rows.sort_by_key(|r| std::cmp::Reverse(r.1));
+        rows.into_iter()
+            .map(|(p, _)| PathBuf::from(p))
+            .filter(|p| crate::drill::of_path(p).is_none() && p.is_file())
+            .take(limit)
+            .collect()
+    }
+
     /// 譜面ごとの記録（選曲画面の並べ替え、ランプ、ランク、スキル）。記録が読めなければ空
     pub fn chart_stats(&self) -> Stats {
         let mut out = Stats::new();

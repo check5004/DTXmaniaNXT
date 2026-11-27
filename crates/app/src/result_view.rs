@@ -255,6 +255,9 @@ impl ResultView {
             self.draw_parameters(c, g, Top::Drill(d));
             crate::result_drill::draw(c, g, d, &self.info.title, o.windows.perfect);
             self.draw_title(c, g);
+            if let Some(m) = &o.today {
+                draw_today(c, g, m);
+            }
             return;
         }
         if let Some(p) = &o.practice {
@@ -262,6 +265,9 @@ impl ResultView {
             self.draw_parameters(c, g, Top::Practice(p));
             crate::result_training::draw_practice(c, g, p);
             self.draw_title(c, g);
+            if let Some(m) = &o.today {
+                draw_today(c, g, m);
+            }
             return;
         }
         self.draw_image(c, g);
@@ -277,6 +283,9 @@ impl ResultView {
     }
 
     fn hints(&self, o: &Outcome) -> Vec<ui::Hint<'static>> {
+        if let Some(m) = &o.today {
+            return today_hints(m, self.page, o.practice.is_some());
+        }
         if o.drill.is_some() {
             return drill_hints();
         }
@@ -463,6 +472,153 @@ fn drill_hints() -> Vec<ui::Hint<'static>> {
             t("Drills (Enter)", "基礎練習へ（Enter）"),
         ),
     ]
+}
+
+/// 今日のメニューの結果のパッドの役目。CY で次へ（最後なら終える）、LC で今日のメニューへ
+fn today_hints(m: &crate::today::Mark, page: Page, practice: bool) -> Vec<ui::Hint<'static>> {
+    let mut v: Vec<ui::Hint<'static>> = vec![(&[Pad::SD], t("Play Again (R)", "もう一度（R）"))];
+    if practice {
+        v.push(match page {
+            Page::Summary => (&[Pad::HT, Pad::LT], t("Loop Table (→)", "周ごとの表（→）")),
+            Page::Analysis => (
+                &[Pad::HT, Pad::LT],
+                t("Practice Result (←)", "練習の結果（←）"),
+            ),
+        });
+    }
+    v.push(if m.next.is_some() {
+        (&[Pad::CY], t("Next (Enter)", "次へ（Enter）"))
+    } else {
+        (&[Pad::CY], t("Finish (Enter)", "終える（Enter）"))
+    });
+    v.push((
+        &[Pad::LC],
+        t("Today's Menu (Esc)", "今日のメニューへ（Esc）"),
+    ));
+    v
+}
+
+/// 今日のメニューの進み具合（左上の見出しの下）。全体の帯と、次に叩くもの
+fn draw_today(c: &Canvas, g: &mut Gfx, m: &crate::today::Mark) {
+    // 見出し（スコアの場所）の下、スコアのパネルの上
+    let (x, y, w, h) = (28.0, 118.0, 420.0, 124.0);
+    ui::round_fill(
+        c,
+        x,
+        y,
+        w,
+        h,
+        8.0,
+        Color32::from_rgba_unmultiplied(8, 10, 22, 230),
+    );
+    ui::round_frame(c, x, y, w, h, 8.0, 1.0, Color32::from_white_alpha(70));
+    let accent = Color32::from_rgb(0xFF, 0xB8, 0x40);
+    let done = m.steps.iter().filter(|s| s.2).count();
+    ui::text(
+        c,
+        g,
+        t("Today's Menu", "今日のメニュー"),
+        x + 16.0,
+        y + 10.0,
+        &ui::bold(16.0, accent),
+        w - 120.0,
+    );
+    ui::text_right(
+        c,
+        g,
+        &format!("{done} / {}", m.steps.len()),
+        x + w - 16.0,
+        y + 11.0,
+        &ui::bold(15.0, ui::TEXT),
+        90.0,
+    );
+    // 帯（長さに比べた幅。終えたものは暗く、今のものに白い枠）
+    let (sx, sy, sw, sh) = (x + 16.0, y + 40.0, w - 32.0, 26.0);
+    let gap = 3.0;
+    let total: f64 = m.steps.iter().map(|s| s.1).sum::<f64>().max(1.0);
+    let room = sw - gap * (m.steps.len() as f32 - 1.0);
+    let mut cx = sx;
+    for (k, (role, secs, finished)) in m.steps.iter().enumerate() {
+        let bw = (room * (secs / total) as f32).max(6.0);
+        let fill = if *finished {
+            role.color().gamma_multiply(0.85)
+        } else {
+            role.color().gamma_multiply(0.25)
+        };
+        ui::round_fill(c, cx, sy, bw, sh, 3.0, fill);
+        if *finished && bw > 16.0 {
+            ui::text_center(
+                c,
+                g,
+                "✓",
+                cx + bw / 2.0,
+                sy + 4.0,
+                &ui::bold(13.0, Color32::from_rgb(16, 16, 24)),
+                bw,
+            );
+        }
+        if k == m.index {
+            ui::round_frame(
+                c,
+                cx - 2.0,
+                sy - 2.0,
+                bw + 4.0,
+                sh + 4.0,
+                4.0,
+                2.0,
+                Color32::WHITE,
+            );
+        }
+        cx += bw + gap;
+    }
+    // 次
+    let ny = y + 82.0;
+    match &m.next {
+        Some((role, name)) => {
+            let label = t("Next", "次");
+            let lw = ui::text(
+                c,
+                g,
+                label,
+                x + 16.0,
+                ny + 2.0,
+                &ui::plain(15.0, ui::DIM),
+                60.0,
+            );
+            let px = x + 24.0 + lw;
+            let pw = 74.0;
+            ui::round_fill(c, px, ny + 1.0, pw, 22.0, 11.0, role.color());
+            ui::text_center(
+                c,
+                g,
+                role.label(),
+                px + pw / 2.0,
+                ny + 4.0,
+                &ui::bold(12.0, Color32::from_rgb(16, 16, 24)),
+                pw - 8.0,
+            );
+            ui::text(
+                c,
+                g,
+                name,
+                px + pw + 10.0,
+                ny,
+                &ui::bold(17.0, ui::TEXT),
+                x + w - (px + pw + 26.0),
+            );
+        }
+        None => {
+            ui::text(
+                c,
+                g,
+                t("That's everything for today!", "今日の分はこれで全部です"),
+                x + 16.0,
+                ny,
+                &ui::bold(17.0, Color32::from_rgb(0x70, 0xE0, 0x90)),
+                w - 32.0,
+            );
+        }
+    }
 }
 
 /// 結果の画面のパッドの役目（`main.rs` の結果の画面のパッドと同じ）。足のパッドは使わない。

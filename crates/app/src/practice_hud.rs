@@ -18,9 +18,10 @@ use engine::practice::{BeatSlot, Next, SPEED_MIN, STEP_SPEED, Section, speed_per
 use i18n::{count, t, tf};
 
 use crate::chart_picture::Look;
+use crate::drill_hud::clock;
 use crate::gfx::{Canvas, Gfx, Opt, src};
 use crate::play_view::JUDGE_LINE_Y;
-use crate::practice::{CLEAR_HOLD_MS, Cue, LapState, Practice, pass_line};
+use crate::practice::{CLEAR_HOLD_MS, Cue, LapState, Practice, TIME_UP_HOLD_MS, pass_line};
 use crate::text::Style;
 
 /// 周と速度の数字の場所（上流のスコアと同じ高さ）
@@ -96,6 +97,7 @@ pub fn draw(
     draw_card(c, g, p, now);
     draw_banner(c, g, ln, p, now, px_per_ms, reverse);
     draw_clear(c, g, ln, p, now, reverse);
+    draw_time_up(c, g, ln, p, now, reverse);
     draw_count_in(c, g, ln, p, now, reverse);
 }
 
@@ -521,6 +523,33 @@ fn draw_card(c: &Canvas, g: &mut Gfx, p: &Practice, now: f64) {
         w - 28.0,
         1.0,
     );
+    // 今日のメニューの曲は、時間の区切りまでの残り
+    if let Some(left) = p.time_left_ms(now) {
+        let text = if p.timed_out_at_ms.is_some() || left <= 0.0 {
+            t(
+                "Time's up: this step is the last",
+                "時間です。この段で終わります",
+            )
+            .to_owned()
+        } else {
+            tf!(
+                "Today's Menu: {} left",
+                "今日のメニュー: 残り {}",
+                clock(left)
+            )
+        };
+        put(
+            c,
+            g,
+            &text,
+            &edged(13.0, CURRENT_COLOR),
+            x + 14.0,
+            y + 311.0,
+            Align::Left,
+            w - 28.0,
+            1.0,
+        );
+    }
 }
 
 /// 段の絵。越えた段は緑に ✓、今の段（`current`）は橙に「いまここ」、いちばん上の段に旗
@@ -992,6 +1021,39 @@ fn draw_clear(c: &Canvas, g: &mut Gfx, ln: Lanes, p: &Practice, now: f64, revers
         t("Results coming up…", "まもなく結果へ"),
         &edged(13.0, GREY),
         y + 98.0,
+        alpha,
+    );
+}
+
+/// 時間の区切りを過ぎて終えたら、結果の画面へ進むまでレーンの真ん中に「時間です」
+fn draw_time_up(c: &Canvas, g: &mut Gfx, ln: Lanes, p: &Practice, now: f64, reverse: bool) {
+    let Some(at) = p.timed_out_at_ms else {
+        return;
+    };
+    let since = now - at;
+    if !(0.0..TIME_UP_HOLD_MS + 500.0).contains(&since) {
+        return;
+    }
+    let alpha = (since / BANNER_FADE_IN_MS).clamp(0.0, 1.0) as f32;
+    let h = 150.0;
+    let top = banner_top(h, reverse);
+    banner_frame(c, ln, top, h, CURRENT_COLOR, alpha);
+    line(
+        c,
+        g,
+        ln,
+        t("TIME'S UP", "時間です"),
+        &bold(44.0, CURRENT_COLOR),
+        top + 22.0,
+        alpha,
+    );
+    line(
+        c,
+        g,
+        ln,
+        t("Results coming up…", "まもなく結果へ"),
+        &edged(14.0, GREY),
+        top + 96.0,
         alpha,
     );
 }

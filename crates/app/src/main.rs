@@ -73,6 +73,7 @@ mod takeover;
 mod text;
 mod time;
 mod title_view;
+mod today;
 mod ui;
 mod update;
 mod update_view;
@@ -473,6 +474,10 @@ struct App {
     shutter: Shutter,
     /// シャッターを閉じ終えたら移る先（閉じているあいだは操作を受け付けない）
     after_close: Option<AfterClose>,
+    /// 始めた今日のメニュー（その日のうちは中身を変えない）
+    today: Option<today::Progress>,
+    /// 今日のメニューの曲（日ごとに 1 回だけ記録から選ぶ）
+    today_song: Option<(chrono::NaiveDate, Option<today::SongPick>)>,
     /// 選曲画面に重ねる、練習メニュー
     menu: Option<Box<PracticeMenu>>,
     /// 練習メニューに出した曲と苦手な所（練習から戻ったとき、同じ並びで出す）
@@ -618,8 +623,12 @@ enum AfterClose {
     LeaveReplay,
     /// 基礎練習の画面へ
     Drills,
+    /// 基礎練習の画面の、今日のメニューの列へ
+    TodayMenu,
     /// 基礎練習を始める
     Drill(engine::drill::Run),
+    /// 区間の練習を始める（今日のメニューの曲）
+    Practice(PathBuf, PracticeOptions),
     /// 上達の記録へ。どこから開いたかと、選んでおく譜面
     Records(Option<PathBuf>),
     /// 開発者メニューへ。`true` なら設定を選曲から開いていた
@@ -653,6 +662,8 @@ const APPLY_SHOW: Duration = Duration::from_millis(1500);
 
 /// MIDI の機器がつながったか外れたかを調べる間
 const PORT_CHECK_EVERY: Duration = Duration::from_secs(2);
+/// 今日のメニューの曲を選ぶのに見る、最近遊んだ曲の数
+const TODAY_SONG_CANDIDATES: usize = 4;
 
 /// 設定の画面にいるあいだ、モニターがつながったか外れたかを調べる間
 const MONITOR_CHECK_EVERY: Duration = Duration::from_secs(2);
@@ -734,6 +745,8 @@ impl App {
             startup_error: None,
             shutter: Shutter::new(),
             after_close: None,
+            today: None,
+            today_song: None,
             menu: None,
             menu_spots: None,
             section_audio: SectionAudio::default(),
@@ -1151,8 +1164,13 @@ impl App {
                 }
             }
             AfterClose::Drills => self.open_drills(),
+            AfterClose::TodayMenu => self.open_drills_at(true),
             AfterClose::Drill(run) => {
                 self.start_drill(run);
+                self.shutter.open(shutter::OPEN_DELAY);
+            }
+            AfterClose::Practice(path, options) => {
+                self.start_practice(path, options);
                 self.shutter.open(shutter::OPEN_DELAY);
             }
         }
@@ -1312,15 +1330,115 @@ impl App {
 
     /// 基礎練習の画面を開く（遊んでいる途中なら、そこまでの記録を残してから）。カーソルとテンポは前のまま
     fn open_drills(&mut self) {
+        self.open_drills_at(false);
+    }
+
+    /// 基礎練習の画面を開く。`today` なら今日のメニューの列を開いておく
+    fn open_drills_at(&mut self, today: bool) {
         self.save_unfinished();
         self.sfx.stop_title();
         self.sfx.preview(None);
         self.quick = None;
         self.message = None;
-        let menu =
-            drill_menu::DrillMenu::new(&self.config.drill_prefs(), self.history.drill_records());
+        let day = progress::today();
+        // 日が変わったら、始めたメニューは捨てる
+        if self.today.as_ref().is_some_and(|p| p.plan.day != day) {
+            self.today = None;
+        }
+        if let Some(p) = self.today.as_mut() {
+            p.current = None;
+        }
+        let setup = drill_menu::TodaySetup {
+            day,
+            song: self.today_song(day),
+            progress: self.today.clone(),
+            done_today: self.config.drill_today_done == day.to_string(),
+            open: today,
+        };
+        let menu = drill_menu::DrillMenu::new(
+            &self.config.drill_prefs(),
+            self.history.drill_records(),
+            setup,
+        );
         self.screen = Screen::Drills(Box::new(menu));
         self.shutter.open(CONFIG_OPEN_DELAY);
+    }
+
+    /// 今日のメニューの曲。最近遊んだ曲から、記録に苦手な所があるものを日ごとに回して選ぶ（その日のうちは同じ）
+    fn today_song(&mut self, day: chrono::NaiveDate) -> Option<today::SongPick> {
+        if let Some((d, pick)) = &self.today_song
+            && *d == day
+        {
+            return pick.clone();
+        }
+        let started = Instant::now();
+        let prefs = self.config.practice_prefs();
+        let picks: Vec<today::SongPick> = self
+            .history
+            .recent_charts(TODAY_SONG_CANDIDATES)
+            .into_iter()
+            .filter_map(|path| {
+                let s = PracticeSetup::load(&path, &self.history, None, prefs).ok()?;
+                let phrase = s.weak.phrases.first()?;
+                Some(today::SongPick {
+                    title: s.title,
+                    artist: s.artist,
+                    section: engine::practice::Section::new(phrase.first, phrase.last),
+                    weakness: s.weak.weakness,
+                    path,
+                })
+            })
+            .collect();
+        let seed = chrono::Datelike::num_days_from_ce(&day).unsigned_abs() as usize;
+        let pick = (!picks.is_empty()).then(|| picks[seed % picks.len()].clone());
+        log::info!(
+            "today's song: {:?} ({} candidates, {:.0?})",
+            pick.as_ref().map(|p| &p.title),
+            picks.len(),
+            started.elapsed()
+        );
+        self.today_song = Some((day, pick.clone()));
+        pick
+    }
+
+    /// 今日のメニューの `index` 番目を始める（叩き終えたら結果の画面で止まる）
+    fn start_today_step(&mut self, index: usize) {
+        let Some(p) = self.today.as_mut() else {
+            return;
+        };
+        let Some(step) = p.plan.steps.get(index) else {
+            return;
+        };
+        p.current = Some(index);
+        let after = match step.task.clone() {
+            today::Task::Drill(run) => AfterClose::Drill(run),
+            today::Task::Song { pick, seconds } => {
+                let mut options = self.practice_options(pick.section);
+                options.time_box_s = Some(seconds);
+                AfterClose::Practice(pick.path, options)
+            }
+        };
+        self.close_then(after, Duration::ZERO);
+    }
+
+    /// 結果の画面の CY（今日のメニュー）：次へ。全部終えたら基礎練習の画面の今日のメニューへ
+    fn today_next(&mut self) {
+        let Some(p) = self.today.as_mut() else {
+            return;
+        };
+        let at = p.current.unwrap_or(0);
+        self.sfx.play(Se::Decide);
+        match p.next_after(at) {
+            Some(k) => self.start_today_step(k),
+            None => {
+                p.current = None;
+                if p.complete() {
+                    self.config.drill_today_done = p.plan.day.to_string();
+                    self.config.save();
+                }
+                self.close_then(AfterClose::TodayMenu, Duration::ZERO);
+            }
+        }
     }
 
     /// 基礎練習の画面の操作
@@ -1340,6 +1458,10 @@ impl App {
         match r.done {
             Some(drill_menu::Done::Start(run)) => {
                 self.close_then(AfterClose::Drill(run), Duration::ZERO);
+            }
+            Some(drill_menu::Done::Today(progress, from)) => {
+                self.today = Some(*progress);
+                self.start_today_step(from);
             }
             Some(drill_menu::Done::Back) => self.close_then(AfterClose::Title, Duration::ZERO),
             None => {}
@@ -1873,6 +1995,7 @@ impl App {
             pitch: p.pitch,
             metronome: p.metronome,
             step_laps: p.step_laps,
+            time_box_s: None,
         }
     }
 
@@ -1910,6 +2033,29 @@ impl App {
         outcome.session_id = session;
         if let Some(d) = outcome.drill.as_mut() {
             d.best_before = best_before;
+        }
+        // 今日のメニューの 1 つなら、終えた印を付けて、結果の画面に進み具合を出す
+        if let Some(tp) = self.today.as_mut()
+            && let Some(i) = tp.current
+        {
+            let same = match &tp.plan.steps[i].task {
+                today::Task::Drill(run) => outcome.drill.as_ref().is_some_and(|d| d.run == *run),
+                today::Task::Song { pick, .. } => {
+                    outcome.practice.is_some() && outcome.path == pick.path
+                }
+            };
+            if same {
+                let completed = match &outcome.practice {
+                    Some(o) => o.cleared || o.timed_out,
+                    None => cleared,
+                };
+                if completed {
+                    tp.done[i] = true;
+                }
+                outcome.today = Some(tp.mark(i));
+            } else {
+                tp.current = None;
+            }
         }
         if !practice && drill.is_none() {
             let weak = self.history.weak_map(
@@ -3055,7 +3201,11 @@ impl App {
                 };
                 self.dev_input(input);
             }
-            Screen::Result(_, view) => match code {
+            Screen::Result(o, view) => match code {
+                // 今日のメニューの結果では Enter で次へ
+                KeyCode::Enter | KeyCode::NumpadEnter if o.today.is_some() => {
+                    self.result_action(ui::ResultAction::Next);
+                }
                 KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Escape => {
                     self.result_action(ui::ResultAction::Back);
                 }
@@ -3464,7 +3614,9 @@ impl App {
                 }
             }
             // 画面の下の帯に出す役目（`ResultView::hints`）
-            Screen::Result(..) => match lane {
+            Screen::Result(o, _) => match lane {
+                // 今日のメニューの結果では CY で次へ
+                DrumLane::CY if o.today.is_some() => self.result_action(ui::ResultAction::Next),
                 DrumLane::CY | DrumLane::LC => self.result_action(ui::ResultAction::Back),
                 // もう一度（練習なら同じ決めごとで。キーボードは R）
                 DrumLane::SD => self.result_action(ui::ResultAction::Retry),
@@ -3635,6 +3787,24 @@ impl App {
         let Screen::Result(o, _) = &self.screen else {
             return;
         };
+        // 今日のメニューの結果からは、CY で次へ、LC で今日のメニューへ（もう一度はいつもどおり）
+        if o.today.is_some() {
+            match action {
+                ui::ResultAction::Next => {
+                    self.today_next();
+                    return;
+                }
+                ui::ResultAction::Back => {
+                    self.sfx.play(Se::Cancel);
+                    self.close_then(AfterClose::TodayMenu, Duration::ZERO);
+                    return;
+                }
+                ui::ResultAction::Retry => {}
+                ui::ResultAction::Practice(_) => return,
+            }
+        } else if action == ui::ResultAction::Next {
+            return;
+        }
         // 基礎練習の結果からは、もう一度か基礎練習の画面へ
         if let Some(d) = &o.drill {
             let run = d.run.clone();
@@ -3668,6 +3838,8 @@ impl App {
                 self.sfx.play(Se::Cancel);
                 self.close_then(AfterClose::Select, Duration::ZERO);
             }
+            // 次へは今日のメニューの結果だけ（上で受けている）
+            ui::ResultAction::Next => {}
             ui::ResultAction::Retry => match options {
                 Some(o) => self.start_practice(path, o),
                 None => self.start(path),

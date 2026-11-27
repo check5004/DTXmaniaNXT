@@ -73,6 +73,13 @@ pub struct Config {
     /// 基礎練習のドリルごとの目標のテンポ（既定から変えたものだけ）
     #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub drill_bpm: std::collections::BTreeMap<String, u32>,
+    /// 今日のメニューの長さ（分。5・10・15）
+    pub drill_today_minutes: u32,
+    /// 基礎練習の画面を、最後に今日のメニューの行で閉じた
+    pub drill_on_today: bool,
+    /// 今日のメニューを最後までやった日（YYYY-MM-DD。朝 4 時で区切る）
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub drill_today_done: String,
     /// ゲージが尽きたら途中で終わる（STAGE FAILED）。書いていなければ ON（上流の既定）
     pub stage_failed: Option<bool>,
     /// 判定の下のずれの数字（0 は出さない、1 は出す、2 は PERFECT 以外だけ。上流 `ShowLagTime`）
@@ -202,6 +209,9 @@ impl Default for Config {
             drill_way: String::new(),
             drill_lefty: false,
             drill_bpm: std::collections::BTreeMap::new(),
+            drill_today_minutes: crate::today::DEFAULT_LENGTH,
+            drill_on_today: false,
+            drill_today_done: String::new(),
             stage_failed: None,
             show_lag_time: 1,
             show_lag_time_color: 0,
@@ -483,6 +493,8 @@ impl Config {
             bpm: self.drill_bpm.clone(),
             way: way.key(),
             lefty: self.drill_lefty,
+            today_minutes: self.drill_today_minutes,
+            on_today: self.drill_on_today,
         }
     }
 
@@ -492,6 +504,8 @@ impl Config {
         self.drill_bpm = p.bpm;
         self.drill_way = p.way;
         self.drill_lefty = p.lefty;
+        self.drill_today_minutes = p.today_minutes;
+        self.drill_on_today = p.on_today;
     }
 
     pub fn set_practice_prefs(&mut self, p: PracticePrefs) {
@@ -641,6 +655,8 @@ mod tests {
         p.bpm.insert("paradiddle".into(), 135);
         p.way = engine::drill::Way::Endurance(2).key();
         p.lefty = true;
+        p.today_minutes = 15;
+        p.on_today = true;
         c.set_drill_prefs(p.clone());
         // 表（[drill_bpm]）があっても、あとの項目と一緒に書ける
         c.language = "ja".into();
