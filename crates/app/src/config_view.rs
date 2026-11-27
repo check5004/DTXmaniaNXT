@@ -132,41 +132,41 @@ impl Cat {
                 "よく変える項目です。選曲で RD を叩いて開く簡易設定と同じ並びです。",
             ),
             Cat::Display => t(
-                "Window mode, rendering, and background video.",
-                "窓の出し方と、画面の描き方、譜面の動画。",
+                "Display mode, performance, and background video.",
+                "画面モード、パフォーマンス、背景動画。",
             ),
-            Cat::Sound => t("Volume and what gets played.", "音量と、鳴らすもの。"),
+            Cat::Sound => t("Volume and which sounds play.", "音量と、鳴らす音。"),
             Cat::Play => t(
                 "Game rules (STAGE FAILED, gauge), judgment windows, timing display, and records.",
                 "ゲームの決まり（STAGE FAILED、ゲージ）、判定の幅、ずれの表示、記録。",
             ),
             Cat::Songs => t(
                 "Song folders, rescanning, and the chart editor.",
-                "曲のフォルダと、曲の探し直し、譜面エディタ。",
+                "曲のフォルダ、曲の再読み込み、譜面エディタ。",
             ),
             Cat::App => t(
-                "Language, updates, and credits.",
-                "言語と更新、クレジット。",
+                "Language, updates, credits, and importing from other DTXMania.",
+                "言語、アップデート、クレジット、他の DTXMania からの引き継ぎ。",
             ),
             Cat::View => t(
                 "Scroll speed and direction, note hiding, lanes and notes, and screen elements.",
-                "譜面の速さと流れ方、見えにくくする、レーンとチップ、画面の部品。",
+                "譜面の速さと流れ方、音符を隠す、レーンと音符、画面の表示。",
             ),
             Cat::Pads => t(
                 "Auto play, pad grouping, and which sound plays when pads are grouped.",
-                "自動演奏、叩き分け、共通にしたときに鳴らす音。",
+                "自動演奏、叩き分け、叩き分けないときに鳴らす音。",
             ),
             Cat::Timing => t(
                 "Offsets for input, display, and BGM.",
-                "叩いた時刻・表示・BGM の補正。",
+                "叩いたタイミング・表示・BGM の補正。",
             ),
             Cat::Input => t(
                 "Pad and key mapping, and per-device MIDI settings.",
                 "パッドとキーの割り当てと、MIDI 機器ごとの設定。",
             ),
             Cat::Practice => t(
-                "Default rules for section practice. Changes made in the practice popup on song select are saved here too.",
-                "区間練習の決めごとの既定です。選曲の練習のポップアップで変えたものも、ここに残ります。",
+                "Settings for section practice. Changes you make in the practice menu are saved here too.",
+                "区間練習の設定です。練習メニューで変えた内容も、ここに保存されます。",
             ),
         }
     }
@@ -701,7 +701,7 @@ fn value_row(s: Setting, c: &Config) -> Row {
             &[t("Early = Blue", "早いと青"), t("Early = Red", "早いと赤")],
             at as usize,
             Some(def as usize),
-            t("Colors for the timing numbers.\nEarly = Blue: early hits are blue, late hits are red.\nEarly = Red: early hits are red, late hits are blue.", "ずれの数字の色です。\n早いと青: 早いと青、遅いと赤。\n早いと赤: 早いと赤、遅いと青。"),
+            t("Colors for the timing numbers.\nEarly = Blue: early hits are blue, late hits are red.\nEarly = Red: early hits are red, late hits are blue.", "ずれの数字の色です。\n早いと青: 早いときは青、遅いときは赤。\n早いと赤: 早いときは赤、遅いときは青。"),
         ),
         Setting::ShowLagHitCount => flag(
             t("Early/Late Counts", "早い・遅いの数"),
@@ -709,11 +709,11 @@ fn value_row(s: Setting, c: &Config) -> Row {
         ),
         Setting::Update => choice(
             id,
-            t("Updates", "更新"),
+            t("Updates", "アップデート"),
             &UpdateMode::ALL.map(UpdateMode::label),
             at as usize,
             Some(def as usize),
-            t("How new versions are handled. Only works if you installed with Setup.exe.\nNotify: checks at startup and shows it under the title menu. You decide when to update.\nAutomatic: downloads at startup and installs when you quit.\nOff: never checks for new versions.", "新しい版の扱いです。Setup.exe で入れたときだけ働きます。\n知らせる: 起動したときに確かめ、あればタイトルのメニューの下に出します。更新するかは自分で選びます。\n自動: 起動したときに落とし、終了したときに入れ替えます。\n確かめない: 新しい版を確かめません。"),
+            t("How new versions are handled. Only works if you installed with Setup.exe.\nNotify: checks at startup and shows it under the title menu. You decide when to update.\nAutomatic: downloads at startup and installs when you quit.\nOff: never checks for new versions.", "新しいバージョンが出たときの扱いです。Setup.exe でインストールしたときだけ使えます。\nお知らせ: 起動時に確認し、新しいバージョンがあればタイトル画面のメニューの下に表示します。アップデートするかは自分で選べます。\n自動: 起動時にダウンロードし、終了するときにインストールします。\n確認しない: 新しいバージョンを確認しません。"),
         ),        Setting::Language => choice(
             id,
             // 読めない言語にしてしまっても見つけられるように、日本語の画面でも英語の名前を添える
@@ -777,26 +777,26 @@ fn drill_row_at(d: Drill, c: &Config, at: i64) -> Row {
     };
     match d {
         Drill::Style => pick(
-            t("Looping", "つなぎ方"),
+            t("Looping", "くり返し方"),
             &[t("Seamless", "切れ目なく"), t("Restart Each Loop", "毎回区切る")],
             t("Seamless: goes straight from the end of the section back to the start (good for beats).\nRestart Each Loop: play through the first beat of the next measure, then start over from the lead-in (good for fills).", "切れ目なく: 区間の終わりから切れ目なく頭へ戻ります（ビート向き）。\n毎回区切る: 次の小節の頭の 1 打まで叩き、助走からやり直します（フィル向き）。"),
         ),
         Drill::Rule => pick(
-            t("Pass Rule", "段の越え方"),
+            t("Pass Rule", "合格の基準"),
             &[t("Lenient", "ゆるい"), t("Normal", "ふつう"), t("Strict", "きびしい")],
-            t("How many misses on the same beat (POOR or MISS) in one step send you back to play it again. Misses on different beats don't add up.\nLenient: 3.\nNormal: 2.\nStrict: just 1.", "1 段のうちに、同じ拍を何回落としたら「もう一度」にするかです（落としたのは POOR と MISS）。違う拍のミスは数えません。\nゆるい: 3 回。\nふつう: 2 回。\nきびしい: 1 回でも。"),
+            t("How many misses on the same beat (POOR or MISS) in one step send you back to play it again. Misses on different beats don't add up.\nLenient: 3.\nNormal: 2.\nStrict: just 1.", "1 つの段で、同じ拍を何回ミス（POOR か MISS）したら、その段をもう一度やるかです。違う拍のミスは合わせて数えません。\nゆるい: 3 回。\nふつう: 2 回。\nきびしい: 1 回でも。"),
         ),
         Drill::StepLaps => pick(
-            t("Loops per Step", "1 段の周"),
+            t("Loops per Step", "1 段の周回数"),
             &[t("3 loops", "3 周"), t("4 loops", "4 周"), t("6 loops", "6 周"), t("8 loops", "8 周")],
-            t("How many loops you play at each step. Get through them without missing the same beat repeatedly to move up.", "1 つの段で叩く周の数です。叩き終えて同じ拍のミスが重ならなければ、次の段へ進みます。"),
+            t("How many loops you play at each step. Get through them without missing the same beat repeatedly to move up.", "1 つの段で叩く周回数です。叩き終えたときに、同じ拍のミスが重なっていなければ次の段へ進みます。"),
         ),
         Drill::Ladder => pick(
             t("Speed Mode", "速度の決め方"),
             &[t("Step Up", "段階アップ"), t("Fixed", "固定")],
             &tf!(
                 "Step Up: climbs from the start speed to the target speed in {STEP_SPEED}% steps. Pass the target step to clear. Fail a step twice in a row and you drop down one.\nFixed: a single step at that speed. Pass it to clear (you can still change speed in 5% steps with , and . while practicing).",
-                "段階アップ: 始めの速度から目標の速度まで {STEP_SPEED}% ずつの段をのぼります。目標の段を越えたらクリア。「もう一度」が 2 回続いたら 1 段下げます。\n固定: その速度の 1 段だけです。越えたらクリア（練習中も , と . キーで 5% ずつ変えられます）。"
+                "段階アップ: 始めの速度から目標の速度まで、{STEP_SPEED}% ずつ段をのぼります。目標の速度の段を越えたらクリアです。「もう一度」が 2 回続くと 1 段下がります。\n固定: その速度の 1 段だけです。越えたらクリアです（練習中も , と . キーで 5% ずつ変えられます）。"
             ),
         ),
         Drill::Speed => number(
@@ -828,8 +828,8 @@ fn drill_row_at(d: Drill, c: &Config, at: i64) -> Row {
         ),
         Drill::Metronome => pick(
             t("Metronome", "メトロノーム"),
-            &[t("On", "オン"), t("Off", "オフ")],
-            t("On: plays a soft click on every beat during the section (accented at the start of each measure).\nThe 4-beat count-in at the start of each step plays even when Off.", "オン: 区間のあいだ拍ごとに小さくクリックを鳴らします（小節の頭は強く）。\n段の頭の 4 拍のカウントは、オフでも鳴ります。"),
+            &["ON", "OFF"],
+            t("ON: plays a soft click on every beat during the section (accented at the start of each measure).\nThe 4-beat count-in at the start of each step plays even when OFF.", "ON: 区間のあいだ、拍ごとに小さくクリックを鳴らします（小節の頭は強く）。\n各段の始めの 4 拍のカウントは、OFF でも鳴ります。"),
         ),
     }
 }
@@ -1003,12 +1003,9 @@ pub struct ImportInfo<'a> {
 }
 
 /// 出すモニターの選択肢の、窓のあるモニター（選んでいない）の名前
-const MONITOR_AUTO: Tr = tr("Auto (window's monitor)", "自動（窓のあるモニター）");
+const MONITOR_AUTO: Tr = tr("Auto (current monitor)", "自動（今のモニター）");
 /// 選んだモニターが外れているときの選択肢の名前
-const MONITOR_GONE: Tr = tr(
-    "Chosen monitor (disconnected)",
-    "選んだモニター（外れています）",
-);
+const MONITOR_GONE: Tr = tr("Chosen monitor (disconnected)", "選んだモニター（未接続）");
 
 /// 出すモニターの行。選択肢は「自動」、つながっているモニター、選んだモニターが外れていればその印
 fn monitor_row(c: &Config, monitors: &[MonitorInfo]) -> Row {
@@ -1031,9 +1028,9 @@ fn monitor_row(c: &Config, monitors: &[MonitorInfo]) -> Row {
     };
     row(
         ItemId::Monitor,
-        t("Monitor", "出すモニター"),
+        t("Monitor", "表示するモニター"),
         labels[at].to_string(),
-        t("The monitor used for Fullscreen and Borderless. It moves as soon as you pick it. In windowed mode, the window also opens on this monitor at startup.\nWith Auto, or if the chosen monitor is disconnected, the monitor the window is on is used.", "全画面とボーダーレスを出すモニターです。選ぶとその場で移ります。ウィンドウも、起動したときはこのモニターに開きます。\n自動か、選んだモニターが外れているときは、窓のあるモニターに出します。")
+        t("The monitor used for Fullscreen and Borderless. It moves as soon as you pick it. In windowed mode, the window also opens on this monitor at startup.\nWith Auto, or if the chosen monitor is disconnected, the monitor the window is on is used.", "フルスクリーンとボーダーレスで使うモニターです。選ぶとすぐに移ります。ウィンドウモードでも、起動したときはこのモニターに開きます。\n「自動」のときと、選んだモニターがつながっていないときは、ウィンドウのあるモニターを使います。")
             .to_owned(),
         Ctl::Choice {
             labels,
@@ -1094,7 +1091,7 @@ fn add_timing_rows(rows: &mut Vec<Row>, t: &TimingInfo, global_ms: i64) {
         let r = OFFSET_RANGE as i64;
         let mut desc = tf!(
             "Offset for this song only (shared by all difficulties). It's added to the global offset and shifts both judgment and scrolling. Now {global_ms:+} + {at:+} = {:+} ms.",
-            "この曲だけの補正（難易度はまとめて）。全体に足し、判定と譜面の流れを一緒にずらします。今は {global_ms:+} + {at:+} = {:+} ms。",
+            "この曲だけの補正です（どの難易度にも効きます）。全体の補正に足して、判定と譜面の流れを一緒にずらします。今は {global_ms:+} + {at:+} = {:+} ms。",
             global_ms + at
         );
         match a.song {
@@ -1128,7 +1125,7 @@ fn add_timing_rows(rows: &mut Vec<Row>, t: &TimingInfo, global_ms: i64) {
                 ItemId::ApplyAdvice,
                 i18n::t("Apply Suggestion", "おすすめにする"),
                 text,
-                i18n::t("Sets the offsets suggested by your recorded timing. Global uses the median of your recent songs; this song uses the gap between this song's timing and the global value.", "記録のずれから出した値にします。全体は直近の曲のずれの真ん中、この曲はこの曲のずれと全体の差です。")
+                i18n::t("Sets the offsets suggested by your recorded timing. Global uses the median of your recent songs; this song uses the gap between this song's timing and the global value.", "記録したずれから出した値にします。全体は最近の曲のずれの中央値、この曲はこの曲のずれと全体との差です。")
                     .to_owned(),
                 None,
             )
@@ -1188,7 +1185,7 @@ fn folder_name(p: &Path) -> String {
 /// 機器の一覧の値（出発点か、使っていないわけ）
 fn device_state(d: &DeviceRow) -> String {
     if d.disabled {
-        t("Disabled", "使わない").to_owned()
+        t("Disabled", "無効").to_owned()
     } else if !d.open {
         t("Can't Open", "開けません").to_owned()
     } else {
@@ -1199,17 +1196,17 @@ fn device_state(d: &DeviceRow) -> String {
 /// 機器の様子の説明
 fn device_summary(d: &DeviceRow) -> String {
     if d.disabled {
-        t("This device is disabled.", "使わない設定です。").to_owned()
+        t("This device is disabled.", "この機器は無効にしています。").to_owned()
     } else if let Some(e) = &d.error {
         tf!(
             "Can't open it (another app may be using it): {e}",
-            "開けません（ほかのアプリが使っているかも）: {e}"
+            "開けません（ほかのアプリが使っている可能性があります）: {e}"
         )
     } else {
         let channel = Fmt::Channel.show(i64::from(d.channel));
         if i18n::is_ja() {
             format!(
-                "{} / チャンネル {channel} / 変更 {} 個",
+                "{} / チャンネル {channel} / 変更 {} 件",
                 d.preset.label(),
                 d.changes
             )
@@ -1257,8 +1254,8 @@ pub fn rows(page: Page, info: &ConfigInfo<'_>) -> Vec<Row> {
                     t("Practice This Song", "この曲を区間練習"),
                     String::new(),
                     t(
-                        "Opens the panel to choose a section and speed for this song (P on the keyboard).",
-                        "選んでいる曲の、区間と速度を選ぶ板を開きます（キーボードなら P）。",
+                        "Opens the practice menu for this song, where you choose a section and speed (P on the keyboard).",
+                        "選んでいる曲の練習メニューを開きます。区間と速度を選んで練習できます（キーボードなら P）。",
                     )
                     .to_owned(),
                     None,
@@ -1397,7 +1394,7 @@ pub fn rows(page: Page, info: &ConfigInfo<'_>) -> Vec<Row> {
             r.insert(at, monitor_row(c, info.monitors));
         }
         Page::Cat(Cat::Play) => {
-            s.at(t("Rules", "演奏の決まり"))
+            s.at(t("Rules", "ルール"))
                 .push(value_row(Setting::StageFailed, c));
             // 小見出しの並びを先に決めておく（表の並びは分類ごとではないので）
             for sec in [
@@ -1417,7 +1414,7 @@ pub fn rows(page: Page, info: &ConfigInfo<'_>) -> Vec<Row> {
         Page::Cat(Cat::View) => {
             s.at(t("Scrolling", "流れ方"))
                 .push(value_row(Setting::ScrollSpeed, c));
-            s.at(t("Note Hiding", "見えにくくする"));
+            s.at(t("Note Hiding", "音符を隠す"));
             s.table(Group::View, v);
         }
         Page::Cat(Cat::Pads) => s.table(Group::Pads, v),
@@ -1431,7 +1428,7 @@ pub fn rows(page: Page, info: &ConfigInfo<'_>) -> Vec<Row> {
             // 音量ミキサーの行（全体のあとに、表の系統ごとの音量が続く）を先頭に
             s.at(t("Volume", "音量"))
                 .push(value_row(Setting::MasterVolume, c));
-            s.at(t("Playback", "鳴らすもの"))
+            s.at(t("Playback", "鳴らす音"))
                 .push(value_row(Setting::HitSound, c));
             s.table(Group::Sound, v);
         }
@@ -1468,7 +1465,7 @@ pub fn rows(page: Page, info: &ConfigInfo<'_>) -> Vec<Row> {
                 } else {
                     count(info.devices.len(), "device", "devices", "台")
                 },
-                t("Searches for MIDI devices again and reopens them. Devices you plug in later are also found automatically while this screen is open.", "MIDI の機器を探し直して、開き直します。後からつないだ機器は、この画面にいれば自動でも見つけます。")
+                t("Searches for MIDI devices again and reopens them. Devices you plug in later are also found automatically while this screen is open.", "MIDI 機器を探し直して、開き直します。あとからつないだ機器も、この画面を開いていれば自動で見つかります。")
                     .to_owned(),
                 None,
             ));
@@ -1495,9 +1492,9 @@ pub fn rows(page: Page, info: &ConfigInfo<'_>) -> Vec<Row> {
             }
             dirs.push(action(
                 ItemId::AddSongDir,
-                t("Add Folder", "フォルダを足す"),
+                t("Add Folder", "フォルダを追加"),
                 String::new(),
-                t("Adds a song folder where it is. Select to open a folder picker (use the mouse).\nA folder you drop onto the window is copied into the Add Songs To folder instead (a folder with more than 50 songs is added where it is).", "曲のフォルダを、その場所のまま足します。決定でフォルダを選ぶ窓を開きます（マウスで選びます）。\nウィンドウにドロップしたフォルダは、「曲の追加先」へ写して追加します（50 曲より多いフォルダは、その場所のまま足します）。")
+                t("Adds a song folder where it is. Select to open a folder picker (use the mouse).\nA folder you drop onto the window is copied into the Add Songs To folder instead (a folder with more than 50 songs is added where it is).", "曲のフォルダを、今ある場所のまま追加します。決定するとフォルダを選ぶ画面が開きます（マウスで選びます）。\nウィンドウにドロップしたフォルダは、「曲の追加先」にコピーして追加します（50 曲より多いフォルダは、今ある場所のまま追加します）。")
                     .to_owned(),
                 None,
             ));
@@ -1508,21 +1505,21 @@ pub fn rows(page: Page, info: &ConfigInfo<'_>) -> Vec<Row> {
                 folder_name(&dest),
                 tf!(
                     "{}\nZip files and song folders you drop onto the window are copied here, then the song is selected. Select to switch to the next song folder.",
-                    "{}\nウィンドウにドロップした zip ファイルや曲のフォルダを、ここへ写して追加します。決定で次の曲のフォルダに変えます。",
+                    "{}\nウィンドウにドロップした zip ファイルや曲のフォルダを、ここにコピーして追加します。決定で次の曲のフォルダに変えます。",
                     dest.display()
                 ),
                 None,
             ));
             s.at(" ").push(action(
                 ItemId::Rescan,
-                t("Rescan Songs", "曲を探し直す"),
+                t("Rescan Songs", "曲を再読み込み"),
                 match info.scanning {
                     Some(p) => format!("{}…", count(p.songs, "song", "songs", "曲")),
                     None => count(info.song_count, "song", "songs", "曲"),
                 },
                 t(
                     "Scans the song folders again and rebuilds the song list.",
-                    "曲のフォルダを探し直して、曲の一覧を作り直します。",
+                    "曲のフォルダを読み込み直して、曲の一覧を作り直します。",
                 )
                 .to_owned(),
                 None,
@@ -1533,7 +1530,7 @@ pub fn rows(page: Page, info: &ConfigInfo<'_>) -> Vec<Row> {
                 t("Browser", "ブラウザ").to_owned(),
                 tf!(
                     "Opens DTX Web Editor in your browser. It's a free editor for making and fixing charts while listening to the original song (Chrome or Edge recommended).\nIt can also sync song folders across PCs through Google Drive.\nRun Rescan Songs to see edited charts and new songs in the list.\n{}",
-                    "DTX Web Editor をブラウザで開きます。原曲を聴きながら譜面を作って直せる、無料のエディタです（Chrome か Edge がおすすめ）。\nGoogle Drive で、何台かの PC の曲のフォルダを同期することもできます。\n直した譜面や足した曲は「曲を探し直す」で一覧に出ます。\n{}",
+                    "DTX Web Editor をブラウザで開きます。原曲を聴きながら譜面を作ったり直したりできる、無料のエディタです（Chrome か Edge がおすすめ）。\nGoogle Drive で、複数の PC の曲のフォルダを同期することもできます。\n編集した譜面や追加した曲は、「曲を再読み込み」で一覧に出ます。\n{}",
                     crate::editor::URL
                 ),
                 None,
@@ -1578,10 +1575,13 @@ pub fn rows(page: Page, info: &ConfigInfo<'_>) -> Vec<Row> {
                 if c.developer {
                     t(
                         "The version of DTXmaniaNXT.\nDeveloper mode is ON.",
-                        "DTXmaniaNXT の版です。\n開発者モードは ON です。",
+                        "DTXmaniaNXT のバージョンです。\n開発者モードは ON です。",
                     )
                 } else {
-                    t("The version of DTXmaniaNXT.", "DTXmaniaNXT の版です。")
+                    t(
+                        "The version of DTXmaniaNXT.",
+                        "DTXmaniaNXT のバージョンです。",
+                    )
                 }
                 .to_owned(),
                 None,
@@ -1596,7 +1596,7 @@ pub fn rows(page: Page, info: &ConfigInfo<'_>) -> Vec<Row> {
                         String::new(),
                         t(
                             "Records MIDI, gathers the log and environment, and runs test tools. The result becomes a draft GitHub issue you can check and send from the browser.",
-                            "MIDI の記録、ログや環境の情報、試験の道具を動かします。結果は GitHub の issue の下書きになり、中身を確かめてからブラウザで送れます。",
+                            "MIDI の記録、ログや環境の情報の収集、テスト用のツールを使えます。結果は GitHub の issue の下書きになり、中身を確かめてからブラウザで送れます。",
                         )
                         .to_owned(),
                         None,
@@ -1646,7 +1646,7 @@ pub fn rows(page: Page, info: &ConfigInfo<'_>) -> Vec<Row> {
                     ItemId::AssignAll,
                     t("Assign by Hitting", "順に叩いて割り当てる"),
                     String::new(),
-                    t("Hit the pad for each lane as it comes up, from Left Cymbal to Left Pedal. The mapping goes to whichever device you hit.\nAfter 4 seconds without a hit, it skips to the next lane. Add the left bass drum from the list below.", "左シンバルから左ペダルまで、言われたレーンのパッドを順に叩いて割り当てます。叩いた機器の割り当てになります。\n叩かずに 4 秒たつと次のレーンへ飛ばします。左バスドラムは下の一覧から足します。")
+                    t("Hit the pad for each lane as it comes up, from Left Cymbal to Left Pedal. The mapping goes to whichever device you hit.\nAfter 4 seconds without a hit, it skips to the next lane. Add the left bass drum from the list below.", "左シンバルから左ペダルまで、画面に出たレーンのパッドを順に叩いて割り当てます。叩いた機器に割り当てます。\n4 秒叩かないと、次のレーンへ進みます。左バスドラムは下の一覧から追加します。")
                         .to_owned(),
                     None,
                 )
@@ -1660,15 +1660,15 @@ pub fn rows(page: Page, info: &ConfigInfo<'_>) -> Vec<Row> {
                     .collect();
                 if lane == DrumLane::LBD {
                     desc.push_str(if sources.is_empty() {
-                        t("Nothing is assigned, so the bass drum also hits left bass drum notes (the left pedal does if Pedal Grouping is BD-2). Only add one if you play it with a separate pad or key.\n", "割り当てが無いので、バスドラムで左バスドラムの音符も取れます（ペダルの叩き分けが BD-2 なら左ペダルで）。別のパッドやキーで踏むときだけ足します。\n")
+                        t("Nothing is assigned, so the bass drum also hits left bass drum notes (the left pedal does if Pedal Grouping is BD-2). Only add one if you play it with a separate pad or key.\n", "割り当てが無いので、バスドラムで左バスドラムの音符も取れます（ペダルの叩き分けが BD-2 なら左ペダルで）。別のパッドやキーで踏むときだけ追加します。\n")
                     } else {
-                        t("Whether the bass drum also hits left bass drum notes is set in Drums > Auto & Grouping > Pedal Grouping.\n", "左バスドラムをバスドラムでも取るかは、ドラムの「自動・叩き分け」の「ペダルの叩き分け」で決めます。\n")
+                        t("Whether the bass drum also hits left bass drum notes is set in Drums > Auto & Grouping > Pedal Grouping.\n", "左バスドラムの音符をバスドラムでも取るかは、「自動・叩き分け」の「ペダルの叩き分け」で決めます。\n")
                     });
                 } else if sources.is_empty() {
                     desc.push_str(t("Nothing assigned.\n", "割り当てがありません。\n"));
                 }
                 desc.push_str(
-                    t("Select, then hit a pad or press a key to add it. If it's already assigned to this lane, it's removed.", "決定してからパッドを叩くかキーを押すと足します。このレーンに割り当て済みなら外します。"),
+                    t("Select, then hit a pad or press a key to add it. If it's already assigned to this lane, it's removed.", "決定してからパッドを叩くかキーを押すと追加します。このレーンに割り当て済みなら外します。"),
                 );
                 lanes.push(row(
                     ItemId::Lane(lane),
@@ -1681,12 +1681,12 @@ pub fn rows(page: Page, info: &ConfigInfo<'_>) -> Vec<Row> {
             let changed = c.has_custom_assignments();
             s.at(" ").push(action(
                 ItemId::ResetPads,
-                t("Reset All Mappings", "割り当てをすべて戻す"),
+                t("Reset All Mappings", "割り当てをすべて既定に戻す"),
                 String::new(),
                 tf!(
                     "Clears every mapping you changed here and goes back to each device's preset and the keyboard defaults.{}",
                     "ここで変えた割り当てを全部消して、機器ごとのプリセットとキーボードの既定に戻します。{}",
-                    if changed { "" } else { t("\n(Nothing has been changed.)", "\n（今は変えていません）") }
+                    if changed { "" } else { t("\n(Nothing has been changed.)", "\n（まだ何も変えていません）") }
                 ),
                 Some(
                     t("Reset pad and key mapping to the defaults for all devices?\nMappings you changed here will be lost.", "パッドとキーの割り当てを、すべての機器で既定に戻しますか？\nここで変えた割り当ては消えます。")
@@ -1703,9 +1703,9 @@ pub fn rows(page: Page, info: &ConfigInfo<'_>) -> Vec<Row> {
                 ItemId::DeviceState(i),
                 t("Status", "状態"),
                 if d.disabled {
-                    t("Disabled", "使っていません").to_owned()
+                    t("Disabled", "無効").to_owned()
                 } else if d.open {
-                    t("Connected", "つながっています").to_owned()
+                    t("Connected", "接続中").to_owned()
                 } else {
                     t("Can't Open", "開けません").to_owned()
                 },
@@ -1714,7 +1714,7 @@ pub fn rows(page: Page, info: &ConfigInfo<'_>) -> Vec<Row> {
             ));
             r.push(toggle(
                 ItemId::DeviceUse(i),
-                t("Enabled", "使う"),
+                t("Enabled", "この機器を使う"),
                 !d.disabled,
                 true,
                 t("When OFF, the app won't open this device (for example, when another app needs it).", "OFF にすると、このアプリはこの機器を開きません（ほかのアプリで使うときなど）。"),
@@ -1725,7 +1725,7 @@ pub fn rows(page: Page, info: &ConfigInfo<'_>) -> Vec<Row> {
                 &Preset::ALL.map(Preset::label),
                 Preset::ALL.iter().position(|&p| p == d.preset).unwrap_or(0),
                 Preset::ALL.iter().position(|&p| p == d.default_preset),
-                t("The starting point for the mapping.\nRoland: V-Drums defaults (including rims and edges).\nGM: General MIDI drum notes.\nNone: nothing assigned.", "割り当ての出発点です。\nRoland: V-Drums の既定（リムやエッジも）。\nGM: General MIDI のドラムの番号。\nなし: 何も割り当てない。"),
+                t("The starting point for the mapping.\nRoland: V-Drums defaults (including rims and edges).\nGM: General MIDI drum notes.\nNone: nothing assigned.", "割り当てのもとにする設定です。\nRoland: V-Drums の既定の割り当て（リムやエッジも）。\nGM: General MIDI のドラムの番号。\nなし: 何も割り当てません。"),
             ));
             r.push(number(
                 ItemId::DeviceChannel(i),
@@ -1747,20 +1747,20 @@ pub fn rows(page: Page, info: &ConfigInfo<'_>) -> Vec<Row> {
                 (0, 127, 1),
                 Some(0),
                 Fmt::OffZero,
-                t("Ignores hits softer than this velocity. Filters out weak crosstalk from neighboring pads.", "これより弱い打撃（ベロシティ）を捨てます。隣のパッドにつられて鳴る弱い音を除きます。").to_owned(),
+                t("Ignores hits softer than this velocity. Filters out weak crosstalk from neighboring pads.", "これより弱い打撃（ベロシティ）を無視します。隣のパッドにつられて入る弱い信号（クロストーク）を防げます。").to_owned(),
             ));
             r.push(action(
                 ItemId::DeviceReset(i),
-                t("Reset Mapping", "割り当てを戻す"),
+                t("Reset to Preset", "プリセットに戻す"),
                 if d.changes == 0 {
                     String::new()
                 } else {
-                    count(d.changes, "change", "changes", "個")
+                    count(d.changes, "change", "changes", "件")
                 },
                 t("Clears the mapping changes for this device and goes back to its preset.", "この機器で変えた割り当てを消して、プリセットに戻します。").to_owned(),
                 Some(tf!(
                     "Reset {} to its preset mapping?\nThe changes you made on this device ({}) will be lost.",
-                    "{} の割り当てをプリセットに戻しますか？\nこの機器で変えた割り当て（{} 個）は消えます。",
+                    "{} の割り当てをプリセットに戻しますか？\nこの機器で変えた割り当て（{} 件）は消えます。",
                     d.name, d.changes
                 )),
             ));
@@ -1968,7 +1968,7 @@ fn import_items(s: &mut Sections, info: &ConfigInfo<'_>) {
             tf!("{n} / {}", "{n} / {}", plan.total()),
             tf!(
                 "Imports the {n} checked items. Your current settings are saved first, so you can put them back with Undo Import in General.",
-                "チェックした {n} 項目を引き継ぎます。今の設定は先に残すので、アプリの「引き継ぐ前に戻す」で戻せます。"
+                "チェックした {n} 項目を引き継ぎます。今の設定は先に保存するので、「全般」の「引き継ぐ前に戻す」で戻せます。"
             ),
             None,
         )
@@ -1988,7 +1988,7 @@ fn import_items(s: &mut Sections, info: &ConfigInfo<'_>) {
                     count(m.notes.len(), "note", "notes", "ノート"),
                     tf!(
                         "The mapping {} used for its MIDI device {}. DTXMania doesn't keep device names; the number is the device's place in Windows' list.\nChoose the device that receives it in the next row. Notes in that device's preset that aren't listed here (rims, edges, and so on) are kept.",
-                        "{} が {} 台目の MIDI 機器に使っていた割り当てです。DTXMania には機器の名前が残らず、Windows の並びの何番目かだけが分かります。\n写す機器は次の行で選びます。その機器のプリセットにあって、ここに無いノート（リムやエッジなど）は残します。",
+                        "{} が {} 台目の MIDI 機器に使っていた割り当てです。DTXMania には機器の名前が残らず、Windows の並びの何番目かだけが分かります。\n割り当てる機器は次の行で選びます。その機器のプリセットにあって、ここに無いノート（リムやエッジなど）は残します。",
                         plan.product,
                         m.device + 1
                     ),
@@ -2002,7 +2002,7 @@ fn import_items(s: &mut Sections, info: &ConfigInfo<'_>) {
                         target_labels.get(at).map(|l| l.to_string()).unwrap_or_default(),
                         t(
                             "The device that receives this mapping. Devices are in the same order as Windows lists them, so the same-numbered device is chosen at first.\nNext Device You Connect applies it to a device you connect later.",
-                            "この割り当てを写す機器です。機器は Windows と同じ並びなので、はじめは同じ番目の機器を選んでいます。\n「これからつなぐ機器」は、あとでつないだ機器に使います。",
+                            "この割り当てを使う機器です。機器は Windows と同じ並びなので、はじめは同じ番目の機器を選んでいます。\n「これからつなぐ機器」は、あとでつないだ機器に使います。",
                         )
                         .to_owned(),
                         Ctl::Choice {
@@ -2135,7 +2135,7 @@ fn seek_row(p: PlayPos, skip_ms: i64) -> Row {
         format!("{} / {}", clock(at), clock(end)),
         tf!(
             "◀▶ rewinds or skips ahead {step} s at a time (set in Gameplay > Skip Length).\nPlays with skips aren't recorded.",
-            "◀▶ で {step} 秒ずつ巻き戻し・早送りします（幅は「ゲームプレイ」の「早送り・巻き戻しの幅」）。\n飛んだプレイは記録に残しません。"
+            "◀▶ で {step} 秒ずつ巻き戻し・早送りします（幅は「ゲームプレイ」の「早送り・巻き戻しの幅」）。\n早送りや巻き戻しをしたプレイは記録に残しません。"
         ),
         Ctl::Number {
             at,
@@ -2702,7 +2702,7 @@ impl ConfigView {
             self.toast(
                 t(
                     "Canceled (no hit for 5 seconds)",
-                    "5 秒叩かなかったので取りやめました",
+                    "5 秒間叩かなかったのでキャンセルしました",
                 )
                 .to_owned(),
             );
@@ -2737,7 +2737,7 @@ impl ConfigView {
             let n = f.got.iter().flatten().count();
             self.toast(tf!(
                 "Assigned {} by hitting",
-                "順に割り当てるのを終えました（{}）",
+                "{}を割り当てました",
                 count(n, "lane", "lanes", "レーン")
             ));
         }
@@ -2902,7 +2902,7 @@ fn hints_for(view: &ConfigView, row: Option<&Row>) -> Vec<ui::Hint<'static>> {
             ALL,
             t(
                 "Hit a pad to add (removes it if already assigned; cancels after 5 s; on the keyboard, Esc cancels and Delete clears all)",
-                "足すパッドを叩く（割り当て済みなら外す・5 秒で取りやめ・キーボードは Esc、Delete で全部外す）",
+                "追加するパッドを叩く（割り当て済みなら外す・5 秒でキャンセル・キーボードは Esc、Delete で全部外す）",
             ),
         )];
     }
@@ -2944,7 +2944,7 @@ fn hints_for(view: &ConfigView, row: Option<&Row>) -> Vec<ui::Hint<'static>> {
         Some(Ctl::Toggle { .. } | Ctl::Check { .. }) => t("Toggle (Enter)", "切り替え（Enter）"),
         Some(Ctl::Choice { .. } | Ctl::Number { .. }) => t("Choose (Enter)", "選ぶ（Enter）"),
         Some(Ctl::Page(_)) => t("Open (Enter)", "開く（Enter）"),
-        Some(Ctl::Lane(_)) => t("Add/Remove by Hitting (Enter)", "叩いて足す・外す（Enter）"),
+        Some(Ctl::Lane(_)) => t("Add/Remove by Hitting (Enter)", "叩いて追加・削除（Enter）"),
         Some(Ctl::Action { .. }) => t("Select (Enter)", "実行（Enter）"),
         _ => t("Select (Enter)", "決定（Enter）"),
     };
@@ -3216,8 +3216,8 @@ impl ConfigView {
                 w - 44.0,
             );
             let text = tf!(
-                "{}\n\nSelect or press → to go in.",
-                "{}\n\n決定か → で中へ。",
+                "{}\n\nSelect or press → to open.",
+                "{}\n\n決定か → で開きます。",
                 cat.desc()
             );
             ui::paragraph(
@@ -3271,12 +3271,12 @@ impl ConfigView {
             );
             if r.changed() {
                 let chip = ui::bold(12.0, Color32::from_rgb(26, 10, 0));
-                let cw = ui::text_width(g, t("Changed", "変えています"), &chip) + 12.0;
+                let cw = ui::text_width(g, t("Changed", "変更あり"), &chip) + 12.0;
                 ui::round_fill(c, x + 22.0 + dw + 12.0, ty + 4.0, cw, 19.0, 3.0, ui::ORANGE);
                 ui::text(
                     c,
                     g,
-                    t("Changed", "変えています"),
+                    t("Changed", "変更あり"),
                     x + 28.0 + dw + 12.0,
                     ty + 6.0,
                     &chip,
@@ -4171,7 +4171,7 @@ fn draw_wait(c: &Canvas, g: &mut Gfx, lane: DrumLane, since: Instant, info: &Con
         g,
         &tf!(
             "Hit the pad to add to {}",
-            "{}に足すパッドを叩いてください",
+            "{}に追加するパッドを叩いてください",
             lane_label(lane)
         ),
         640.0,
@@ -4183,7 +4183,7 @@ fn draw_wait(c: &Canvas, g: &mut Gfx, lane: DrumLane, since: Instant, info: &Con
     ui::text_center(
         c,
         g,
-        &tf!("Current: {now}", "今: {now}"),
+        &tf!("Current: {now}", "現在: {now}"),
         640.0,
         296.0,
         &ui::plain(15.0, ui::DIM),
@@ -4209,7 +4209,7 @@ fn draw_wait(c: &Canvas, g: &mut Gfx, lane: DrumLane, since: Instant, info: &Con
         g,
         &tf!(
             "Canceling in {secs:.0} s (Esc on the keyboard)",
-            "あと {secs:.0} 秒で取りやめ（キーボードは Esc）"
+            "あと {secs:.0} 秒でキャンセル（キーボードは Esc）"
         ),
         640.0,
         396.0,
@@ -4251,7 +4251,7 @@ fn draw_flow(c: &Canvas, g: &mut Gfx, f: &Flow, info: &ConfigInfo<'_>) {
         let sub = if i < f.at {
             f.got[i]
                 .clone()
-                .unwrap_or_else(|| t("Skipped", "飛ばした").to_owned())
+                .unwrap_or_else(|| t("Skipped", "スキップ").to_owned())
         } else if i == f.at {
             t("Now", "今ここ").to_owned()
         } else {
@@ -4755,10 +4755,7 @@ mod tests {
         );
         assert_eq!(v.input(ConfigInput::Up, &list), Response::default());
         // 小見出し「見えにくくする」を飛ばす
-        let heading = list
-            .iter()
-            .position(|r| r.name == "見えにくくする")
-            .unwrap();
+        let heading = list.iter().position(|r| r.name == "音符を隠す").unwrap();
         assert_eq!(list[heading].ctl, Ctl::Heading);
         *v.cursor_mut() = heading - 1;
         v.input(ConfigInput::Down, &list);
@@ -5037,11 +5034,11 @@ mod tests {
             names,
             [
                 "状態",
-                "使う",
+                "この機器を使う",
                 "プリセット",
                 "チャンネル",
                 "最小ベロシティ",
-                "割り当てを戻す"
+                "プリセットに戻す"
             ]
         );
         assert_eq!(dev[2].value, "GM");
@@ -5207,7 +5204,7 @@ mod tests {
         assert_eq!(ids(&list[1..6]), ids(&mixer));
         assert_eq!(
             (list[6].name.as_str(), &list[6].ctl),
-            ("鳴らすもの", &Ctl::Heading)
+            ("鳴らす音", &Ctl::Heading)
         );
         assert_eq!(list[7].id, Some(ItemId::Value(Setting::HitSound)));
         // ほかの行は表のまま（重ねて出さない）
@@ -5311,7 +5308,7 @@ mod tests {
         let row = &list[find(&list, ItemId::Practice(Drill::Metronome))];
         assert_eq!(
             (row.name.as_str(), row.value.as_str()),
-            ("メトロノーム", "オフ")
+            ("メトロノーム", "OFF")
         );
     }
 

@@ -869,7 +869,7 @@ fn add_keys(
     let now = if config.keys.is_empty() {
         t("Default", "既定").to_owned()
     } else {
-        t("Changed", "変えてある").to_owned()
+        t("Changed", "変更あり").to_owned()
     };
     p.items.push(Item {
         part: Part::Pads,
@@ -954,7 +954,7 @@ fn songs(p: &mut Plan, ini: &Ini, root: &Path, config: &Config) {
         } else {
             tf!(
                 "Adds these to your song folders and rescans songs. Folders you already have stay as they are.\n{}",
-                "曲のフォルダに追加して、曲を探し直します。今あるフォルダはそのままです。\n{}",
+                "曲のフォルダに追加して、曲を再読み込みします。今あるフォルダはそのままです。\n{}",
                 list.join("\n")
             )
         },
@@ -1236,7 +1236,7 @@ fn velocity(p: &mut Plan, ini: &Ini, config: &Config, ports: &[PortInfo]) {
         note: None,
         desc: t(
             "Hits softer than this are ignored (to filter crosstalk). Applied to the devices that receive the MIDI mapping above.",
-            "これより弱い打撃を捨てます（となりのパッドにつられて鳴る音を除く）。上の MIDI の割り当てを写す機器に使います。",
+            "これより弱い打撃を無視します（隣のパッドにつられて入る信号を防ぎます）。上の MIDI の割り当てを使う機器に設定します。",
         )
         .to_owned(),
         same: now == to,
@@ -1269,8 +1269,8 @@ fn rejected_extras(p: &mut Plan, ini: &Ini, scope: Scope, format: Format) {
                     t("Not read", "読まない").to_owned()
                 },
                 detail: t(
-                    "For this version of DTXMania, only settings whose meaning has been checked against its source are imported (pad mapping and song folders, plus a few more for XG).",
-                    "この DTXMania では、ソースで値の意味を確かめた項目だけを引き継ぎます（パッドの割り当てと曲のフォルダ。XG はほかにもいくつか）。",
+                    "From this version of DTXMania, only settings whose meaning is certain are imported (pad mapping and song folders, plus a few more for XG).",
+                    "この DTXMania からは、値の意味が確かな項目だけを引き継ぎます（パッドの割り当てと曲のフォルダ。XG はほかにもいくつか）。",
                 )
                 .to_owned(),
             });
