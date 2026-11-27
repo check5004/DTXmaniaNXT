@@ -33,28 +33,38 @@ pub const LEAN_MS: f64 = 8.0;
 pub enum Hand {
     Right,
     Left,
+    /// 右足（バスドラ）
     Foot,
+    /// 左足（ハイハットのペダルと左のバスドラ）
+    LeftFoot,
 }
 
 impl Hand {
-    pub const ALL: [Hand; 3] = [Self::Right, Self::Left, Self::Foot];
+    pub const ALL: [Hand; 4] = [Self::Right, Self::Left, Self::Foot, Self::LeftFoot];
 
-    fn from_char(c: char) -> Option<Self> {
+    /// 型の文字とレーンから。足（F）は左のペダルと左のバスドラなら左足
+    fn of(c: char, lane: DrumLane) -> Option<Self> {
         match c {
             'R' => Some(Self::Right),
             'L' => Some(Self::Left),
+            'F' if matches!(lane, DrumLane::LP | DrumLane::LBD) => Some(Self::LeftFoot),
             'F' => Some(Self::Foot),
             _ => None,
         }
     }
 
-    /// 型の文字（R・L・F）
+    /// 型の文字（R・L・F。左足も F）
     pub fn letter(self) -> char {
         match self {
             Self::Right => 'R',
             Self::Left => 'L',
-            Self::Foot => 'F',
+            Self::Foot | Self::LeftFoot => 'F',
         }
+    }
+
+    /// 足か
+    pub fn is_foot(self) -> bool {
+        matches!(self, Self::Foot | Self::LeftFoot)
     }
 }
 
@@ -63,15 +73,31 @@ impl Hand {
 pub enum Category {
     Timing,
     Rudiments,
+    /// 基本のビート
     Grooves,
+    /// ジャンルのビート
+    Styles,
+    /// タム回しとフィル
+    Fills,
+    /// 足
+    Feet,
+    /// シンバルとハイハット
+    Cymbals,
+    /// 拍子とポリリズム
+    Meters,
     InnerClock,
 }
 
 impl Category {
-    pub const ALL: [Category; 4] = [
+    pub const ALL: [Category; 9] = [
         Self::Timing,
         Self::Rudiments,
         Self::Grooves,
+        Self::Styles,
+        Self::Fills,
+        Self::Feet,
+        Self::Cymbals,
+        Self::Meters,
         Self::InnerClock,
     ];
 }
@@ -83,120 +109,316 @@ pub struct Drill {
     pub id: &'static str,
     pub category: Category,
     /// レーンごとの型。1 マス 1 文字で R・L は手、F は足、- は休み。小節は `|` で分け、
-    /// 小節ごとのマスの数がその小節の分け方（16 なら 16 分、12 なら 3 連の 8 分）。どのレーンも同じ小節の数
+    /// 小節ごとのマスの数がその小節の分け方（4/4 で 16 なら 16 分、12 なら 3 連の 8 分）。どのレーンも同じ小節の数。
+    /// レーンごとにマスの数が違ってもよい（ポリリズム）
     pub lanes: &'static [(DrumLane, &'static str)],
     /// クリックを鳴らす小節の数と、消す小節の数（体内時計）。あるときはテンポを上げない
     pub gap: Option<(u32, u32)>,
-    /// はじめに選んでおくテンポ
+    /// はじめに選んでおくテンポ（4 分音符）
     pub default_bpm: u32,
+    /// 拍子（分子と分母）。小節の長さは 分子 / 分母 で、4/4 なら 1
+    pub meter: (u32, u32),
+    /// クリックの型（1 小節）。X は強いクリック、x はふつうのクリック、- は鳴らさない。マスの数で位置を決める。
+    /// None は拍ごと（小節の頭が強い）。分母が 8 の拍子はカウントもこの型で鳴らす
+    pub click: Option<&'static str>,
+}
+
+impl Drill {
+    /// 書かない項目の既定（`..Drill::BASE` で使う）
+    const BASE: Drill = Drill {
+        id: "",
+        category: Category::Timing,
+        lanes: &[],
+        gap: None,
+        default_bpm: 100,
+        meter: (4, 4),
+        click: None,
+    };
 }
 
 const SD: DrumLane = DrumLane::SD;
 const HH: DrumLane = DrumLane::HH;
+const HHO: DrumLane = DrumLane::HHO;
 const BD: DrumLane = DrumLane::BD;
+const HT: DrumLane = DrumLane::HT;
+const LT: DrumLane = DrumLane::LT;
+const FT: DrumLane = DrumLane::FT;
+const CY: DrumLane = DrumLane::CY;
+const RD: DrumLane = DrumLane::RD;
+const LC: DrumLane = DrumLane::LC;
+const LP: DrumLane = DrumLane::LP;
+const LBD: DrumLane = DrumLane::LBD;
 
-/// すべてのドリル（画面に出す順）
+/// 8 分のハイハットと 2・4 拍のスネア（ビートの多くで使う）
+const HATS_8: &str = "R-R-R-R-R-R-R-R-";
+const BACKBEAT: &str = "----L-------L---";
+
+/// すべてのドリル（画面に出す順。分け方の中はこの順）
 pub const DRILLS: &[Drill] = &[
     // ---- タイミング ----
     Drill {
         id: "quarter",
-        category: Category::Timing,
         lanes: &[(SD, "R---L---R---L---")],
-        gap: None,
-        default_bpm: 100,
+        ..Drill::BASE
     },
     Drill {
         id: "eighth",
-        category: Category::Timing,
         lanes: &[(SD, "R-L-R-L-R-L-R-L-")],
-        gap: None,
-        default_bpm: 100,
+        ..Drill::BASE
     },
     Drill {
         id: "sixteenth",
-        category: Category::Timing,
         lanes: &[(SD, "RLRLRLRLRLRLRLRL")],
-        gap: None,
         default_bpm: 90,
+        ..Drill::BASE
     },
     Drill {
         id: "triplet",
-        category: Category::Timing,
         lanes: &[(SD, "RLRLRLRLRLRL")],
-        gap: None,
         default_bpm: 90,
+        ..Drill::BASE
     },
     Drill {
         id: "upbeat",
-        category: Category::Timing,
         lanes: &[(SD, "--R---R---R---R-")],
-        gap: None,
-        default_bpm: 100,
+        ..Drill::BASE
+    },
+    Drill {
+        id: "sixteenth_e",
+        lanes: &[(SD, "-R---L---R---L--")],
+        default_bpm: 90,
+        ..Drill::BASE
+    },
+    Drill {
+        id: "sixteenth_a",
+        lanes: &[(SD, "---R---L---R---L")],
+        default_bpm: 90,
+        ..Drill::BASE
+    },
+    Drill {
+        id: "dotted_sixteenth",
+        lanes: &[(SD, "R--LR--LR--LR--L")],
+        default_bpm: 90,
+        ..Drill::BASE
+    },
+    Drill {
+        id: "sixteenth_dotted",
+        lanes: &[(SD, "RL--RL--RL--RL--")],
+        default_bpm: 90,
+        ..Drill::BASE
+    },
+    Drill {
+        id: "dotted_eighths",
+        // 3 マスおきなので 3 小節でひと回り
+        lanes: &[(SD, "R--L--R--L--R--L|--R--L--R--L--R-|-L--R--L--R--L--")],
+        default_bpm: 90,
+        ..Drill::BASE
+    },
+    Drill {
+        id: "quarter_triplet",
+        lanes: &[(SD, "R-L-R-L-R-L-")],
+        default_bpm: 90,
+        ..Drill::BASE
+    },
+    Drill {
+        id: "swung_eighths",
+        lanes: &[(SD, "R-LR-LR-LR-L")],
+        ..Drill::BASE
+    },
+    Drill {
+        id: "quintuplet",
+        lanes: &[(SD, "RLRLRLRLRLRLRLRLRLRL")],
+        default_bpm: 90,
+        ..Drill::BASE
+    },
+    Drill {
+        id: "sextuplet",
+        lanes: &[(SD, "RLRLRLRLRLRLRLRLRLRLRLRL")],
+        default_bpm: 90,
+        ..Drill::BASE
     },
     Drill {
         id: "subdivisions",
-        category: Category::Timing,
         lanes: &[(
             SD,
             "R---L---R---L---|R-L-R-L-R-L-R-L-|RLRLRLRLRLRL|RLRLRLRLRLRLRLRL",
         )],
-        gap: None,
         default_bpm: 90,
+        ..Drill::BASE
+    },
+    Drill {
+        id: "eighth_sixteenth",
+        lanes: &[(SD, "R-L-R-L-R-L-R-L-|RLRLRLRLRLRLRLRL")],
+        default_bpm: 90,
+        ..Drill::BASE
+    },
+    Drill {
+        id: "triplet_sixteenth",
+        lanes: &[(SD, "RLRLRLRLRLRL|RLRLRLRLRLRLRLRL")],
+        default_bpm: 90,
+        ..Drill::BASE
     },
     // ---- ルーディメンツ ----
     Drill {
         id: "single_stroke",
         category: Category::Rudiments,
         lanes: &[(SD, "RLRLRLRLRLRLRLRL")],
-        gap: None,
-        default_bpm: 100,
+        ..Drill::BASE
     },
     Drill {
         id: "double_stroke",
         category: Category::Rudiments,
         lanes: &[(SD, "RRLLRRLLRRLLRRLL")],
-        gap: None,
         default_bpm: 90,
+        ..Drill::BASE
     },
     Drill {
-        id: "paradiddle",
+        id: "triple_stroke",
         category: Category::Rudiments,
-        lanes: &[(SD, "RLRRLRLLRLRRLRLL")],
-        gap: None,
-        default_bpm: 100,
+        lanes: &[(SD, "RRRLLLRRRLLL")],
+        default_bpm: 90,
+        ..Drill::BASE
     },
     Drill {
-        id: "double_paradiddle",
+        id: "five_stroke",
         category: Category::Rudiments,
-        lanes: &[(SD, "RLRLRRLRLRLL")],
-        gap: None,
-        default_bpm: 90,
-    },
-    Drill {
-        id: "paradiddle_diddle",
-        category: Category::Rudiments,
-        lanes: &[(SD, "RLRRLLRLRRLL")],
-        gap: None,
-        default_bpm: 90,
+        lanes: &[(SD, "RRLLR---LLRRL---")],
+        ..Drill::BASE
     },
     Drill {
         id: "six_stroke",
         category: Category::Rudiments,
         lanes: &[(SD, "RLLRRLRLLRRL")],
-        gap: None,
         default_bpm: 90,
+        ..Drill::BASE
     },
-    // ---- 手と足 ----
+    Drill {
+        id: "seven_stroke",
+        category: Category::Rudiments,
+        lanes: &[(SD, "RRLLRRL-LLRRLLR-")],
+        default_bpm: 90,
+        ..Drill::BASE
+    },
+    Drill {
+        id: "nine_stroke",
+        category: Category::Rudiments,
+        lanes: &[(SD, "RRLLRRLLR---|LLRRLLRRL---")],
+        default_bpm: 90,
+        ..Drill::BASE
+    },
+    Drill {
+        id: "paradiddle",
+        category: Category::Rudiments,
+        lanes: &[(SD, "RLRRLRLLRLRRLRLL")],
+        ..Drill::BASE
+    },
+    Drill {
+        id: "inverted_paradiddle",
+        category: Category::Rudiments,
+        lanes: &[(SD, "RLLRLRRLRLLRLRRL")],
+        default_bpm: 90,
+        ..Drill::BASE
+    },
+    Drill {
+        id: "reverse_paradiddle",
+        category: Category::Rudiments,
+        lanes: &[(SD, "RRLRLLRLRRLRLLRL")],
+        default_bpm: 90,
+        ..Drill::BASE
+    },
+    Drill {
+        id: "double_paradiddle",
+        category: Category::Rudiments,
+        lanes: &[(SD, "RLRLRRLRLRLL")],
+        default_bpm: 90,
+        ..Drill::BASE
+    },
+    Drill {
+        id: "triple_paradiddle",
+        category: Category::Rudiments,
+        lanes: &[(SD, "RLRLRLRRLRLRLRLL")],
+        default_bpm: 90,
+        ..Drill::BASE
+    },
+    Drill {
+        id: "paradiddle_diddle",
+        category: Category::Rudiments,
+        lanes: &[(SD, "RLRRLLRLRRLL")],
+        default_bpm: 90,
+        ..Drill::BASE
+    },
+    Drill {
+        id: "paradiddle_triplets",
+        category: Category::Rudiments,
+        lanes: &[(SD, "RLRRLRLLRLRR|LRLLRLRRLRLL")],
+        default_bpm: 90,
+        ..Drill::BASE
+    },
+    Drill {
+        id: "single_stroke_four",
+        category: Category::Rudiments,
+        lanes: &[(SD, "RLRL--RLRL--")],
+        ..Drill::BASE
+    },
+    Drill {
+        id: "single_stroke_seven",
+        category: Category::Rudiments,
+        lanes: &[(SD, "RLRLRLR-----LRLRLRL-----")],
+        default_bpm: 90,
+        ..Drill::BASE
+    },
+    Drill {
+        id: "double_triplets",
+        category: Category::Rudiments,
+        lanes: &[(SD, "RRLLRRLLRRLL")],
+        default_bpm: 90,
+        ..Drill::BASE
+    },
+    // ---- ビート ----
+    Drill {
+        id: "eight_beat_basic",
+        category: Category::Grooves,
+        lanes: &[(HH, HATS_8), (SD, BACKBEAT), (BD, "F-------F-------")],
+        default_bpm: 110,
+        ..Drill::BASE
+    },
     Drill {
         id: "eight_beat",
         category: Category::Grooves,
+        lanes: &[(HH, HATS_8), (SD, BACKBEAT), (BD, "F-------F-F-----")],
+        default_bpm: 110,
+        ..Drill::BASE
+    },
+    Drill {
+        id: "kick_and_of_2",
+        category: Category::Grooves,
+        lanes: &[(HH, HATS_8), (SD, BACKBEAT), (BD, "F-----F-F-------")],
+        default_bpm: 110,
+        ..Drill::BASE
+    },
+    Drill {
+        id: "kick_and_of_4",
+        category: Category::Grooves,
+        lanes: &[(HH, HATS_8), (SD, BACKBEAT), (BD, "F-------F-----F-")],
+        default_bpm: 110,
+        ..Drill::BASE
+    },
+    Drill {
+        id: "kick_sixteenth",
+        category: Category::Grooves,
+        lanes: &[(HH, HATS_8), (SD, BACKBEAT), (BD, "F------F--F-----")],
+        ..Drill::BASE
+    },
+    Drill {
+        id: "quarter_hats",
+        category: Category::Grooves,
         lanes: &[
-            (HH, "R-R-R-R-R-R-R-R-"),
-            (SD, "----L-------L---"),
+            (HH, "R---R---R---R---"),
+            (SD, BACKBEAT),
             (BD, "F-------F-F-----"),
         ],
-        gap: None,
         default_bpm: 110,
+        ..Drill::BASE
     },
     Drill {
         id: "sixteen_beat",
@@ -206,19 +428,74 @@ pub const DRILLS: &[Drill] = &[
             (SD, "----R-------R---"),
             (BD, "F-------F-F-----"),
         ],
-        gap: None,
         default_bpm: 90,
+        ..Drill::BASE
+    },
+    Drill {
+        id: "sixteen_beat_kick",
+        category: Category::Grooves,
+        lanes: &[
+            (HH, "RLRL-LRLRLRL-LRL"),
+            (SD, "----R-------R---"),
+            (BD, "F--F--F---F--F--"),
+        ],
+        default_bpm: 90,
+        ..Drill::BASE
+    },
+    Drill {
+        id: "sixteen_one_hand",
+        category: Category::Grooves,
+        lanes: &[
+            (HH, "RRRRRRRRRRRRRRRR"),
+            (SD, BACKBEAT),
+            (BD, "F-------F-F-----"),
+        ],
+        default_bpm: 90,
+        ..Drill::BASE
+    },
+    Drill {
+        id: "half_time",
+        category: Category::Grooves,
+        lanes: &[
+            (HH, HATS_8),
+            (SD, "--------L-------"),
+            (BD, "F-----F---F-----"),
+        ],
+        default_bpm: 120,
+        ..Drill::BASE
+    },
+    Drill {
+        id: "two_beat",
+        category: Category::Grooves,
+        lanes: &[
+            (HH, HATS_8),
+            (SD, "--L---L---L---L-"),
+            (BD, "F---F---F---F---"),
+        ],
+        default_bpm: 140,
+        ..Drill::BASE
+    },
+    Drill {
+        id: "snare_every_beat",
+        category: Category::Grooves,
+        lanes: &[
+            (HH, HATS_8),
+            (SD, "L---L---L---L---"),
+            (BD, "F-------F-------"),
+        ],
+        default_bpm: 120,
+        ..Drill::BASE
     },
     Drill {
         id: "four_on_the_floor",
         category: Category::Grooves,
         lanes: &[
             (HH, "--R---R---R---R-"),
-            (SD, "----L-------L---"),
+            (SD, BACKBEAT),
             (BD, "F---F---F---F---"),
         ],
-        gap: None,
         default_bpm: 120,
+        ..Drill::BASE
     },
     Drill {
         id: "shuffle",
@@ -228,30 +505,630 @@ pub const DRILLS: &[Drill] = &[
             (SD, "---L-----L--"),
             (BD, "F-----F-----"),
         ],
-        gap: None,
-        default_bpm: 100,
+        ..Drill::BASE
     },
     Drill {
         id: "hand_foot_triplet",
         category: Category::Grooves,
         lanes: &[(SD, "RL-RL-RL-RL-"), (BD, "--F--F--F--F")],
-        gap: None,
         default_bpm: 90,
+        ..Drill::BASE
+    },
+    // ---- ジャンル ----
+    Drill {
+        id: "funk_ghost",
+        category: Category::Styles,
+        lanes: &[
+            (HH, HATS_8),
+            (SD, "----L--L-L--L--L"),
+            (BD, "F-----F---F-----"),
+        ],
+        default_bpm: 90,
+        ..Drill::BASE
+    },
+    Drill {
+        id: "linear",
+        category: Category::Styles,
+        lanes: &[
+            (HH, "-R-R-R-R-R-R-R-R"),
+            (SD, "--L-L-----L-L---"),
+            (BD, "F-----F-F-----F-"),
+        ],
+        default_bpm: 90,
+        ..Drill::BASE
+    },
+    Drill {
+        id: "disco",
+        category: Category::Styles,
+        lanes: &[
+            (HH, "R---R---R---R---"),
+            (HHO, "--R---R---R---R-"),
+            (SD, BACKBEAT),
+            (BD, "F---F---F---F---"),
+        ],
+        default_bpm: 120,
+        ..Drill::BASE
+    },
+    Drill {
+        id: "hip_hop",
+        category: Category::Styles,
+        lanes: &[(HH, HATS_8), (SD, BACKBEAT), (BD, "F------F-F---F--")],
+        default_bpm: 90,
+        ..Drill::BASE
+    },
+    Drill {
+        id: "half_time_shuffle",
+        category: Category::Styles,
+        lanes: &[
+            (HH, "R-RR-RR-RR-R"),
+            (SD, "-L--L-LL--L-"),
+            (BD, "F--------F--"),
+        ],
+        default_bpm: 90,
+        ..Drill::BASE
+    },
+    Drill {
+        id: "twelve_eight",
+        category: Category::Styles,
+        lanes: &[
+            (HH, "RRRRRRRRRRRR"),
+            (SD, "---L-----L--"),
+            (BD, "F-----F-----"),
+        ],
+        default_bpm: 90,
+        ..Drill::BASE
+    },
+    Drill {
+        id: "one_drop",
+        category: Category::Styles,
+        lanes: &[
+            (HH, "R-RR-RR-RR-R"),
+            (SD, "------L-----"),
+            (BD, "------F-----"),
+        ],
+        default_bpm: 90,
+        ..Drill::BASE
+    },
+    Drill {
+        id: "bossa_nova",
+        category: Category::Styles,
+        lanes: &[
+            (HH, "R-R-R-R-R-R-R-R-|R-R-R-R-R-R-R-R-"),
+            (SD, "L-----L-----L---|----L-----L-----"),
+            (BD, "F-----F-F-----F-|F-----F-F-----F-"),
+        ],
+        default_bpm: 120,
+        ..Drill::BASE
+    },
+    Drill {
+        id: "samba",
+        category: Category::Styles,
+        lanes: &[
+            (HH, HATS_8),
+            (SD, "---L---L---L---L"),
+            (BD, "F--FF--FF--FF--F"),
+        ],
+        default_bpm: 90,
+        ..Drill::BASE
+    },
+    Drill {
+        id: "jazz_ride",
+        category: Category::Styles,
+        lanes: &[(RD, "R--R-RR--R-R"), (LP, "---F-----F--")],
+        default_bpm: 120,
+        ..Drill::BASE
+    },
+    Drill {
+        id: "jazz_comping",
+        category: Category::Styles,
+        lanes: &[
+            (RD, "R--R-RR--R-R"),
+            (SD, "--L-----L---"),
+            (LP, "---F-----F--"),
+        ],
+        default_bpm: 120,
+        ..Drill::BASE
+    },
+    Drill {
+        id: "drum_and_bass",
+        category: Category::Styles,
+        lanes: &[(HH, HATS_8), (SD, BACKBEAT), (BD, "F---------F-----")],
+        default_bpm: 170,
+        ..Drill::BASE
+    },
+    Drill {
+        id: "blast_beat",
+        category: Category::Styles,
+        lanes: &[
+            (CY, "R-R-R-R-R-R-R-R-"),
+            (SD, "-L-L-L-L-L-L-L-L"),
+            (BD, "F-F-F-F-F-F-F-F-"),
+        ],
+        default_bpm: 90,
+        ..Drill::BASE
+    },
+    // ---- タム回しとフィル ----
+    Drill {
+        id: "toms_eighths",
+        category: Category::Fills,
+        lanes: &[
+            (SD, "R-L-------------"),
+            (HT, "----R-L---------"),
+            (LT, "--------R-L-----"),
+            (FT, "------------R-L-"),
+        ],
+        default_bpm: 110,
+        ..Drill::BASE
+    },
+    Drill {
+        id: "toms_sixteenths",
+        category: Category::Fills,
+        lanes: &[
+            (SD, "RLRL------------"),
+            (HT, "----RLRL--------"),
+            (LT, "--------RLRL----"),
+            (FT, "------------RLRL"),
+        ],
+        default_bpm: 90,
+        ..Drill::BASE
+    },
+    Drill {
+        id: "toms_upward",
+        category: Category::Fills,
+        lanes: &[
+            (FT, "RLRL------------"),
+            (LT, "----RLRL--------"),
+            (HT, "--------RLRL----"),
+            (SD, "------------RLRL"),
+        ],
+        default_bpm: 90,
+        ..Drill::BASE
+    },
+    Drill {
+        id: "toms_triplets",
+        category: Category::Fills,
+        lanes: &[
+            (SD, "RLR---------"),
+            (HT, "---LRL------"),
+            (LT, "------RLR---"),
+            (FT, "---------LRL"),
+        ],
+        default_bpm: 90,
+        ..Drill::BASE
+    },
+    Drill {
+        id: "toms_sextuplets",
+        category: Category::Fills,
+        lanes: &[
+            (SD, "RLRLRL------------------"),
+            (HT, "------RLRLRL------------"),
+            (LT, "------------RLRLRL------"),
+            (FT, "------------------RLRLRL"),
+        ],
+        default_bpm: 90,
+        ..Drill::BASE
+    },
+    Drill {
+        id: "snare_and_toms",
+        category: Category::Fills,
+        lanes: &[
+            (SD, "R-R-R-R-R-R-R-R-"),
+            (HT, "-L-L-L-L--------"),
+            (FT, "---------L-L-L-L"),
+        ],
+        default_bpm: 90,
+        ..Drill::BASE
+    },
+    Drill {
+        id: "rll_fill",
+        category: Category::Fills,
+        lanes: &[
+            (HT, "R--R--------"),
+            (FT, "------R--R--"),
+            (SD, "-LL-LL-LL-LL"),
+        ],
+        default_bpm: 90,
+        ..Drill::BASE
+    },
+    Drill {
+        id: "hand_hand_foot",
+        category: Category::Fills,
+        lanes: &[
+            (SD, "RL----------"),
+            (HT, "---RL-------"),
+            (LT, "------RL----"),
+            (FT, "---------RL-"),
+            (BD, "--F--F--F--F"),
+        ],
+        default_bpm: 90,
+        ..Drill::BASE
+    },
+    Drill {
+        id: "fill_one_beat",
+        category: Category::Fills,
+        lanes: &[
+            (HH, "R-R-R-R-R-R-R-R-|R-R-R-R-R-R-----"),
+            (SD, "----L-------L---|----L-------RL--"),
+            (FT, "----------------|--------------RL"),
+            (BD, "F-------F-F-----|F-------F-F-----"),
+        ],
+        ..Drill::BASE
+    },
+    Drill {
+        id: "fill_two_beats",
+        category: Category::Fills,
+        lanes: &[
+            (HH, "R-R-R-R-R-R-R-R-|R-R-R-R---------"),
+            (SD, "----L-------L---|----L---RLRL----"),
+            (HT, "----------------|------------RL--"),
+            (FT, "----------------|--------------RL"),
+            (BD, "F-------F-F-----|F-------F-------"),
+        ],
+        ..Drill::BASE
+    },
+    Drill {
+        id: "fill_four_bars",
+        category: Category::Fills,
+        lanes: &[
+            (
+                CY,
+                "R---------------|----------------|----------------|----------------",
+            ),
+            (
+                HH,
+                "--R-R-R-R-R-R-R-|R-R-R-R-R-R-R-R-|R-R-R-R-R-R-R-R-|----------------",
+            ),
+            (
+                SD,
+                "----L-------L---|----L-------L---|----L-------L---|RLRL------------",
+            ),
+            (
+                HT,
+                "----------------|----------------|----------------|----RLRL--------",
+            ),
+            (
+                LT,
+                "----------------|----------------|----------------|--------RLRL----",
+            ),
+            (
+                FT,
+                "----------------|----------------|----------------|------------RLRL",
+            ),
+            (
+                BD,
+                "F-------F-F-----|F-------F-F-----|F-------F-F-----|----------------",
+            ),
+        ],
+        ..Drill::BASE
+    },
+    // ---- 足 ----
+    Drill {
+        id: "kick_eighths",
+        category: Category::Feet,
+        lanes: &[
+            (HH, "R---R---R---R---"),
+            (SD, BACKBEAT),
+            (BD, "F-F-F-F-F-F-F-F-"),
+        ],
+        ..Drill::BASE
+    },
+    Drill {
+        id: "kick_upbeats",
+        category: Category::Feet,
+        lanes: &[(HH, "R---R---R---R---"), (BD, "--F---F---F---F-")],
+        ..Drill::BASE
+    },
+    Drill {
+        id: "kick_doubles",
+        category: Category::Feet,
+        lanes: &[(HH, HATS_8), (SD, BACKBEAT), (BD, "FF------FF------")],
+        default_bpm: 90,
+        ..Drill::BASE
+    },
+    Drill {
+        id: "hihat_foot",
+        category: Category::Feet,
+        lanes: &[(SD, "R-L-R-L-R-L-R-L-"), (LP, "F---F---F---F---")],
+        ..Drill::BASE
+    },
+    Drill {
+        id: "hihat_foot_2_4",
+        category: Category::Feet,
+        lanes: &[
+            (RD, HATS_8),
+            (BD, "F-------F-------"),
+            (LP, "----F-------F---"),
+        ],
+        default_bpm: 110,
+        ..Drill::BASE
+    },
+    Drill {
+        id: "kick_and_hihat_foot",
+        category: Category::Feet,
+        lanes: &[(BD, "F---F---F---F---"), (LP, "--F---F---F---F-")],
+        ..Drill::BASE
+    },
+    Drill {
+        id: "double_bass_eighths",
+        category: Category::Feet,
+        lanes: &[
+            (RD, "R---R---R---R---"),
+            (SD, BACKBEAT),
+            (BD, "F---F---F---F---"),
+            (LBD, "--F---F---F---F-"),
+        ],
+        default_bpm: 110,
+        ..Drill::BASE
+    },
+    Drill {
+        id: "double_bass_triplets",
+        category: Category::Feet,
+        lanes: &[
+            (RD, "R--R--R--R--"),
+            (SD, "---L-----L--"),
+            (BD, "F-F-F-F-F-F-"),
+            (LBD, "-F-F-F-F-F-F"),
+        ],
+        default_bpm: 90,
+        ..Drill::BASE
+    },
+    Drill {
+        id: "double_bass_sixteenths",
+        category: Category::Feet,
+        lanes: &[
+            (RD, "R---R---R---R---"),
+            (SD, BACKBEAT),
+            (BD, "F-F-F-F-F-F-F-F-"),
+            (LBD, "-F-F-F-F-F-F-F-F"),
+        ],
+        default_bpm: 90,
+        ..Drill::BASE
+    },
+    Drill {
+        id: "gallop",
+        category: Category::Feet,
+        lanes: &[
+            (RD, "R---R---R---R---"),
+            (SD, BACKBEAT),
+            (BD, "F--FF--FF--FF--F"),
+            (LBD, "--F---F---F---F-"),
+        ],
+        default_bpm: 90,
+        ..Drill::BASE
+    },
+    // ---- シンバルとハイハット ----
+    Drill {
+        id: "open_hihat_four",
+        category: Category::Cymbals,
+        lanes: &[
+            (HH, "R-R-R-R-R-R-R---"),
+            (HHO, "--------------R-"),
+            (SD, BACKBEAT),
+            (BD, "F-------F-F-----"),
+        ],
+        default_bpm: 110,
+        ..Drill::BASE
+    },
+    Drill {
+        id: "open_hihat_upbeats",
+        category: Category::Cymbals,
+        lanes: &[
+            (HH, "R---R---R---R---"),
+            (HHO, "--R---R---R---R-"),
+            (SD, BACKBEAT),
+            (BD, "F-------F-F-----"),
+        ],
+        default_bpm: 110,
+        ..Drill::BASE
+    },
+    Drill {
+        id: "ride_and_crash",
+        category: Category::Cymbals,
+        lanes: &[
+            (CY, "R---------------"),
+            (RD, "--R-R-R-R-R-R-R-"),
+            (SD, BACKBEAT),
+            (BD, "F-------F-F-----"),
+        ],
+        default_bpm: 110,
+        ..Drill::BASE
+    },
+    Drill {
+        id: "hats_to_ride",
+        category: Category::Cymbals,
+        lanes: &[
+            (HH, "R-R-R-R-R-R-R-R-|----------------"),
+            (RD, "----------------|R-R-R-R-R-R-R-R-"),
+            (SD, "----L-------L---|----L-------L---"),
+            (BD, "F-------F-F-----|F-------F-F-----"),
+        ],
+        default_bpm: 110,
+        ..Drill::BASE
+    },
+    Drill {
+        id: "left_right_crash",
+        category: Category::Cymbals,
+        lanes: &[
+            (LC, "L---------------|----------------"),
+            (CY, "----------------|R---------------"),
+            (HH, "--R-R-R-R-R-R-R-|--R-R-R-R-R-R-R-"),
+            (SD, "----L-------L---|----L-------L---"),
+            (BD, "F-------F-F-----|F-------F-F-----"),
+        ],
+        default_bpm: 110,
+        ..Drill::BASE
+    },
+    Drill {
+        id: "crash_every_beat",
+        category: Category::Cymbals,
+        lanes: &[
+            (CY, "R---R---R---R---"),
+            (SD, BACKBEAT),
+            (BD, "F---F---F---F---"),
+        ],
+        default_bpm: 120,
+        ..Drill::BASE
+    },
+    Drill {
+        id: "kicks_and_crashes",
+        category: Category::Cymbals,
+        lanes: &[
+            (CY, "R-----R-----R---|R-----R---------"),
+            (SD, "----------------|--------RLRLRLRL"),
+            (BD, "F-----F-----F---|F-----F---------"),
+        ],
+        ..Drill::BASE
+    },
+    // ---- 拍子とポリリズム ----
+    Drill {
+        id: "waltz",
+        category: Category::Meters,
+        lanes: &[
+            (HH, "R-R-R-R-R-R-"),
+            (SD, "----L---L---"),
+            (BD, "F-----------"),
+        ],
+        default_bpm: 120,
+        meter: (3, 4),
+        ..Drill::BASE
+    },
+    Drill {
+        id: "three_four",
+        category: Category::Meters,
+        lanes: &[
+            (HH, "R-R-R-R-R-R-"),
+            (SD, "----L-------"),
+            (BD, "F-------F---"),
+        ],
+        meter: (3, 4),
+        ..Drill::BASE
+    },
+    Drill {
+        id: "six_eight",
+        category: Category::Meters,
+        lanes: &[
+            (HH, "R-R-R-R-R-R-"),
+            (SD, "------L-----"),
+            (BD, "F-----------"),
+        ],
+        default_bpm: 70,
+        meter: (6, 8),
+        click: Some("X-x-x-x-x-x-"),
+        ..Drill::BASE
+    },
+    Drill {
+        id: "five_four",
+        category: Category::Meters,
+        lanes: &[
+            (HH, "R-R-R-R-R-R-R-R-R-R-"),
+            (SD, "--------L-------L---"),
+            (BD, "F-----------F-------"),
+        ],
+        default_bpm: 110,
+        meter: (5, 4),
+        ..Drill::BASE
+    },
+    Drill {
+        id: "seven_eight",
+        category: Category::Meters,
+        lanes: &[
+            (HH, "R-R-R-R-R-R-R-"),
+            (SD, "----L-------L-"),
+            (BD, "F-------F-----"),
+        ],
+        meter: (7, 8),
+        click: Some("X---x---x-----"),
+        ..Drill::BASE
+    },
+    Drill {
+        id: "three_against_two",
+        category: Category::Meters,
+        lanes: &[(HH, "R-R-R-R-R-R-"), (SD, "L--L--L--L--")],
+        default_bpm: 90,
+        ..Drill::BASE
+    },
+    Drill {
+        id: "four_against_three",
+        category: Category::Meters,
+        lanes: &[(HH, "R--R--R--R--"), (SD, "L---L---L---")],
+        default_bpm: 90,
+        ..Drill::BASE
+    },
+    Drill {
+        id: "triplets_over_kick",
+        category: Category::Meters,
+        lanes: &[(SD, "RLRLRLRLRLRL"), (BD, "F---F---F---F---")],
+        default_bpm: 90,
+        ..Drill::BASE
+    },
+    Drill {
+        id: "dotted_quarter_kick",
+        category: Category::Meters,
+        // 6 マスおきなので 3 小節でひと回り
+        lanes: &[
+            (HH, "R-R-R-R-R-R-R-R-|R-R-R-R-R-R-R-R-|R-R-R-R-R-R-R-R-"),
+            (SD, "----L-------L---|----L-------L---|----L-------L---"),
+            (BD, "F-----F-----F---|--F-----F-----F-|----F-----F-----"),
+        ],
+        ..Drill::BASE
     },
     // ---- 体内時計 ----
+    Drill {
+        id: "gap_1",
+        category: Category::InnerClock,
+        lanes: &[(SD, "R-L-R-L-R-L-R-L-")],
+        gap: Some((1, 1)),
+        ..Drill::BASE
+    },
     Drill {
         id: "gap_2",
         category: Category::InnerClock,
         lanes: &[(SD, "R-L-R-L-R-L-R-L-")],
         gap: Some((2, 2)),
-        default_bpm: 100,
+        ..Drill::BASE
     },
     Drill {
         id: "gap_4",
         category: Category::InnerClock,
         lanes: &[(SD, "R-L-R-L-R-L-R-L-")],
         gap: Some((4, 4)),
-        default_bpm: 100,
+        ..Drill::BASE
+    },
+    Drill {
+        id: "gap_long",
+        category: Category::InnerClock,
+        lanes: &[(SD, "R-L-R-L-R-L-R-L-")],
+        gap: Some((2, 6)),
+        ..Drill::BASE
+    },
+    Drill {
+        id: "groove_gap",
+        category: Category::InnerClock,
+        lanes: &[(HH, HATS_8), (SD, BACKBEAT), (BD, "F-------F-F-----")],
+        gap: Some((2, 2)),
+        default_bpm: 110,
+        ..Drill::BASE
+    },
+    Drill {
+        id: "click_two_four",
+        category: Category::InnerClock,
+        lanes: &[(SD, "R-L-R-L-R-L-R-L-")],
+        click: Some("----x-------x---"),
+        ..Drill::BASE
+    },
+    Drill {
+        id: "click_one",
+        category: Category::InnerClock,
+        lanes: &[(SD, "R-L-R-L-R-L-R-L-")],
+        click: Some("X---------------"),
+        ..Drill::BASE
+    },
+    Drill {
+        id: "click_upbeats",
+        category: Category::InnerClock,
+        lanes: &[(SD, "R-L-R-L-R-L-R-L-")],
+        click: Some("--x---x---x---x-"),
+        ..Drill::BASE
     },
 ];
 
@@ -296,7 +1173,7 @@ impl Drill {
             for (m, bar) in text.split('|').enumerate() {
                 let cells: Vec<char> = bar.chars().filter(|c| !c.is_whitespace()).collect();
                 for (i, &c) in cells.iter().enumerate() {
-                    if let Some(hand) = Hand::from_char(c) {
+                    if let Some(hand) = Hand::of(c, lane) {
                         v.push(PatternNote {
                             measure: m as u32,
                             cell: i as u32,
@@ -326,6 +1203,46 @@ impl Drill {
     pub fn fixed_tempo(&self) -> bool {
         self.gap.is_some()
     }
+
+    /// 小節の長さ（4/4 を 1 として）
+    pub fn bar_len(&self) -> f64 {
+        f64::from(self.meter.0) / f64::from(self.meter.1)
+    }
+
+    /// 型の小節のクリック（小節の中の位置 0〜1 と、強いクリックか）
+    pub fn bar_clicks(&self) -> Vec<(f64, bool)> {
+        match self.click {
+            Some(p) => pattern_clicks(p),
+            None => self.beat_clicks(),
+        }
+    }
+
+    /// カウントの小節のクリック。分母が 8 の拍子は型のクリック、ほかは拍ごと
+    pub fn count_in_clicks(&self) -> Vec<(f64, bool)> {
+        match self.click {
+            Some(p) if self.meter.1 == 8 => pattern_clicks(p),
+            _ => self.beat_clicks(),
+        }
+    }
+
+    /// 4 分音符ごと（小節の頭が強い）
+    fn beat_clicks(&self) -> Vec<(f64, bool)> {
+        let quarters = self.bar_len() * 4.0;
+        let n = (quarters - 1e-9).ceil().max(1.0) as u32;
+        (0..n).map(|i| (f64::from(i) / quarters, i == 0)).collect()
+    }
+}
+
+/// クリックの型の文字（X・x・-）から位置と強さ
+fn pattern_clicks(p: &str) -> Vec<(f64, bool)> {
+    let cells: Vec<char> = p.chars().filter(|c| !c.is_whitespace()).collect();
+    let n = cells.len().max(1) as f64;
+    cells
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| matches!(c, 'X' | 'x'))
+        .map(|(i, &c)| (i as f64 / n, c == 'X'))
+        .collect()
 }
 
 /// 段ごとのテンポ。`target` を最後の段にして、`rise` ずつ下げて並べる（`BPM_MIN` より下げない）。
@@ -394,6 +1311,17 @@ impl Run {
         m % (on + off) < on
     }
 
+    /// 譜面の小節 `measure` で鳴らすクリック（小節の中の位置 0〜1 と、強いクリックか）。消える小節は空
+    pub fn clicks_in(&self, measure: u32) -> Vec<(f64, bool)> {
+        if measure >= self.measure_count() || !self.clicks(measure) {
+            Vec::new()
+        } else if measure < COUNT_IN_MEASURES {
+            self.drill.count_in_clicks()
+        } else {
+            self.drill.bar_clicks()
+        }
+    }
+
     /// 譜面の音符（小節と位置、レーン）を叩く手足。型に無い音符は None
     pub fn hand_at(&self, at: NotePos, lane: DrumLane) -> Option<Hand> {
         let m = at.measure.checked_sub(COUNT_IN_MEASURES)?;
@@ -417,6 +1345,12 @@ impl Run {
             s += &format!("#BPM{:02}: {b}\n", i + 1);
         }
         s += "#00008: 01\n";
+        if self.drill.meter != (4, 4) {
+            let len = self.drill.bar_len();
+            for m in 0..self.measure_count() {
+                s += &format!("#{m:03}02: {len}\n");
+            }
+        }
         let pattern_measures = self.drill.measures();
         for step in 0..STEPS {
             let first = COUNT_IN_MEASURES + step as u32 * STEP_MEASURES;
@@ -432,7 +1366,7 @@ impl Run {
                     .chars()
                     .filter(|c| !c.is_whitespace())
                     .map(|c| {
-                        if Hand::from_char(c).is_some() {
+                        if Hand::of(c, lane).is_some() {
                             "01"
                         } else {
                             "00"
@@ -666,6 +1600,7 @@ mod tests {
         for d in DRILLS {
             assert!(ids.insert(d.id), "{} twice", d.id);
             let m = d.measures();
+            let (num, den) = d.meter;
             for (lane, text) in d.lanes {
                 assert_eq!(text.split('|').count() as u32, m, "{} {lane:?}", d.id);
                 for bar in text.split('|') {
@@ -674,23 +1609,148 @@ mod tests {
                         "{} {lane:?} {bar}",
                         d.id
                     );
-                    assert!([12, 16].contains(&bar.len()), "{} {lane:?} {bar}", d.id);
+                    // 4 分音符ひとつのマスの数は 3〜6（3 連・16 分・5 連・6 連）
+                    let cells = bar.len() as u32 * den;
+                    assert_eq!(cells % (num * 4), 0, "{} {lane:?} {bar}", d.id);
+                    assert!(
+                        (3..=6).contains(&(cells / (num * 4))),
+                        "{} {lane:?} {bar}",
+                        d.id
+                    );
+                    // 足の文字は足のレーンだけ、手の文字は足のレーンに書かない
+                    let foot = matches!(*lane, BD | LBD | LP);
+                    assert!(
+                        bar.chars().all(|c| c == '-' || (c == 'F') == foot),
+                        "{} {lane:?} {bar}",
+                        d.id
+                    );
                 }
             }
-            // 同じ小節のレーンは同じ分け方（同じ時刻の音符が同じマスに並ぶ）
-            for pm in 0..m as usize {
-                let lens: Vec<usize> = d
-                    .lanes
-                    .iter()
-                    .map(|(_, t)| t.split('|').nth(pm).unwrap().len())
-                    .collect();
-                assert!(lens.windows(2).all(|w| w[0] == w[1]), "{}", d.id);
+            if let Some(p) = d.click {
+                assert!(p.chars().all(|c| "Xx-".contains(c)), "{}", d.id);
+                assert!(p.contains(['X', 'x']), "{}", d.id);
             }
-            assert!(!d.notes().is_empty());
+            // 同じ時刻に同じ手で 2 つ叩かない
+            let notes = d.notes();
+            for (i, a) in notes.iter().enumerate() {
+                for b in &notes[i + 1..] {
+                    let same_time = a.measure == b.measure
+                        && u64::from(a.cell) * u64::from(b.cells)
+                            == u64::from(b.cell) * u64::from(a.cells);
+                    assert!(!(same_time && a.hand == b.hand), "{} {a:?} {b:?}", d.id);
+                }
+            }
+            assert!(!notes.is_empty());
             assert!((BPM_MIN..=BPM_MAX).contains(&d.default_bpm));
             assert_eq!(d.default_bpm % BPM_STEP, 0);
         }
-        assert_eq!(DRILLS.len(), 19);
+        // どの分け方にもドリルがある
+        for c in Category::ALL {
+            assert!(DRILLS.iter().any(|d| d.category == c), "{c:?}");
+        }
+        assert_eq!(DRILLS.len(), 107);
+    }
+
+    #[test]
+    fn the_first_drills_keep_their_ids() {
+        // 記録と設定は id で引くので、前からあるドリルの id は変えない
+        for id in [
+            "quarter",
+            "eighth",
+            "sixteenth",
+            "triplet",
+            "upbeat",
+            "subdivisions",
+            "single_stroke",
+            "double_stroke",
+            "paradiddle",
+            "double_paradiddle",
+            "paradiddle_diddle",
+            "six_stroke",
+            "eight_beat",
+            "sixteen_beat",
+            "four_on_the_floor",
+            "shuffle",
+            "hand_foot_triplet",
+            "gap_2",
+            "gap_4",
+        ] {
+            assert!(Drill::find(id).is_some(), "{id}");
+        }
+    }
+
+    #[test]
+    fn left_pedal_and_left_bass_are_the_left_foot() {
+        let d = drill("double_bass_eighths");
+        let hands: Vec<(DrumLane, Hand)> = d.notes().iter().map(|n| (n.lane, n.hand)).collect();
+        assert!(hands.contains(&(BD, Hand::Foot)));
+        assert!(hands.contains(&(LBD, Hand::LeftFoot)));
+        let d = drill("hihat_foot");
+        assert!(
+            d.notes()
+                .iter()
+                .any(|n| n.lane == LP && n.hand == Hand::LeftFoot)
+        );
+        assert!(Hand::LeftFoot.is_foot() && !Hand::Left.is_foot());
+    }
+
+    #[test]
+    fn meters_set_the_bar_length_and_the_clicks() {
+        let run = Run::new(drill("waltz"), 120, 0);
+        let chart = dtx::parse(&run.to_dtx("x"));
+        let tempo = dtx::TempoMap::build(&chart);
+        // 3/4 の小節は 4 分音符 3 つ（120 BPM で 1.5 秒）
+        let bar = tempo.measure_start_ms(2) - tempo.measure_start_ms(1);
+        assert!((bar - 1500.0).abs() < 1e-6, "{bar}");
+        let notes = tempo.drum_notes(&chart);
+        assert_eq!(notes.len(), (6 + 2 + 1) * 16);
+        assert!(notes.iter().all(|n| run.hand_at(n.at, n.lane).is_some()));
+        assert_eq!(run.clicks_in(0).len(), 3);
+        assert_eq!(run.clicks_in(1).len(), 3);
+        // 7/8 はカウントも 2+2+3 で鳴らす
+        let run = Run::new(drill("seven_eight"), 100, 10);
+        let at: Vec<f64> = run.clicks_in(0).iter().map(|c| c.0).collect();
+        assert_eq!(at, [0.0, 4.0 / 14.0, 8.0 / 14.0]);
+        assert_eq!(run.clicks_in(5), run.clicks_in(0));
+        let chart = dtx::parse(&run.to_dtx("x"));
+        let tempo = dtx::TempoMap::build(&chart);
+        let bar = tempo.measure_start_ms(1) - tempo.measure_start_ms(0);
+        assert!((bar - 3.5 * 60_000.0 / 70.0).abs() < 1e-6, "{bar}");
+        // 2・4 拍のクリックは、カウントだけ拍ごと
+        let run = Run::new(drill("click_two_four"), 100, 0);
+        assert_eq!(run.clicks_in(0).len(), 4);
+        assert_eq!(run.clicks_in(1), [(0.25, false), (0.75, false)]);
+        // クリックの消える小節は空
+        let run = Run::new(drill("gap_1"), 100, 0);
+        assert!(!run.clicks_in(1).is_empty());
+        assert!(run.clicks_in(2).is_empty());
+        assert!(run.clicks_in(run.measure_count()).is_empty());
+    }
+
+    #[test]
+    fn every_drill_makes_a_chart_whose_notes_all_have_a_hand() {
+        for d in DRILLS {
+            let run = Run::new(d, d.default_bpm, DEFAULT_RISE);
+            let chart = dtx::parse(&run.to_dtx(d.id));
+            let tempo = dtx::TempoMap::build(&chart);
+            let notes = tempo.drum_notes(&chart);
+            let per_pass = d.notes().len();
+            let passes = (STEPS as u32 * STEP_MEASURES) as usize / d.measures() as usize;
+            let rest = (STEPS as u32 * STEP_MEASURES) % d.measures();
+            let extra: usize = d.notes().iter().filter(|n| n.measure < rest).count();
+            assert_eq!(notes.len(), per_pass * passes + extra, "{}", d.id);
+            assert!(
+                notes.iter().all(|n| run.hand_at(n.at, n.lane).is_some()),
+                "{}",
+                d.id
+            );
+            assert_eq!(
+                tempo.measure_count() as u32,
+                run.measure_count(),
+                "{}",
+                d.id
+            );
+        }
     }
 
     #[test]

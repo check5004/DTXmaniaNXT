@@ -31,25 +31,125 @@ pub fn of_path(path: &std::path::Path) -> Option<&'static Drill> {
 /// ドリルの名前
 pub fn name(d: &Drill) -> &'static str {
     match d.id {
+        // タイミング
         "quarter" => t("Quarter Notes", "4 分音符"),
         "eighth" => t("8th Notes", "8 分音符"),
         "sixteenth" => t("16th Notes", "16 分音符"),
         "triplet" => t("Triplets", "3 連符"),
         "upbeat" => t("Upbeats", "裏拍"),
+        "sixteenth_e" => t("16th Offbeats (e)", "16 分の 2 つ目だけ"),
+        "sixteenth_a" => t("16th Offbeats (a)", "16 分の 4 つ目だけ"),
+        "dotted_sixteenth" => t("Dotted 8th + 16th", "付点 8 分と 16 分"),
+        "sixteenth_dotted" => t("16th + Dotted 8th", "16 分と付点 8 分"),
+        "dotted_eighths" => t("Dotted 8ths Across the Bar", "付点 8 分の連続"),
+        "quarter_triplet" => t("Quarter-Note Triplets", "2 拍 3 連"),
+        "swung_eighths" => t("Swung 8ths", "ハネた 8 分"),
+        "quintuplet" => t("Quintuplets", "5 連符"),
+        "sextuplet" => t("Sextuplets", "6 連符"),
         "subdivisions" => t("Subdivision Ladder", "4・8・3 連・16 の切り替え"),
+        "eighth_sixteenth" => t("8ths to 16ths", "8 分と 16 分の切り替え"),
+        "triplet_sixteenth" => t("Triplets to 16ths", "3 連と 16 分の切り替え"),
+        // ルーディメンツ
         "single_stroke" => t("Single Stroke Roll", "シングルストローク"),
         "double_stroke" => t("Double Stroke Roll", "ダブルストローク"),
-        "paradiddle" => t("Paradiddle", "パラディドル"),
-        "double_paradiddle" => t("Double Paradiddle", "ダブルパラディドル"),
-        "paradiddle_diddle" => t("Paradiddle-diddle", "パラディドルディドル"),
+        "triple_stroke" => t("Triple Stroke Roll", "トリプルストローク"),
+        "five_stroke" => t("Five Stroke Roll", "5 ストロークロール"),
         "six_stroke" => t("Six Stroke Roll", "シックスストローク"),
-        "eight_beat" => t("8-Beat", "8 ビート"),
+        "seven_stroke" => t("Seven Stroke Roll", "7 ストロークロール"),
+        "nine_stroke" => t("Nine Stroke Roll", "9 ストロークロール"),
+        "paradiddle" => t("Paradiddle", "パラディドル"),
+        "inverted_paradiddle" => t("Inverted Paradiddle", "インバーテッドパラディドル"),
+        "reverse_paradiddle" => t("Reverse Paradiddle", "リバースパラディドル"),
+        "double_paradiddle" => t("Double Paradiddle", "ダブルパラディドル"),
+        "triple_paradiddle" => t("Triple Paradiddle", "トリプルパラディドル"),
+        "paradiddle_diddle" => t("Paradiddle-diddle", "パラディドルディドル"),
+        "paradiddle_triplets" => t("Paradiddle Triplets", "3 連のパラディドル"),
+        "single_stroke_four" => t("Single Stroke Four", "シングルストローク 4"),
+        "single_stroke_seven" => t("Single Stroke Seven", "シングルストローク 7"),
+        "double_triplets" => t("Double Strokes in Triplets", "3 連のダブルストローク"),
+        // ビート
+        "eight_beat_basic" => t("Basic 8-Beat", "8 ビート（基本）"),
+        "eight_beat" => t("8-Beat: Kick on 3&", "8 ビート：3 拍目の裏にバスドラ"),
+        "kick_and_of_2" => t("8-Beat: Kick on 2&", "8 ビート：2 拍目の裏にバスドラ"),
+        "kick_and_of_4" => t("8-Beat: Kick on 4&", "8 ビート：4 拍目の裏にバスドラ"),
+        "kick_sixteenth" => t("8-Beat: 16th Kicks", "8 ビート：16 分のバスドラ"),
+        "quarter_hats" => t("Quarter-Note Hi-Hat", "4 分のハイハット"),
         "sixteen_beat" => t("16-Beat", "16 ビート"),
+        "sixteen_beat_kick" => t("16-Beat: Busy Kick", "16 ビート：バスドラ多め"),
+        "sixteen_one_hand" => t("One-Hand 16-Beat", "片手の 16 ビート"),
+        "half_time" => t("Half-Time", "ハーフタイム"),
+        "two_beat" => t("Two-Beat", "2 ビート"),
+        "snare_every_beat" => t("Snare on Every Beat", "スネアの 4 つ打ち"),
         "four_on_the_floor" => t("Four on the Floor", "4 つ打ち"),
         "shuffle" => t("Shuffle", "シャッフル"),
         "hand_foot_triplet" => t("Hand-Foot Triplets", "手足の 3 連"),
+        // ジャンル
+        "funk_ghost" => t("Funk with Ghost Notes", "ファンク（ゴーストノート）"),
+        "linear" => t("Linear Groove", "リニア"),
+        "disco" => t("Disco", "ディスコ"),
+        "hip_hop" => t("Hip-Hop", "ヒップホップ"),
+        "half_time_shuffle" => t("Half-Time Shuffle", "ハーフタイムシャッフル"),
+        "twelve_eight" => t("12/8 Ballad", "12/8 のバラード"),
+        "one_drop" => t("One Drop", "ワンドロップ（レゲエ）"),
+        "bossa_nova" => t("Bossa Nova", "ボサノバ"),
+        "samba" => t("Samba", "サンバ"),
+        "jazz_ride" => t("Jazz Ride", "ジャズのライド"),
+        "jazz_comping" => t("Jazz Comping", "ジャズのコンピング"),
+        "drum_and_bass" => t("Drum and Bass", "ドラムンベース"),
+        "blast_beat" => t("Blast Beat", "ブラストビート"),
+        // タム回しとフィル
+        "toms_eighths" => t("Around the Toms: 8ths", "タム回し（8 分）"),
+        "toms_sixteenths" => t("Around the Toms: 16ths", "タム回し（16 分）"),
+        "toms_upward" => t("Toms Going Up", "タム回し（下から上へ）"),
+        "toms_triplets" => t("Around the Toms: Triplets", "タム回し（3 連）"),
+        "toms_sextuplets" => t("Around the Toms: Sextuplets", "タム回し（6 連）"),
+        "snare_and_toms" => t("Snare and Toms", "スネアとタムの行き来"),
+        "rll_fill" => t("RLL Fill", "RLL のフィル"),
+        "hand_hand_foot" => t("Hand-Hand-Foot Fill", "手・手・足のフィル"),
+        "fill_one_beat" => t("Groove + 1-Beat Fill", "ビートと 1 拍のフィル"),
+        "fill_two_beats" => t("Groove + 2-Beat Fill", "ビートと 2 拍のフィル"),
+        "fill_four_bars" => t("3 Bars + 1-Bar Fill", "3 小節のビートと 1 小節のフィル"),
+        // 足
+        "kick_eighths" => t("8th-Note Kicks", "バスドラの 8 分"),
+        "kick_upbeats" => t("Kick on the Upbeats", "バスドラの裏拍"),
+        "kick_doubles" => t("Kick Doubles", "バスドラの 16 分 2 つ"),
+        "hihat_foot" => t("Hi-Hat Foot on the Beat", "ハイハットペダルで 4 分"),
+        "hihat_foot_2_4" => t("Hi-Hat Foot on 2 and 4", "ハイハットペダルを 2・4 拍で"),
+        "kick_and_hihat_foot" => t("Kick and Hi-Hat Foot", "バスドラとハイハットペダル"),
+        "double_bass_eighths" => t("Double Bass: 8ths", "ツーバスの 8 分"),
+        "double_bass_triplets" => t("Double Bass: Triplets", "ツーバスの 3 連"),
+        "double_bass_sixteenths" => t("Double Bass: 16ths", "ツーバスの 16 分"),
+        "gallop" => t("Gallop", "ギャロップ"),
+        // シンバルとハイハット
+        "open_hihat_four" => t("Open Hi-Hat on 4&", "4 拍目の裏でオープン"),
+        "open_hihat_upbeats" => t("Open Hi-Hat on the Upbeats", "裏拍でオープン"),
+        "ride_and_crash" => t("Ride with a Crash on 1", "ライドと頭のクラッシュ"),
+        "hats_to_ride" => t("Hi-Hat to Ride", "ハイハットとライドの持ち替え"),
+        "left_right_crash" => t("Left and Right Crash", "左右のクラッシュ"),
+        "crash_every_beat" => t("Crash on Every Beat", "クラッシュの 4 つ打ち"),
+        "kicks_and_crashes" => t("Hits with Crash and Kick", "キメ（クラッシュとバスドラ）"),
+        // 拍子とポリリズム
+        "waltz" => t("Waltz (3/4)", "ワルツ（3/4）"),
+        "three_four" => t("3/4 Groove", "3/4 のビート"),
+        "six_eight" => t("6/8 Groove", "6/8 のビート"),
+        "five_four" => t("5/4 Groove", "5/4 のビート"),
+        "seven_eight" => t("7/8 Groove (2+2+3)", "7/8 のビート（2+2+3）"),
+        "three_against_two" => t("3 Against 2", "3 対 2"),
+        "four_against_three" => t("4 Against 3", "4 対 3"),
+        "triplets_over_kick" => t("Triplets over Quarter Kicks", "4 分のバスドラに 3 連"),
+        "dotted_quarter_kick" => t("Dotted-Quarter Kicks", "付点 4 分のバスドラ"),
+        // 体内時計
+        "gap_1" => t(
+            "Gap Click (Every Other Bar)",
+            "1 小節おきにクリックが消える",
+        ),
         "gap_2" => t("Gap Click (2 Bars)", "2 小節ごとにクリックが消える"),
         "gap_4" => t("Gap Click (4 Bars)", "4 小節ごとにクリックが消える"),
+        "gap_long" => t("Gap Click (6 Bars)", "6 小節クリックが消える"),
+        "groove_gap" => t("8-Beat with Gap Click", "8 ビートでクリックが消える"),
+        "click_two_four" => t("Click on 2 and 4", "クリックは 2・4 拍目だけ"),
+        "click_one" => t("Click on 1 Only", "クリックは 1 拍目だけ"),
+        "click_upbeats" => t("Click on the Upbeats", "クリックは裏拍"),
         _ => d.id,
     }
 }
@@ -59,7 +159,12 @@ pub fn category_name(c: Category) -> &'static str {
     match c {
         Category::Timing => t("Timing", "タイミング"),
         Category::Rudiments => t("Rudiments", "ルーディメンツ"),
-        Category::Grooves => t("Hands and Feet", "手と足"),
+        Category::Grooves => t("Beats", "ビート"),
+        Category::Styles => t("Styles", "ジャンル"),
+        Category::Fills => t("Fills and Toms", "タム回しとフィル"),
+        Category::Feet => t("Feet", "足"),
+        Category::Cymbals => t("Cymbals and Hi-Hat", "シンバルとハイハット"),
+        Category::Meters => t("Meters and Polyrhythms", "拍子とポリリズム"),
         Category::InnerClock => t("Inner Clock", "体内時計"),
     }
 }
@@ -69,7 +174,8 @@ pub fn hand_name(h: Hand) -> &'static str {
     match h {
         Hand::Right => t("Right", "右手"),
         Hand::Left => t("Left", "左手"),
-        Hand::Foot => t("Foot", "足"),
+        Hand::Foot => t("Right Foot", "右足"),
+        Hand::LeftFoot => t("Left Foot", "左足"),
     }
 }
 
@@ -79,24 +185,25 @@ pub fn hand_letter(h: Hand) -> &'static str {
         Hand::Right => "R",
         Hand::Left => "L",
         Hand::Foot => t("F", "足"),
+        Hand::LeftFoot => t("LF", "左足"),
     }
 }
 
-/// 型の説明の行（「16 分音符 · スネア」）
+/// 型の説明の行（「16 分音符 · スネア」「3/4 · 8 分音符 · HH・SD・BD」）
 pub fn pattern_line(d: &Drill) -> String {
-    let notes = d.notes();
-    let cells: Vec<u32> = notes.iter().map(|n| n.cells).collect();
     let lanes = d.lanes();
     let feel = if d.measures() > 1 {
         t("Mixed", "いろいろ")
-    } else if cells.contains(&12) {
-        t("Triplets", "3 連符")
-    } else if notes.iter().all(|n| n.cell % 4 == 0) {
-        t("Quarter Notes", "4 分音符")
-    } else if notes.iter().all(|n| n.cell % 2 == 0) {
-        t("8th Notes", "8 分音符")
     } else {
-        t("16th Notes", "16 分音符")
+        match finest_division(d) {
+            Some(1) => t("Quarter Notes", "4 分音符"),
+            Some(2) => t("8th Notes", "8 分音符"),
+            Some(3) => t("Triplets", "3 連符"),
+            Some(4) => t("16th Notes", "16 分音符"),
+            Some(5) => t("Quintuplets", "5 連符"),
+            Some(6) => t("Sextuplets", "6 連符"),
+            _ => t("Mixed", "いろいろ"),
+        }
     };
     let pads = if lanes == [DrumLane::SD] {
         t("Snare", "スネア").to_owned()
@@ -107,7 +214,23 @@ pub fn pattern_line(d: &Drill) -> String {
             .collect::<Vec<_>>()
             .join("・")
     };
-    format!("{feel} · {pads}")
+    if d.meter == (4, 4) {
+        format!("{feel} · {pads}")
+    } else {
+        format!("{}/{} · {feel} · {pads}", d.meter.0, d.meter.1)
+    }
+}
+
+/// 4 分音符ひとつをいくつに分ければ型の音符がみな乗るか（1・2・3・4・5・6 のうち一番少ないもの）
+fn finest_division(d: &Drill) -> Option<u32> {
+    let quarters = f64::from(d.meter.0) * 4.0 / f64::from(d.meter.1);
+    let notes = d.notes();
+    [1u32, 2, 4, 3, 6, 5].into_iter().find(|&k| {
+        notes.iter().all(|n| {
+            let x = n.pos() * quarters * f64::from(k);
+            (x - x.round()).abs() < 1e-6
+        })
+    })
 }
 
 /// 演奏中のドリル（`Play` が持つ）
@@ -161,12 +284,32 @@ impl DrillPlay {
     }
 
     /// カウントの小節の何拍目か（1 から。カウントの外は None）
-    pub fn count_in_beat(&self, ms: f64) -> Option<u32> {
+    /// と、その拍の頭の時刻。拍はカウントのクリック（3/4 なら 3 拍、7/8 なら 2+2+3 の 3 つ）
+    pub fn count_in_beat(&self, ms: f64) -> Option<(u32, f64)> {
         let (from, to) = (self.measure_ms[0], self.measure_ms[1]);
         if ms < from || ms >= to {
             return None;
         }
-        Some(((ms - from) / ((to - from) / 4.0)) as u32 + 1)
+        let starts: Vec<f64> = self
+            .run
+            .clicks_in(0)
+            .iter()
+            .map(|&(pos, _)| from + pos * (to - from))
+            .collect();
+        let i = starts.partition_point(|&s| s <= ms).max(1);
+        Some((i as u32, starts[i - 1]))
+    }
+
+    /// クリックを鳴らす時刻と強さ（譜面の時刻の順）。拍子・クリックの型・消える小節を入れて、終わりの小節まで
+    pub fn clicks(&self) -> Vec<(f64, bool)> {
+        let mut v = Vec::new();
+        for m in 0..self.run.measure_count() {
+            let (from, to) = (self.measure_start_ms(m), self.measure_start_ms(m + 1));
+            for (pos, accent) in self.run.clicks_in(m) {
+                v.push((from + pos * (to - from), accent));
+            }
+        }
+        v
     }
 
     /// 段 `step` の小節の範囲（譜面の小節）
@@ -309,6 +452,9 @@ mod tests {
         assert_eq!(line("double_paradiddle"), "3 連符 · スネア");
         assert_eq!(line("eight_beat"), "8 分音符 · HH・SD・BD");
         assert_eq!(line("quarter"), "4 分音符 · スネア");
+        assert_eq!(line("waltz"), "3/4 · 8 分音符 · HH・SD・BD");
+        assert_eq!(line("sextuplet"), "6 連符 · スネア");
+        assert_eq!(line("three_against_two"), "3 連符 · HH・SD");
     }
 
     #[test]
@@ -325,8 +471,8 @@ mod tests {
         let e = play("eighth", 60, 0);
         assert!(e.clicks_at(67_000.0));
         assert!(!e.clicks_at(68_000.0));
-        assert_eq!(p.count_in_beat(0.0), Some(1));
-        assert_eq!(p.count_in_beat(1600.0), Some(4));
+        assert_eq!(p.count_in_beat(0.0), Some((1, 0.0)));
+        assert_eq!(p.count_in_beat(1600.0), Some((4, 1500.0)));
         assert_eq!(p.count_in_beat(2000.0), None);
         assert_eq!(p.measure_at(2000.0), 1);
         assert_eq!(p.step_measures(1), 5..9);
