@@ -73,7 +73,7 @@ pub fn draw_headline(c: &Canvas, g: &mut Gfx, o: &DrillOutcome) {
         }
         Some(b) => (tf!("Clean up to {b} ✓", "{b} まで ✓"), Color32::WHITE),
         None => (
-            t("No clean step this time", "ミスなしの段はまだ").to_owned(),
+            t("No clean step this time", "ミスなしの段はありません").to_owned(),
             Color32::from_gray(220),
         ),
     };
@@ -93,7 +93,7 @@ pub fn draw_headline(c: &Canvas, g: &mut Gfx, o: &DrillOutcome) {
     }
     let label = match o.best_before {
         Some(b) => tf!("New best (was {b})", "最高を更新（前は {b}）"),
-        None => t("First clean record", "はじめての記録").to_owned(),
+        None => t("First clean record", "初めての記録").to_owned(),
     };
     let st = pill_text(15.0, Color32::from_rgb(40, 24, 0));
     let pw = ui::text_width(g, &label, &st) + 20.0;

@@ -112,7 +112,7 @@ pub fn draw_result(ui: &mut egui::Ui, g: &mut Gfx, o: &Outcome) -> Vec<ResultAct
                         ui.label(
                             RichText::new(i18n::t(
                                 "The suggested offset is on the Timing panel on page 1 (based on your recent plays).",
-                                "補正のおすすめは、1 ページ目の「ずれ」の板に出します（直近のプレイから）。",
+                                "補正のおすすめは、1 ページ目の「ずれ」に出ています（直近のプレイから計算）。",
                             ))
                             .weak(),
                         );
@@ -224,7 +224,7 @@ fn draw_overcome(ui: &mut egui::Ui, checks: &[OvercomeCheck]) {
         } else {
             ui.label(tf!(
                 "{} was cleared in practice at {}%, but still slipped this time (score {:.2}; {change})",
-                "{} は {}% でクリアした区間ですが、今回はまだ崩れました（今回の点 {:.2}、{change}）",
+                "{} は {}% でクリアした区間ですが、今回はまだミスが出ました（今回の苦手度 {:.2}、{change}）",
                 section_text(c.section),
                 c.speed,
                 c.this_play

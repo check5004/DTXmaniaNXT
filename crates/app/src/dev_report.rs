@@ -359,7 +359,7 @@ impl Report {
         }
         let note = t(
             "(The report was too long for the link, so the game copied it to your clipboard. Select this text and paste with Ctrl+V.)",
-            "（本文が長いので、ゲームがクリップボードに入れました。この文を選んで Ctrl+V で貼り付けてください）",
+            "（本文が長いので、ゲームがクリップボードにコピーしました。この文を選んで Ctrl+V で貼り付けてください）",
         );
         Send::Paste {
             url: issue_url(&self.title, note, &self.labels),

@@ -101,7 +101,7 @@ fn stray_note(h: &StrayHint) -> String {
     let (lane, n, weak) = (lane_label(h.lane), h.count, h.weak);
     tf!(
         "{n} stray hits on the {lane} ({weak} of them soft, velocity under {WEAK_VELOCITY}). The pad may be picking up too much. Raising Minimum Velocity under MIDI Devices in Settings cuts these down.",
-        "空打ちが {lane}で {n} 回（うち弱い打 {weak} 回、強さ {WEAK_VELOCITY} 未満）。パッドの拾いすぎかも。設定の「MIDI 機器」で最小ベロシティを上げると減ります。"
+        "{lane}で空打ちが {n} 回ありました（うち {weak} 回はベロシティ {WEAK_VELOCITY} 未満の弱い入力）。パッドが振動を拾いすぎているかもしれません。設定の「MIDI 機器」で最小ベロシティを上げると減ります。"
     )
 }
 
@@ -110,7 +110,7 @@ fn offset_note((mean, hits): (f64, usize)) -> Option<String> {
     (hits >= OFFSET_NOTE_HITS && mean.abs() >= OFFSET_NOTE_MS).then(|| {
         tf!(
             "You hit {:.0} ms {} on average. Setting Input Offset in Quick Settings (RD) at song select makes it easier.",
-            "叩くのが平均 {:.0}ms {}。選曲の簡易設定（RD）の「入力の補正」を合わせると楽になります。",
+            "平均 {:.0}ms {}に叩いています。選曲の簡易設定（RD）の「入力の補正」を合わせると、判定が合いやすくなります。",
             mean.abs(),
             if mean < 0.0 {
                 t("early", "早め")
@@ -438,7 +438,7 @@ pub fn draw_practice_laps(c: &Canvas, g: &mut Gfx, p: &PracticeOutcome) {
             g,
             t(
                 "Loops you stopped partway are left out (and not recorded).",
-                "途中でやめた周は入れていません（記録にも残しません）。",
+                "途中でやめた周は含めていません（記録にも残りません）。",
             ),
             left,
             ty,
@@ -500,7 +500,7 @@ fn lap_table(c: &Canvas, g: &mut Gfx, laps: &[&LapSummary], x: f32, y: f32, bott
         text(
             c,
             g,
-            &tf!("({n} older loops not shown)", "（古い {n} 周は省きました）"),
+            &tf!("({n} older loops not shown)", "（古い {n} 周は省略）"),
             x,
             ty,
             14.0,
@@ -656,7 +656,7 @@ pub fn draw_weak(c: &Canvas, g: &mut Gfx, o: &Outcome) {
             (
                 tf!(
                     "{} still needs work (practiced at {}%)",
-                    "{} はまだ崩れました（練習 {}%）",
+                    "{} はまだミスが出ました（練習 {}%）",
                     section_text(ch.section),
                     ch.speed
                 ),

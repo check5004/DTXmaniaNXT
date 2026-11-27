@@ -479,8 +479,8 @@ impl MidiMonitor {
                 };
                 // 設定の画面に出す文（ログは英語のまま）
                 let shown = match (accepted, lane) {
-                    (false, _) => t("Ignored (other channel)", "ほかのチャンネルなので捨てた"),
-                    (true, Some(_)) if soft => t("Ignored (too soft)", "弱いので捨てた"),
+                    (false, _) => t("Ignored (other channel)", "無視（ほかのチャンネル）"),
+                    (true, Some(_)) if soft => t("Ignored (too soft)", "無視（弱すぎる）"),
                     (true, Some(l)) => lane_label(l),
                     (true, None) => t("Not assigned", "割り当てなし"),
                 };
@@ -732,14 +732,14 @@ mod tests {
         m.observe(1, "Pad2", &on(38), Some(&only1));
         assert_eq!(
             m.last(1),
-            Some("ch10 ノート 38 ベロシティ 100 → ほかのチャンネルなので捨てた")
+            Some("ch10 ノート 38 ベロシティ 100 → 無視（ほかのチャンネル）")
         );
         let mut strong = p.clone();
         strong.min_velocity = 110;
         m.observe(1, "Pad2", &on(38), Some(&strong));
         assert_eq!(
             m.last(1),
-            Some("ch10 ノート 38 ベロシティ 100 → 弱いので捨てた")
+            Some("ch10 ノート 38 ベロシティ 100 → 無視（弱すぎる）")
         );
         assert_eq!(m.last(2), None);
     }

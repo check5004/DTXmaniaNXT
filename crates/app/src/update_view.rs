@@ -92,7 +92,7 @@ pub fn applying(c: &Canvas, g: &mut Gfx, from: &str, to: &str, since: Instant) {
     ui::text(
         c,
         g,
-        t("Updating", "更新しています"),
+        t("Updating", "アップデート中"),
         tx,
         y + 24.0,
         &ui::bold(30.0, Color32::WHITE),
@@ -112,7 +112,7 @@ pub fn applying(c: &Canvas, g: &mut Gfx, from: &str, to: &str, since: Instant) {
         g,
         t(
             "The game will close to install the update, then start the new version in a few seconds.",
-            "入れ替えのためにいったん閉じます。数秒で、新しい版が自動で起動します。",
+            "アップデートのためにいったん終了します。数秒後に新しいバージョンが自動で起動します。",
         ),
         tx,
         y + 106.0,
@@ -136,7 +136,8 @@ pub fn applying(c: &Canvas, g: &mut Gfx, from: &str, to: &str, since: Instant) {
 /// 更新して起動し直したときの知らせ（左下、操作の案内の帯の上）。`previous` は前の版（分からなければ空）
 pub fn updated(c: &Canvas, g: &mut Gfx, current: &str, previous: &str, alpha: f32) {
     let main = tf!("Updated to v{current}", "v{current} になりました");
-    let sub = (!previous.is_empty()).then(|| tf!("from v{previous}", "前は v{previous}"));
+    let sub =
+        (!previous.is_empty()).then(|| tf!("from v{previous}", "前のバージョンは v{previous}"));
     notice(c, g, &main, sub.as_deref(), OK, alpha, 0);
 }
 
