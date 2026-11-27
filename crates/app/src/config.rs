@@ -65,6 +65,11 @@ pub struct Config {
     pub drill: String,
     /// 基礎練習の 1 段ごとのテンポの上げ幅（0・5・10・15）
     pub drill_rise: u32,
+    /// 基礎練習のやり方（[`engine::drill::Way::key`]。空ならテンポを上げる）
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub drill_way: String,
+    /// 基礎練習の手順を左からにする
+    pub drill_lefty: bool,
     /// 基礎練習のドリルごとの目標のテンポ（既定から変えたものだけ）
     #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub drill_bpm: std::collections::BTreeMap<String, u32>,
@@ -194,6 +199,8 @@ impl Default for Config {
             practice_step_laps: STEP_LAPS,
             drill: String::new(),
             drill_rise: engine::drill::DEFAULT_RISE,
+            drill_way: String::new(),
+            drill_lefty: false,
             drill_bpm: std::collections::BTreeMap::new(),
             stage_failed: None,
             show_lag_time: 1,
@@ -468,10 +475,14 @@ impl Config {
     /// 練習の決めごとを残す（次の練習でも使う）
     /// 基礎練習の画面で覚えておく値
     pub fn drill_prefs(&self) -> crate::drill_menu::Prefs {
+        let way =
+            engine::drill::Way::from_key(&self.drill_way).unwrap_or(engine::drill::Way::Climb);
         crate::drill_menu::Prefs {
             last: self.drill.clone(),
             rise: self.drill_rise,
             bpm: self.drill_bpm.clone(),
+            way: way.key(),
+            lefty: self.drill_lefty,
         }
     }
 
@@ -479,6 +490,8 @@ impl Config {
         self.drill = p.last;
         self.drill_rise = p.rise;
         self.drill_bpm = p.bpm;
+        self.drill_way = p.way;
+        self.drill_lefty = p.lefty;
     }
 
     pub fn set_practice_prefs(&mut self, p: PracticePrefs) {
@@ -626,6 +639,8 @@ mod tests {
         p.last = "paradiddle".into();
         p.rise = 5;
         p.bpm.insert("paradiddle".into(), 135);
+        p.way = engine::drill::Way::Endurance(2).key();
+        p.lefty = true;
         c.set_drill_prefs(p.clone());
         // 表（[drill_bpm]）があっても、あとの項目と一緒に書ける
         c.language = "ja".into();

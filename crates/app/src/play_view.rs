@@ -1520,8 +1520,15 @@ impl PlayView {
             if play.judge.is_done(i) || !visible(n.ms) {
                 continue;
             }
-            if let Some(alpha) = looks.chip_alpha(ahead(n.ms)) {
-                shown.push((n.lane, y, alpha, play.is_rim_note(n)));
+            // 基礎練習の「見ないで」は段ごとに薄く
+            let fade = play
+                .drill
+                .as_ref()
+                .map_or(1.0, |d| d.note_alpha(n.at.measure, now_ms));
+            if fade > 0.0
+                && let Some(alpha) = looks.chip_alpha(ahead(n.ms))
+            {
+                shown.push((n.lane, y, alpha * fade, play.is_rim_note(n)));
             }
         }
         // 練習の助走など、判定しない音符は薄く
@@ -1605,9 +1612,11 @@ impl PlayView {
                 Some(engine::drill::Hand::Left) => ("L", crate::drill::LEFT_COLOR),
                 _ => continue,
             };
-            let Some(alpha) = looks.chip_alpha(ahead(n.ms)) else {
+            let fade = d.note_alpha(n.at.measure, now_ms);
+            let Some(alpha) = looks.chip_alpha(ahead(n.ms)).filter(|_| fade > 0.0) else {
                 continue;
             };
+            let alpha = alpha * fade;
             let (x, _, w, _) = chip(&looks, n.lane);
             let style = Style {
                 px: 20.0,

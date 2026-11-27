@@ -1,9 +1,11 @@
 //! 基礎練習の画面（タイトルの「Drills」から開く。2026-11-25 見本の案 A、2026-11-27 に型が増えて 3 列に）。
 //!
-//! 左に分け方、真ん中にその分け方のドリル、右に選んだドリルの手順の絵とテンポと段、これまでの最高。
-//! 左の列では HT/LT で分け方、CY/RD か FT で真ん中の列へ。真ん中の列では HT/LT でドリル、SD/FT でテンポ（5 ずつ）、
-//! CY/RD で始め、LC で左の列へ戻る（左の列の LC はタイトルへ）。テンポはドリルごとに覚える。
-//! 1 回は決まった長さ（カウント 1 小節 + 4 段 × 4 小節）で必ず終わり、終えたらこの画面の同じドリルに戻る。
+//! 左に分け方、真ん中にその分け方のドリル、右に選んだドリルの手順の絵、やり方と手順、テンポと段、これまでの最高。
+//! 左の列では HT/LT で分け方、CY か FT で真ん中の列へ。真ん中の列では HT/LT でドリル、SD/FT でテンポ（5 ずつ）、
+//! HH でやり方、RD で手順（右から・左から）、CY で始め、LC で左の列へ戻る（左の列の LC はタイトルへ）。
+//! テンポはドリルごとに、やり方と手順は全体で覚える。
+//! 1 回はやり方ごとに決まった長さで必ず終わり（限界チャレンジは 3 つ落とすか上の端まで）、
+//! 終えたらこの画面の同じドリルに戻る。
 //! 次に何をするかは自分で選ぶ（勝手に次のドリルやテンポへ進めない）。
 //! 足のパッドはメニューに使わない（誤って踏むため）。
 
@@ -12,14 +14,16 @@ use std::time::Instant;
 
 use egui::{Color32, Stroke};
 use engine::drill::{
-    BPM_STEP, COUNT_IN_MEASURES, Category, DEFAULT_RISE, DRILLS, Drill, Hand, RISES, Run,
-    STEP_MEASURES, STEPS, nudge_bpm,
+    BLIND_ALPHA, BPM_STEP, COUNT_IN_MEASURES, Category, DEFAULT_RISE, DRILLS, Drill, Hand,
+    LIMIT_RISE, LIMIT_STEP_MEASURES, MANY_MISSES, RISES, Run, Way, nudge_bpm,
 };
 use i18n::{count, t, tf};
 
 use crate::drill::{
-    self, DrillRecord, LEFT_COLOR, RIGHT_COLOR, category_name, hand_letter, pattern_line,
+    self, DrillRecords, LEFT_COLOR, RIGHT_COLOR, category_name, hand_letter, lead_name,
+    pattern_line, way_name,
 };
+use crate::drill_hud::{DEMO_COLOR, Stairs, clock};
 use crate::gfx::{Canvas, Gfx};
 use crate::settings_ui::{self as ui, Pad};
 use crate::sfx::Se;
@@ -70,10 +74,14 @@ pub enum Input {
     Right,
     Decide,
     Cancel,
+    /// やり方を次へ（HH）
+    Way,
+    /// 手順の右から・左からを入れ替える（RD）
+    Lead,
 }
 
 /// 操作の結果
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct Response {
     pub se: Option<Se>,
     pub done: Option<Done>,
@@ -81,7 +89,7 @@ pub struct Response {
     pub changed: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Done {
     Start(Run),
     Back,
@@ -95,6 +103,10 @@ pub struct Prefs {
     pub rise: u32,
     /// ドリルごとの目標のテンポ（既定から変えたもの）
     pub bpm: BTreeMap<String, u32>,
+    /// やり方（[`Way::key`]）
+    pub way: String,
+    /// 手順を左からにする
+    pub lefty: bool,
 }
 
 impl Default for Prefs {
@@ -103,6 +115,8 @@ impl Default for Prefs {
             last: String::new(),
             rise: DEFAULT_RISE,
             bpm: BTreeMap::new(),
+            way: Way::Climb.key(),
+            lefty: false,
         }
     }
 }
@@ -119,7 +133,10 @@ pub struct DrillMenu {
     top: usize,
     rise: u32,
     bpm: HashMap<&'static str, u32>,
-    records: HashMap<&'static str, DrillRecord>,
+    /// やり方（ドリルで使えなければ、そのドリルではテンポを上げる）
+    way: Way,
+    lefty: bool,
+    records: DrillRecords,
     entered: Instant,
 }
 
@@ -137,7 +154,7 @@ fn drills_of(c: Category) -> Vec<usize> {
         .collect()
 }
 
-/// 1 回の長さ（秒。カウントの小節も入れて）
+/// 1 回の長さ（秒。カウントの小節も入れて。限界チャレンジは上の端まで叩いたとき）
 pub fn run_seconds(run: &Run) -> f64 {
     let quarters = run.drill.bar_len() * 4.0;
     let bar = |bpm: u32| quarters * 60.0 / f64::from(bpm.max(1));
@@ -145,12 +162,12 @@ pub fn run_seconds(run: &Run) -> f64 {
         + run
             .bpms
             .iter()
-            .map(|&b| f64::from(STEP_MEASURES) * bar(b))
+            .map(|&b| f64::from(run.step_measures) * bar(b))
             .sum::<f64>()
 }
 
 impl DrillMenu {
-    pub fn new(prefs: &Prefs, records: HashMap<&'static str, DrillRecord>) -> Self {
+    pub fn new(prefs: &Prefs, records: DrillRecords) -> Self {
         let bpm = DRILLS
             .iter()
             .filter_map(|d| prefs.bpm.get(d.id).map(|&b| (d.id, nudge_bpm(b, 0))))
@@ -168,6 +185,8 @@ impl DrillMenu {
             top: 0,
             rise,
             bpm,
+            way: Way::from_key(&prefs.way).unwrap_or(Way::Climb),
+            lefty: prefs.lefty,
             records,
             entered: Instant::now(),
         };
@@ -221,7 +240,12 @@ impl DrillMenu {
     /// 選んでいるドリルで始めるときの 1 回
     pub fn run(&self) -> Run {
         let d = self.drill();
-        Run::new(d, self.bpm_of(d), self.rise)
+        Run::with(d, self.way, self.bpm_of(d), self.rise, self.lefty)
+    }
+
+    /// 選んでいるドリルで使うやり方
+    fn way(&self) -> Way {
+        self.way.for_drill(self.drill())
     }
 
     /// 覚えておく値
@@ -236,6 +260,8 @@ impl DrillMenu {
                     (*b != d.default_bpm).then(|| (d.id.to_owned(), *b))
                 })
                 .collect(),
+            way: self.way.key(),
+            lefty: self.lefty,
         }
     }
 
@@ -300,6 +326,8 @@ impl DrillMenu {
                 r.se = Some(Se::Cancel);
                 r.done = Some(Done::Back);
             }
+            // やり方と手順は真ん中の列で選ぶ
+            Input::Way | Input::Lead => {}
         }
         r
     }
@@ -354,6 +382,16 @@ impl DrillMenu {
                 self.focus = Focus::Left;
                 self.left = self.category;
                 r.se = Some(Se::Cancel);
+            }
+            Input::Way => {
+                self.way = self.way().next_for(self.drill());
+                r.se = Some(Se::Change);
+                r.changed = true;
+            }
+            Input::Lead => {
+                self.lefty = !self.lefty;
+                r.se = Some(Se::Change);
+                r.changed = true;
             }
         }
         r
@@ -427,25 +465,127 @@ impl DrillMenu {
         match self.selected() {
             Item::Drill(_) => {
                 v.push((&[Pad::SD, Pad::FT], t("Tempo", "テンポ")));
-                v.push((&[Pad::CY, Pad::RD], t("Start (Enter)", "始める（Enter）")));
+                v.push((&[Pad::HH], t("Mode (Tab)", "やり方（Tab）")));
+                v.push((&[Pad::RD], t("Lead Hand (H)", "手順（H）")));
+                v.push((&[Pad::CY], t("Start (Enter)", "始める（Enter）")));
                 v.push((&[Pad::LC], t("Categories (Esc)", "分け方へ（Esc）")));
                 return v;
             }
             Item::Category(_) => {
-                v.push((&[Pad::CY, Pad::RD], t("Open (Enter)", "開く（Enter）")));
+                v.push((&[Pad::CY], t("Open (Enter)", "開く（Enter）")));
             }
             Item::Rise => {
                 v.push((&[Pad::SD, Pad::FT], t("Change", "変える")));
             }
             Item::Back => {
                 v.push((
-                    &[Pad::CY, Pad::RD],
+                    &[Pad::CY],
                     t("Back to Title (Enter)", "タイトルへ（Enter）"),
                 ));
             }
         }
         v.push((&[Pad::LC], t("Back to Title (Esc)", "タイトルへ（Esc）")));
         v
+    }
+
+    /// 札の行（やり方・手順）。札は（名前、選んでいるか、使えるか）。入りきらなければ字を小さく
+    fn chip_row(
+        &self,
+        c: &Canvas,
+        g: &mut Gfx,
+        label: &str,
+        chips: &[(String, bool, bool)],
+        y: f32,
+    ) {
+        let (x, _, w, _) = DETAIL;
+        let on_list = self.focus == Focus::Drills;
+        ui::text(c, g, label, x + 20.0, y + 4.0, &plain(15.0, ui::DIM), 90.0);
+        let (from, room) = (x + 104.0, w - 124.0);
+        let gap = 6.0;
+        let mut px = 14.0;
+        let widths = |g: &mut Gfx, px: f32| -> Vec<f32> {
+            chips
+                .iter()
+                .map(|(t, ..)| ui::text_width(g, t, &bold(px, ui::TEXT)) + px * 1.4)
+                .collect()
+        };
+        let mut ws = widths(g, px);
+        while px > 11.0 && ws.iter().sum::<f32>() + gap * (chips.len() as f32 - 1.0) > room {
+            px -= 1.0;
+            ws = widths(g, px);
+        }
+        let mut cx = from;
+        for ((text, on, fits), cw) in chips.iter().zip(ws) {
+            let h = 26.0;
+            if *on {
+                let fill = if on_list {
+                    ACCENT
+                } else {
+                    ACCENT.gamma_multiply(0.6)
+                };
+                ui::round_fill(c, cx, y, cw, h, h / 2.0, fill);
+                ui::text_center(
+                    c,
+                    g,
+                    text,
+                    cx + cw / 2.0,
+                    y + (h - px) / 2.0 - 2.0,
+                    &bold(px, Color32::from_rgb(40, 24, 0)),
+                    cw,
+                );
+            } else {
+                let ink = if *fits {
+                    ui::DIM
+                } else {
+                    ui::MUTED.gamma_multiply(0.5)
+                };
+                ui::round_frame(c, cx, y, cw, h, h / 2.0, 1.0, ink.gamma_multiply(0.7));
+                ui::text_center(
+                    c,
+                    g,
+                    text,
+                    cx + cw / 2.0,
+                    y + (h - px) / 2.0 - 2.0,
+                    &plain(px, ink),
+                    cw,
+                );
+            }
+            cx += cw + gap;
+        }
+    }
+
+    /// やり方の絵の下のひとこと（段の数・長さ・終わり方）
+    fn way_line(&self, run: &Run) -> String {
+        let secs = run_seconds(run).round() as u32;
+        let steps = run.steps();
+        let bars = run.step_measures;
+        match run.way {
+            Way::Climb if run.drill.fixed_tempo() || self.rise == 0 => tf!(
+                "{steps} steps × {bars} bars at one tempo · about {secs} s",
+                "{steps} 段 × {bars} 小節を同じテンポで・約 {secs} 秒"
+            ),
+            Way::Climb => tf!(
+                "{bars} bars per step · {steps} steps · about {secs} s",
+                "1 段 {bars} 小節・{steps} 段で約 {secs} 秒"
+            ),
+            Way::Limit => tf!(
+                "+{LIMIT_RISE} every {LIMIT_STEP_MEASURES} bars · ends at {MANY_MISSES} misses in a step",
+                "{LIMIT_STEP_MEASURES} 小節ごとに +{LIMIT_RISE}・同じ段で {MANY_MISSES} つ落としたら終わり"
+            ),
+            Way::Endurance(_) => tf!(
+                "One tempo for {} · checked every 30 s",
+                "テンポを変えずに {}・30 秒ごとに見る",
+                clock(f64::from(secs) * 1000.0)
+            ),
+            Way::Blind => tf!(
+                "Notes fade each step, then vanish · about {secs} s",
+                "段ごとに薄くなり、最後は見えない・約 {secs} 秒"
+            ),
+            Way::Echo => tf!(
+                "Hear a bar (no notes), then play it · about {secs} s",
+                "お手本 1 小節（音だけ）→ 自分 1 小節・約 {secs} 秒"
+            ),
+        }
     }
 
     /// 選んでいる行の帯。`strong` は操作している列（枠を太く明るく）
@@ -579,7 +719,7 @@ impl DrillMenu {
                 plain(16.0, ui::DIM)
             };
             ui::text(c, g, drill::name(d), x + 20.0, ry + 8.0, &style, w - 112.0);
-            match self.records.get(d.id).and_then(|r| r.best) {
+            match self.records.get(&(d.id, self.lefty)).and_then(|r| r.best) {
                 Some(b) => best_pill(
                     c,
                     g,
@@ -654,13 +794,13 @@ impl DrillMenu {
             w - cw - 52.0,
         );
         // 手順の絵と、手の見方・型の説明
-        draw_pattern(c, g, d, (x + 20.0, y + 58.0, w - 40.0, 156.0));
+        draw_pattern(c, g, d, self.lefty, (x + 20.0, y + 56.0, w - 40.0, 136.0));
         ui::text(
             c,
             g,
             t("R = right hand   L = left hand", "R = 右手　L = 左手"),
             x + 20.0,
-            y + 222.0,
+            y + 198.0,
             &plain(13.0, ui::MUTED),
             200.0,
         );
@@ -669,37 +809,60 @@ impl DrillMenu {
             g,
             &pattern_line(d),
             x + w - 20.0,
-            y + 222.0,
+            y + 198.0,
             &plain(13.0, ui::MUTED),
             w - 260.0,
         );
-        c.fill(
-            x + 20.0,
-            y + 250.0,
-            w - 40.0,
-            1.0,
-            Color32::from_white_alpha(40),
-        );
+        let rule = |c: &Canvas, ry: f32| {
+            c.fill(x + 20.0, ry, w - 40.0, 1.0, Color32::from_white_alpha(40));
+        };
+        rule(c, y + 222.0);
+        // やり方と手順の行
+        let way = self.way();
+        let ways: Vec<(String, bool, bool)> = WAY_CHIPS
+            .into_iter()
+            .map(|k| {
+                let on = same_chip(k, way);
+                let label = match k {
+                    _ if on => way_name(way),
+                    Way::Endurance(_) => t("Endurance", "持久").to_owned(),
+                    _ => way_name(k),
+                };
+                (label, on, k.fits(d))
+            })
+            .collect();
+        self.chip_row(c, g, t("Mode", "やり方"), &ways, y + 232.0);
+        let leads: Vec<(String, bool, bool)> = [false, true]
+            .into_iter()
+            .map(|l| (lead_name(l).to_owned(), l == self.lefty, true))
+            .collect();
+        self.chip_row(c, g, t("Lead Hand", "手順"), &leads, y + 266.0);
+        rule(c, y + 304.0);
         // テンポ
         let tempo_on = matches!(self.selected(), Item::Drill(_));
+        let label = if way == Way::Limit {
+            t("Start Tempo", "始めのテンポ")
+        } else {
+            t("Tempo", "テンポ")
+        };
         ui::text(
             c,
             g,
-            t("Tempo", "テンポ"),
+            label,
             x + 20.0,
-            y + 264.0,
+            y + 316.0,
             &plain(15.0, ui::DIM),
             200.0,
         );
         let arrow = if tempo_on { ACCENT } else { ui::MUTED };
-        ui::triangle(c, x + 30.0, y + 334.0, 10.0, -1, arrow);
-        ui::triangle(c, x + 222.0, y + 334.0, 10.0, 1, arrow);
+        ui::triangle(c, x + 30.0, y + 378.0, 10.0, -1, arrow);
+        ui::triangle(c, x + 222.0, y + 378.0, 10.0, 1, arrow);
         ui::text_center(
             c,
             g,
             &run.target().to_string(),
             x + 126.0,
-            y + 300.0,
+            y + 342.0,
             &bold(58.0, ui::TEXT),
             170.0,
         );
@@ -708,7 +871,7 @@ impl DrillMenu {
             g,
             "BPM",
             x + 126.0,
-            y + 368.0,
+            y + 410.0,
             &plain(13.0, ui::MUTED),
             100.0,
         );
@@ -717,61 +880,34 @@ impl DrillMenu {
             g,
             &tf!("SD ◀ · FT ▶ by {BPM_STEP}", "SD ◀・FT ▶ で {BPM_STEP} ずつ"),
             x + 20.0,
-            y + 398.0,
+            y + 432.0,
             &plain(13.0, ui::MUTED),
             230.0,
         );
-        // 段（テンポを上げないドリルは同じテンポのまま）
-        let none = [None; STEPS];
+        // やり方の絵とひとこと
         let (sx, sw) = (x + 270.0, w - 290.0);
-        crate::drill_hud::stairs(
-            c,
-            g,
-            &run.bpms,
-            None,
-            &none,
-            false,
-            (sx, y + 270.0, sw, 136.0),
-        );
-        let secs = run_seconds(&run).round() as u32;
-        let line = if d.fixed_tempo() || self.rise == 0 {
-            tf!(
-                "{STEPS} steps × {STEP_MEASURES} bars at one tempo · about {secs} s",
-                "{STEPS} 段 × {STEP_MEASURES} 小節を同じテンポで・約 {secs} 秒"
-            )
-        } else {
-            tf!(
-                "{STEP_MEASURES} bars per step · {STEPS} steps · about {secs} s",
-                "1 段 {STEP_MEASURES} 小節・{STEPS} 段で約 {secs} 秒"
-            )
-        };
+        draw_way(c, g, &run, (sx, y + 314.0, sw, 116.0));
         ui::text_center(
             c,
             g,
-            &line,
+            &self.way_line(&run),
             sx + sw / 2.0,
-            y + 416.0,
+            y + 436.0,
             &plain(14.0, ui::DIM),
-            sw,
+            sw + 20.0,
         );
-        c.fill(
-            x + 20.0,
-            y + 450.0,
-            w - 40.0,
-            1.0,
-            Color32::from_white_alpha(40),
-        );
-        // これまで
+        rule(c, y + 464.0);
+        // これまで（手順ごと）
         ui::text(
             c,
             g,
             t("Best", "これまで"),
             x + 20.0,
-            y + 468.0,
+            y + 482.0,
             &plain(15.0, ui::DIM),
             120.0,
         );
-        let rec = self.records.get(d.id);
+        let rec = self.records.get(&(d.id, self.lefty));
         match rec.and_then(|r| r.best) {
             Some(b) => best_pill(
                 c,
@@ -782,7 +918,7 @@ impl DrillMenu {
                     tf!("✓ up to {b}", "✓ {b} まで")
                 },
                 x + 250.0,
-                y + 480.0,
+                y + 494.0,
                 16.0,
             ),
             None => {
@@ -791,7 +927,7 @@ impl DrillMenu {
                     g,
                     t("No clean step yet", "まだミスなしの段はありません"),
                     x + 120.0,
-                    y + 468.0,
+                    y + 482.0,
                     &plain(15.0, ui::MUTED),
                     300.0,
                 );
@@ -805,11 +941,11 @@ impl DrillMenu {
                 g,
                 &format!("{when} · {runs}"),
                 x + 266.0,
-                y + 468.0,
+                y + 482.0,
                 &plain(14.0, ui::MUTED),
                 150.0,
             );
-            draw_trail(c, &r.trail, (x + w - 176.0, y + 462.0, 150.0, 34.0));
+            draw_trail(c, &r.trail, (x + w - 176.0, y + 476.0, 150.0, 34.0));
         }
         // 始める
         let (bx, by, bw, bh) = (x + w - 250.0, y + DETAIL.3 - 72.0, 230.0, 52.0);
@@ -845,6 +981,147 @@ impl DrillMenu {
             &bold(22.0, ui::TEXT),
             bw - 80.0,
         );
+    }
+}
+
+/// やり方の札（持久は長さをまとめて 1 つ。HH で長さも順に回る）
+const WAY_CHIPS: [Way; 5] = [
+    Way::Climb,
+    Way::Limit,
+    Way::Endurance(0),
+    Way::Blind,
+    Way::Echo,
+];
+
+/// 同じ札か（持久は長さを問わない）
+fn same_chip(a: Way, b: Way) -> bool {
+    matches!((a, b), (Way::Endurance(_), Way::Endurance(_))) || a == b
+}
+
+/// やり方の絵（テンポとテンポの段・消え方・交代・区切り）
+fn draw_way(c: &Canvas, g: &mut Gfx, run: &Run, (x, y, w, h): (f32, f32, f32, f32)) {
+    let none = vec![None; run.steps()];
+    match run.way {
+        Way::Climb | Way::Blind => {
+            let fades: &[f32] = if run.way == Way::Blind {
+                &BLIND_ALPHA
+            } else {
+                &[]
+            };
+            crate::drill_hud::stairs(
+                c,
+                g,
+                &Stairs {
+                    bpms: &run.bpms,
+                    current: None,
+                    grades: &none,
+                    marks: false,
+                    fades,
+                    flag: run.way == Way::Climb,
+                },
+                (x, y + 4.0, w, h - 4.0),
+            );
+        }
+        Way::Limit => {
+            // 始めの 8 段と、その先も続くこと
+            let n = run.steps().min(8);
+            crate::drill_hud::stairs(
+                c,
+                g,
+                &Stairs {
+                    bpms: &run.bpms[..n],
+                    current: None,
+                    grades: &none[..n],
+                    marks: false,
+                    fades: &[],
+                    flag: false,
+                },
+                (x, y + 4.0, w - 30.0, h - 4.0),
+            );
+            if run.steps() > n {
+                ui::text_center(c, g, "…", x + w - 14.0, y + 8.0, &bold(18.0, ui::DIM), 30.0);
+            }
+        }
+        Way::Echo => {
+            // 1 段の小節の並び（お手本と自分の交代）
+            let n = run.step_measures as usize;
+            let gap = 8.0;
+            let bw = (w - gap * (n as f32 - 1.0)) / n as f32;
+            for i in 0..n {
+                let bx = x + i as f32 * (bw + gap);
+                let demo = i % 2 == 0;
+                let (color, label) = if demo {
+                    (DEMO_COLOR, t("Listen", "聞く"))
+                } else {
+                    (ACCENT, t("Play", "叩く"))
+                };
+                let (by, bh) = (y + 34.0, h - 40.0);
+                if demo {
+                    ui::round_frame(c, bx, by, bw, bh, 6.0, 2.0, color);
+                    // 音の波
+                    for k in 0..3 {
+                        let r = 6.0 + k as f32 * 6.0;
+                        c.painter().circle_stroke(
+                            c.pos(bx + bw / 2.0 - 10.0, by + bh / 2.0),
+                            r * c.scale(),
+                            Stroke::new(
+                                1.5 * c.scale(),
+                                color.gamma_multiply(1.0 - k as f32 * 0.25),
+                            ),
+                        );
+                    }
+                } else {
+                    ui::round_fill(c, bx, by, bw, bh, 6.0, color.gamma_multiply(0.85));
+                }
+                ui::text_center(
+                    c,
+                    g,
+                    label,
+                    bx + bw / 2.0,
+                    y + 8.0,
+                    &bold(14.0, color),
+                    bw + gap,
+                );
+            }
+        }
+        Way::Endurance(_) => {
+            // 30 秒ほどの区切りの並びと、区切りの終わりの時刻
+            let n = run.steps();
+            let gap = 6.0;
+            let pw = (w - gap * (n as f32 - 1.0)) / n as f32;
+            let bar_ms = run.drill.bar_len() * 4.0 * 60_000.0 / f64::from(run.target().max(1));
+            for i in 0..n {
+                let px = x + i as f32 * (pw + gap);
+                ui::round_fill(
+                    c,
+                    px,
+                    y + 40.0,
+                    pw,
+                    h - 64.0,
+                    6.0,
+                    ACCENT.gamma_multiply(0.25 + 0.6 * (i + 1) as f32 / n as f32),
+                );
+                let at = f64::from((i as u32 + 1) * run.step_measures) * bar_ms;
+                ui::text_center(
+                    c,
+                    g,
+                    &crate::drill_hud::up_to(at),
+                    px + pw / 2.0,
+                    y + h - 20.0,
+                    &plain(13.0, ui::DIM),
+                    pw + gap,
+                );
+            }
+            ui::text_center(
+                c,
+                g,
+                &tf!("{} BPM all the way", "ずっと {} で", run.target()),
+                x + w / 2.0,
+                y + 8.0,
+                &bold(15.0, ui::TEXT),
+                w,
+            );
+        }
     }
 }
 
@@ -892,7 +1169,14 @@ fn draw_trail(c: &Canvas, trail: &[u32], (x, y, w, h): (f32, f32, f32, f32)) {
 
 /// 手順の絵。型の小節を横に並べ、レーンごとの行に音符の四角（演奏の画面と同じレーンの色）。
 /// 叩く手を下（1 つのレーン）か四角の中に
-fn draw_pattern(c: &Canvas, g: &mut Gfx, d: &Drill, (x, y, w, h): (f32, f32, f32, f32)) {
+/// 手順の絵。`lefty` なら R と L を入れ替えて描く
+fn draw_pattern(
+    c: &Canvas,
+    g: &mut Gfx,
+    d: &Drill,
+    lefty: bool,
+    (x, y, w, h): (f32, f32, f32, f32),
+) {
     ui::round_fill(
         c,
         x,
@@ -903,7 +1187,12 @@ fn draw_pattern(c: &Canvas, g: &mut Gfx, d: &Drill, (x, y, w, h): (f32, f32, f32
         Color32::from_rgba_unmultiplied(6, 6, 12, 200),
     );
     ui::round_frame(c, x, y, w, h, 6.0, 1.0, Color32::from_white_alpha(50));
-    let notes = d.notes();
+    let mut notes = d.notes();
+    if lefty {
+        for n in &mut notes {
+            n.hand = n.hand.mirrored();
+        }
+    }
     let lanes = d.lanes();
     let measures = d.measures();
     let label_w = 44.0;
@@ -1161,5 +1450,93 @@ mod tests {
             let s = run_seconds(&Run::new(d, d.default_bpm, DEFAULT_RISE));
             assert!((20.0..60.0).contains(&s), "{} {s}", d.id);
         }
+    }
+
+    #[test]
+    fn every_mode_ends_in_a_known_time_for_every_drill() {
+        for d in DRILLS {
+            for way in Way::ALL {
+                let run = Run::with(d, way, d.default_bpm, DEFAULT_RISE, false);
+                let s = run_seconds(&run);
+                let limit = match run.way {
+                    // 上の端まで叩いても 2 分半かからない
+                    Way::Limit => 150.0,
+                    Way::Endurance(m) => f64::from(m) * 60.0 * 1.2 + 10.0,
+                    _ => 75.0,
+                };
+                assert!(s < limit, "{} {way:?} {s}", d.id);
+            }
+        }
+    }
+
+    #[test]
+    fn hh_changes_the_mode_and_rd_the_lead_hand_in_the_drill_column() {
+        let mut m = menu();
+        // 左の列では使わない
+        assert_eq!(m.input(Input::Way), Response::default());
+        assert_eq!(m.input(Input::Lead), Response::default());
+        m.input(Input::Decide);
+        assert_eq!(m.run().way, Way::Climb);
+        let r = m.input(Input::Way);
+        assert_eq!(r.se, Some(Se::Change));
+        assert!(r.changed);
+        assert_eq!(m.run().way, Way::Limit);
+        m.input(Input::Way);
+        assert_eq!(m.run().way, Way::Endurance(1));
+        let r = m.input(Input::Lead);
+        assert!(r.changed);
+        assert!(m.run().lefty);
+        // 覚えて、開き直しても同じ
+        let p = m.prefs();
+        assert_eq!(p.way, "endurance1");
+        assert!(p.lefty);
+        let again = DrillMenu::new(&p, HashMap::new());
+        assert_eq!(again.run().way, Way::Endurance(1));
+        assert!(again.run().lefty);
+        // RD で始めない（始めるのは CY だけ）
+        assert_eq!(m.input(Input::Lead).done, None);
+        assert!(matches!(m.input(Input::Decide).done, Some(Done::Start(_))));
+    }
+
+    #[test]
+    fn modes_a_drill_cannot_use_fall_back_to_speed_up() {
+        let p = Prefs {
+            last: "gap_2".to_owned(),
+            way: Way::Echo.key(),
+            ..Prefs::default()
+        };
+        let mut m = DrillMenu::new(&p, HashMap::new());
+        assert_eq!(m.run().way, Way::Climb);
+        // 次は使えるものだけ（聞いてまねるの次のテンポを上げるの、さらに次）
+        m.input(Input::Way);
+        assert_eq!(m.run().way, Way::Endurance(1));
+        // ほかのドリルに移れば、選んだやり方のまま
+        let p = Prefs {
+            last: "paradiddle".to_owned(),
+            way: Way::Echo.key(),
+            ..Prefs::default()
+        };
+        assert_eq!(DrillMenu::new(&p, HashMap::new()).run().way, Way::Echo);
+    }
+
+    #[test]
+    fn records_are_kept_apart_for_each_lead_hand() {
+        let mut records = DrillRecords::new();
+        records.insert(
+            ("paradiddle", false),
+            crate::drill::DrillRecord {
+                best: Some(120),
+                ..Default::default()
+            },
+        );
+        let p = Prefs {
+            last: "paradiddle".to_owned(),
+            ..Prefs::default()
+        };
+        let mut m = DrillMenu::new(&p, records);
+        let best = |m: &DrillMenu| m.records.get(&(m.drill().id, m.lefty)).and_then(|r| r.best);
+        assert_eq!(best(&m), Some(120));
+        m.input(Input::Lead);
+        assert_eq!(best(&m), None);
     }
 }

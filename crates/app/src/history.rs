@@ -20,7 +20,7 @@ use records::{
 };
 
 use crate::chart_picture::Marks;
-use crate::drill::DrillRecord;
+use crate::drill::{DrillRecord, DrillRecords};
 use crate::game::{Play, WeakMap};
 use crate::progress::estimate_ms;
 use crate::result_view::Rank;
@@ -292,7 +292,8 @@ impl History {
     }
 
     /// 基礎練習のドリルごとの記録（基礎練習の画面に出す）。記録が読めなければ空
-    pub fn drill_records(&self) -> HashMap<&'static str, DrillRecord> {
+    /// 基礎練習のドリルごと（手順の右から・左からも分けて）の記録。記録が読めなければ空
+    pub fn drill_records(&self) -> DrillRecords {
         let mut out = HashMap::new();
         let Some(records) = self.records.as_ref() else {
             return out;
@@ -304,7 +305,8 @@ impl History {
                         continue;
                     };
                     let best = json_number(&r.settings, "best_bpm").map(|b| b as u32);
-                    out.entry(d.id)
+                    let lefty = r.settings.contains("\"lefty\":true");
+                    out.entry((d.id, lefty))
                         .or_insert_with(DrillRecord::default)
                         .add(r.started_at, best);
                 }

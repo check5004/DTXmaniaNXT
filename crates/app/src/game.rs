@@ -16,7 +16,7 @@ use engine::stroke::{Stroke, StrokeTally};
 use i18n::tf;
 use records::{Lap, NoteHit, SectionClear, Session, SessionKind, StrayHit};
 
-use crate::audio::{AudioOut, Bus, HitTiming, Sound, click, load_sound};
+use crate::audio::{AudioOut, Bus, HitTiming, Sound, click, drum_voice, load_sound};
 use crate::chart_sound::{AutoMix, ChartSounds, Hat};
 use crate::drill::{DrillOutcome, DrillPlay};
 use crate::history::OvercomeCheck;
@@ -48,6 +48,10 @@ const DRILL_BEAT_GAIN: f32 = 0.7;
 
 /// 基礎練習で、最後の小節が終わってから結果へ移るまで（ミリ秒）
 const DRILL_TAIL_MS: f64 = 1000.0;
+/// 限界チャレンジで 3 つ落としてから結果へ移るまで（ミリ秒）
+const DRILL_STOP_MS: f64 = 1500.0;
+/// 聞いてまねるのお手本の音の番号（譜面の `#WAVzz` は 36 × 36 未満なので重ならない）
+const DEMO_WAV: u16 = 0xF000;
 
 /// メトロノームの音に付ける目印（一時停止の板で切ったとき、鳴らす予定の音を取りやめる）
 const METRONOME_TAG: u8 = 2;
@@ -426,8 +430,9 @@ impl Play {
         drum_sounds: bool,
         rules: &Rules,
     ) -> Result<Self> {
-        let path = crate::drill::chart_path(run.drill);
-        let text = run.to_dtx(crate::drill::name(run.drill));
+        let drill = run.drill;
+        let path = crate::drill::chart_path(drill);
+        let text = run.to_dtx(crate::drill::name(drill));
         let rules = Rules {
             tight: false,
             metronome: true,
@@ -442,9 +447,9 @@ impl Play {
             None,
             Some(run),
         )?;
-        // 記録では、テンポが違ってもドリルごとに同じ譜面として扱う
-        play.chart_hash = records::hash_bytes(run.drill.id.as_bytes());
-        play.artist = crate::drill::category_name(run.drill.category).to_owned();
+        // 記録では、テンポとやり方が違ってもドリルごとに同じ譜面として扱う
+        play.chart_hash = records::hash_bytes(drill.id.as_bytes());
+        play.artist = crate::drill::category_name(drill.category).to_owned();
         play.time_kind = records::time_kind::DRILL;
         Ok(play)
     }
@@ -616,6 +621,9 @@ impl Play {
         judge.set_auto(auto);
         judge.set_pedal_windows(rules.pedal_windows);
         let drill = drill.map(|run| DrillPlay::new(run, &tempo, judge.notes()));
+        // 聞いてまねるのお手本は、作った音を自動で鳴らす音として時刻を決めて鳴らす（判定はしない）
+        let demo = drill.as_ref().map_or_else(Vec::new, DrillPlay::demo_hits);
+        chart_sounds.add_auto_notes(demo.iter().map(|&(ms, lane)| (ms, demo_wav(lane), lane)));
         let click_lines = match &drill {
             Some(d) => d
                 .clicks()
@@ -637,12 +645,20 @@ impl Play {
             }
         };
         let sounds = match &audio {
-            Some(a) => load_sounds(
-                &chart,
-                &chart_sounds,
-                path.parent().unwrap_or(Path::new(".")),
-                a.rate(),
-            ),
+            Some(a) => {
+                let mut sounds = load_sounds(
+                    &chart,
+                    &chart_sounds,
+                    path.parent().unwrap_or(Path::new(".")),
+                    a.rate(),
+                );
+                for &(_, lane) in &demo {
+                    sounds
+                        .entry(demo_wav(lane))
+                        .or_insert_with(|| drum_voice(a.rate(), lane));
+                }
+                sounds
+            }
             None => HashMap::new(),
         };
         let mut section_audio = None;
@@ -1693,9 +1709,14 @@ impl Play {
                 offset_ms: h.offset_ms,
             })
             .collect();
-        let summary = engine::drill::summarize(&d.run, &results, d.measure_at(now));
+        // 限界チャレンジで終えた段は、最後まで叩いていない段として数える（出来は 3 つ落とした × に決まる）
+        let now_measure = match d.stopped {
+            Some((step, _)) => d.measure_at(now).min(d.run.step_range(step).start),
+            None => d.measure_at(now),
+        };
+        let summary = engine::drill::summarize(&d.run, &results, now_measure);
         Some(DrillOutcome {
-            run: d.run,
+            run: d.run.clone(),
             summary,
             elapsed_ms: (now - d.measure_start_ms(0)).max(0.0),
             best_before: None,
@@ -1732,6 +1753,31 @@ impl Play {
                 hh_pedal,
                 beat_pos,
             });
+        }
+        // 限界チャレンジは、同じ段で 3 つ落としたらそこで終える
+        let mut stop = false;
+        if let Some(d) = self.drill.as_mut() {
+            for e in events {
+                let note = &self.judge.notes()[e.note];
+                if !self.judge.is_auto(note.lane)
+                    && d.on_judged(note.at.measure, e.judgement, note.ms)
+                {
+                    stop = true;
+                }
+            }
+        }
+        if stop {
+            self.stop_drill();
+        }
+    }
+
+    /// 限界チャレンジを終える。残りの音符は判定せず、クリックを止め、少し置いて結果へ
+    fn stop_drill(&mut self) {
+        let now = self.now_ms();
+        self.end_ms = self.end_ms.min(now + DRILL_STOP_MS);
+        self.judge.jump_to(f64::INFINITY);
+        if let Some(a) = self.audio.as_mut() {
+            a.stop(METRONOME_TAG);
         }
     }
 
@@ -1805,8 +1851,10 @@ impl Play {
             let run = &d.run;
             let bpms: Vec<String> = run.bpms.iter().map(u32::to_string).collect();
             settings += &format!(
-                ",\"drill\":\"{}\",\"bpms\":[{}],\"target_bpm\":{}",
+                ",\"drill\":\"{}\",\"way\":\"{}\",\"lefty\":{},\"bpms\":[{}],\"target_bpm\":{}",
                 run.drill.id,
+                run.way.key(),
+                run.lefty,
                 bpms.join(","),
                 run.target()
             );
@@ -2037,6 +2085,11 @@ fn unix_now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs() as i64)
+}
+
+/// お手本の音（作った音）の番号
+fn demo_wav(lane: DrumLane) -> u16 {
+    DEMO_WAV + u16::from(lane.channel())
 }
 
 /// 譜面が使う音（叩く音符、自動で鳴らす音、空打ちの音、見えない音符）をすべて読む。読めない音は飛ばす
@@ -2357,7 +2410,7 @@ mod tests {
             ..Default::default()
         };
         let run = Run::new(Drill::find("paradiddle").unwrap(), 100, 10);
-        let mut play = Play::load_drill(run, 0.0, false, &rules).unwrap();
+        let mut play = Play::load_drill(run.clone(), 0.0, false, &rules).unwrap();
         play.audio = None;
         // 1 小節 16 打 × 4 段 × 4 小節。クリックはいつも鳴らし、空打ちの MISS は使わない
         assert_eq!(play.judge.notes().len(), 16 * 16);
@@ -2402,6 +2455,103 @@ mod tests {
         assert_eq!(session.laps[0].passed, Some(true));
         assert_eq!(session.laps[0].hits.len(), 64);
         assert_eq!(session.laps[1].passed, Some(false));
+    }
+
+    /// 時計を曲の時刻 `ms` に合わせる（音が出ないときの時計）
+    fn set_clock(play: &mut Play, ms: f64) {
+        play.fallback_origin_us = host_us() - ((ms - play.start_ms) * 1000.0) as i64;
+    }
+
+    #[test]
+    fn the_limit_test_stops_after_three_misses_in_one_step() {
+        use engine::drill::{Drill, Grade, Run, Way};
+        let run = Run::with(Drill::find("quarter").unwrap(), Way::Limit, 100, 10, false);
+        let mut play = Play::load_drill(run, 0.0, false, &Rules::default()).unwrap();
+        play.audio = None;
+        let full_end = play.end_ms;
+        // 1 段目（小節 1・2、100 BPM）はミスなし
+        let first: Vec<(f64, DrumLane)> = play
+            .judge
+            .notes()
+            .iter()
+            .filter(|n| (1..3).contains(&n.at.measure))
+            .map(|n| (n.ms, n.lane))
+            .collect();
+        assert_eq!(first.len(), 8);
+        for (ms, lane) in first {
+            let events = play.judge.hit(Hit {
+                ms: ms + 3.0,
+                lane,
+                velocity: 100,
+            });
+            play.record(&events, None, None);
+        }
+        // 2 段目（小節 3・4、105 BPM）は叩かない。3 つ目の見逃しで終わる
+        let m3 = play.drill.as_ref().unwrap().measure_start_ms(3);
+        let beat = 60_000.0 / 105.0;
+        set_clock(&mut play, m3 + beat);
+        play.update();
+        assert!(play.drill.as_ref().unwrap().stopped.is_none());
+        set_clock(&mut play, m3 + 2.0 * beat + 200.0);
+        play.update();
+        let d = play.drill.as_ref().unwrap();
+        assert_eq!(d.stopped.map(|(s, _)| s), Some(1));
+        assert!(play.end_ms < full_end);
+        // 残りの音符は判定しない（見逃しを数えない）
+        set_clock(&mut play, m3 + 6.0 * beat);
+        play.update();
+        let judged = play.note_hits.iter().flatten().count();
+        assert_eq!(judged, 11);
+        let o = play.drill_outcome().unwrap();
+        assert_eq!(o.best_now(), Some(100));
+        assert_eq!(o.summary.steps[0].grade(), Some(Grade::Clean));
+        assert_eq!(o.summary.steps[1].grade(), Some(Grade::Many));
+        assert_eq!(o.summary.steps[2].notes, 0);
+        let session = play.session().unwrap();
+        assert!(session.settings.contains("\"way\":\"limit\""));
+        assert!(session.settings.contains("\"lefty\":false"));
+        assert_eq!(session.laps.len(), 2);
+        assert!(play.finished());
+    }
+
+    #[test]
+    fn call_and_response_plays_the_heard_bars_without_notes() {
+        use engine::drill::{Drill, Run, Way};
+        let run = Run::with(Drill::find("eight_beat").unwrap(), Way::Echo, 100, 10, true);
+        let heard = run.demo_notes().len();
+        let mut play = Play::load_drill(run, 0.0, false, &Rules::default()).unwrap();
+        play.audio = None;
+        // お手本の音は自動で鳴らす音として並び、譜面の音符は自分の小節だけ
+        let demo: Vec<_> = play
+            .chart_sounds
+            .auto
+            .iter()
+            .filter(|v| v.wav >= DEMO_WAV)
+            .collect();
+        assert_eq!(demo.len(), heard);
+        let d = play.drill.as_ref().unwrap();
+        assert!(
+            play.judge
+                .notes()
+                .iter()
+                .all(|n| !d.run.is_demo(n.at.measure))
+        );
+        // 自分の小節の頭の音符も、ふつうに叩ける
+        let first = play.judge.notes()[0].clone();
+        let events = play.judge.hit(Hit {
+            ms: first.ms + 2.0,
+            lane: first.lane,
+            velocity: 100,
+        });
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].judgement, Judgement::Perfect);
+        let d = play.drill.as_ref().unwrap();
+        // お手本の小節（2 小節目）は叩かなくても休みにしない
+        let m1 = d.measure_start_ms(1);
+        let m2 = d.measure_start_ms(2);
+        let d = play.drill.as_mut().unwrap();
+        assert!(!d.check_rest(m2 - 10.0));
+        assert!(!d.check_rest(m1 + 3000.0));
     }
 
     #[test]

@@ -1377,7 +1377,7 @@ impl App {
             return;
         };
         if let Some(d) = &play.drill {
-            let run = d.run;
+            let run = d.run.clone();
             self.start_drill(run);
             return;
         }
@@ -1890,9 +1890,9 @@ impl App {
         let end_ms = at_ms.unwrap_or_else(|| p.now_ms());
         let finish = view.finish(p, end_ms);
         let practice = p.practice.is_some();
-        let drill = p.drill.as_ref().map(|d| d.run.drill.id);
-        // 基礎練習の最高は、今回を残す前の記録と比べる
-        let best_before = drill.and_then(|id| self.history.drill_records().get(id)?.best);
+        let drill = p.drill.as_ref().map(|d| (d.run.drill.id, d.run.lefty));
+        // 基礎練習の最高は、今回を残す前の記録（同じ手順）と比べる
+        let best_before = drill.and_then(|k| self.history.drill_records().get(&k)?.best);
         // Esc でやめたときも結果は出す（記録は「最後まで遊んでいない」として残す）
         let cleared = p.finished();
         let session = self
@@ -3016,6 +3016,8 @@ impl App {
                         drill_menu::Input::Decide
                     }
                     KeyCode::Escape | KeyCode::Backspace => drill_menu::Input::Cancel,
+                    KeyCode::Tab => drill_menu::Input::Way,
+                    KeyCode::KeyH => drill_menu::Input::Lead,
                     _ => return,
                 };
                 self.drills_input(input);
@@ -3477,7 +3479,10 @@ impl App {
                     DrumLane::LT => drill_menu::Input::Down,
                     DrumLane::SD => drill_menu::Input::Left,
                     DrumLane::FT => drill_menu::Input::Right,
-                    DrumLane::CY | DrumLane::RD => drill_menu::Input::Decide,
+                    DrumLane::CY => drill_menu::Input::Decide,
+                    // やり方と手順（真ん中の列で）
+                    DrumLane::HH | DrumLane::HHO => drill_menu::Input::Way,
+                    DrumLane::RD => drill_menu::Input::Lead,
                     DrumLane::LC => drill_menu::Input::Cancel,
                     _ => return,
                 };
@@ -3625,7 +3630,7 @@ impl App {
         };
         // 基礎練習の結果からは、もう一度か基礎練習の画面へ
         if let Some(d) = &o.drill {
-            let run = d.run;
+            let run = d.run.clone();
             match action {
                 ui::ResultAction::Retry => {
                     self.sfx.play(Se::Decide);
