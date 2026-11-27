@@ -2345,7 +2345,7 @@ impl App {
                 self.config_toast(if added {
                     tf!(
                         "Added note {note} to {} ({device})",
-                        "ノート {note} を{}に足しました（{device}）",
+                        "ノート {note} を{}に追加しました（{device}）",
                         inputs::lane_label(lane)
                     )
                 } else {
@@ -2364,7 +2364,7 @@ impl App {
                 self.config_toast(if added {
                     tf!(
                         "Added key {key} to {}",
-                        "キー {key} を{}に足しました",
+                        "キー {key} を{}に追加しました",
                         inputs::lane_label(lane)
                     )
                 } else {

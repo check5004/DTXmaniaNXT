@@ -214,7 +214,7 @@ Windows では `%APPDATA%\DTXmaniaNXT` に保存されます（設定の `config
 <details>
 <summary><b>自分で譜面を作りたいときは？</b></summary>
 
-同じ作者による、ブラウザで使える無料のドラム譜面エディタ [DTX Web Editor](https://github.com/check5004/dtx-mania-web-editor) をどうぞ。設定の「曲」→「譜面エディタを開く」からも開けます。保存した曲フォルダは、DTXmaniaNXT でも DTXMania でもそのまま遊べます。直した譜面は「曲を探し直す」で一覧に反映されます。
+同じ作者による、ブラウザで使える無料のドラム譜面エディタ [DTX Web Editor](https://github.com/check5004/dtx-mania-web-editor) をどうぞ。設定の「曲」→「譜面エディタを開く」からも開けます。保存した曲フォルダは、DTXmaniaNXT でも DTXMania でもそのまま遊べます。直した譜面は「曲を再読み込み」で一覧に反映されます。
 </details>
 
 <details>
@@ -260,7 +260,7 @@ DTXmaniaNXT は**非公式のファンメイド作品**です。2000 年から�
     - 画像（段階 3）: ほとんどは `tools/skin/build_stage3.py` で図形とフォント（Rubik Spray Paint と Inter。どちらも SIL Open Font License）から描きました。結果の文字、並べ替えのアイコン、練習の合格のメダルは、同じ画像生成 AI で作った 2 枚の絵から切り出しています。
     - 操作音: `tools/skin/ui_sounds.py` で合成しました。
     - タイトル曲と、クリア・フルコンボ・開始・読み込み中などの短い曲: Google の音楽生成モデル Lyria 3（OpenRouter 経由）で作りました。指示文に既存の曲や演奏者の名前は入れていません。Lyria の出力には、耳では聞こえない透かし（SynthID）が入っています。
-    - ボイス（難易度や並べ替えの読み上げと、短い曲に重ねた声）: **VOICEVOX:春日部つむぎ**。CC BY 4.0 も MIT ライセンスも適用されず、[VOICEVOX の利用規約](https://voicevox.hiroshiba.jp/term/)と[春日部つむぎの利用規約](https://tsumugi-official.studio.site/rule)に従います。DTXmaniaNXT の中で鳴らすためのものなので、取り出してほかの作品に使ったり、配布したりしないでください。アプリでも、Config の「アプリ」にある「クレジット」に表示しています。
+    - ボイス（難易度や並べ替えの読み上げと、短い曲に重ねた声）: **VOICEVOX:春日部つむぎ**。CC BY 4.0 も MIT ライセンスも適用されず、[VOICEVOX の利用規約](https://voicevox.hiroshiba.jp/term/)と[春日部つむぎの利用規約](https://tsumugi-official.studio.site/rule)に従います。DTXmaniaNXT の中で鳴らすためのものなので、取り出してほかの作品に使ったり、配布したりしないでください。アプリでも、Config の「全般」にある「クレジット」に表示しています。
   - **過去のリリース**には、DTXManiaNX v2.0 のスキン（[BocuD/DTXmaniaNX](https://github.com/BocuD/DTXmaniaNX) のタグ `V2.0.0-20260121-5` にある `Runtime/System` フォルダ）のファイルが残っています。段階 1 の画像は 0.8.0 まで、音は 0.9.1 まで、段階 3 の画像は 0.10.0 までのリリースで、過去のコミットも同じです。これらのファイルには MIT ライセンスも CC BY 4.0 も適用されません。権利は元の制作者にありますが、絵ごとの制作者の記録は残っていません。DTXManiaNX のリポジトリにはライセンスファイルがなく、上流に含まれている DTXMania の使用許諾書（`Runtime/Licenses/dtxmania.txt`、MIT ライセンスと同等の内容）は DTXMania 本体のソフトウェアを対象としたもので、これらのファイルには及びません。
 - **アプリのアイコン**は、DTXManiaNX の `dtx.ico`（DTXMania から受け継がれてきたアイコン）の「DTX」の文字を「NXT」に描き換えたものです。こちらも MIT ライセンスの対象外です。
 - **`master` ブランチ**には、参考として上流の C# 版 DTXManiaNX のコードを残しています。このリポジトリのライセンスは適用されません。

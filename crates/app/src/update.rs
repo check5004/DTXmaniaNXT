@@ -48,9 +48,9 @@ impl UpdateMode {
     /// 設定の画面の表示
     pub fn label(self) -> &'static str {
         match self {
-            UpdateMode::Notify => t("Notify", "知らせる"),
+            UpdateMode::Notify => t("Notify", "お知らせ"),
             UpdateMode::Auto => t("Automatic", "自動"),
-            UpdateMode::Off => t("Off", "確かめない"),
+            UpdateMode::Off => t("Off", "確認しない"),
         }
     }
 }

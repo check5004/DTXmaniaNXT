@@ -72,14 +72,14 @@ impl Outcome {
             }
             Outcome::InLibrary { .. } => t(
                 "This folder is already in your song folder. Rescanned songs.",
-                "このフォルダはもう曲のフォルダに入っています。曲を探し直しました",
+                "このフォルダはもう曲のフォルダに入っています。曲を再読み込みしました",
             )
             .to_owned(),
             Outcome::Register { dir } => {
                 let name = folder_name(dir);
                 tf!(
                     "Added \"{name}\" to your song folders",
-                    "「{name}」を曲のフォルダに足しました"
+                    "「{name}」を曲のフォルダに追加しました"
                 )
             }
             Outcome::Failed { from, error } => error_message(from, error),
