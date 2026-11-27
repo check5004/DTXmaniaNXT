@@ -389,7 +389,8 @@ fn bold(px: f32, color: Color32) -> Style {
 }
 
 const ACCENT: Color32 = Color32::from_rgb(0xFF, 0xB8, 0x40);
-const NOTE: Color32 = Color32::from_rgb(0xFF, 0xD2, 0x3A);
+/// 音符の四角の中の、叩く手の文字（どのレーンの色の上でも読める暗い色）
+const NOTE_LETTER: Color32 = Color32::from_rgb(16, 16, 24);
 const BEST: Color32 = Color32::from_rgb(0x70, 0xE0, 0x90);
 const CATEGORY: Color32 = Color32::from_rgb(0xB4, 0x8C, 0xFF);
 
@@ -889,7 +890,8 @@ fn draw_trail(c: &Canvas, trail: &[u32], (x, y, w, h): (f32, f32, f32, f32)) {
     }
 }
 
-/// 手順の絵。型の小節を横に並べ、レーンごとの行に音符の四角。叩く手を下（1 つのレーン）か四角の中に
+/// 手順の絵。型の小節を横に並べ、レーンごとの行に音符の四角（演奏の画面と同じレーンの色）。
+/// 叩く手を下（1 つのレーン）か四角の中に
 fn draw_pattern(c: &Canvas, g: &mut Gfx, d: &Drill, (x, y, w, h): (f32, f32, f32, f32)) {
     ui::round_fill(
         c,
@@ -941,34 +943,29 @@ fn draw_pattern(c: &Canvas, g: &mut Gfx, d: &Drill, (x, y, w, h): (f32, f32, f32
     }
     for (li, &lane) in lanes.iter().enumerate() {
         let ry = top + li as f32 * row_h;
-        let name = if lane == dtx::DrumLane::SD {
-            "SD"
-        } else {
-            lane.name()
-        };
+        let color = ui::lane_color(lane);
         ui::text(
             c,
             g,
-            name,
+            lane.name(),
             x + 10.0,
             ry + row_h / 2.0 - 9.0,
-            &bold(14.0, ui::lane_color(lane)),
+            &bold(14.0, color),
             label_w - 12.0,
         );
         for n in notes.iter().filter(|n| n.lane == lane) {
             let cell_w = mw / n.cells as f32;
             let cx = gx + n.measure as f32 * mw + (n.cell as f32 + 0.5) * cell_w;
             let size = (cell_w * 0.72).min(row_h * 0.62).clamp(8.0, 26.0);
-            ui::round_fill(
-                c,
-                cx - size / 2.0,
-                ry + row_h / 2.0 - size / 2.0,
-                size,
-                size,
-                size * 0.22,
-                NOTE,
-            );
-            let (letter, color) = match n.hand {
+            let (nx, ny) = (cx - size / 2.0, ry + row_h / 2.0 - size / 2.0);
+            // 開いたハイハットは、譜面の絵と同じく中を抜く（閉じたハイハットと同じ色なので形で分ける）
+            let hollow = lane == dtx::DrumLane::HHO;
+            if hollow {
+                ui::round_frame(c, nx, ny, size, size, size * 0.22, 2.0, color);
+            } else {
+                ui::round_fill(c, nx, ny, size, size, size * 0.22, color);
+            }
+            let (letter, hand_color) = match n.hand {
                 Hand::Right => ("R", RIGHT_COLOR),
                 Hand::Left => ("L", LEFT_COLOR),
                 h @ (Hand::Foot | Hand::LeftFoot) => (hand_letter(h), ui::DIM),
@@ -980,7 +977,7 @@ fn draw_pattern(c: &Canvas, g: &mut Gfx, d: &Drill, (x, y, w, h): (f32, f32, f32
                     letter,
                     cx,
                     y + h - 30.0,
-                    &bold(15.0, color),
+                    &bold(15.0, hand_color),
                     cell_w.max(12.0),
                 );
             } else if size >= 14.0 && !n.hand.is_foot() {
@@ -990,7 +987,7 @@ fn draw_pattern(c: &Canvas, g: &mut Gfx, d: &Drill, (x, y, w, h): (f32, f32, f32
                     letter,
                     cx,
                     ry + row_h / 2.0 - size * 0.42,
-                    &bold(size * 0.62, Color32::from_rgb(40, 30, 0)),
+                    &bold(size * 0.62, if hollow { color } else { NOTE_LETTER }),
                     size,
                 );
             }
