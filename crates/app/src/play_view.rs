@@ -1520,19 +1520,32 @@ impl PlayView {
             if play.judge.is_done(i) || !visible(n.ms) {
                 continue;
             }
-            // 基礎練習の「見ないで」は段ごとに薄く
-            let fade = play
-                .drill
-                .as_ref()
-                .map_or(1.0, |d| d.note_alpha(n.at.measure, now_ms));
+            // 基礎練習の「見ないで」は段ごとに薄く、曲の練習の「消える譜面」は周ごとに消える
+            let fade = match (&play.drill, &play.practice) {
+                (Some(d), _) => d.note_alpha(n.at.measure, now_ms),
+                (None, Some(p)) => p.note_alpha(i),
+                (None, None) => 1.0,
+            };
             if fade > 0.0
                 && let Some(alpha) = looks.chip_alpha(ahead(n.ms))
             {
                 shown.push((n.lane, y, alpha * fade, play.is_rim_note(n)));
             }
         }
-        // 練習の助走など、判定しない音符は薄く
+        // 練習の助走など、判定しない音符は薄く。お手本の周の音符は、判定ラインに来たら消える（自動で叩く）
         if let Some(p) = &play.practice {
+            for &(ms, lane, wav) in p.demo.iter().filter(|d| d.0 >= now_ms) {
+                if visible(ms)
+                    && let Some(alpha) = looks.chip_alpha(ahead(ms))
+                {
+                    shown.push((
+                        lane,
+                        looks.ahead_y(ahead(ms)),
+                        0.85 * alpha,
+                        play.is_rim(lane, wav),
+                    ));
+                }
+            }
             for &(ms, lane, wav) in &p.faint {
                 if visible(ms)
                     && let Some(alpha) = looks.chip_alpha(ahead(ms))

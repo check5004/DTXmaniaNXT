@@ -1415,6 +1415,8 @@ impl App {
             today::Task::Song { pick, seconds } => {
                 let mut options = self.practice_options(pick.section);
                 options.time_box_s = Some(seconds);
+                // 今日のメニューの曲は、いつも段をのぼる
+                options.way = engine::practice_way::Way::Climb;
                 AfterClose::Practice(pick.path, options)
             }
         };
@@ -1996,6 +1998,9 @@ impl App {
             metronome: p.metronome,
             step_laps: p.step_laps,
             time_box_s: None,
+            way: p.way,
+            part: p.part,
+            build: p.build,
         }
     }
 

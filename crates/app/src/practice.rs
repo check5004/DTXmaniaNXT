@@ -19,6 +19,9 @@ use engine::practice::{
     STEP_LAPS, STEP_SPEED, Section, SectionTimes, SpeedPlan, SpotTally, next_step, snap_speed,
     speed_percent,
 };
+use engine::practice_way::{
+    Build, Part, Way, break_muted, build_lengths, build_section, fade_rank, fade_share, lane_mask,
+};
 use i18n::{t, tf};
 use records::{ClearRecord, StrayHit};
 
@@ -41,6 +44,10 @@ pub struct PracticeOptions {
     pub step_laps: u32,
     /// 時間の区切り（秒。今日のメニュー）。過ぎたら、その段の挑戦の終わりで結果へ。設定には残さない
     pub time_box_s: Option<u32>,
+    /// やり方と、パート練習で叩くパート・積み上げの向き
+    pub way: Way,
+    pub part: Part,
+    pub build: Build,
 }
 
 /// 区間のほかの決めごと（設定に残し、次の練習でも使う）
@@ -52,6 +59,9 @@ pub struct PracticePrefs {
     pub pitch: Pitch,
     pub metronome: bool,
     pub step_laps: u32,
+    pub way: Way,
+    pub part: Part,
+    pub build: Build,
 }
 
 impl Default for PracticePrefs {
@@ -63,6 +73,9 @@ impl Default for PracticePrefs {
             pitch: Pitch::default(),
             metronome: true,
             step_laps: STEP_LAPS,
+            way: Way::default(),
+            part: Part::default(),
+            build: Build::default(),
         }
     }
 }
@@ -74,6 +87,8 @@ pub struct PracticeSetup {
     pub title: String,
     pub artist: String,
     pub notes_per_measure: Vec<usize>,
+    /// 小節ごとの、音符のあるレーン（`DrumLane as usize` のビット）
+    pub lanes_per_measure: Vec<u16>,
     /// 苦手な小節（記録が無ければ全部「記録なし」）
     pub weak: WeakMap,
     /// 練習でクリアした区間（古い順）
@@ -88,6 +103,9 @@ pub struct PracticeSetup {
     pub pitch: Pitch,
     pub metronome: bool,
     pub step_laps: u32,
+    pub way: Way,
+    pub part: Part,
+    pub build: Build,
 }
 
 /// 苦手フレーズも記録も無いときに選んでおく長さ（小節）
@@ -107,6 +125,7 @@ impl PracticeSetup {
         let tempo = TempoMap::build(&chart);
         let notes = tempo.drum_notes(&chart);
         let notes_per_measure = count_per_measure(&notes, tempo.measure_count());
+        let lanes_per_measure = lanes_per_measure(&notes, tempo.measure_count());
         let weak = history.weak_map(path, &notes_per_measure, None);
         let clears = history.clears(path);
         let picture = ChartPicture::new(&notes, &tempo);
@@ -119,6 +138,7 @@ impl PracticeSetup {
             title: chart.title().to_owned(),
             artist: chart.artist().to_owned(),
             notes_per_measure,
+            lanes_per_measure,
             weak,
             clears,
             picture,
@@ -130,6 +150,9 @@ impl PracticeSetup {
             pitch: previous.map_or(prefs.pitch, |p| p.pitch),
             metronome: previous.map_or(prefs.metronome, |p| p.metronome),
             step_laps: previous.map_or(prefs.step_laps, |p| p.step_laps),
+            way: previous.map_or(prefs.way, |p| p.way),
+            part: previous.map_or(prefs.part, |p| p.part),
+            build: previous.map_or(prefs.build, |p| p.build),
         })
     }
 
@@ -142,6 +165,9 @@ impl PracticeSetup {
             pitch: self.pitch,
             metronome: self.metronome,
             step_laps: self.step_laps,
+            way: self.way,
+            part: self.part,
+            build: self.build,
         }
     }
 
@@ -156,9 +182,30 @@ impl PracticeSetup {
             .sum()
     }
 
-    /// 始められるなら練習の決めごと（音符の無い区間は練習できない）
+    /// 区間 `s` に、パート `part` の音符があるか
+    pub fn part_in(&self, s: Section, part: Part) -> bool {
+        (s.first..=s.last)
+            .filter_map(|m| self.lanes_per_measure.get(m as usize))
+            .any(|&l| l & part.mask() != 0)
+    }
+
+    /// 曲に音符のあるパート（パート練習で選べるもの）。手と足はいつも出す
+    pub fn parts(&self) -> Vec<Part> {
+        let all = self.lanes_per_measure.iter().fold(0, |a, &l| a | l);
+        Part::ALL
+            .into_iter()
+            .filter(|p| matches!(p, Part::Hands | Part::Feet) || all & p.mask() != 0)
+            .collect()
+    }
+
+    /// 区間 `s` を今のやり方で練習できるか（音符の無い区間、パート練習でそのパートの音符が無い区間はできない）
+    pub fn playable(&self, s: Section) -> bool {
+        self.notes_in(s) > 0 && (self.way != Way::Part || self.part_in(s, self.part))
+    }
+
+    /// 始められるなら練習の決めごと
     pub fn options(&self) -> Option<PracticeOptions> {
-        let section = self.section.filter(|&s| self.notes_in(s) > 0)?;
+        let section = self.section.filter(|&s| self.playable(s))?;
         Some(PracticeOptions {
             section,
             style: self.style,
@@ -168,6 +215,9 @@ impl PracticeSetup {
             metronome: self.metronome,
             step_laps: self.step_laps,
             time_box_s: None,
+            way: self.way,
+            part: self.part,
+            build: self.build,
         })
     }
 
@@ -250,6 +300,17 @@ pub fn count_per_measure(notes: &[DrumNote], measures: usize) -> Vec<usize> {
     n
 }
 
+/// 小節ごとの、音符のあるレーン（`DrumLane as usize` のビット）
+pub fn lanes_per_measure(notes: &[DrumNote], measures: usize) -> Vec<u16> {
+    let mut v = vec![0u16; measures];
+    for note in notes {
+        if let Some(m) = v.get_mut(note.at.measure as usize) {
+            *m |= lane_mask([note.lane]);
+        }
+    }
+    v
+}
+
 /// はじめに選んでおく区間。一番の苦手フレーズ、無ければ音符のある最初の小節から 4 小節
 fn default_section(weak: &WeakMap, notes_per_measure: &[usize]) -> Option<Section> {
     if let Some(p) = weak.phrases.first() {
@@ -269,6 +330,8 @@ pub enum Cue {
     Step { from: u32, next: Next },
     /// 手で速度を変えた
     Manual { from: u32 },
+    /// 積み上げで、区間を `from` 小節から `to` 小節に伸ばした
+    Grow { from: u32, to: u32 },
 }
 
 /// 練習中の 1 周
@@ -297,6 +360,14 @@ pub struct LapState {
     /// 何回目の段の挑戦の周か（0 から）と、その挑戦の何周目か（1 から。手で速度を変えたらそこから数え直す）
     pub attempt: usize,
     pub in_attempt: usize,
+    /// お手本の周（自動で叩くのを見て聞くだけ。判定の音符は無い）
+    pub demo: bool,
+    /// 叩いた区間（積み上げでは区間の一部）
+    pub section: Section,
+    /// 判定の音符ごとの、曲のブレイクで音の消えている所か
+    muted: Vec<bool>,
+    /// 曲のブレイクで、音の消えている所を叩いたずれ（ミリ秒）
+    pub break_offsets: Vec<f64>,
 }
 
 impl LapState {
@@ -438,6 +509,18 @@ pub struct Practice {
     listen_from_ms: f64,
     /// 休んでいる（並べた周を叩き終えるまで次の周を並べず、終えたら助走からその段を数え直す）
     resting: bool,
+    /// 積み上げの長さ（小節）と、今の長さの添字（積み上げでなければ None）
+    build: Option<(Vec<u32>, usize)>,
+    /// 終わった段の挑戦ごとに、区間ぜんぶを叩いたか（積み上げの途中はクリアに数えない）
+    full_attempts: Vec<bool>,
+    /// お手本の周の音符（実時間、レーン、`#WAVzz`）。見せるだけで判定しない
+    pub demo: Vec<(f64, DrumLane, u16)>,
+    /// 並べたお手本の周の、鳴らす音符（実時間。[`Practice::take_demo`] で取り出す）
+    pending_demo: Vec<DrumNote>,
+    /// 次に並べる周がお手本か、判定の音符ごとに曲のブレイクで音の消える所か
+    /// （`next_lap` が作り、`push_lap` が周に移す）
+    next_demo: bool,
+    next_muted: Vec<bool>,
 }
 
 /// 取り下げるには、周の音が鳴り始めるまでこれだけ余裕が要る（ミリ秒。音の出力の遅れのぶん）
@@ -445,7 +528,16 @@ pub const WITHDRAW_MARGIN_MS: f64 = 60.0;
 
 impl Practice {
     pub fn new(options: PracticeOptions, tempo: &TempoMap, chart_notes: Vec<DrumNote>) -> Self {
-        let times = SectionTimes::new(tempo, options.section);
+        // 積み上げは 1 小節から（区間が 1 小節なら、ふつうに段をのぼる）
+        let build = (options.way == Way::Build)
+            .then(|| build_lengths(options.section.measures()))
+            .filter(|v| v.len() > 1)
+            .map(|v| (v, 0));
+        let first = match &build {
+            Some((v, i)) => build_section(options.section, v[*i], options.build),
+            None => options.section,
+        };
+        let times = SectionTimes::new(tempo, first);
         let picture = ChartPicture::new(&chart_notes, tempo);
         Self {
             options,
@@ -476,7 +568,28 @@ impl Practice {
             last_hit_ms: f64::NEG_INFINITY,
             listen_from_ms: f64::NEG_INFINITY,
             resting: false,
+            build,
+            full_attempts: Vec::new(),
+            demo: Vec::new(),
+            pending_demo: Vec::new(),
+            next_demo: false,
+            next_muted: Vec::new(),
         }
+    }
+
+    /// 今叩いている区間（積み上げでは区間の一部）
+    pub fn current_section(&self) -> Section {
+        self.looper.times().section
+    }
+
+    /// 積み上げの長さ（小節）と、今の長さの添字（積み上げでなければ None）
+    pub fn build_stage(&self) -> Option<(&[u32], usize)> {
+        self.build.as_ref().map(|(v, i)| (v.as_slice(), *i))
+    }
+
+    /// 積み上げの途中（区間ぜんぶにまだ届いていない）
+    fn building(&self) -> bool {
+        self.build.as_ref().is_some_and(|(v, i)| i + 1 < v.len())
     }
 
     /// 練習する区間の曲の時刻（区間の音はこの範囲で作る）
@@ -499,9 +612,9 @@ impl Practice {
         self.attempt
     }
 
-    /// 1 段の周の数
+    /// 1 段の周の数（お手本と交互は、お手本の周を入れて偶数）
     pub fn step_laps(&self) -> usize {
-        self.options.step_laps.max(1) as usize
+        self.options.way.laps_per_step(self.options.step_laps) as usize
     }
 
     /// 今の挑戦の周（並べた順）
@@ -562,23 +675,126 @@ impl Practice {
             .looper
             .next_lap(f64::from(percent) / 100.0, self.run_up_next);
         self.run_up_next = false;
+        // 段の何周目か（手で速度を変えた周は 1 周目から数え直す）
+        let manual = lap.has_run_up() && matches!(self.next_cue, Some(Cue::Manual { .. }));
+        let k = if manual || self.laps.is_empty() {
+            1
+        } else {
+            self.laps.len() - self.attempt_start.min(self.laps.len()) + 1
+        };
+        self.next_demo = self.options.way.demo_lap(k);
+        let muted = self.break_windows(&lap);
         let mut judged = Vec::new();
         self.next_slots.clear();
+        self.next_muted.clear();
         for n in lap.notes(&self.chart_notes) {
             let note = &self.chart_notes[n.note];
-            if n.judged {
+            let placed = DrumNote {
+                ms: n.ms,
+                ..note.clone()
+            };
+            if n.judged && self.next_demo {
+                // お手本の周は、判定せずに自動で叩く
+                self.demo.push((n.ms, note.lane, note.wav));
+                self.pending_demo.push(placed);
+            } else if n.judged {
                 // 区切るときの着地（区間の外）は地図に入れない
                 self.next_slots
                     .push((self.grid.slot(note), note.lane, note.at));
-                judged.push(DrumNote {
-                    ms: n.ms,
-                    ..note.clone()
-                });
+                self.next_muted
+                    .push(muted.iter().any(|&(a, b)| note.ms >= a && note.ms < b));
+                judged.push(placed);
             } else {
                 self.faint.push((n.ms, note.lane, note.wav));
             }
         }
         (lap, judged)
+    }
+
+    /// 並べたお手本の周の、鳴らす音符（実時間）を取り出す
+    pub fn take_demo(&mut self) -> Vec<DrumNote> {
+        std::mem::take(&mut self.pending_demo)
+    }
+
+    /// 曲のブレイクで、周 `lap` の中で音を消す所（曲の時刻の範囲）。練習を始めてからの小節を数え、
+    /// 2 小節鳴らして 2 小節消す。助走と、区切るときの着地のあとは消さない
+    pub fn break_windows(&self, lap: &Lap) -> Vec<(f64, f64)> {
+        if self.options.way != Way::Break {
+            return Vec::new();
+        }
+        let s = self.current_section();
+        let n = s.measures();
+        let mut out: Vec<(f64, f64)> = Vec::new();
+        for i in 0..n {
+            let bar = lap.index as u32 * n + i;
+            if !break_muted(bar) {
+                continue;
+            }
+            let m = (s.first + i) as usize;
+            let (a, b) = (
+                self.tempo.measure_start_ms(m),
+                self.tempo.measure_start_ms(m + 1),
+            );
+            match out.last_mut() {
+                Some(last) if (last.1 - a).abs() < 1e-6 => last.1 = b,
+                _ => out.push((a, b)),
+            }
+        }
+        out
+    }
+
+    /// 曲のブレイクで、今（実時間 `now_ms`）音が消えているか
+    pub fn in_break(&self, now_ms: f64) -> bool {
+        let Some(i) = self.current_lap(now_ms) else {
+            return false;
+        };
+        let lap = &self.laps[i].plan;
+        let song = lap.song_ms(now_ms);
+        self.break_windows(lap)
+            .iter()
+            .any(|&(a, b)| song >= a && song < b)
+    }
+
+    /// 曲のブレイクで、音の消えている所を叩いたずれの平均（ミリ秒。- は早い）と打った数
+    pub fn break_offset(&self) -> Option<(f64, usize)> {
+        let all: Vec<f64> = self
+            .laps
+            .iter()
+            .filter(|l| !l.rest)
+            .flat_map(|l| l.break_offsets.iter().copied())
+            .collect();
+        let (mean, _) = mean_and_sd(&all);
+        Some((mean?, all.len()))
+    }
+
+    /// 消える譜面で、判定の音符 `note` を見せる濃さ（0 か 1）。段の周を重ねるごとに見せる音符を減らし、
+    /// 同じ段の前の周で落とした音は見せる。ほかのやり方はいつも 1
+    pub fn note_alpha(&self, note: usize) -> f32 {
+        if self.options.way != Way::Fade {
+            return 1.0;
+        }
+        let Some(lap) = self.lap_of.get(note).and_then(|&i| self.laps.get(i)) else {
+            return 1.0;
+        };
+        let Some(&(_, lane, at)) = lap.slots.get(note - lap.notes.start) else {
+            return 1.0;
+        };
+        let share = fade_share(lap.in_attempt, self.step_laps());
+        if fade_rank(at, lane) < share {
+            return 1.0;
+        }
+        let missed_before = self.laps.iter().any(|l| {
+            l.attempt == lap.attempt
+                && l.plan.index < lap.plan.index
+                && l.missed_notes.contains(&(at, lane))
+        });
+        if missed_before { 1.0 } else { 0.0 }
+    }
+
+    /// 消える譜面で、周 `lap`（添字）に見せる音符の割合（0〜1）
+    pub fn fade_share_of(&self, lap: usize) -> Option<f64> {
+        let l = self.laps.get(lap)?;
+        (self.options.way == Way::Fade).then(|| fade_share(l.in_attempt, self.step_laps()))
     }
 
     /// 音符をすべて判定し終えた周を数える。挑戦の周を叩き終えたら（同じ拍のミスが重なったら、並べた周を
@@ -652,20 +868,48 @@ impl Practice {
         let passed = !self.decided && report.weak().is_empty();
         report.passed = Some(passed);
         self.again = if passed { 0 } else { self.again + 1 };
-        let next = next_step(self.plan, report.speed, passed, self.again);
+        // 積み上げの途中で越えたら、速度はそのままで区間を伸ばす
+        let grow = passed && self.building();
+        let next = if grow {
+            Next::Again
+        } else {
+            next_step(self.plan, report.speed, passed, self.again)
+        };
         log::info!(
-            "attempt {} at {}%: {} laps, {} clean, {} weak -> {next:?}",
+            "attempt {} at {}% ({}): {} laps, {} clean, {} weak -> {}",
             report.index + 1,
             report.speed,
+            section_label(self.current_section()),
             report.laps,
             report.clean_laps,
-            report.weak().len()
+            report.weak().len(),
+            if grow {
+                "grow".to_owned()
+            } else {
+                format!("{next:?}")
+            }
         );
         let from = report.speed;
         self.done.push(report);
+        self.full_attempts.push(!self.building());
         self.attempt += 1;
         self.attempt_start = self.laps.len();
         self.decided = false;
+        if grow && let Some((lengths, stage)) = self.build.as_mut() {
+            let from = lengths[*stage];
+            *stage += 1;
+            let to = lengths[*stage];
+            let s = build_section(self.options.section, to, self.options.build);
+            self.looper.set_times(SectionTimes::new(&self.tempo, s));
+            if self.time_left_ms(now_ms).is_some_and(|left| left <= 0.0) {
+                self.timed_out_at_ms = Some(now_ms);
+                return;
+            }
+            self.run_up_next = true;
+            self.resume_pending = true;
+            self.next_cue = Some(Cue::Grow { from, to });
+            return;
+        }
         match next {
             Next::Clear => {
                 self.cleared_at_ms = Some(now_ms);
@@ -711,6 +955,7 @@ impl Practice {
         let lap = self.laps.pop()?;
         self.lap_of.truncate(lap.notes.start);
         self.faint.retain(|f| f.0 < lap.plan.audio.at_ms);
+        self.demo.retain(|f| f.0 < lap.plan.audio.at_ms);
         if lap.cue.is_some() {
             self.next_cue = self.next_cue.or(lap.cue);
             self.run_up_next |= lap.plan.has_run_up();
@@ -754,11 +999,22 @@ impl Practice {
         let (Some(first), Some(last)) = (self.laps.first(), self.laps.last()) else {
             return false;
         };
+        // お手本の周は叩かないので、そのあいだとその前は数えない
+        let demo_until = self
+            .laps
+            .iter()
+            .filter(|l| l.demo && l.plan.audio.at_ms <= now_ms)
+            .map(|l| l.plan.end_ms)
+            .fold(f64::NEG_INFINITY, f64::max);
+        if demo_until > now_ms {
+            return false;
+        }
         // 1 周目の助走のあいだは数えない
         let since = self
             .last_hit_ms
             .max(self.listen_from_ms)
-            .max(first.plan.start_ms);
+            .max(first.plan.start_ms)
+            .max(demo_until);
         let lap_ms = (last.plan.end_ms - last.plan.audio.at_ms).max(0.0);
         if now_ms - since < lap_ms.max(REST_MIN_MS) {
             return false;
@@ -834,11 +1090,16 @@ impl Practice {
     }
 
     /// 等速以上で越えた段の、一番速い速度（%）（記録のクリア）
+    /// パート練習（ほかのパートは自動）と、積み上げの途中の段はクリアに数えない
     pub fn clear_speed(&self) -> Option<u32> {
+        if self.options.way == Way::Part {
+            return None;
+        }
         self.done
             .iter()
-            .filter(|r| r.cleared())
-            .map(|r| r.speed)
+            .zip(&self.full_attempts)
+            .filter(|(r, full)| **full && r.cleared())
+            .map(|(r, _)| r.speed)
             .max()
     }
 
@@ -970,6 +1231,10 @@ impl Practice {
             rest: false,
             attempt: self.attempt,
             in_attempt: index - self.attempt_start.min(index) + 1,
+            demo: std::mem::take(&mut self.next_demo),
+            section: self.current_section(),
+            muted: std::mem::take(&mut self.next_muted),
+            break_offsets: Vec::new(),
         });
     }
 
@@ -985,6 +1250,9 @@ impl Practice {
             lap.judged += 1;
             if let Some(o) = e.offset_ms {
                 lap.offsets.push(o);
+                if lap.muted.get(e.note - lap.notes.start) == Some(&true) {
+                    lap.break_offsets.push(o);
+                }
             }
             if matches!(e.judgement, Judgement::Poor | Judgement::Miss)
                 && let Some(&(Some(slot), lane, at)) = lap.slots.get(e.note - lap.notes.start)
@@ -1057,7 +1325,7 @@ impl Practice {
     pub fn summaries(&self, now_ms: f64) -> Vec<LapSummary> {
         self.laps
             .iter()
-            .filter(|l| !l.rest)
+            .filter(|l| !l.rest && !l.demo)
             .filter(|l| l.judged > 0 || !l.strays.is_empty() || l.plan.start_ms <= now_ms)
             .map(LapState::summary)
             .collect()
@@ -1118,6 +1386,82 @@ impl Practice {
     /// 古い薄い音符を捨てる
     pub fn forget_before(&mut self, ms: f64) {
         self.faint.retain(|f| f.0 >= ms);
+        self.demo.retain(|f| f.0 >= ms);
+    }
+}
+
+/// やり方の名前
+pub fn way_label(w: Way) -> &'static str {
+    match w {
+        Way::Climb => t("Step Up", "段をのぼる"),
+        Way::Part => t("Part Practice", "パート練習"),
+        Way::Demo => t("Watch, Then Play", "お手本と交互"),
+        Way::Build => t("Build Up", "積み上げ"),
+        Way::Break => t("Song Break", "曲のブレイク"),
+        Way::Fade => t("Vanishing Notes", "消える譜面"),
+    }
+}
+
+/// パートの名前（「手だけ」）
+pub fn part_label(p: Part) -> &'static str {
+    match p {
+        Part::Hands => t("Hands Only", "手だけ"),
+        Part::Feet => t("Feet Only", "足だけ"),
+        Part::HiHat => t("Hi-Hat Only", "ハイハットだけ"),
+        Part::Snare => t("Snare Only", "スネアだけ"),
+        Part::Toms => t("Toms Only", "タムだけ"),
+        Part::Cymbals => t("Cymbals Only", "シンバルだけ"),
+    }
+}
+
+/// 積み上げの向きの名前
+pub fn build_label(b: Build) -> &'static str {
+    match b {
+        Build::Forward => t("From the Start", "前から"),
+        Build::Backward => t("From the End", "後ろから"),
+    }
+}
+
+/// やり方の説明（練習メニューの右の板）。`measures` は区間の長さ（積み上げの長さを出す）
+pub fn way_help(way: Way, part: Part, build: Build, measures: u32) -> String {
+    match way {
+        Way::Climb => t(
+            "Climbs from the start speed to the target speed, one step at a time.",
+            "始めの速度から目標の速度まで、段をのぼります。",
+        )
+        .to_owned(),
+        Way::Part => tf!(
+            "{}: you play only that part and the rest plays itself. Learn the hard parts one at a time, then put them together.",
+            "{}：そのパートだけを叩き、ほかのパートは自動で鳴ります。難しい所を分けて覚え、あとで合わせましょう。",
+            part_label(part)
+        ),
+        Way::Demo => t(
+            "Watch and listen to one loop played for you, then play the next loop yourself. Only your loops are scored.",
+            "1 周目は自動で叩くのを見て聞き、2 周目に自分で叩きます。点を付けるのは自分の周だけです。",
+        )
+        .to_owned(),
+        Way::Build => {
+            let lengths: Vec<String> = build_lengths(measures)
+                .iter()
+                .map(u32::to_string)
+                .collect();
+            let path = lengths.join(" → ");
+            tf!(
+                "Start with 1 measure and make it longer each time you clear it, up to the whole section ({path} measures, {}). The speed stays put until then.",
+                "1 小節から始め、クリアするたびに伸ばします（{path} 小節、{}）。区間ぜんぶまで速度は同じです。",
+                build_label(build).to_lowercase()
+            )
+        }
+        Way::Break => t(
+            "The music and the click drop out every other 2 measures. Keep the beat, and see if you are still with the song when it comes back.",
+            "曲の音とクリックが 2 小節ずつ消えます。消えているあいだもリズムを保ち、戻ったときに曲と合っているかを見ます。",
+        )
+        .to_owned(),
+        Way::Fade => t(
+            "Notes thin out with each loop of a step, and the last loop shows none. Notes you miss come back in the next loop.",
+            "段の中で周を重ねるごとに音符が減り、最後の周は何も見えません。ミスした音は次の周で戻ってきます。",
+        )
+        .to_owned(),
     }
 }
 
@@ -1204,6 +1548,9 @@ mod tests {
                 metronome: true,
                 step_laps: laps,
                 time_box_s: None,
+                way: Default::default(),
+                part: Default::default(),
+                build: Default::default(),
             },
             &tempo,
             notes,
@@ -1380,6 +1727,7 @@ mod tests {
             title: String::new(),
             artist: String::new(),
             notes_per_measure: npm,
+            lanes_per_measure: Vec::new(),
             weak,
             clears: Vec::new(),
             picture: ChartPicture::default(),
@@ -1391,6 +1739,9 @@ mod tests {
             pitch: Pitch::Keep,
             metronome: true,
             step_laps: STEP_LAPS,
+            way: Default::default(),
+            part: Default::default(),
+            build: Default::default(),
         };
         assert_eq!(s.notes_in(Section::new(2, 5)), 15);
         s.shift(5);
@@ -1412,6 +1763,7 @@ mod tests {
             title: String::new(),
             artist: String::new(),
             notes_per_measure: vec![4],
+            lanes_per_measure: Vec::new(),
             weak: WeakMap {
                 weakness: vec![None],
                 phrases: Vec::new(),
@@ -1428,6 +1780,9 @@ mod tests {
             pitch: Pitch::Keep,
             metronome: true,
             step_laps: STEP_LAPS,
+            way: Default::default(),
+            part: Default::default(),
+            build: Default::default(),
         };
         s.nudge_speed(-1);
         assert_eq!(
@@ -1911,6 +2266,7 @@ mod tests {
             title: String::new(),
             artist: String::new(),
             notes_per_measure: vec![4; 10],
+            lanes_per_measure: Vec::new(),
             weak: WeakMap {
                 weakness: vec![None; 10],
                 phrases: Vec::new(),
@@ -1927,6 +2283,9 @@ mod tests {
             pitch: Pitch::Keep,
             metronome: true,
             step_laps: STEP_LAPS,
+            way: Default::default(),
+            part: Default::default(),
+            build: Default::default(),
         };
         s.clears = vec![
             clear(5, 6, 1.0, false),
@@ -1940,5 +2299,179 @@ mod tests {
                 (Section::new(5, 6), 110, true)
             ]
         );
+    }
+
+    fn practice_way(way: Way, speed: SpeedPlan, section: Section, laps: u32) -> Practice {
+        let mut p = practice_with(LoopStyle::Connect, speed, section, laps);
+        p.options.way = way;
+        // 積み上げの長さは作るときに決まるので、作り直す
+        let (tempo, notes) = chart();
+        Practice::new(p.options, &tempo, notes)
+    }
+
+    #[test]
+    fn demo_loops_alternate_and_only_your_loops_count() {
+        // 1 段 3 周は、お手本と自分の 2 組（4 周）にする
+        let mut p = practice_way(Way::Demo, SpeedPlan::Fixed(100), Section::new(1, 1), 3);
+        let mut judge = judge();
+        assert_eq!(p.step_laps(), 4);
+        for k in 0..4 {
+            let i = play_lap(&mut p, &mut judge, 100, true);
+            let demo = k % 2 == 0;
+            assert_eq!(p.laps[i].demo, demo, "lap {k}");
+            if demo {
+                // お手本の周は判定せず、音符は自動で鳴らす
+                assert!(p.laps[i].notes.is_empty());
+                assert_eq!(p.take_demo().len(), 4);
+            } else {
+                assert_eq!(p.laps[i].notes.len(), 4);
+                assert!(p.take_demo().is_empty());
+            }
+        }
+        assert_eq!(p.demo.len(), 8);
+        let a = p.done.last().expect("the step is over");
+        assert_eq!((a.laps, a.passed), (2, Some(true)));
+        assert!(p.cleared());
+        assert_eq!(p.summaries(f64::MAX).len(), 2);
+    }
+
+    #[test]
+    fn build_up_grows_from_one_measure_at_the_same_speed() {
+        let section = Section::new(0, 3);
+        let mut p = practice_way(Way::Build, SpeedPlan::Fixed(100), section, 2);
+        let mut judge = judge();
+        assert_eq!(p.current_section(), Section::new(0, 0));
+        assert_eq!(p.build_stage(), Some((&[1u32, 2, 4][..], 0)));
+        for _ in 0..2 {
+            play_lap(&mut p, &mut judge, 100, true);
+        }
+        // 1 小節を越えたら、同じ速度で 2 小節へ（クリアには数えない）
+        assert_eq!(p.current_section(), Section::new(0, 1));
+        assert!(!p.cleared());
+        assert_eq!(p.clear_speed(), None);
+        assert_eq!(p.speed(), 100);
+        let i = play_lap(&mut p, &mut judge, 100, true);
+        assert_eq!(p.laps[i].cue, Some(Cue::Grow { from: 1, to: 2 }));
+        assert_eq!(p.laps[i].notes.len(), 8);
+        play_lap(&mut p, &mut judge, 100, true);
+        assert_eq!(p.current_section(), section);
+        for _ in 0..2 {
+            play_lap(&mut p, &mut judge, 100, true);
+        }
+        // 区間ぜんぶを越えてクリア
+        assert!(p.cleared());
+        assert_eq!(p.clear_speed(), Some(100));
+        // 後ろからは終わりの小節から
+        let mut p = practice_way(Way::Build, SpeedPlan::Fixed(100), section, 2);
+        p.options.build = Build::Backward;
+        let (tempo, notes) = chart();
+        let p = Practice::new(p.options, &tempo, notes);
+        assert_eq!(p.current_section(), Section::new(3, 3));
+    }
+
+    #[test]
+    fn song_break_mutes_two_measures_and_keeps_the_offsets_there() {
+        let mut p = practice_way(Way::Break, SpeedPlan::Fixed(100), Section::new(0, 3), 4);
+        let mut judge = judge();
+        let i = play_lap(&mut p, &mut judge, 100, true);
+        // BPM 120 で 1 小節 2000ms。小節 2〜3 が消える
+        assert_eq!(p.break_windows(&p.laps[i].plan), vec![(4000.0, 8000.0)]);
+        assert_eq!(p.laps[i].break_offsets.len(), 8);
+        assert_eq!(p.break_offset(), Some((0.0, 8)));
+        // 1 小節の区間は、周をまたいで 2 小節鳴らして 2 小節消す
+        let mut p = practice_way(Way::Break, SpeedPlan::Fixed(100), Section::new(1, 1), 4);
+        let mut judge = super::tests::judge();
+        let muted: Vec<bool> = (0..4)
+            .map(|_| {
+                let i = play_lap(&mut p, &mut judge, 100, true);
+                !p.break_windows(&p.laps[i].plan).is_empty()
+            })
+            .collect();
+        assert_eq!(muted, [false, false, true, true]);
+        // ほかのやり方では消さない
+        let p = practice(LoopStyle::Connect);
+        let lap = engine::practice::Looper::new(p.times(), LoopStyle::Connect).next_lap(1.0, false);
+        assert!(p.break_windows(&lap).is_empty());
+    }
+
+    #[test]
+    fn vanishing_notes_thin_out_and_misses_come_back() {
+        let mut p = practice_way(Way::Fade, SpeedPlan::Fixed(100), Section::new(0, 3), 4);
+        let mut judge = judge();
+        let shown = |p: &Practice, i: usize| {
+            p.laps[i]
+                .notes
+                .clone()
+                .filter(|&n| p.note_alpha(n) > 0.0)
+                .count()
+        };
+        let i = play_lap(&mut p, &mut judge, 100, true);
+        assert_eq!(shown(&p, i), 16);
+        let i = play_lap(&mut p, &mut judge, 100, true);
+        let second = shown(&p, i);
+        assert!((6..16).contains(&second), "{second}");
+        // 3 周目で 6 番目の音符を落とすと、4 周目（何も見えない周）でもその音符だけ見える
+        let i = play_lap_missing(&mut p, &mut judge, 100, &[5]);
+        assert!(shown(&p, i) <= second);
+        let (lap, notes) = p.next_lap(100, f64::MIN);
+        let range = judge.extend(notes);
+        p.push_lap(lap, range.clone());
+        let visible: Vec<usize> = range.filter(|&n| p.note_alpha(n) > 0.0).collect();
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0] - p.laps[3].notes.start, 5);
+        assert_eq!(p.fade_share_of(3), Some(0.0));
+    }
+
+    #[test]
+    fn part_practice_needs_notes_for_the_part_and_never_counts_as_a_clear() {
+        use engine::practice_way::lane_mask;
+        let mut s = PracticeSetup {
+            path: PathBuf::new(),
+            title: String::new(),
+            artist: String::new(),
+            notes_per_measure: vec![4; 4],
+            lanes_per_measure: vec![
+                lane_mask([DrumLane::SD]),
+                lane_mask([DrumLane::HT, DrumLane::BD]),
+                0,
+                lane_mask([DrumLane::SD]),
+            ],
+            weak: WeakMap {
+                weakness: vec![None; 4],
+                phrases: Vec::new(),
+                plays: 0,
+                practice_laps: 0,
+            },
+            clears: Vec::new(),
+            picture: ChartPicture::default(),
+            marks: Marks::new(),
+            section: Some(Section::new(0, 0)),
+            style: LoopStyle::Connect,
+            rule: PassRule::Normal,
+            speed: SpeedPlan::default(),
+            pitch: Pitch::Keep,
+            metronome: true,
+            step_laps: STEP_LAPS,
+            way: Way::Part,
+            part: Part::Toms,
+            build: Build::Forward,
+        };
+        assert_eq!(
+            s.parts(),
+            vec![Part::Hands, Part::Feet, Part::Snare, Part::Toms]
+        );
+        // 小節 0 にタムは無いので始められない
+        assert!(s.options().is_none());
+        s.section = Some(Section::new(0, 1));
+        let o = s.options().expect("measure 1 has toms");
+        assert_eq!((o.way, o.part), (Way::Part, Part::Toms));
+        // 自動で叩くパートがあるので、越えても区間のクリアには残さない
+        let mut p = practice_way(Way::Part, SpeedPlan::Fixed(100), Section::new(1, 1), 2);
+        let mut judge = judge();
+        for _ in 0..2 {
+            play_lap(&mut p, &mut judge, 100, true);
+        }
+        assert!(p.cleared());
+        assert_eq!(p.clear_speed(), None);
     }
 }
