@@ -4,6 +4,8 @@
 //! よくミスする音には印を付け、選んでいる所の音（BGM とドラム）は App が流す（[`PracticeMenu::shown`]）。
 //! 苦手な所の下に「やり方」（パート練習・お手本と交互など。パートや向きを選ぶやり方はその下に 1 行）、
 //! 「自分で選ぶ」（区間と長さ）、「速度・つなぎ方」（開くと右に行が出る）、「選曲に戻る」。
+//! いくつかの所をめぐるやり方（苦手めぐり・フィルだけ・つなぎ目）では、苦手な所の代わりにめぐる所を
+//! めぐる順に並べ、「自分で選ぶ」の行は出さない。どの札から始めても、1 か所目からめぐる。
 //!
 //! 練習の結果からはここに戻る。苦手な所の並びは開いたときのまま変えず（練習で苦手度が下がっても消えない）、
 //! クリアした所には印を付け、カーソルを次のまだクリアしていない所に移す。勝手には始めない。
@@ -22,8 +24,8 @@ use crate::band::{Band, BandData, CLEARED_COLOR};
 use crate::chart_picture::{Look, WEAK_COLOR};
 use crate::gfx::{Canvas, Gfx};
 use crate::practice::{
-    PracticeOptions, PracticeSetup, build_label, part_label, pass_line, section_label, style_label,
-    way_help, way_label,
+    PracticeOptions, PracticeSetup, build_label, no_stops_line, part_label, pass_line,
+    section_label, style_label, way_help, way_label,
 };
 use crate::settings_ui::{self as ui, Pad};
 use crate::sfx::Se;
@@ -216,6 +218,9 @@ impl PracticeMenu {
                 })
                 .collect()
         });
+        let mut setup = setup;
+        let sections: Vec<Section> = spots.iter().map(|p| p.section).collect();
+        setup.reshuffle_weak_tour(&sections);
         let target = finished.map(|f| f.section).or(setup.section);
         let target_spot = target.and_then(|s| spots.iter().position(|p| p.section == s));
         let mut custom = setup.default_custom();
@@ -234,6 +239,8 @@ impl PracticeMenu {
             hover: None,
         };
         m.cursor = match (target, target_spot) {
+            // めぐるやり方は「やり方」の行から（決めればもう一度めぐる）
+            _ if m.setup.way.tours() => m.item_index(Item::Way),
             (Some(_), Some(i)) if finished.is_some_and(|f| f.cleared) => m.next_open_spot(i),
             (Some(_), Some(i)) => i,
             (Some(_), None) => m.item_index(Item::Section),
@@ -265,8 +272,23 @@ impl PracticeMenu {
         self.shown
     }
 
+    /// 一覧の札：苦手な所。めぐるやり方なら、めぐる所（めぐる順）
+    fn cards(&self) -> Vec<Spot> {
+        if !self.setup.way.tours() {
+            return self.spots.clone();
+        }
+        self.setup
+            .stops()
+            .into_iter()
+            .map(|section| Spot {
+                section,
+                weakness: self.recorded_weakness(section).unwrap_or(0.0),
+            })
+            .collect()
+    }
+
     fn items(&self) -> Vec<Item> {
-        (0..self.spots.len())
+        (0..self.cards().len())
             .map(Item::Spot)
             .chain(self.rows())
             .collect()
@@ -278,7 +300,10 @@ impl PracticeMenu {
         if matches!(self.setup.way, Way::Part | Way::Build) {
             v.push(Item::WayOption);
         }
-        v.extend([Item::Section, Item::Length, Item::Settings, Item::Back]);
+        if !self.setup.way.tours() {
+            v.extend([Item::Section, Item::Length]);
+        }
+        v.extend([Item::Settings, Item::Back]);
         v
     }
 
@@ -308,27 +333,48 @@ impl PracticeMenu {
             .unwrap_or(i)
     }
 
-    /// 今の苦手度（記録が変わったら変わる）。区間に記録が無ければ開いたときの値
-    fn weakness_now(&self, spot: &Spot) -> f64 {
+    /// 区間の記録の苦手度（小節の平均）。記録が無ければ None
+    fn recorded_weakness(&self, s: Section) -> Option<f64> {
         let w = &self.setup.weak.weakness;
-        let v: Vec<f64> = (spot.section.first..=spot.section.last)
+        let v: Vec<f64> = (s.first..=s.last)
             .filter_map(|m| w.get(m as usize).copied().flatten())
             .collect();
-        if v.is_empty() {
-            spot.weakness
+        (!v.is_empty()).then(|| v.iter().sum::<f64>() / v.len() as f64)
+    }
+
+    /// 今の苦手度（記録が変わったら変わる）。区間に記録が無ければ開いたときの値
+    fn weakness_now(&self, spot: &Spot) -> f64 {
+        self.recorded_weakness(spot.section)
+            .unwrap_or(spot.weakness)
+    }
+
+    /// 札に出す苦手度。めぐる所（フィル・つなぎ目）は、記録が無ければ None
+    fn card_weakness(&self, spot: &Spot) -> Option<f64> {
+        if self.setup.way.tours() {
+            self.recorded_weakness(spot.section)
         } else {
-            v.iter().sum::<f64>() / v.len() as f64
+            Some(self.weakness_now(spot))
         }
     }
 
-    /// カーソルの行に合わせて、練習する区間と絵に出す区間を決める
+    /// カーソルの行に合わせて、練習する区間と絵に出す区間を決める。めぐるやり方では練習する区間は変えず、
+    /// 「やり方」の行では 1 か所目を絵に出す
     fn sync(&mut self) {
+        let tours = self.setup.way.tours();
         let s = match self.item() {
-            Item::Spot(i) => Some(self.spots[i].section),
+            Item::Spot(i) => self.cards().get(i).map(|c| c.section),
             Item::Section | Item::Length => self.custom,
+            Item::Way if tours => {
+                if let Some(c) = self.cards().first() {
+                    self.shown = Some(c.section);
+                }
+                return;
+            }
             Item::Way | Item::WayOption | Item::Settings | Item::Back => return,
         };
-        self.setup.section = s;
+        if !tours {
+            self.setup.section = s;
+        }
         self.shown = s;
     }
 
@@ -358,7 +404,14 @@ impl PracticeMenu {
                 let d = if input == MenuInput::Left { -1 } else { 1 };
                 match item {
                     Item::Way => {
+                        let was = self.setup.way.tours();
                         self.setup.way = self.setup.way.step(d);
+                        // 札の数が変わるので、カーソルは「やり方」の行に置き直す
+                        self.cursor = self.item_index(Item::Way);
+                        if was && !self.setup.way.tours() {
+                            self.shown = self.setup.section;
+                        }
+                        self.sync();
                         return Response::se(Se::Move);
                     }
                     Item::WayOption => return self.change_option(d),
@@ -557,14 +610,14 @@ impl PracticeMenu {
 
     /// 苦手な所の札の間（札の高さと間）。下の行が増えたら、板に収まるよう札を低くする
     fn card_pitch(&self) -> f32 {
-        let n = self.spots.len().max(1) as f32;
+        let n = self.cards().len().max(1) as f32;
         let room = LIST.1 + LIST.3 - 8.0 - CARD_Y - 10.0 - self.rows().len() as f32 * ROW_H;
         (CARD_H + CARD_GAP).min(room / n)
     }
 
     /// 一覧の行の場所（y と高さ）
     fn item_rect(&self, i: usize) -> (f32, f32) {
-        let n = self.spots.len();
+        let n = self.cards().len();
         if i < n {
             let pitch = self.card_pitch();
             (CARD_Y + i as f32 * pitch, pitch - CARD_GAP)
@@ -575,7 +628,7 @@ impl PracticeMenu {
 
     /// 苦手な所の下の行の上の端
     fn rows_top(&self) -> f32 {
-        let n = self.spots.len();
+        let n = self.cards().len();
         if n == 0 {
             // 苦手な所が無いことを書く 2 行の下
             CARD_Y + 56.0
@@ -634,7 +687,7 @@ impl PracticeMenu {
             g,
             &BandData {
                 weakness: &self.setup.weak.weakness,
-                phrases: self.spots.iter().map(|s| s.section).collect(),
+                phrases: self.cards().iter().map(|s| s.section).collect(),
                 selected: self.shown,
                 cleared,
             },
@@ -663,31 +716,44 @@ impl PracticeMenu {
             bold: true,
             ..Style::edged(18.0, Color32::WHITE, Color32::BLACK, 1.5)
         };
-        if let Some(tx) = g.texts.get(t("Weak Spots", "苦手な所"), &head) {
+        let way = self.setup.way;
+        let heading = if way.tours() {
+            t("Tour Stops", "めぐる所")
+        } else {
+            t("Weak Spots", "苦手な所")
+        };
+        if let Some(tx) = g.texts.get(heading, &head) {
             tx.draw(c, x + 18.0, y + 8.0, 1.0, 1.0);
         }
         let small = Style::edged(12.0, Color32::from_gray(190), Color32::BLACK, 1.0);
-        if let Some(tx) = g.texts.get(&weak_source(&self.setup), &small) {
+        let source = match way {
+            Way::Fills => t("found in the chart", "譜面から見つけたフィル").to_owned(),
+            Way::Seams => t("found in the chart", "譜面から見つけた変わり目").to_owned(),
+            _ => weak_source(&self.setup),
+        };
+        if let Some(tx) = g.texts.get(&source, &small) {
             tx.draw_fit(c, (x + w - 18.0 - tx.w).max(x + 120.0), y + 14.0, w - 140.0);
         }
         let current = self.item();
-        if self.spots.is_empty() {
+        let cards = self.cards();
+        if cards.is_empty() {
             let style = Style::edged(14.0, GREY, Color32::BLACK, 1.0);
-            let lines = g.texts.wrap(
+            let text = if way.tours() {
+                no_stops_line(way)
+            } else {
                 t(
                     "No weak spots yet. Play the song through once and they show up here. For now, pick a section yourself.",
                     "苦手な所はまだありません。1 回通して遊ぶと、ここに出ます。今は区間を自分で選んでください。",
-                ),
-                14.0,
-                w - 40.0,
-            );
+                )
+            };
+            let lines = g.texts.wrap(text, 14.0, w - 40.0);
             for (i, line) in lines.iter().take(3).enumerate() {
                 if let Some(tx) = g.texts.get(line, &style) {
                     tx.draw(c, x + 20.0, CARD_Y + i as f32 * 18.0, 1.0, 1.0);
                 }
             }
         }
-        for (i, spot) in self.spots.iter().enumerate() {
+        for (i, spot) in cards.iter().enumerate() {
             let (cy, ch) = self.item_rect(i);
             let on = current == Item::Spot(i);
             let card = (x + 12.0, cy, w - 24.0, ch);
@@ -722,20 +788,28 @@ impl PracticeMenu {
             if let Some(tx) = g.texts.get(&section_label(spot.section), &label) {
                 tx.draw_fit(c, tx_x, cy + 6.0, w - 24.0 - (tx_x - x) - 8.0);
             }
-            let wk = self.weakness_now(spot);
-            let bar = (tx_x, cy + 28.0, 100.0, 8.0);
-            round_fill(c, bar, 4.0, Color32::from_white_alpha(30));
-            round_fill(
-                c,
-                (bar.0, bar.1, bar.2 * wk.clamp(0.0, 1.0) as f32, bar.3),
-                4.0,
-                weakness_color(Some(wk)),
-            );
             let pct = Style::edged(12.0, GREY, Color32::BLACK, 1.0);
-            if let Some(tx) = g.texts.get(&format!("{:.0}%", wk * 100.0), &pct) {
-                tx.draw(c, bar.0 + bar.2 + 6.0, cy + 24.0, 1.0, 1.0);
+            match self.card_weakness(spot) {
+                Some(wk) => {
+                    let bar = (tx_x, cy + 28.0, 100.0, 8.0);
+                    round_fill(c, bar, 4.0, Color32::from_white_alpha(30));
+                    round_fill(
+                        c,
+                        (bar.0, bar.1, bar.2 * wk.clamp(0.0, 1.0) as f32, bar.3),
+                        4.0,
+                        weakness_color(Some(wk)),
+                    );
+                    if let Some(tx) = g.texts.get(&format!("{:.0}%", wk * 100.0), &pct) {
+                        tx.draw(c, bar.0 + bar.2 + 6.0, cy + 24.0, 1.0, 1.0);
+                    }
+                }
+                None => {
+                    if let Some(tx) = g.texts.get(t("no records", "記録なし"), &pct) {
+                        tx.draw(c, tx_x, cy + 24.0, 1.0, 1.0);
+                    }
+                }
             }
-            if let Some(speed) = self.cleared_speed(spot.section) {
+            if let Some(speed) = self.cleared_speed(spot.section).filter(|_| !way.tours()) {
                 let badge = (tx_x, cy + (ch - 18.0).min(40.0), 84.0, 18.0);
                 round_fill(c, badge, 10.0, CLEARED_COLOR);
                 let st = Style {
@@ -762,7 +836,7 @@ impl PracticeMenu {
             1.0,
             Color32::from_white_alpha(50),
         );
-        let n = self.spots.len();
+        let n = cards.len();
         for (k, item) in self.rows().into_iter().enumerate() {
             let (ry, rh) = self.item_rect(n + k);
             let on = current == item;
@@ -860,9 +934,12 @@ impl PracticeMenu {
             }
             return;
         };
-        let spot = self.spots.iter().position(|p| p.section == section);
-        // 題：札（苦手 1・自分で選ぶ）と区間
+        let cards = self.cards();
+        let tours = self.setup.way.tours();
+        let spot = cards.iter().position(|p| p.section == section);
+        // 題：札（苦手 1・1 か所目・自分で選ぶ）と区間
         let badge = match spot {
+            Some(i) if tours => tf!("Spot {}", "{} か所目", i + 1),
             Some(i) => tf!("Weak {}", "苦手 {}", i + 1),
             None => t("Your Pick", "自分で選ぶ").to_owned(),
         };
@@ -884,14 +961,11 @@ impl PracticeMenu {
         if let Some(tx) = g.texts.get(&section_label(section), &title) {
             tx.draw(c, tx_x, y + 14.0, 1.0, 1.0);
         }
-        let info = match spot {
-            Some(i) => {
-                let wk = self.weakness_now(&self.spots[i]);
-                Some((
-                    tf!("weakness {:.0}%", "苦手度 {:.0}%", wk * 100.0),
-                    weakness_color(Some(wk)),
-                ))
-            }
+        let info = match spot.and_then(|i| self.card_weakness(&cards[i])) {
+            Some(wk) => Some((
+                tf!("weakness {:.0}%", "苦手度 {:.0}%", wk * 100.0),
+                weakness_color(Some(wk)),
+            )),
             None => {
                 let n = self.setup.notes_in(section);
                 Some((count(n, "note", "notes", "音符"), GREY))
@@ -971,6 +1045,22 @@ impl PracticeMenu {
         let grey = Style::edged(14.0, GREY, Color32::BLACK, 1.0);
         let py = ly + 42.0;
         let mut below = py + 54.0;
+        let head = if s.way.tours() {
+            let secs = s.tour_seconds();
+            let time = if secs < 60.0 {
+                t("about 1 min", "1 分ほど").to_owned()
+            } else {
+                let m = (secs / 60.0).round() as u32;
+                tf!("about {m} min", "約 {m} 分")
+            };
+            tf!(
+                "{}% the whole way · {time}",
+                "{}% のまま・{time}",
+                s.speed.first_speed()
+            )
+        } else {
+            head
+        };
         if s.way == Way::Climb {
             if let Some(tx) = g.texts.get(&head, &accent) {
                 tx.draw_fit(c, left, py, right - left);
@@ -995,7 +1085,7 @@ impl PracticeMenu {
             if let Some(tx) = g.texts.get(&head, &speed) {
                 tx.draw_fit(c, hx, py + 3.0, right - hx);
             }
-            let help = way_help(s.way, s.part, s.build, section.measures());
+            let help = way_help(s.way, s.part, s.build, section.measures(), cards.len());
             let lines = g.texts.wrap(&help, 14.0, right - left);
             for (i, line) in lines.iter().take(3).enumerate() {
                 if let Some(tx) = g.texts.get(line, &grey) {
@@ -1004,7 +1094,7 @@ impl PracticeMenu {
             }
             below = py + 28.0 + lines.len().min(3) as f32 * 19.0 + 6.0;
         }
-        if let Some(speed) = self.cleared_speed(section) {
+        if let Some(speed) = self.cleared_speed(section).filter(|_| !tours) {
             let st = Style::edged(14.0, CLEARED_COLOR, Color32::BLACK, 1.0);
             if let Some(tx) = g
                 .texts
@@ -1015,7 +1105,9 @@ impl PracticeMenu {
         }
         // 練習を始めるボタン（音符が無ければ知らせる）
         if !s.playable(section) {
-            let text = if s.notes_in(section) == 0 {
+            let text = if tours {
+                no_stops_line(s.way)
+            } else if s.notes_in(section) == 0 {
                 t(
                     "This section has no notes.",
                     "この区間には音符がありません。",
@@ -1459,6 +1551,10 @@ mod tests {
             way: Default::default(),
             part: Default::default(),
             build: Default::default(),
+            fills: Vec::new(),
+            seams: Vec::new(),
+            weak_tour: Vec::new(),
+            measure_ms: Vec::new(),
         }
     }
 
@@ -1643,21 +1739,74 @@ mod tests {
         ));
         // 積み上げは向きの行
         m.cursor = m.item_index(Item::Way);
-        m.input(MenuInput::Right);
-        m.input(MenuInput::Right);
+        for _ in 0..3 {
+            m.input(MenuInput::Right);
+        }
         assert_eq!(m.setup.way, Way::Build);
         m.input(MenuInput::Down);
         m.input(MenuInput::Left);
         assert_eq!(m.setup.build, Build::Backward);
         // 左の端からは右の端へ回る
         m.cursor = m.item_index(Item::Way);
-        for _ in 0..3 {
+        for _ in 0..4 {
             m.input(MenuInput::Left);
         }
         assert_eq!(m.setup.way, Way::Climb);
         m.input(MenuInput::Left);
         assert_eq!(m.setup.way, Way::Fade);
         assert!(!m.items().contains(&Item::WayOption));
+    }
+
+    #[test]
+    fn touring_ways_list_the_stops_and_start_from_the_first() {
+        let mut s = setup(16, None);
+        s.fills = vec![Section::new(3, 3), Section::new(7, 7)];
+        let mut m = PracticeMenu::new(s, None, None);
+        m.cursor = m.item_index(Item::Way);
+        // 苦手めぐり：苦手な所 3 か所を、まぜた順にめぐる
+        for _ in 0..3 {
+            m.input(MenuInput::Right);
+        }
+        assert_eq!(m.setup.way, Way::Tour);
+        assert_eq!(m.item(), Item::Way);
+        let mut tour: Vec<Section> = m.cards().iter().map(|c| c.section).collect();
+        tour.sort_by_key(|s| s.first);
+        assert_eq!(
+            tour,
+            vec![Section::new(4, 5), Section::new(9, 9), Section::new(12, 13)]
+        );
+        // 自分で選ぶ行は出ない
+        assert_eq!(m.items().len(), 3 + 3);
+        assert!(!m.items().contains(&Item::Section));
+        // フィルだけ：札は見つけたフィル。2 か所目の札で決めても、1 か所目からめぐる（選んでいた区間は変えない）
+        m.input(MenuInput::Right);
+        m.input(MenuInput::Right);
+        assert_eq!(m.setup.way, Way::Fills);
+        assert_eq!(m.item(), Item::Way);
+        assert_eq!(m.shown(), Some(Section::new(3, 3)));
+        m.cursor = 1;
+        m.sync();
+        assert_eq!(m.shown(), Some(Section::new(7, 7)));
+        let Some(Done::Start(o)) = m.input(MenuInput::Decide).done else {
+            panic!("did not start");
+        };
+        assert_eq!(o.way, Way::Fills);
+        assert_eq!(
+            o.stops.as_slice(),
+            &[Section::new(3, 3), Section::new(7, 7)]
+        );
+        assert_eq!(o.section, Section::new(4, 5));
+        // つなぎ目：見つからなければ始められない
+        m.cursor = m.item_index(Item::Way);
+        m.input(MenuInput::Right);
+        assert_eq!(m.setup.way, Way::Seams);
+        assert!(m.cards().is_empty());
+        assert_eq!(m.input(MenuInput::Decide).done, None);
+        // めぐるやり方をやめると、絵は選んでいた区間に戻る
+        m.input(MenuInput::Right);
+        assert_eq!(m.setup.way, Way::Break);
+        assert_eq!(m.shown(), Some(Section::new(4, 5)));
+        assert!(m.items().contains(&Item::Section));
     }
 
     #[test]

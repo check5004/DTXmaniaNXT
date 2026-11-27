@@ -22,11 +22,11 @@ use crate::drill_hud::clock;
 use crate::gfx::{Canvas, Gfx, Opt, src};
 use crate::play_view::JUDGE_LINE_Y;
 use crate::practice::{
-    CLEAR_HOLD_MS, Cue, LapState, Practice, TIME_UP_HOLD_MS, part_label, pass_line, section_label,
-    way_label,
+    CLEAR_HOLD_MS, Cue, LapState, Practice, TIME_UP_HOLD_MS, mark_label, mark_line, part_label,
+    pass_line, section_label, way_label,
 };
 use crate::text::Style;
-use engine::practice_way::Way;
+use engine::practice_way::{Mark, TOUR_LAPS, Way};
 
 /// 周と速度の数字の場所（上流のスコアと同じ高さ）
 pub(crate) const LAP_X: f32 = 40.0;
@@ -78,6 +78,17 @@ pub(crate) const GREY: Color32 = Color32::from_gray(200);
 const DIM: Color32 = Color32::from_gray(150);
 /// お手本の周（自動で叩く）
 pub(crate) const DEMO_COLOR: Color32 = Color32::from_rgb(0xB4, 0x8C, 0xFF);
+/// 同じ所を 2 周とも落とした（めぐるやり方の ×）
+pub(crate) const WEAK_COLOR: Color32 = Color32::from_rgb(0xFF, 0x70, 0x50);
+
+/// めぐった所の出来の色（◎ 緑・○ 黄・× 赤）
+pub(crate) fn mark_color(m: Mark) -> Color32 {
+    match m {
+        Mark::Clean => OK_COLOR,
+        Mark::Fair => SLIP_COLOR,
+        Mark::Weak => WEAK_COLOR,
+    }
+}
 /// 今の段の文字（橙の上）
 pub(crate) const INK: Color32 = Color32::from_rgb(50, 30, 0);
 
@@ -104,6 +115,7 @@ pub fn draw(
     draw_banner(c, g, ln, p, now, px_per_ms, reverse);
     draw_clear(c, g, ln, p, now, reverse);
     draw_time_up(c, g, ln, p, now, reverse);
+    draw_toured(c, g, ln, p, now, reverse);
     draw_count_in(c, g, ln, p, now, reverse);
     draw_demo_tag(c, g, ln, p, now, reverse);
 }
@@ -400,7 +412,8 @@ fn draw_info(c: &Canvas, g: &mut Gfx, p: &Practice) {
     c.frame(x, y, w, h, Color32::from_white_alpha(60));
     let started = p.attempt_laps().iter().any(|l| l.judged > 0);
     let (title, marks) = match p.done.last() {
-        Some(last) if !started => (
+        // めぐるやり方は、次の所の絵に前の所の印を出さない
+        Some(last) if !started && !p.options.way.tours() => (
             {
                 let laps = count(last.laps, "loop", "loops", "周");
                 tf!(
@@ -409,6 +422,14 @@ fn draw_info(c: &Canvas, g: &mut Gfx, p: &Practice) {
                 )
             },
             p.marks_of_attempt(last.index),
+        ),
+        _ if p.options.way.tours() => (
+            tf!(
+                "Misses (this spot, {} loops)",
+                "ミスした所（この所の {} 周）",
+                p.step_laps()
+            ),
+            p.attempt_marks(),
         ),
         _ => (
             tf!(
@@ -434,7 +455,7 @@ fn draw_info(c: &Canvas, g: &mut Gfx, p: &Practice) {
         c,
         g,
         (x + 6.0, y + 28.0, w - 12.0, h - 34.0),
-        p.options.section,
+        p.shown_section(),
         &marks,
         Look {
             counts: false,
@@ -460,6 +481,10 @@ pub(crate) fn card_frame(c: &Canvas) {
 fn draw_card(c: &Canvas, g: &mut Gfx, p: &Practice, now: f64) {
     card_frame(c);
     let (x, y, w, _) = CARD;
+    if p.options.way.tours() {
+        draw_tour_card(c, g, p, now);
+        return;
+    }
     let goal = p.plan().goal();
     put(
         c,
@@ -505,6 +530,24 @@ fn draw_card(c: &Canvas, g: &mut Gfx, p: &Practice, now: f64) {
         w - 28.0,
         1.0,
     );
+    draw_lap_dots(c, g, p, now);
+    put(
+        c,
+        g,
+        &pass_line(p.options.rule),
+        &edged(14.0, Color32::WHITE),
+        x + 14.0,
+        y + 290.0,
+        Align::Left,
+        w - 28.0,
+        1.0,
+    );
+    draw_way_and_time(c, g, p, now);
+}
+
+/// 右の欄の、この段（めぐるやり方はこの所）の周の丸と「1 / 4」
+fn draw_lap_dots(c: &Canvas, g: &mut Gfx, p: &Practice, now: f64) {
+    let (x, y, w, _) = CARD;
     let n = p.step_laps();
     let laps = p.attempt_laps();
     let playing = lap_in_attempt(p, now) - 1;
@@ -550,17 +593,11 @@ fn draw_card(c: &Canvas, g: &mut Gfx, p: &Practice, now: f64) {
         Align::Right,
         80.0,
     );
-    put(
-        c,
-        g,
-        &pass_line(p.options.rule),
-        &edged(14.0, Color32::WHITE),
-        x + 14.0,
-        y + 290.0,
-        Align::Left,
-        w - 28.0,
-        1.0,
-    );
+}
+
+/// 右の欄の下の行：やり方の今の様子と、今日のメニューの残り時間
+fn draw_way_and_time(c: &Canvas, g: &mut Gfx, p: &Practice, now: f64) {
+    let (x, y, w, _) = CARD;
     // やり方（今日のメニューの曲は、いつも段をのぼる）
     if let Some((text, color)) = way_line(p, now) {
         put(
@@ -602,6 +639,150 @@ fn draw_card(c: &Canvas, g: &mut Gfx, p: &Practice, now: f64) {
             1.0,
         );
     }
+}
+
+/// めぐるやり方の右の欄。何か所目かと「あと何か所」、めぐる所の並びと出来、この所の周の丸
+fn draw_tour_card(c: &Canvas, g: &mut Gfx, p: &Practice, now: f64) {
+    let (x, y, w, _) = CARD;
+    let stops = p.stops();
+    let n = stops.len();
+    let at = p.stop_index().unwrap_or(0);
+    put(
+        c,
+        g,
+        &tf!("Spot {} of {n}", "{} / {n} か所目", (at + 1).min(n)),
+        &bold(19.0, Color32::WHITE),
+        x + 14.0,
+        y + 10.0,
+        Align::Left,
+        w / 2.0,
+        1.0,
+    );
+    let (right, color) = if p.toured() {
+        (t("DONE", "おしまい").to_owned(), OK_COLOR)
+    } else {
+        let left = count(p.steps_left(), "spot", "spots", "か所");
+        (tf!("{left} to go", "あと {left}"), CURRENT_COLOR)
+    };
+    put(
+        c,
+        g,
+        &right,
+        &bold(22.0, color),
+        x + w - 14.0,
+        y + 7.0,
+        Align::Right,
+        w / 2.0,
+        1.0,
+    );
+    // めぐる所の並び。今の所は橙、めぐった所は出来の印
+    let marks = p.stop_marks();
+    let (rx, rw) = (x + 16.0, w - 32.0);
+    let gap = 6.0;
+    let cw = (rw - gap * (n.max(1) as f32 - 1.0)) / n.max(1) as f32;
+    let (top, ch) = (y + 74.0, 104.0);
+    for (i, s) in stops.iter().enumerate() {
+        let bx = rx + i as f32 * (cw + gap);
+        let cell = (bx, top, cw, ch);
+        let current = i == at && !p.toured();
+        if current {
+            round_fill(
+                c,
+                (bx - 3.0, top - 3.0, cw + 6.0, ch + 6.0),
+                7.0,
+                CURRENT_COLOR.gamma_multiply(0.35),
+            );
+            round_fill(c, cell, 5.0, CURRENT_COLOR.gamma_multiply(0.95));
+            put_mid(
+                c,
+                g,
+                t("NOW", "いまここ"),
+                &edged(12.0, CURRENT_COLOR),
+                bx + cw / 2.0,
+                top - 13.0,
+                Align::Center,
+                cw + gap,
+            );
+        } else {
+            round_fill(c, cell, 5.0, Color32::from_white_alpha(18));
+            round_frame(c, cell, 5.0, Color32::from_white_alpha(70));
+        }
+        let ink = if current { INK } else { GREY };
+        let style = |px: f32| {
+            if current {
+                Style::plain(px, ink)
+            } else {
+                edged(px, ink)
+            }
+        };
+        put_mid(
+            c,
+            g,
+            t("Meas.", "小節"),
+            &style(11.0),
+            bx + cw / 2.0,
+            top + 14.0,
+            Align::Center,
+            cw - 4.0,
+        );
+        let range = if s.first == s.last {
+            s.first.to_string()
+        } else {
+            format!("{}-{}", s.first, s.last)
+        };
+        put_mid(
+            c,
+            g,
+            &range,
+            &Style {
+                bold: true,
+                ..style(15.0)
+            },
+            bx + cw / 2.0,
+            top + 34.0,
+            Align::Center,
+            cw - 4.0,
+        );
+        if let Some(m) = marks.get(i).copied().flatten() {
+            put_mid(
+                c,
+                g,
+                m.symbol(),
+                &bold(30.0, mark_color(m)),
+                bx + cw / 2.0,
+                top + 72.0,
+                Align::Center,
+                cw,
+            );
+        }
+    }
+    if p.toured() {
+        return;
+    }
+    put(
+        c,
+        g,
+        &tf!("This spot: {} loops", "この所の {} 周", p.step_laps()),
+        &edged(13.0, GREY),
+        x + 14.0,
+        y + 218.0,
+        Align::Left,
+        w - 28.0,
+        1.0,
+    );
+    draw_lap_dots(c, g, p, now);
+    put(
+        c,
+        g,
+        &mark_line(),
+        &edged(13.0, Color32::WHITE),
+        x + 14.0,
+        y + 290.0,
+        Align::Left,
+        w - 28.0,
+        1.0,
+    );
+    draw_way_and_time(c, g, p, now);
 }
 
 /// 右の欄の下に出す、やり方の今の様子（段をのぼるだけなら None）
@@ -661,6 +842,13 @@ fn way_line(p: &Practice, now: f64) -> Option<(String, Color32)> {
                 "{name}: {:.0}% of the notes shown",
                 "{name}：見える音符 {:.0}%",
                 share * 100.0
+            )
+        }
+        Way::Tour | Way::Fills | Way::Seams => {
+            tf!(
+                "{name}: {}",
+                "{name}：{}",
+                section_label(p.current_section())
             )
         }
     };
@@ -1071,6 +1259,57 @@ fn draw_banner(
                 alpha,
             );
         }
+        Cue::Stop { index } => {
+            let n = p.stops().len();
+            banner_frame(c, ln, top, BANNER_H, CURRENT_COLOR, alpha);
+            line(
+                c,
+                g,
+                ln,
+                &tf!("Next: spot {} of {n}", "次の所 {} / {n}", index + 1),
+                &bold(30.0, CURRENT_COLOR),
+                top + 18.0,
+                alpha,
+            );
+            line(
+                c,
+                g,
+                ln,
+                &section_label(lap.section),
+                &bold(34.0, Color32::WHITE),
+                top + 66.0,
+                alpha,
+            );
+            // さっきの所の出来
+            if let Some(m) = last.and_then(Mark::of) {
+                line(
+                    c,
+                    g,
+                    ln,
+                    &tf!(
+                        "Last spot: {} {}",
+                        "さっきの所：{} {}",
+                        m.symbol(),
+                        mark_label(m)
+                    ),
+                    &edged(18.0, mark_color(m)),
+                    top + 130.0,
+                    alpha,
+                );
+            }
+            line(
+                c,
+                g,
+                ln,
+                &tf!(
+                    "{TOUR_LAPS} loops at {speed}%",
+                    "{speed}% で {TOUR_LAPS} 周"
+                ),
+                &edged(15.0, GREY),
+                top + 170.0,
+                alpha,
+            );
+        }
         Cue::Manual { from } => {
             banner_frame(c, ln, top, BANNER_H, Color32::WHITE, alpha);
             line(
@@ -1138,6 +1377,13 @@ fn start_line(p: &Practice) -> Option<String> {
             "周ごとに音符が減っていきます",
         )
         .to_owned(),
+        Way::Tour | Way::Fills | Way::Seams => {
+            let n = count(p.stops().len(), "spot", "spots", "か所");
+            tf!(
+                "{n}, {TOUR_LAPS} loops each",
+                "{n}を {TOUR_LAPS} 周ずつめぐります"
+            )
+        }
     })
 }
 
@@ -1234,6 +1480,62 @@ fn draw_time_up(c: &Canvas, g: &mut Gfx, ln: Lanes, p: &Practice, now: f64, reve
         t("Results coming up…", "まもなく結果へ"),
         &edged(14.0, GREY),
         top + 96.0,
+        alpha,
+    );
+}
+
+/// めぐり終えたら、結果の画面へ進むまでレーンの真ん中に「ひと回りしました」と所ごとの出来
+fn draw_toured(c: &Canvas, g: &mut Gfx, ln: Lanes, p: &Practice, now: f64, reverse: bool) {
+    let Some(at) = p.toured_at_ms else {
+        return;
+    };
+    let since = now - at;
+    if !(0.0..CLEAR_HOLD_MS + 500.0).contains(&since) {
+        return;
+    }
+    let alpha = (since / BANNER_FADE_IN_MS).clamp(0.0, 1.0) as f32;
+    let h = 200.0;
+    let top = banner_top(h, reverse);
+    banner_frame(c, ln, top, h, OK_COLOR, alpha);
+    line(
+        c,
+        g,
+        ln,
+        t("TOUR COMPLETE!", "ひと回りしました！"),
+        &bold(40.0, OK_COLOR),
+        top + 18.0,
+        alpha,
+    );
+    // 所ごとの出来を並べる
+    let marks = p.stop_marks();
+    let pitch = 48.0;
+    let x0 = ln.cx() - pitch * (marks.len() as f32 - 1.0) / 2.0;
+    for (i, m) in marks.iter().enumerate() {
+        let (sym, color) = match m {
+            Some(m) => (m.symbol(), mark_color(*m)),
+            None => ("-", GREY),
+        };
+        let style = bold(34.0, color);
+        let h = g.texts.get(sym, &style).map_or(0.0, |t| t.h);
+        put(
+            c,
+            g,
+            sym,
+            &style,
+            x0 + i as f32 * pitch,
+            top + 100.0 - h / 2.0,
+            Align::Center,
+            pitch,
+            alpha,
+        );
+    }
+    line(
+        c,
+        g,
+        ln,
+        t("Results coming up…", "まもなく結果へ"),
+        &edged(13.0, GREY),
+        top + 150.0,
         alpha,
     );
 }

@@ -200,13 +200,26 @@ impl SectionAudio {
     /// まとめた音 `mix`（曲の時刻 `from_ms` から）を受け取る。`first`（%）の速度の音はここで作り、
     /// ほかの速度は `request` で別のスレッドに頼む
     pub fn new(mix: Vec<f32>, from_ms: f64, rate: u32, pitch: Pitch, first: u32) -> Self {
+        Self::build(mix, from_ms, rate, pitch, Some(first))
+    }
+
+    /// [`SectionAudio::new`] と同じだが、`first`（%）の速度の音も別のスレッドで作る（すぐには使わない区間の音）
+    pub fn later(mix: Vec<f32>, from_ms: f64, rate: u32, pitch: Pitch, first: u32) -> Self {
+        let mut a = Self::build(mix, from_ms, rate, pitch, None);
+        a.request(first);
+        a
+    }
+
+    fn build(mix: Vec<f32>, from_ms: f64, rate: u32, pitch: Pitch, now: Option<u32>) -> Self {
         let song_len_ms = (mix.len() / 2) as f64 * 1000.0 / f64::from(rate);
         let mix: Arc<[f32]> = Arc::from(mix);
         let mut ready = HashMap::new();
-        ready.insert(
-            first,
-            Sound::from_samples(stretch(&mix, rate, first, pitch)),
-        );
+        if let Some(first) = now {
+            ready.insert(
+                first,
+                Sound::from_samples(stretch(&mix, rate, first, pitch)),
+            );
+        }
         let (tx, jobs) = mpsc::channel::<u32>();
         let (done, rx) = mpsc::channel();
         let src = mix.clone();

@@ -2001,6 +2001,7 @@ impl App {
             way: p.way,
             part: p.part,
             build: p.build,
+            stops: engine::practice_way::Stops::default(),
         }
     }
 
@@ -3259,10 +3260,15 @@ impl App {
                 return;
             }
             KeyCode::ArrowLeft | KeyCode::ArrowRight if play.practice.is_some() => {
-                // 区間を 1 小節ずらして始め直す
+                // 区間を 1 小節ずらして始め直す（めぐるやり方は所が決まっているので動かさない）
                 let d = if code == KeyCode::ArrowLeft { -1 } else { 1 };
                 let path = play.path.clone();
-                if let Some(mut o) = play.practice.as_ref().map(|p| p.restart_options()) {
+                if let Some(mut o) = play
+                    .practice
+                    .as_ref()
+                    .map(|p| p.restart_options())
+                    .filter(|o| !o.way.tours())
+                {
                     o.section = o.section.shifted(d, play.notes_per_measure().len());
                     self.restart(path, Some(o));
                 }

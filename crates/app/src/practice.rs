@@ -20,9 +20,10 @@ use engine::practice::{
     speed_percent,
 };
 use engine::practice_way::{
-    Build, Part, Way, break_muted, build_lengths, build_section, fade_rank, fade_share, lane_mask,
+    Build, MAX_STOPS, Mark, Part, Stops, TOUR_LAPS, Way, break_muted, build_lengths, build_section,
+    fade_rank, fade_share, find_fills, find_seams, lane_mask, shuffle,
 };
-use i18n::{t, tf};
+use i18n::{count, t, tf};
 use records::{ClearRecord, StrayHit};
 
 use crate::chart_picture::{ChartPicture, Marks};
@@ -48,6 +49,8 @@ pub struct PracticeOptions {
     pub way: Way,
     pub part: Part,
     pub build: Build,
+    /// めぐるやり方でめぐる所（めぐる順）。ほかのやり方では空
+    pub stops: Stops,
 }
 
 /// 区間のほかの決めごと（設定に残し、次の練習でも使う）
@@ -106,6 +109,13 @@ pub struct PracticeSetup {
     pub way: Way,
     pub part: Part,
     pub build: Build,
+    /// 譜面から探したフィルと、形が変わる所（フィルだけ・つなぎ目でめぐる所）
+    pub fills: Vec<Section>,
+    pub seams: Vec<Section>,
+    /// 苦手めぐりでめぐる所（苦手な所を、開くたびにまぜた順）
+    pub weak_tour: Vec<Section>,
+    /// 小節の頭の曲の時刻（ミリ秒。めぐる時間の見積もりに使う）
+    pub measure_ms: Vec<f64>,
 }
 
 /// 苦手フレーズも記録も無いときに選んでおく長さ（小節）
@@ -133,7 +143,14 @@ impl PracticeSetup {
         let section = previous
             .map(|p| p.section.clamped(notes_per_measure.len()))
             .or_else(|| default_section(&weak, &notes_per_measure));
-        Ok(Self {
+        let fills = find_fills(&notes, tempo.measure_count());
+        let seams = find_seams(&notes, tempo.measure_count());
+        let spots: Vec<Section> = weak
+            .phrases
+            .iter()
+            .map(|p| Section::new(p.first, p.last))
+            .collect();
+        let mut setup = Self {
             path: path.to_owned(),
             title: chart.title().to_owned(),
             artist: chart.artist().to_owned(),
@@ -153,7 +170,56 @@ impl PracticeSetup {
             way: previous.map_or(prefs.way, |p| p.way),
             part: previous.map_or(prefs.part, |p| p.part),
             build: previous.map_or(prefs.build, |p| p.build),
-        })
+            fills,
+            seams,
+            weak_tour: Vec::new(),
+            measure_ms: (0..=tempo.measure_count())
+                .map(|m| tempo.measure_start_ms(m))
+                .collect(),
+        };
+        setup.set_weak_tour(&spots, tour_seed());
+        Ok(setup)
+    }
+
+    /// 苦手めぐりでめぐる所を、苦手な所 `spots`（苦手な順）から決める。苦手な方から [`MAX_STOPS`] か所を、
+    /// `seed` で決まる順にまぜる（同じ所を続けるより、まぜた方が覚えが残りやすい）
+    pub fn set_weak_tour(&mut self, spots: &[Section], seed: u64) {
+        let mut v: Vec<Section> = spots.iter().copied().take(MAX_STOPS).collect();
+        shuffle(&mut v, seed);
+        self.weak_tour = v;
+    }
+
+    /// 苦手めぐりの順を、苦手な所 `spots` からまぜ直す（練習メニューを開くたび）
+    pub fn reshuffle_weak_tour(&mut self, spots: &[Section]) {
+        self.set_weak_tour(spots, tour_seed());
+    }
+
+    /// 今のやり方でめぐり終えるまでのおよその時間（秒）。所ごとに 1 小節の助走と区間と着地を
+    /// [`TOUR_LAPS`] 周、今の速度で
+    pub fn tour_seconds(&self) -> f64 {
+        let ms = |m: u32| self.measure_ms.get(m as usize).copied();
+        let speed = f64::from(self.speed.first_speed().max(1)) / 100.0;
+        self.stops()
+            .iter()
+            .map(|s| {
+                let (Some(a), Some(b)) = (ms(s.first), ms(s.last + 1)) else {
+                    return 0.0;
+                };
+                let run_up = a - s.first.checked_sub(1).and_then(ms).unwrap_or(a - 2000.0);
+                let lap = (run_up + (b - a) + 600.0) / speed;
+                lap * f64::from(TOUR_LAPS) / 1000.0
+            })
+            .sum()
+    }
+
+    /// 今のやり方でめぐる所（めぐるやり方でなければ空）
+    pub fn stops(&self) -> Vec<Section> {
+        match self.way {
+            Way::Tour => self.weak_tour.clone(),
+            Way::Fills => self.fills.clone(),
+            Way::Seams => self.seams.clone(),
+            _ => Vec::new(),
+        }
     }
 
     /// 今の決めごと（設定に残す）
@@ -198,14 +264,24 @@ impl PracticeSetup {
             .collect()
     }
 
-    /// 区間 `s` を今のやり方で練習できるか（音符の無い区間、パート練習でそのパートの音符が無い区間はできない）
+    /// 区間 `s` を今のやり方で練習できるか（音符の無い区間、パート練習でそのパートの音符が無い区間はできない）。
+    /// めぐるやり方は、区間に関わらずめぐる所があればできる
     pub fn playable(&self, s: Section) -> bool {
+        if self.way.tours() {
+            return !self.stops().is_empty();
+        }
         self.notes_in(s) > 0 && (self.way != Way::Part || self.part_in(s, self.part))
     }
 
-    /// 始められるなら練習の決めごと
+    /// 始められるなら練習の決めごと。めぐるやり方の区間は、選んでいた区間のまま（めぐる所は `stops`）
     pub fn options(&self) -> Option<PracticeOptions> {
-        let section = self.section.filter(|&s| self.playable(s))?;
+        let stops = self.stops();
+        let section = if self.way.tours() {
+            self.section.or(stops.first().copied())
+        } else {
+            self.section
+        }
+        .filter(|&s| self.playable(s))?;
         Some(PracticeOptions {
             section,
             style: self.style,
@@ -218,6 +294,7 @@ impl PracticeSetup {
             way: self.way,
             part: self.part,
             build: self.build,
+            stops: Stops::new(&stops),
         })
     }
 
@@ -311,6 +388,13 @@ pub fn lanes_per_measure(notes: &[DrumNote], measures: usize) -> Vec<u16> {
     v
 }
 
+/// 苦手めぐりの順をまぜる種（開くたびに変わる）
+fn tour_seed() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos() as u64)
+}
+
 /// はじめに選んでおく区間。一番の苦手フレーズ、無ければ音符のある最初の小節から 4 小節
 fn default_section(weak: &WeakMap, notes_per_measure: &[usize]) -> Option<Section> {
     if let Some(p) = weak.phrases.first() {
@@ -332,6 +416,8 @@ pub enum Cue {
     Manual { from: u32 },
     /// 積み上げで、区間を `from` 小節から `to` 小節に伸ばした
     Grow { from: u32, to: u32 },
+    /// めぐるやり方で、次の所（0 から数えて `index` か所目）へ移った
+    Stop { index: usize },
 }
 
 /// 練習中の 1 周
@@ -480,6 +566,12 @@ pub struct Practice {
     pub cleared_at_ms: Option<f64>,
     /// 時間の区切りを過ぎて終えた実時間（それからは周を並べない）
     pub timed_out_at_ms: Option<f64>,
+    /// めぐるやり方で、最後の所まで叩き終えた実時間（それからは周を並べない）
+    pub toured_at_ms: Option<f64>,
+    /// 練習する小節の範囲（めぐるやり方は、めぐる所をすべて含む範囲。ほかは選んだ区間）
+    span: Section,
+    /// めぐるやり方で、今叩いている所（めぐる順の添字）
+    stop: usize,
     /// 音符をすべて判定し終えた周の数（周は順に終わる）
     settled: usize,
     /// 次に並べる周を助走から入れる・そのときに知らせること
@@ -528,6 +620,11 @@ pub const WITHDRAW_MARGIN_MS: f64 = 60.0;
 
 impl Practice {
     pub fn new(options: PracticeOptions, tempo: &TempoMap, chart_notes: Vec<DrumNote>) -> Self {
+        let mut options = options;
+        // めぐるやり方は、めぐる所が無ければ選んだ区間だけをめぐる
+        if options.way.tours() && options.stops.is_empty() {
+            options.stops = Stops::new(&[options.section]);
+        }
         // 積み上げは 1 小節から（区間が 1 小節なら、ふつうに段をのぼる）
         let build = (options.way == Way::Build)
             .then(|| build_lengths(options.section.measures()))
@@ -535,14 +632,25 @@ impl Practice {
             .map(|v| (v, 0));
         let first = match &build {
             Some((v, i)) => build_section(options.section, v[*i], options.build),
+            None if options.way.tours() => options.stops.as_slice()[0],
             None => options.section,
+        };
+        let span = match options.stops.cover() {
+            Some(c) if options.way.tours() => c,
+            _ => options.section,
+        };
+        // めぐるやり方は毎回区切る（所ごとに 1 小節前から入り、次の小節の頭の 1 打まで叩く）
+        let style = if options.way.tours() {
+            LoopStyle::Restart
+        } else {
+            options.style
         };
         let times = SectionTimes::new(tempo, first);
         let picture = ChartPicture::new(&chart_notes, tempo);
         Self {
             options,
             tempo: tempo.clone(),
-            looper: Looper::new(times, options.style),
+            looper: Looper::new(times, style),
             plan: options.speed,
             speed: snap_speed(i64::from(options.speed.first_speed())),
             attempt: 0,
@@ -552,6 +660,9 @@ impl Practice {
             done: Vec::new(),
             cleared_at_ms: None,
             timed_out_at_ms: None,
+            toured_at_ms: None,
+            span,
+            stop: 0,
             settled: 0,
             run_up_next: false,
             next_cue: None,
@@ -561,7 +672,7 @@ impl Practice {
             lap_of: Vec::new(),
             faint: Vec::new(),
             band: Vec::new(),
-            grid: BeatGrid::new(tempo, options.section),
+            grid: BeatGrid::new(tempo, span),
             picture,
             next_slots: Vec::new(),
             rest_watch: true,
@@ -592,9 +703,48 @@ impl Practice {
         self.build.as_ref().is_some_and(|(v, i)| i + 1 < v.len())
     }
 
-    /// 練習する区間の曲の時刻（区間の音はこの範囲で作る）
+    /// 区間の音を作る区間（めぐるやり方は所ごと。ほかは選んだ区間）
+    pub fn audio_sections(&self) -> Vec<Section> {
+        if self.options.way.tours() {
+            self.options.stops.as_slice().to_vec()
+        } else {
+            vec![self.options.section]
+        }
+    }
+
+    /// 譜面の絵と進み具合のバーに出す区間（めぐるやり方は今の所。ほかは選んだ区間）
+    pub fn shown_section(&self) -> Section {
+        if self.options.way.tours() {
+            self.current_section()
+        } else {
+            self.options.section
+        }
+    }
+
+    /// [`Practice::shown_section`] の曲の時刻
     pub fn times(&self) -> SectionTimes {
-        SectionTimes::new(&self.tempo, self.options.section)
+        SectionTimes::new(&self.tempo, self.shown_section())
+    }
+
+    /// めぐる所（めぐる順。めぐるやり方でなければ空）
+    pub fn stops(&self) -> &[Section] {
+        if self.options.way.tours() {
+            self.options.stops.as_slice()
+        } else {
+            &[]
+        }
+    }
+
+    /// めぐるやり方で、今の所（めぐる順の添字）
+    pub fn stop_index(&self) -> Option<usize> {
+        self.options.way.tours().then_some(self.stop)
+    }
+
+    /// めぐり終えた所ごとの出来（めぐる順。叩いている途中の所とまだの所は None）
+    pub fn stop_marks(&self) -> Vec<Option<Mark>> {
+        (0..self.stops().len())
+            .map(|i| self.done.get(i).and_then(Mark::of))
+            .collect()
     }
 
     /// 次に並べる周の速度（%）
@@ -652,7 +802,7 @@ impl Practice {
         if self.resume_pending {
             return true;
         }
-        match self.options.style {
+        match self.looper.style() {
             LoopStyle::Connect => self.looper.next_audio_ms(1.0) <= now_ms + ahead_ms,
             LoopStyle::Restart => self.settled >= self.laps.len(),
         }
@@ -698,9 +848,11 @@ impl Practice {
                 self.demo.push((n.ms, note.lane, note.wav));
                 self.pending_demo.push(placed);
             } else if n.judged {
-                // 区切るときの着地（区間の外）は地図に入れない
-                self.next_slots
-                    .push((self.grid.slot(note), note.lane, note.at));
+                // 区切るときの着地（区間の外。めぐるやり方は今の所の外）は地図に入れない
+                let inside =
+                    !self.options.way.tours() || self.current_section().contains(note.at.measure);
+                let slot = self.grid.slot(note).filter(|_| inside);
+                self.next_slots.push((slot, note.lane, note.at));
                 self.next_muted
                     .push(muted.iter().any(|&(a, b)| note.ms >= a && note.ms < b));
                 judged.push(placed);
@@ -864,6 +1016,10 @@ impl Practice {
 
     /// 挑戦を終える。合否から次の段を決め、次の挑戦を助走から並べるようにする（クリアなら並べない）
     fn close_attempt(&mut self, now_ms: f64) {
+        if self.options.way.tours() {
+            self.next_stop(now_ms);
+            return;
+        }
         let mut report = self.report();
         let passed = !self.decided && report.weak().is_empty();
         report.passed = Some(passed);
@@ -932,6 +1088,39 @@ impl Practice {
         self.next_cue = Some(Cue::Step { from, next });
     }
 
+    /// めぐるやり方で、今の所を終えて次の所へ移る（最後の所なら終える）。速度は変えない。
+    /// 合否は ◎○ なら越えた、× ならもう一度（記録と効果音のため。めぐるやり方はやり直さない）
+    fn next_stop(&mut self, now_ms: f64) {
+        let mut report = self.report();
+        let mark = Mark::of(&report);
+        report.passed = Some(mark != Some(Mark::Weak));
+        log::info!(
+            "stop {} of {} ({}): {} laps, {} missed -> {:?}",
+            self.stop + 1,
+            self.stops().len(),
+            section_label(self.current_section()),
+            report.laps,
+            report.missed,
+            mark
+        );
+        self.done.push(report);
+        self.full_attempts.push(false);
+        self.attempt += 1;
+        self.attempt_start = self.laps.len();
+        self.decided = false;
+        self.again = 0;
+        if self.stop + 1 >= self.stops().len() {
+            self.toured_at_ms = Some(now_ms);
+            return;
+        }
+        self.stop += 1;
+        let s = self.stops()[self.stop];
+        self.looper.set_times(SectionTimes::new(&self.tempo, s));
+        self.run_up_next = true;
+        self.resume_pending = true;
+        self.next_cue = Some(Cue::Stop { index: self.stop });
+    }
+
     /// 並べたがまだ始まっていない最後の周を、要らなくなったら取り下げる（手で決め直した速度と違う周、
     /// 同じ拍のミスが重なって終える挑戦の続きの周）。取り下げた周の音符と音は呼んだ側が取り除く。
     /// `now_ms` は今の実時間
@@ -977,7 +1166,7 @@ impl Practice {
 
     /// 区間の音符がすべて自動で叩くレーンなら、叩くのをやめても休みにしない（`auto` は自動で叩くレーン）
     pub fn set_auto_lanes(&mut self, auto: &[DrumLane]) {
-        let s = self.options.section;
+        let s = self.span;
         self.rest_watch = self
             .chart_notes
             .iter()
@@ -1092,7 +1281,7 @@ impl Practice {
     /// 等速以上で越えた段の、一番速い速度（%）（記録のクリア）
     /// パート練習（ほかのパートは自動）と、積み上げの途中の段はクリアに数えない
     pub fn clear_speed(&self) -> Option<u32> {
-        if self.options.way == Way::Part {
+        if self.options.way == Way::Part || self.options.way.tours() {
             return None;
         }
         self.done
@@ -1108,9 +1297,14 @@ impl Practice {
         self.cleared_at_ms.is_some()
     }
 
-    /// クリアしたか時間の区切りを過ぎて、もう周を並べない
+    /// クリアしたか、時間の区切りを過ぎたか、めぐり終えて、もう周を並べない
     pub fn over(&self) -> bool {
-        self.cleared_at_ms.is_some() || self.timed_out_at_ms.is_some()
+        self.cleared_at_ms.is_some() || self.timed_out_at_ms.is_some() || self.toured()
+    }
+
+    /// めぐるやり方で、最後の所まで叩き終えた
+    pub fn toured(&self) -> bool {
+        self.toured_at_ms.is_some()
     }
 
     /// 時間の区切りまでの残り（ミリ秒。区切りが無ければ None）。最初の周の区間の頭から数える
@@ -1153,10 +1347,14 @@ impl Practice {
         v
     }
 
-    /// 目標の段まで、あと何段か（今の段を入れる）。クリアしたら 0
+    /// 目標の段まで、あと何段か（今の段を入れる）。クリアしたら 0。
+    /// めぐるやり方は、あと何か所か（今の所を入れる）
     pub fn steps_left(&self) -> usize {
-        if self.cleared() {
+        if self.cleared() || self.toured() {
             return 0;
+        }
+        if self.options.way.tours() {
+            return self.stops().len() - self.stop;
         }
         let goal = self.plan.goal().max(self.speed);
         self.stairs()
@@ -1167,6 +1365,10 @@ impl Practice {
 
     /// 光らせる拍：前の挑戦が「もう一度」なら、そのとき重なった拍とレーン（多い順）。越えたら無し
     pub fn focus_beats(&self) -> Vec<(BeatSlot, Vec<DrumLane>)> {
+        // めぐるやり方は次の所が別の所なので、前の所の拍は光らせない
+        if self.options.way.tours() {
+            return Vec::new();
+        }
         match self.done.last() {
             Some(r) if r.passed == Some(false) && self.cleared_at_ms.is_none() => r
                 .weak()
@@ -1263,6 +1465,7 @@ impl Practice {
             }
         }
         if missed
+            && !self.options.way.tours()
             && !self.decided
             && !self
                 .attempt_spots()
@@ -1399,6 +1602,9 @@ pub fn way_label(w: Way) -> &'static str {
         Way::Build => t("Build Up", "積み上げ"),
         Way::Break => t("Song Break", "曲のブレイク"),
         Way::Fade => t("Vanishing Notes", "消える譜面"),
+        Way::Tour => t("Weak Spot Tour", "苦手めぐり"),
+        Way::Fills => t("Fills Only", "フィルだけ"),
+        Way::Seams => t("Transitions", "つなぎ目"),
     }
 }
 
@@ -1422,8 +1628,9 @@ pub fn build_label(b: Build) -> &'static str {
     }
 }
 
-/// やり方の説明（練習メニューの右の板）。`measures` は区間の長さ（積み上げの長さを出す）
-pub fn way_help(way: Way, part: Part, build: Build, measures: u32) -> String {
+/// やり方の説明（練習メニューの右の板）。`measures` は区間の長さ（積み上げの長さを出す）、
+/// `stops` はめぐる所の数
+pub fn way_help(way: Way, part: Part, build: Build, measures: u32, stops: usize) -> String {
     match way {
         Way::Climb => t(
             "Climbs from the start speed to the target speed, one step at a time.",
@@ -1462,6 +1669,63 @@ pub fn way_help(way: Way, part: Part, build: Build, measures: u32) -> String {
             "段の中で周を重ねるごとに音符が減り、最後の周は何も見えません。ミスした音は次の周で戻ってきます。",
         )
         .to_owned(),
+        Way::Tour => {
+            let n = count(stops, "spot", "spots", "か所");
+            tf!(
+                "Visits your weak spots ({n}) in a mixed-up order, {TOUR_LAPS} loops each, then shows how each went. Mixing them up helps them stick.",
+                "苦手な所 {n}を、まぜた順に {TOUR_LAPS} 周ずつめぐり、所ごとの出来を出します。同じ所を続けるより、まぜた方が覚えが残ります。"
+            )
+        }
+        Way::Fills => {
+            let n = count(stops, "fill", "fills", "か所");
+            tf!(
+                "Found {n} in this song (fills with the same shape count once). Plays each one {TOUR_LAPS} times, in order, through the first hit after it.",
+                "この曲のフィルを {n}見つけました（同じ形のフィルは 1 つ）。順に {TOUR_LAPS} 周ずつ、フィルのあとの 1 打まで叩きます。"
+            )
+        }
+        Way::Seams => {
+            let n = count(stops, "place", "places", "か所");
+            tf!(
+                "Found {n} where the beat changes (like verse to chorus). Plays the measure before and after each one {TOUR_LAPS} times, in order.",
+                "形が変わる所（A メロからサビなど）を {n}見つけました。前後 1 小節ずつを、順に {TOUR_LAPS} 周ずつ叩きます。"
+            )
+        }
+    }
+}
+
+/// めぐった所の出来の意味
+pub fn mark_label(m: Mark) -> &'static str {
+    match m {
+        Mark::Clean => t("No misses", "ノーミス"),
+        Mark::Fair => t("No repeat misses", "同じ所のミスなし"),
+        Mark::Weak => t("Same spot missed twice", "同じ所を 2 周ともミス"),
+    }
+}
+
+/// 出来の印の見方（1 行）
+pub fn mark_line() -> String {
+    t(
+        "◎ No misses  ○ No repeats  × Same spot twice",
+        "◎ ノーミス　○ 同じ所のミスなし　× 2 周とも",
+    )
+    .to_owned()
+}
+
+/// めぐる所が無くて始められないときの知らせ
+pub fn no_stops_line(way: Way) -> &'static str {
+    match way {
+        Way::Tour => t(
+            "No weak spots yet. Play the song through once and they show up.",
+            "苦手な所がまだありません。1 回通して遊ぶと出てきます。",
+        ),
+        Way::Fills => t(
+            "No fills were found in this song.",
+            "この曲ではフィルが見つかりませんでした。",
+        ),
+        _ => t(
+            "No places where the beat changes were found in this song.",
+            "この曲では、形が変わる所が見つかりませんでした。",
+        ),
     }
 }
 
@@ -1551,6 +1815,7 @@ mod tests {
                 way: Default::default(),
                 part: Default::default(),
                 build: Default::default(),
+                stops: Default::default(),
             },
             &tempo,
             notes,
@@ -1742,6 +2007,10 @@ mod tests {
             way: Default::default(),
             part: Default::default(),
             build: Default::default(),
+            fills: Vec::new(),
+            seams: Vec::new(),
+            weak_tour: Vec::new(),
+            measure_ms: Vec::new(),
         };
         assert_eq!(s.notes_in(Section::new(2, 5)), 15);
         s.shift(5);
@@ -1783,6 +2052,10 @@ mod tests {
             way: Default::default(),
             part: Default::default(),
             build: Default::default(),
+            fills: Vec::new(),
+            seams: Vec::new(),
+            weak_tour: Vec::new(),
+            measure_ms: Vec::new(),
         };
         s.nudge_speed(-1);
         assert_eq!(
@@ -2286,6 +2559,10 @@ mod tests {
             way: Default::default(),
             part: Default::default(),
             build: Default::default(),
+            fills: Vec::new(),
+            seams: Vec::new(),
+            weak_tour: Vec::new(),
+            measure_ms: Vec::new(),
         };
         s.clears = vec![
             clear(5, 6, 1.0, false),
@@ -2455,6 +2732,10 @@ mod tests {
             way: Way::Part,
             part: Part::Toms,
             build: Build::Forward,
+            fills: Vec::new(),
+            seams: Vec::new(),
+            weak_tour: Vec::new(),
+            measure_ms: Vec::new(),
         };
         assert_eq!(
             s.parts(),
@@ -2473,5 +2754,117 @@ mod tests {
         }
         assert!(p.cleared());
         assert_eq!(p.clear_speed(), None);
+    }
+
+    #[test]
+    fn a_tour_plays_each_stop_twice_and_marks_it() {
+        let mut o = practice_with(
+            LoopStyle::Connect,
+            SpeedPlan::Ladder {
+                start: 80,
+                target: 100,
+            },
+            Section::new(0, 0),
+            4,
+        )
+        .options;
+        o.way = Way::Fills;
+        o.stops = Stops::new(&[Section::new(3, 3), Section::new(1, 1)]);
+        let (tempo, notes) = chart();
+        let mut p = Practice::new(o, &tempo, notes);
+        let mut judge = judge();
+        // 1 か所 2 周、毎回区切る。区間の音は所ごと
+        assert_eq!(p.step_laps(), 2);
+        assert_eq!(p.looper.style(), LoopStyle::Restart);
+        assert_eq!(p.current_section(), Section::new(3, 3));
+        assert_eq!(p.shown_section(), Section::new(3, 3));
+        assert_eq!(
+            p.audio_sections(),
+            vec![Section::new(3, 3), Section::new(1, 1)]
+        );
+        assert_eq!(p.steps_left(), 2);
+        // 同じ拍を 2 周とも落としても、途中で打ち切らずに 2 周叩く
+        play_lap_missing(&mut p, &mut judge, 80, &[0]);
+        assert!(p.wants_lap(0.0, 0.0));
+        play_lap_missing(&mut p, &mut judge, 80, &[0]);
+        assert_eq!(p.done.len(), 1);
+        assert_eq!(p.stop_index(), Some(1));
+        assert_eq!(p.current_section(), Section::new(1, 1));
+        assert_eq!(p.speed(), 80);
+        assert!(p.focus_beats().is_empty());
+        // 次の所は助走から。着地（所の外の 1 打）は 2 周とも落としても × にしない
+        let i = play_lap_missing(&mut p, &mut judge, 80, &[4]);
+        assert_eq!(p.laps[i].cue, Some(Cue::Stop { index: 1 }));
+        assert_eq!(p.laps[i].notes.len(), 5);
+        assert!(!p.toured());
+        play_lap_missing(&mut p, &mut judge, 80, &[4]);
+        assert!(p.toured() && p.over());
+        assert!(!p.wants_lap(0.0, 0.0));
+        assert_eq!(p.stop_marks(), vec![Some(Mark::Weak), Some(Mark::Fair)]);
+        assert_eq!(p.steps_left(), 0);
+        // めぐるやり方は区間のクリアに残さない
+        assert!(!p.cleared());
+        assert_eq!(p.clear_speed(), None);
+    }
+
+    #[test]
+    fn the_setup_tours_weak_spots_fills_or_seams() {
+        let mut s = PracticeSetup {
+            path: PathBuf::new(),
+            title: String::new(),
+            artist: String::new(),
+            notes_per_measure: vec![4; 8],
+            lanes_per_measure: Vec::new(),
+            weak: WeakMap {
+                weakness: vec![None; 8],
+                phrases: Vec::new(),
+                plays: 0,
+                practice_laps: 0,
+            },
+            clears: Vec::new(),
+            picture: ChartPicture::default(),
+            marks: Marks::new(),
+            section: Some(Section::new(0, 1)),
+            style: LoopStyle::Connect,
+            rule: PassRule::Normal,
+            speed: SpeedPlan::Fixed(100),
+            pitch: Pitch::Keep,
+            metronome: true,
+            step_laps: STEP_LAPS,
+            way: Way::Tour,
+            part: Part::Hands,
+            build: Build::Forward,
+            fills: vec![Section::new(3, 3), Section::new(7, 7)],
+            seams: Vec::new(),
+            weak_tour: Vec::new(),
+            measure_ms: (0..=8).map(|m| f64::from(m) * 2000.0).collect(),
+        };
+        // 苦手な所が無ければ、苦手めぐりは始められない
+        assert!(s.options().is_none());
+        let spots: Vec<Section> = (0..7).map(|m| Section::new(m, m)).collect();
+        s.set_weak_tour(&spots, 7);
+        // 苦手な方から 5 か所を、まぜた順に
+        let mut tour = s.stops();
+        assert_eq!(tour.len(), MAX_STOPS);
+        assert_ne!(tour, spots[..MAX_STOPS].to_vec());
+        tour.sort_by_key(|s| s.first);
+        assert_eq!(tour, spots[..MAX_STOPS].to_vec());
+        let o = s.options().expect("weak spots to tour");
+        assert_eq!(o.stops.len(), MAX_STOPS);
+        // 練習する区間は選んでいたまま
+        assert_eq!(o.section, Section::new(0, 1));
+        s.way = Way::Fills;
+        assert_eq!(
+            s.options().map(|o| o.stops),
+            Some(Stops::new(&[Section::new(3, 3), Section::new(7, 7)]))
+        );
+        // 1 か所は 1 小節の助走 + 1 小節 + 着地を 2 周（1 小節 2 秒）
+        assert!(
+            (s.tour_seconds() - 2.0 * 2.0 * 4.6).abs() < 1e-6,
+            "{}",
+            s.tour_seconds()
+        );
+        s.way = Way::Seams;
+        assert!(s.options().is_none());
     }
 }
