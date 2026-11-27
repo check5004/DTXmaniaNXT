@@ -51,6 +51,7 @@ mod practice;
 mod practice_hud;
 mod practice_menu;
 mod progress;
+mod ranking_view;
 mod records_view;
 mod replay;
 mod replay_view;
@@ -108,8 +109,9 @@ use crate::midi::MidiIn;
 use crate::play_view::PlayView;
 use crate::practice::{PracticeOptions, PracticeSetup};
 use crate::practice_menu::{Done, Finished, MenuInput, MenuMouse, PracticeMenu, Spot};
-use crate::records_view::{RecordsAction, RecordsFrom, RecordsInput, RecordsView};
-use crate::replay_view::{Back, ListDone, ListInput, ReplayList, ReplayRun};
+use crate::ranking_view::{RankInput, Ranking};
+use crate::records_view::{RecordsAction, RecordsInput, RecordsView};
+use crate::replay_view::{Back, ReplayRun};
 use crate::result_view::{Page, ResultInfo, ResultView};
 use crate::section_sound::SectionAudio;
 use crate::select::{PREVIEW_WAIT, SelectView};
@@ -480,8 +482,8 @@ struct App {
     menu_sound: Option<practice_menu::Sound>,
     /// 選曲の簡易設定か、演奏中の一時停止の板（設定の画面と同じ行）
     quick: Option<Box<ConfigView>>,
-    /// 選曲画面に重ねる、選んでいる曲のプレイの一覧（リプレイ）
-    replays: Option<Box<ReplayList>>,
+    /// 選曲の左上の、選んでいる譜面のスコアのランキング（リプレイの入口）
+    ranking: Ranking,
     /// 補正の行に出す、この曲の補正とおすすめ
     timing: Option<SongTiming>,
     /// 選曲画面のマウスホイールの、まだ 1 行に満たない分
@@ -619,15 +621,17 @@ enum AfterClose {
     /// 基礎練習を始める
     Drill(engine::drill::Run),
     /// 上達の記録へ。どこから開いたかと、選んでおく譜面
-    Records(RecordsFrom, Option<PathBuf>),
+    Records(Option<PathBuf>),
     /// 開発者メニューへ。`true` なら設定を選曲から開いていた
     Dev(bool),
     /// 開発者メニューから設定の「アプリ」へ戻る
     DevBack(bool),
 }
 
-/// リプレイの一覧に出すプレイの数
-const REPLAY_LIST_LIMIT: usize = 50;
+/// 選曲のランキングに読む記録の数
+const RANKING_LIMIT: usize = 50;
+/// 選曲で曲を止めてからランキングを読むまでの待ち（速く送っているあいだは記録を読まない）
+const RANKING_WAIT: Duration = Duration::from_millis(150);
 
 /// シャッターを開き始めるまでの待ち（v2 はフレームで数える。60 で割った時間にする）。
 /// 選曲は 20 フレーム、設定は 2 フレーム、設定から出てタイトルへは 150 ミリ秒
@@ -735,7 +739,7 @@ impl App {
             section_audio: SectionAudio::default(),
             menu_sound: None,
             quick: None,
-            replays: None,
+            ranking: Ranking::default(),
             timing: None,
             wheel: 0.0,
             show_play_info: false,
@@ -931,7 +935,8 @@ impl App {
         self.sfx.stop_title();
         self.menu = None;
         self.quick = None;
-        self.replays = None;
+        // 遊んだあとは記録が増えている（リプレイから戻ったときは選んでいた行のまま）
+        self.ranking.invalidate();
         self.screen = Screen::Select;
         self.view.enter();
         self.shutter.open(SELECT_OPEN_DELAY);
@@ -1130,7 +1135,7 @@ impl App {
             }
             AfterClose::Replay(session) => self.open_replay(session),
             AfterClose::LeaveReplay => self.leave_replay(),
-            AfterClose::Records(from, focus) => self.open_records(from, focus.as_deref()),
+            AfterClose::Records(focus) => self.open_records(focus.as_deref()),
             AfterClose::Dev(from_select) => self.open_dev(from_select),
             AfterClose::DevBack(from_select) => {
                 self.open_config(from_select);
@@ -1268,12 +1273,12 @@ impl App {
     }
 
     /// 上達の記録の画面を開く（v2 の設定と同じく、シャッターを開いて入る）
-    fn open_records(&mut self, from: RecordsFrom, focus: Option<&Path>) {
+    fn open_records(&mut self, focus: Option<&Path>) {
         self.sfx.preview(None);
         self.quick = None;
         self.close_menu();
         let data = self.history.progress();
-        let view = RecordsView::new(from, data, &self.songs, focus);
+        let view = RecordsView::new(data, &self.songs, focus);
         self.screen = Screen::Records(Box::new(view));
         self.shutter.open(CONFIG_OPEN_DELAY);
     }
@@ -1286,7 +1291,6 @@ impl App {
         let Screen::Records(view) = &mut self.screen else {
             return;
         };
-        let from = view.from;
         match view.input(input) {
             RecordsAction::None => {}
             RecordsAction::Moved => self.sfx.play(Se::Move),
@@ -1301,11 +1305,7 @@ impl App {
             }
             RecordsAction::Back => {
                 self.sfx.play(Se::Cancel);
-                let next = match from {
-                    RecordsFrom::Title => AfterClose::Title,
-                    RecordsFrom::Select => AfterClose::Select,
-                };
-                self.close_then(next, Duration::ZERO);
+                self.close_then(AfterClose::Select, Duration::ZERO);
             }
         }
     }
@@ -1727,39 +1727,35 @@ impl App {
         self.close_then(AfterClose::Replay(session), Duration::ZERO);
     }
 
-    /// 選んでいる曲のプレイの一覧（リプレイ）を選曲画面に開く
-    fn open_replay_list(&mut self) {
-        let Some(path) = self.songs.selected_chart() else {
+    /// 選曲のランキングを、選んでいる譜面のものにする（曲を止めて少し待ってから記録を読む）
+    fn refresh_ranking(&mut self) {
+        let chart = self.songs.selected_chart();
+        if self.ranking.is_for(chart.as_deref()) {
             return;
+        }
+        if !self.view.settled_for(&self.songs, RANKING_WAIT) {
+            self.ranking.moving();
+            return;
+        }
+        let (entries, hash, level) = match &chart {
+            Some(path) => (
+                self.history.ranking(path, RANKING_LIMIT),
+                std::fs::read(path).ok().map(|b| records::hash_bytes(&b)),
+                self.songs.chart_label(path),
+            ),
+            None => (Vec::new(), None, String::new()),
         };
-        let entries = self.history.plays(&path, REPLAY_LIST_LIMIT);
-        let hash = std::fs::read(&path).ok().map(|b| records::hash_bytes(&b));
-        let label = self.songs.chart_label(&path);
-        let title = match self.songs.selected_song() {
-            Some(s) if !label.is_empty() => format!("{} / {label}", s.title),
-            Some(s) => s.title.clone(),
-            None => label,
-        };
-        self.sfx.play(Se::Decide);
-        self.sfx.preview(None);
-        self.replays = Some(Box::new(ReplayList::new(title, entries, hash)));
+        self.ranking.load(chart, level, entries, hash);
     }
 
-    /// プレイの一覧を操作する
-    fn replay_list_input(&mut self, input: ListInput) {
-        let Some(list) = &mut self.replays else {
-            return;
-        };
-        let (se, done) = list.input(input);
+    /// ランキングで選んだ記録の音を鳴らし、リプレイを開く
+    fn ranking_done(&mut self, se: Option<Se>, session: Option<i64>) {
         if let Some(se) = se {
             self.sfx.play(se);
         }
-        match done {
-            Some(ListDone::Play(session)) => {
-                self.close_then(AfterClose::Replay(session), Duration::ZERO);
-            }
-            Some(ListDone::Close) => self.replays = None,
-            None => {}
+        if let Some(session) = session {
+            self.sfx.preview(None);
+            self.close_then(AfterClose::Replay(session), Duration::ZERO);
         }
     }
 
@@ -1770,7 +1766,7 @@ impl App {
             Screen::Result(o, v) => Some(Back::Result(o, v)),
             other => {
                 self.screen = other;
-                self.replays.take().map(Back::List)
+                Some(Back::Select)
             }
         };
         let Some(back) = back else {
@@ -1832,10 +1828,7 @@ impl App {
                 self.screen = Screen::Result(o, v);
                 self.shutter.open(shutter::OPEN_DELAY);
             }
-            Back::List(list) => {
-                self.go_to_select();
-                self.replays = Some(list);
-            }
+            Back::Select => self.go_to_select(),
         }
     }
 
@@ -2190,7 +2183,6 @@ impl App {
         if matches!(self.screen, Screen::Select)
             && self.after_close.is_none()
             && self.menu.is_none()
-            && self.replays.is_none()
         {
             // 選んでから少し待ってプレビューの音を鳴らす（上流 CActSelectPresound）
             let preview = if self.view.settled_for(&self.songs, PREVIEW_WAIT) {
@@ -2242,14 +2234,6 @@ impl App {
                 self.sfx.play(Se::Decide);
                 self.sfx.stop_title();
                 self.close_then(AfterClose::Drills, Duration::ZERO);
-            }
-            Some(TitleItem::Records) => {
-                self.sfx.play(Se::Decide);
-                self.sfx.stop_title();
-                self.close_then(
-                    AfterClose::Records(RecordsFrom::Title, None),
-                    Duration::ZERO,
-                );
             }
             Some(TitleItem::Config) => {
                 self.sfx.play(Se::Decide);
@@ -2645,17 +2629,10 @@ impl App {
                 self.quick = None;
                 self.select_action(ui::SelectAction::Practice);
             }
-            ConfigAction::Run(ItemId::ReplaySong) => {
-                self.quick = None;
-                self.open_replay_list();
-            }
             ConfigAction::Run(ItemId::SongRecords) => {
                 self.quick = None;
                 let chart = self.songs.selected_chart();
-                self.close_then(
-                    AfterClose::Records(RecordsFrom::Select, chart),
-                    Duration::ZERO,
-                );
+                self.close_then(AfterClose::Records(chart), Duration::ZERO);
             }
             ConfigAction::Run(ItemId::AllSettings) => {
                 self.quick = None;
@@ -2688,10 +2665,6 @@ impl App {
             }
             KeyCode::KeyP if !paused => {
                 self.quick_action(ConfigAction::Run(ItemId::PracticeSong));
-                return;
-            }
-            KeyCode::KeyV if !paused => {
-                self.quick_action(ConfigAction::Run(ItemId::ReplaySong));
                 return;
             }
             KeyCode::F1 if !paused => {
@@ -3225,7 +3198,6 @@ impl App {
         if !matches!(self.screen, Screen::Select)
             || self.after_close.is_some()
             || self.quick.is_some()
-            || self.replays.is_some()
         {
             self.wheel = 0.0;
             return;
@@ -3236,12 +3208,27 @@ impl App {
             self.menu_response(r);
             return;
         }
+        // 左上のランキング：行を押すと再生し、上でホイールを回すと順位を送る
+        let hover = mouse.menu.hover;
+        let over_ranking = hover.is_some_and(|p| self.ranking.contains(p));
+        let (se, session) = self.ranking.mouse(hover, mouse.clicked_at);
+        if se.is_some() || session.is_some() {
+            self.ranking_done(se, session);
+            return;
+        }
+        if mouse.clicked_at.is_some() {
+            self.ranking.focus = false;
+        }
         self.wheel += mouse.wheel;
         let steps = self.wheel.trunc();
         if steps != 0.0 {
             self.wheel -= steps;
-            // 上へ回すと前の曲
-            self.move_cursor(-steps as isize);
+            if over_ranking {
+                self.ranking.scroll(steps as i32);
+            } else {
+                // 上へ回すと前の曲
+                self.move_cursor(-steps as isize);
+            }
         }
         match mouse.clicked_row {
             Some(0) => self.select_action(ui::SelectAction::Enter),
@@ -3261,15 +3248,16 @@ impl App {
             self.on_quick_key(code);
             return;
         }
-        if self.replays.is_some() {
+        if self.ranking.focus {
             let input = match code {
-                KeyCode::ArrowUp => ListInput::Up,
-                KeyCode::ArrowDown => ListInput::Down,
-                KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space => ListInput::Decide,
-                KeyCode::Escape | KeyCode::Backspace => ListInput::Cancel,
+                KeyCode::ArrowUp => RankInput::Up,
+                KeyCode::ArrowDown => RankInput::Down,
+                KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space => RankInput::Decide,
+                KeyCode::Escape | KeyCode::Backspace | KeyCode::KeyV => RankInput::Cancel,
                 _ => return,
             };
-            self.replay_list_input(input);
+            let (se, session) = self.ranking.input(input);
+            self.ranking_done(se, session);
             return;
         }
         if self.menu.is_some() {
@@ -3311,6 +3299,12 @@ impl App {
             KeyCode::Tab => self.cycle_level(),
             KeyCode::F5 => self.select_action(ui::SelectAction::Rescan),
             KeyCode::KeyP => self.select_action(ui::SelectAction::Practice),
+            // 左上のランキングに入る（↑↓ と Enter で選ぶ。パッドでは操作しない）
+            KeyCode::KeyV => {
+                if let Some(se) = self.ranking.toggle_focus() {
+                    self.sfx.play(se);
+                }
+            }
             _ => {}
         }
     }
@@ -3422,17 +3416,8 @@ impl App {
                 self.dev_input(input);
             }
             Screen::Select => {
-                if self.replays.is_some() {
-                    let input = match lane {
-                        DrumLane::HT => ListInput::Up,
-                        DrumLane::LT => ListInput::Down,
-                        DrumLane::CY | DrumLane::RD => ListInput::Decide,
-                        DrumLane::LC => ListInput::Cancel,
-                        _ => return,
-                    };
-                    self.replay_list_input(input);
-                    return;
-                }
+                // ランキングはキーボードとマウスだけ。パッドを叩いたら板から出て、いつもの選曲の操作にする
+                self.ranking.focus = false;
                 if self.menu.is_some() {
                     // 設定の画面と同じパッドの役目（SD・FT で区間や値をその場で変える）
                     let input = match lane {
@@ -4047,6 +4032,8 @@ impl App {
                 self.view.update(&mut self.songs);
                 self.view.left_bass_apart = self.config.settings.left_bass_apart();
                 self.view.draw(&c, &mut self.gfx, &self.songs);
+                self.refresh_ranking();
+                self.ranking.draw(&c, &mut self.gfx);
                 if let Some(m) = &self.menu {
                     let sound = self.menu_sound.unwrap_or(practice_menu::Sound::Off);
                     m.draw(&c, &mut self.gfx, sound);
@@ -4063,9 +4050,6 @@ impl App {
                     info.timing = self.timing.as_ref().map(SongTiming::info);
                     let rows = config_view::rows(q.page(), &info);
                     q.draw_panel(&c, &mut self.gfx, &rows, &info);
-                }
-                if let Some(l) = &self.replays {
-                    l.draw(&c, &mut self.gfx);
                 }
                 if let Some(m) = &self.message {
                     ui::message_overlay(&ctx, m);
@@ -4426,6 +4410,8 @@ struct SelectMouse {
     clicked_row: Option<isize>,
     /// 押した並べ替えのアイコンが、選んでいるものから何個先か
     clicked_sort: Option<isize>,
+    /// 押した所（NX の座標。ランキングの行を押したか見る）
+    clicked_at: Option<egui::Pos2>,
     /// 練習メニューへのマウスの操作
     menu: MenuMouse,
 }
@@ -4467,6 +4453,7 @@ impl SelectMouse {
                 wheel,
                 clicked_row,
                 clicked_sort,
+                clicked_at: clicked,
                 menu,
             }
         })

@@ -94,15 +94,8 @@ pub enum RecordsAction {
     Back,
 }
 
-/// どこから開いたか（戻る先）
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RecordsFrom {
-    Title,
-    Select,
-}
-
+/// 選曲の簡易設定「この曲の記録」から開く（閉じると選曲へ戻る）
 pub struct RecordsView {
-    pub from: RecordsFrom,
     log: TimeLog,
     today: NaiveDate,
     songs: Vec<SongTrend>,
@@ -117,7 +110,6 @@ pub struct RecordsView {
 impl RecordsView {
     /// 記録から作る。`data` が None なら記録が読めなかった。`focus` の譜面があれば、その行を選んでおく
     pub fn new(
-        from: RecordsFrom,
         data: Option<(Vec<PlayTime>, Vec<ChartProgress>)>,
         list: &SongList,
         focus: Option<&Path>,
@@ -146,7 +138,6 @@ impl RecordsView {
             .and_then(|f| songs.iter().position(|s| Path::new(&s.record.path) == f))
             .unwrap_or(0);
         let mut view = Self {
-            from,
             log: TimeLog::new(&times, progress::local_day),
             today: progress::today(),
             songs,
@@ -1071,7 +1062,6 @@ mod tests {
             .map(|i| chart(&format!("{i}.dtx"), &[80.0]))
             .collect();
         RecordsView::new(
-            RecordsFrom::Title,
             Some((Vec::new(), charts)),
             &SongList::default(),
             focus.map(Path::new),

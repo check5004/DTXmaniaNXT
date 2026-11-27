@@ -284,8 +284,6 @@ pub enum ItemId {
     DevOff,
     /// 簡易設定から、選んでいる曲の区間練習へ
     PracticeSong,
-    /// 簡易設定から、選んでいる曲のプレイの一覧（リプレイ）へ
-    ReplaySong,
     /// 簡易設定から、選んでいる曲の上達の記録へ
     SongRecords,
     /// 簡易設定から、設定の画面へ
@@ -1265,17 +1263,6 @@ pub fn rows(page: Page, info: &ConfigInfo<'_>) -> Vec<Row> {
                 );
                 practice.tone = Tone::Strong;
                 r.push(practice);
-                r.push(action(
-                    ItemId::ReplaySong,
-                    t("Replay This Song", "この曲のリプレイ"),
-                    String::new(),
-                    t(
-                        "Lists your plays of this song so you can watch and hear one again, with your hits shown on the chart (V on the keyboard).",
-                        "選んでいる曲のプレイを一覧にします。選んだプレイを、叩いた音と叩いた所の印つきで見直せます（キーボードなら V）。",
-                    )
-                    .to_owned(),
-                    None,
-                ));
                 r.push(action(
                     ItemId::SongRecords,
                     t("This Song's Records", "この曲の記録"),
@@ -5223,17 +5210,10 @@ mod tests {
         let mut info = info(&config);
         let fav = ids(&rows(Page::Cat(Cat::Fav), &info));
         let quick = ids(&rows(Page::Quick, &info));
-        // 区間練習が一番上（開いたときに選んでいる）、その下にリプレイと記録
-        assert_eq!(
-            quick[..3],
-            [
-                ItemId::PracticeSong,
-                ItemId::ReplaySong,
-                ItemId::SongRecords
-            ]
-        );
-        assert_eq!(quick[3..fav.len() + 3], fav[..]);
-        assert_eq!(quick[fav.len() + 3..], [ItemId::AllSettings]);
+        // 区間練習が一番上（開いたときに選んでいる）、その下に記録
+        assert_eq!(quick[..2], [ItemId::PracticeSong, ItemId::SongRecords]);
+        assert_eq!(quick[2..fav.len() + 2], fav[..]);
+        assert_eq!(quick[fav.len() + 2..], [ItemId::AllSettings]);
         let list = rows(Page::Quick, &info);
         let mut v = ConfigView::panel(Page::Quick);
         assert_eq!(
