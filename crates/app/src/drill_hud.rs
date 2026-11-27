@@ -402,12 +402,10 @@ pub fn stairs(
 
 /// カウントの小節の拍の数字を、レーンの真ん中に大きく。拍ごとに大きく出て縮む
 fn draw_count_in(c: &Canvas, g: &mut Gfx, d: &DrillPlay, now: f64, reverse: bool, wide: f32) {
-    let Some(beat) = d.count_in_beat(now) else {
+    let Some((beat, beat_ms)) = d.count_in_beat(now) else {
         return;
     };
-    let (from, to) = (d.measure_start_ms(0), d.measure_start_ms(1));
-    let len = (to - from) / 4.0;
-    let since = now - from - f64::from(beat - 1) * len;
+    let since = now - beat_ms;
     let cx = LANES_X + (LANES_W + wide) / 2.0;
     let cy = if reverse { 720.0 - COUNT_Y } else { COUNT_Y };
     let k = (since / COUNT_POP_MS).clamp(0.0, 1.0) as f32;

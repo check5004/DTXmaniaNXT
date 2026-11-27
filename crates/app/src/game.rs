@@ -330,6 +330,8 @@ pub struct Play {
     finish_sent: bool,
     /// 小節線と拍線（時刻の順）
     pub lines: Vec<BeatLine>,
+    /// メトロノームを鳴らす時刻（時刻の順）。ふつうは拍線と同じで、基礎練習はドリルの拍子とクリックの型に合わせる
+    click_lines: Vec<BeatLine>,
     /// 曲の頭のテンポ
     pub bpm: f64,
     /// 譜面の最後のチップの時刻（進み具合のバーに使う）
@@ -614,6 +616,14 @@ impl Play {
         judge.set_auto(auto);
         judge.set_pedal_windows(rules.pedal_windows);
         let drill = drill.map(|run| DrillPlay::new(run, &tempo, judge.notes()));
+        let click_lines = match &drill {
+            Some(d) => d
+                .clicks()
+                .into_iter()
+                .map(|(ms, bar)| BeatLine { ms, bar })
+                .collect(),
+            None => lines.clone(),
+        };
         let tight = rules.tight && practice.is_none();
         let start_ms = practice
             .as_ref()
@@ -692,6 +702,7 @@ impl Play {
             seen_attempts: 0,
             finish_sent: false,
             lines,
+            click_lines,
             bpm: 60_000.0 / (tempo.beat_to_ms(1.0) - tempo.beat_to_ms(0.0)).max(1.0),
             last_chip_ms,
             preimage: preimage_path(&chart, path),
@@ -923,7 +934,7 @@ impl Play {
         let Some((accent, plain)) = &self.clicks else {
             return;
         };
-        while let Some(l) = self.lines.get(self.click_next) {
+        while let Some(l) = self.click_lines.get(self.click_next) {
             if l.ms >= until {
                 break;
             }
@@ -965,7 +976,7 @@ impl Play {
         }
         match &self.practice {
             None => {
-                self.click_next = self.lines.partition_point(|l| l.ms < now);
+                self.click_next = self.click_lines.partition_point(|l| l.ms < now);
                 self.lay_auto(now);
             }
             Some(p) => {
@@ -1134,7 +1145,7 @@ impl Play {
         }
         // 飛んだ先でまだ鳴っているはずの自動の音（長い BGM など）は途中から鳴らし直し、その先は `lay_auto` に任せる
         self.auto_next = self.chart_sounds.auto.partition_point(|v| v.ms < to);
-        self.click_next = self.lines.partition_point(|l| l.ms < to);
+        self.click_next = self.click_lines.partition_point(|l| l.ms < to);
         if let Some(a) = self.audio.as_mut() {
             let rate = f64::from(a.rate());
             for v in &self.chart_sounds.auto[..self.auto_next] {
