@@ -2301,7 +2301,9 @@ impl App {
             self.close_then(AfterClose::Result { at_ms }, Duration::ZERO);
         } else if rested && self.quick.is_none() && self.after_close.is_none() {
             // ドラムだけで止められるように、叩くのをやめたら一時停止する（叩かなかった周は数えない）
-            let drill = matches!(&self.screen, Screen::Play(p, _) if p.drill.is_some());
+            // 基礎練習と待ちモードは周を捨てないので、「この周は数えません」は出さない
+            let drill =
+                matches!(&self.screen, Screen::Play(p, _) if p.drill.is_some() || p.waits());
             self.open_pause();
             let text = if drill {
                 t(

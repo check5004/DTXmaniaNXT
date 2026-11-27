@@ -20,8 +20,8 @@ use engine::practice::{
     speed_percent,
 };
 use engine::practice_way::{
-    Build, MAX_STOPS, Mark, Part, Stops, TOUR_LAPS, Way, break_muted, build_lengths, build_section,
-    fade_rank, fade_share, find_fills, find_seams, lane_mask, shuffle,
+    Build, MAX_STOPS, Mark, Part, Stops, TOUR_LAPS, WAIT_LAPS, Way, break_muted, build_lengths,
+    build_section, fade_rank, fade_share, find_fills, find_seams, lane_mask, shuffle,
 };
 use i18n::{count, t, tf};
 use records::{ClearRecord, StrayHit};
@@ -454,6 +454,10 @@ pub struct LapState {
     muted: Vec<bool>,
     /// 曲のブレイクで、音の消えている所を叩いたずれ（ミリ秒）
     pub break_offsets: Vec<f64>,
+    /// 待ちモードで、止まっているあいだに違うパッドを叩いた回数
+    pub wrong: u32,
+    /// 待ちモードで、譜面が止まっていた時間の合計（ミリ秒）
+    pub held_ms: f64,
 }
 
 impl LapState {
@@ -464,6 +468,12 @@ impl LapState {
     /// 今、助走のあいだか（`now` は実時間）
     pub fn in_run_up(&self, now: f64) -> bool {
         self.plan.has_run_up() && now >= self.plan.audio.at_ms && now < self.plan.start_ms
+    }
+
+    /// 叩き終えるまでにかかった時間（ミリ秒。待ちモードは止まっていた時間を入れる）。終わっていなければ None
+    pub fn took_ms(&self) -> Option<f64> {
+        let end = self.settled_at_ms?;
+        Some((end - self.plan.start_ms).max(0.0) + self.held_ms)
     }
 
     /// ノーミス（POOR と MISS が 0）
@@ -486,6 +496,8 @@ impl LapState {
             misses: self.misses.clone(),
             missed_notes: self.missed_notes.clone(),
             attempt: self.attempt,
+            wrong: self.wrong,
+            took_ms: self.took_ms(),
         }
     }
 }
@@ -509,6 +521,10 @@ pub struct LapSummary {
     pub missed_notes: Vec<(NotePos, DrumLane)>,
     /// 何回目の段の挑戦の周か（0 から）
     pub attempt: usize,
+    /// 待ちモードで、止まっているあいだに違うパッドを叩いた回数
+    pub wrong: u32,
+    /// 叩き終えるまでにかかった時間（ミリ秒。待ちモードは止まっていた時間を入れる）
+    pub took_ms: Option<f64>,
 }
 
 /// 空打ちの多いパッド（パッドが弱い振動まで拾っていないかを結果の画面で知らせる）
@@ -568,6 +584,8 @@ pub struct Practice {
     pub timed_out_at_ms: Option<f64>,
     /// めぐるやり方で、最後の所まで叩き終えた実時間（それからは周を並べない）
     pub toured_at_ms: Option<f64>,
+    /// 待ちモードで、周をすべて叩き終えた実時間（それからは周を並べない）
+    pub waited_at_ms: Option<f64>,
     /// 練習する小節の範囲（めぐるやり方は、めぐる所をすべて含む範囲。ほかは選んだ区間）
     span: Section,
     /// めぐるやり方で、今叩いている所（めぐる順の添字）
@@ -639,8 +657,9 @@ impl Practice {
             Some(c) if options.way.tours() => c,
             _ => options.section,
         };
-        // めぐるやり方は毎回区切る（所ごとに 1 小節前から入り、次の小節の頭の 1 打まで叩く）
-        let style = if options.way.tours() {
+        // めぐるやり方は毎回区切る（所ごとに 1 小節前から入り、次の小節の頭の 1 打まで叩く）。
+        // 待ちモードも、周の切れ目が分かるように区切る
+        let style = if options.way.tours() || options.way == Way::Wait {
             LoopStyle::Restart
         } else {
             options.style
@@ -661,6 +680,7 @@ impl Practice {
             cleared_at_ms: None,
             timed_out_at_ms: None,
             toured_at_ms: None,
+            waited_at_ms: None,
             span,
             stop: 0,
             settled: 0,
@@ -1020,6 +1040,10 @@ impl Practice {
             self.next_stop(now_ms);
             return;
         }
+        if self.options.way == Way::Wait {
+            self.finish_wait(now_ms);
+            return;
+        }
         let mut report = self.report();
         let passed = !self.decided && report.weak().is_empty();
         report.passed = Some(passed);
@@ -1121,6 +1145,60 @@ impl Practice {
         self.next_cue = Some(Cue::Stop { index: self.stop });
     }
 
+    /// 待ちモードで、周をすべて叩き終えた。点は付けないので、段も合否も見ずに終える
+    fn finish_wait(&mut self, now_ms: f64) {
+        let mut report = self.report();
+        report.passed = Some(true);
+        let wrong: u32 = self.attempt_laps().iter().map(|l| l.wrong).sum();
+        log::info!(
+            "wait mode done ({}): {} laps, {wrong} wrong pads",
+            section_label(self.current_section()),
+            report.laps
+        );
+        self.done.push(report);
+        self.full_attempts.push(false);
+        self.attempt += 1;
+        self.attempt_start = self.laps.len();
+        self.waited_at_ms = Some(now_ms);
+    }
+
+    /// 待ちモードで、止まって `notes`（判定の音符の添字。いっしょに叩く音符）を待っているときに違うパッドを叩いた。
+    /// 叩いた回数を数え、待っていた音符を迷った所として譜面の絵と拍の地図に出す（同じ音符は 1 回だけ）
+    pub fn on_wrong(&mut self, notes: &[usize]) {
+        let Some(&i) = notes.first().and_then(|&n| self.lap_of.get(n)) else {
+            return;
+        };
+        let lap = &mut self.laps[i];
+        lap.wrong += 1;
+        for &note in notes {
+            let Some(&(slot, lane, at)) = note
+                .checked_sub(lap.notes.start)
+                .and_then(|k| lap.slots.get(k))
+            else {
+                continue;
+            };
+            if lap.missed_notes.contains(&(at, lane)) {
+                continue;
+            }
+            lap.missed_notes.push((at, lane));
+            if let Some(slot) = slot {
+                lap.misses.push((slot, lane));
+            }
+        }
+    }
+
+    /// 待ちモードで、音符 `note` で譜面が `ms` ミリ秒止まっていた
+    pub fn add_held(&mut self, note: usize, ms: f64) {
+        if let Some(&i) = self.lap_of.get(note) {
+            self.laps[i].held_ms += ms.max(0.0);
+        }
+    }
+
+    /// 待ちモードで、周をすべて叩き終えた
+    pub fn waited(&self) -> bool {
+        self.waited_at_ms.is_some()
+    }
+
     /// 並べたがまだ始まっていない最後の周を、要らなくなったら取り下げる（手で決め直した速度と違う周、
     /// 同じ拍のミスが重なって終える挑戦の続きの周）。取り下げた周の音符と音は呼んだ側が取り除く。
     /// `now_ms` は今の実時間
@@ -1182,7 +1260,8 @@ impl Practice {
     /// 叩かなかった周は成績にも記録にも入れず、今の段の挑戦は取りやめる（もう一度にも数えない）。
     /// 並べた周を叩き終えたら、同じ段を助走から数え直す。休みにしたら true（呼んだ側は一時停止の板を出す）
     pub fn check_rest(&mut self, now_ms: f64) -> bool {
-        if !self.rest_watch || self.resting || self.over() {
+        // 待ちモードは叩くまで譜面が止まるので、休みにしない
+        if !self.rest_watch || self.resting || self.over() || self.options.way == Way::Wait {
             return false;
         }
         let (Some(first), Some(last)) = (self.laps.first(), self.laps.last()) else {
@@ -1281,7 +1360,7 @@ impl Practice {
     /// 等速以上で越えた段の、一番速い速度（%）（記録のクリア）
     /// パート練習（ほかのパートは自動）と、積み上げの途中の段はクリアに数えない
     pub fn clear_speed(&self) -> Option<u32> {
-        if self.options.way == Way::Part || self.options.way.tours() {
+        if matches!(self.options.way, Way::Part | Way::Wait) || self.options.way.tours() {
             return None;
         }
         self.done
@@ -1297,9 +1376,12 @@ impl Practice {
         self.cleared_at_ms.is_some()
     }
 
-    /// クリアしたか、時間の区切りを過ぎたか、めぐり終えて、もう周を並べない
+    /// クリアしたか、時間の区切りを過ぎたか、めぐり終えたか、待ちモードの周を叩き終えて、もう周を並べない
     pub fn over(&self) -> bool {
-        self.cleared_at_ms.is_some() || self.timed_out_at_ms.is_some() || self.toured()
+        self.cleared_at_ms.is_some()
+            || self.timed_out_at_ms.is_some()
+            || self.toured()
+            || self.waited()
     }
 
     /// めぐるやり方で、最後の所まで叩き終えた
@@ -1350,7 +1432,7 @@ impl Practice {
     /// 目標の段まで、あと何段か（今の段を入れる）。クリアしたら 0。
     /// めぐるやり方は、あと何か所か（今の所を入れる）
     pub fn steps_left(&self) -> usize {
-        if self.cleared() || self.toured() {
+        if self.cleared() || self.toured() || self.waited() {
             return 0;
         }
         if self.options.way.tours() {
@@ -1365,8 +1447,8 @@ impl Practice {
 
     /// 光らせる拍：前の挑戦が「もう一度」なら、そのとき重なった拍とレーン（多い順）。越えたら無し
     pub fn focus_beats(&self) -> Vec<(BeatSlot, Vec<DrumLane>)> {
-        // めぐるやり方は次の所が別の所なので、前の所の拍は光らせない
-        if self.options.way.tours() {
+        // めぐるやり方は次の所が別の所なので、前の所の拍は光らせない。待ちモードは段が無い
+        if self.options.way.tours() || self.options.way == Way::Wait {
             return Vec::new();
         }
         match self.done.last() {
@@ -1437,6 +1519,8 @@ impl Practice {
             section: self.current_section(),
             muted: std::mem::take(&mut self.next_muted),
             break_offsets: Vec::new(),
+            wrong: 0,
+            held_ms: 0.0,
         });
     }
 
@@ -1466,6 +1550,7 @@ impl Practice {
         }
         if missed
             && !self.options.way.tours()
+            && self.options.way != Way::Wait
             && !self.decided
             && !self
                 .attempt_spots()
@@ -1605,6 +1690,7 @@ pub fn way_label(w: Way) -> &'static str {
         Way::Tour => t("Weak Spot Tour", "苦手めぐり"),
         Way::Fills => t("Fills Only", "フィルだけ"),
         Way::Seams => t("Transitions", "つなぎ目"),
+        Way::Wait => t("Wait Mode", "待ちモード"),
     }
 }
 
@@ -1690,6 +1776,46 @@ pub fn way_help(way: Way, part: Part, build: Build, measures: u32, stops: usize)
                 "形が変わる所（A メロからサビなど）を {n}見つけました。前後 1 小節ずつを、順に {TOUR_LAPS} 周ずつ叩きます。"
             )
         }
+        Way::Wait => tf!(
+            "The notes stop and wait until you hit the right pad. Forget the timing and learn the order and which pad to hit. No scoring; ends after {WAIT_LAPS} loops.",
+            "合うパッドを叩くまで譜面が止まります。時間は気にせず、叩く順番と叩き分けだけを覚えます。点は付けず、{WAIT_LAPS} 周で終わります。"
+        ),
+    }
+}
+
+/// 待ちモードで、違うパッドを叩いた回数（0 なら「迷いなし」）
+pub fn wrong_pads(n: u32) -> String {
+    if n == 0 {
+        t("No wrong pads", "迷いなし").to_owned()
+    } else {
+        tf!("Wrong pad ×{n}", "違うパッド {n} 回")
+    }
+}
+
+/// 待ちモードの、最初の周から最後の周までの変わり方。周ごとに（かかった時間、違うパッドの回数）
+pub fn wait_progress(first: (Option<f64>, u32), last: (Option<f64>, u32)) -> String {
+    let faster = first.0.zip(last.0).map(|(a, b)| a - b);
+    let fewer = i64::from(first.1) - i64::from(last.1);
+    match faster {
+        Some(d) if d >= 1000.0 && fewer > 0 => tf!(
+            "{:.0} s quicker and {fewer} fewer wrong pads than loop 1",
+            "1 周目より {:.0} 秒早く、迷いが {fewer} 回へりました",
+            d / 1000.0
+        ),
+        Some(d) if d >= 1000.0 => tf!(
+            "{:.0} s quicker than loop 1",
+            "1 周目より {:.0} 秒早くなりました",
+            d / 1000.0
+        ),
+        _ if fewer > 0 => tf!(
+            "{fewer} fewer wrong pads than loop 1",
+            "1 周目より迷いが {fewer} 回へりました"
+        ),
+        _ => t(
+            "Keep going and the order will stick",
+            "続けるうちに、順番が体に入ってきます",
+        )
+        .to_owned(),
     }
 }
 
@@ -2754,6 +2880,54 @@ mod tests {
         }
         assert!(p.cleared());
         assert_eq!(p.clear_speed(), None);
+    }
+
+    #[test]
+    fn wait_mode_plays_three_loops_and_counts_wrong_pads() {
+        let mut p = practice_way(Way::Wait, SpeedPlan::Fixed(100), Section::new(1, 1), 5);
+        let mut judge = judge();
+        // 選んだ周の数に関わらず 3 周、毎回区切る。休みにはしない
+        assert_eq!(p.step_laps(), WAIT_LAPS as usize);
+        assert_eq!(p.looper.style(), LoopStyle::Restart);
+        let i = play_lap(&mut p, &mut judge, 100, true);
+        // 止まっているときに違うパッドを 2 回叩いた音符は、迷った所として 1 つだけ印を付ける
+        let note = p.laps[i].notes.start;
+        p.on_wrong(&[note, note + 1]);
+        p.on_wrong(&[note + 1]);
+        p.add_held(note, 1500.0);
+        assert_eq!(p.laps[i].wrong, 2);
+        assert_eq!(p.laps[i].missed_notes.len(), 2);
+        assert_eq!(p.laps[i].held_ms, 1500.0);
+        assert!(p.laps[i].took_ms().is_some_and(|ms| ms >= 1500.0));
+        assert!(!p.check_rest(1e9));
+        play_lap(&mut p, &mut judge, 100, true);
+        assert!(!p.waited());
+        play_lap(&mut p, &mut judge, 100, true);
+        assert!(p.waited() && p.over());
+        assert!(!p.wants_lap(0.0, 0.0));
+        assert_eq!(p.done.len(), 1);
+        assert_eq!(p.done[0].laps, WAIT_LAPS);
+        // 点を付けないので、区間のクリアにも残さない
+        assert!(!p.cleared());
+        assert_eq!(p.clear_speed(), None);
+        assert!(p.focus_beats().is_empty());
+        let s: Vec<LapSummary> = p.summaries(f64::MAX);
+        assert_eq!(s[0].wrong, 2);
+    }
+
+    #[test]
+    fn wait_progress_reads_naturally() {
+        let _ja = i18n::scoped(i18n::Lang::Ja);
+        assert_eq!(
+            wait_progress((Some(42_000.0), 12), (Some(25_000.0), 1)),
+            "1 周目より 17 秒早く、迷いが 11 回へりました"
+        );
+        assert_eq!(
+            wait_progress((Some(30_000.0), 0), (Some(30_200.0), 0)),
+            "続けるうちに、順番が体に入ってきます"
+        );
+        assert_eq!(wrong_pads(0), "迷いなし");
+        assert_eq!(wrong_pads(3), "違うパッド 3 回");
     }
 
     #[test]

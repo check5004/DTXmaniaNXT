@@ -690,6 +690,7 @@ fn draw_passed(c: &Canvas, g: &mut Gfx, p: &crate::game::PracticeOutcome) {
         .map(|a| a.speed)
         .max();
     let stops = p.options.stops.len();
+    let waited = p.laps.iter().filter(|l| l.completed).count();
     let (text, color) = if p.cleared || p.toured {
         let text = if p.toured {
             t("TOUR COMPLETE", "ひと回り")
@@ -697,6 +698,20 @@ fn draw_passed(c: &Canvas, g: &mut Gfx, p: &crate::game::PracticeOutcome) {
             t("CLEAR", "クリア")
         };
         (text.to_owned(), Color32::from_rgb(0x70, 0xE0, 0x90))
+    } else if p.waited {
+        (
+            tf!("{waited} LOOPS DONE", "{waited} 周叩けました"),
+            Color32::from_rgb(0x70, 0xE0, 0x90),
+        )
+    } else if p.options.way == engine::practice_way::Way::Wait {
+        (
+            tf!(
+                "{waited} of {} loops",
+                "{waited} / {} 周",
+                engine::practice_way::WAIT_LAPS
+            ),
+            Color32::from_rgb(0xFF, 0xB8, 0x40),
+        )
     } else if p.options.way.tours() {
         let done = p.attempts.iter().filter(|a| a.laps > 0).count();
         (

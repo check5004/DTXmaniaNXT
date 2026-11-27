@@ -58,6 +58,27 @@ const DEMO_WAV: u16 = 0xF000;
 /// メトロノームの音に付ける目印（一時停止の板で切ったとき、鳴らす予定の音を取りやめる）
 const METRONOME_TAG: u8 = 2;
 
+/// 待ちモードで、同じ音符の並び（いっしょに叩く音符）とみなす時刻の差（ミリ秒）
+const CHORD_MS: f64 = 1.0;
+/// 待ちモードで、止まったまま何も叩かずにこれだけ過ぎたら一時停止する（秒。ドラムだけで止められるように）
+pub const WAIT_REST_S: u32 = 10;
+
+/// 待ちモードの時計。まだ叩いていない音符が判定の線に来たら、合うパッドを叩くまで曲の時刻を止める。
+/// 叩いた音は鳴らしたいので、音の出力の時計は止めない。止めていた時間の合計だけ、曲の時刻を出力の時計より遅らせる
+#[derive(Debug, Clone, Default)]
+struct WaitClock {
+    /// 出力の時計より遅らせている時間（ミリ秒）
+    lag_ms: f64,
+    /// 止めている曲の時刻と、止めたホスト時刻
+    held: Option<(f64, i64)>,
+    /// 止めて待っている判定の音符（いっしょに叩く音符をまとめて）
+    notes: Vec<usize>,
+    /// ここより前の判定の音符は、もう待たない（済んだか、自動で叩く）
+    next: usize,
+    /// 止まってから、または最後に叩いてから（一時停止から続けてから）のホスト時刻
+    quiet_since_us: i64,
+}
+
 /// 練習の区間の BGM をまとめるとき、助走の前と着地のあとに足す余白（曲のミリ秒）。伸ばした音の端のにじみを周に入れないため
 const SECTION_MARGIN_MS: f64 = 1000.0;
 
@@ -320,6 +341,8 @@ pub struct PracticeOutcome {
     pub timed_out: bool,
     /// めぐるやり方で、最後の所まで叩き終えた
     pub toured: bool,
+    /// 待ちモードで、周をすべて叩き終えた
+    pub waited: bool,
     /// 空打ちが偏っているパッド（拾いすぎの疑い）
     pub strays: Option<StrayHint>,
     /// 最後まで叩いた周のずれの平均（ミリ秒）と打った数
@@ -435,6 +458,8 @@ pub struct Play {
     catching_up: bool,
     /// お手本の周の音符を、ここまで（曲の時刻）レーンを光らせた
     demo_seen_ms: f64,
+    /// 待ちモードの時計（待ちモードでなければ None）
+    wait: Option<WaitClock>,
 }
 
 impl Play {
@@ -707,7 +732,11 @@ impl Play {
         let mut section_audio = Vec::new();
         // 練習でなければ、自動で鳴らす音（BGM・効果音など）は時刻が近づいたものから出力に渡す（`lay_auto`）。
         // 練習は区間の自動で鳴らす音を 1 本にまとめ、周の速度に伸ばして鳴らす（めぐるやり方は所ごとに）
-        if let (Some(a), Some(p)) = (audio.as_ref(), &practice) {
+        // 待ちモードは曲の時刻が止まるので、区間の音もメトロノームも鳴らさない（叩いた音だけ）
+        let waits = practice
+            .as_ref()
+            .is_some_and(|p| p.options.way == Way::Wait);
+        if let (Some(a), Some(p)) = (audio.as_ref(), practice.as_ref().filter(|_| !waits)) {
             let started = std::time::Instant::now();
             let first = p.speed();
             // 1 周目の音はすぐ作り、ほかの所の音は別のスレッドで作る（次の所へ移るときに、できるまで待つ）
@@ -733,7 +762,7 @@ impl Play {
             .map(|a| (click(a.rate(), true), click(a.rate(), false)));
         let metronome = practice
             .as_ref()
-            .map_or(rules.metronome, |p| p.options.metronome);
+            .map_or(rules.metronome, |p| p.options.metronome && !waits);
 
         log::info!(
             "{}: {} notes, {:.1}s{}",
@@ -807,6 +836,7 @@ impl Play {
             replay: None,
             catching_up: false,
             demo_seen_ms: f64::NEG_INFINITY,
+            wait: waits.then(WaitClock::default),
         };
         play.lay_laps(start_ms);
         play.lay_auto(start_ms);
@@ -842,8 +872,8 @@ impl Play {
         };
         for a in &p.done[self.seen_attempts.min(p.done.len())..] {
             let last = a.index + 1 == p.done.len();
-            // めぐり終えたら、最後の所の出来に関わらずクリアの音
-            if last && p.toured() {
+            // めぐり終えたら、最後の所の出来に関わらずクリアの音（待ちモードも叩き終えたら）
+            if last && (p.toured() || p.waited()) {
                 self.practice_events.push(PracticeEvent::Cleared);
             } else if a.passed == Some(true) {
                 self.practice_events.push(if p.cleared() && last {
@@ -858,6 +888,7 @@ impl Play {
         let end = p
             .cleared_at_ms
             .or(p.toured_at_ms)
+            .or(p.waited_at_ms)
             .map(|at| at + CLEAR_HOLD_MS)
             .or(p.timed_out_at_ms.map(|at| at + TIME_UP_HOLD_MS));
         if let Some(end) = end
@@ -895,6 +926,8 @@ impl Play {
             .section_audio
             .iter()
             .all(|sa| sa.get(p.speed()).is_some());
+        // 待ちモードは曲の時刻が出力の時計より遅れているので、出力へ渡す時刻にその分を足す
+        let lag = self.wait.as_ref().map_or(0.0, |w| w.lag_ms);
         if ready {
             while let Some(w) = p.withdraw_stale(now_ms) {
                 if !self.judge.truncate(w.notes_from) {
@@ -902,7 +935,7 @@ impl Play {
                 }
                 self.note_hits.truncate(w.notes_from);
                 if let Some(a) = self.audio.as_mut() {
-                    a.cancel_from(w.audio_from_ms);
+                    a.cancel_from(w.audio_from_ms + lag);
                 }
             }
         }
@@ -959,9 +992,10 @@ impl Play {
                     }
                 }
                 if let Some((accent, plain)) = &self.clicks {
+                    // 助走のカウントは、待ちモードでも鳴らす（助走のあいだは止まらないので、遅れは並べたときのまま）
                     for (i, &c) in lap.clicks.iter().enumerate() {
                         let click = if i == 0 { accent } else { plain };
-                        a.play_at(click, c, CLICK_GAIN, Bus::Click);
+                        a.play_at(click, c + lag, CLICK_GAIN, Bus::Click);
                     }
                     if self.metronome {
                         for &(c, bar) in &lap.beats {
@@ -1109,10 +1143,127 @@ impl Play {
         if let Some(ms) = self.paused_ms {
             return ms;
         }
+        match &self.wait {
+            Some(WaitClock {
+                held: Some((ms, _)),
+                ..
+            }) => *ms,
+            Some(w) => self.clock_ms_at(at_us) - w.lag_ms,
+            None => self.clock_ms_at(at_us),
+        }
+    }
+
+    /// ホスト時刻 `at_us` の出力の時計（待ちモードで止めたぶんを引く前）
+    fn clock_ms_at(&self, at_us: i64) -> f64 {
         self.audio
             .as_ref()
             .and_then(|a| a.song_ms_at(at_us))
             .unwrap_or_else(|| (at_us - self.fallback_origin_us) as f64 / 1000.0 + self.start_ms)
+    }
+
+    /// 待ちモードで止まっていた時間の合計（ミリ秒。止まっている今のぶんも入れる。待ちモードでなければ 0）
+    fn held_ms(&self) -> f64 {
+        self.wait.as_ref().map_or(0.0, |w| {
+            w.lag_ms
+                + w.held
+                    .map_or(0.0, |(_, at)| (host_us() - at) as f64 / 1000.0)
+        })
+    }
+
+    /// 待ちモードか
+    pub fn waits(&self) -> bool {
+        self.wait.is_some()
+    }
+
+    /// 待ちモードで、止まって待っている音符のレーン（止まっていなければ空）
+    pub fn waiting_lanes(&self) -> Vec<DrumLane> {
+        let Some(w) = self.wait.as_ref().filter(|w| w.held.is_some()) else {
+            return Vec::new();
+        };
+        let mut v: Vec<DrumLane> = w
+            .notes
+            .iter()
+            .filter(|&&i| !self.judge.is_done(i))
+            .map(|&i| self.judge.notes()[i].lane)
+            .collect();
+        v.dedup();
+        v
+    }
+
+    /// 待ちモードで、まだ叩いていない音符が判定の線に来たら曲の時刻を止める（いっしょに叩く音符をまとめて待つ）
+    fn hold_if_due(&mut self) {
+        if self.wait.as_ref().is_none_or(|w| w.held.is_some()) {
+            return;
+        }
+        let t = self.judge_ms(self.now_ms());
+        let offset = self.input_offset_ms + self.song_offset_ms;
+        let judge = &self.judge;
+        let notes = judge.notes();
+        let Some(w) = self.wait.as_mut() else {
+            return;
+        };
+        let open = |i: usize| !judge.is_done(i) && !judge.is_auto(notes[i].lane);
+        w.next = w.next.min(notes.len());
+        while w.next < notes.len() && !open(w.next) {
+            w.next += 1;
+        }
+        let Some(first) = notes.get(w.next) else {
+            return;
+        };
+        if first.ms > t {
+            return;
+        }
+        let at = first.ms;
+        w.notes = (w.next..notes.len())
+            .take_while(|&i| notes[i].ms - at < CHORD_MS)
+            .filter(|&i| open(i))
+            .collect();
+        w.held = Some((at + offset, host_us()));
+        w.quiet_since_us = host_us();
+    }
+
+    /// 待ちモードで、待っていた音符をすべて叩いたら曲の時刻を動かし直す
+    fn release_if_done(&mut self) {
+        let Some(w) = &self.wait else {
+            return;
+        };
+        let Some((ms, since)) = w.held else {
+            return;
+        };
+        if w.notes.iter().any(|&i| !self.judge.is_done(i)) {
+            return;
+        }
+        let first = w.notes.first().copied();
+        let now_us = host_us();
+        let clock = self.clock_ms_at(now_us);
+        if let Some(w) = self.wait.as_mut() {
+            w.lag_ms = clock - ms;
+            w.held = None;
+            w.notes.clear();
+        }
+        if let (Some(p), Some(n)) = (self.practice.as_mut(), first) {
+            p.add_held(n, (now_us - since) as f64 / 1000.0);
+        }
+    }
+
+    /// 待ちモードで、止まって待っているあいだにレーン `lane` を叩いたら、合わないパッドか。
+    /// 合わなければ、まだ叩いていない待っている音符（判定の音符の添字）
+    fn wrong_pad(&self, lane: DrumLane) -> Option<Vec<usize>> {
+        let w = self.wait.as_ref().filter(|w| w.held.is_some())?;
+        if self.judge.is_auto(lane) {
+            return None;
+        }
+        let groups = self.judge.groups();
+        let open: Vec<usize> = w
+            .notes
+            .iter()
+            .copied()
+            .filter(|&i| !self.judge.is_done(i))
+            .collect();
+        let fits = open
+            .iter()
+            .any(|&i| groups.accepts(lane, self.judge.notes()[i].lane));
+        (!fits && !open.is_empty()).then_some(open)
     }
 
     pub fn now_ms(&self) -> f64 {
@@ -1152,8 +1303,12 @@ impl Play {
                 if let Some(a) = &self.audio {
                     a.set_paused(false);
                 }
-                // 音が出ないときの時計は、止めていたぶん起点を後ろへずらす
-                self.fallback_origin_us = host_us() - ((ms - self.start_ms) * 1000.0) as i64;
+                // 音が出ないときの時計は、止めていたぶん起点を後ろへずらす（待ちモードは遅らせているぶんを足した時計）
+                let lag = self.wait.as_ref().map_or(0.0, |w| w.lag_ms);
+                self.fallback_origin_us = host_us() - ((ms + lag - self.start_ms) * 1000.0) as i64;
+                if let Some(w) = self.wait.as_mut() {
+                    w.quiet_since_us = host_us();
+                }
                 // 基礎練習は、続けたときから叩かない時間を数え直す
                 let at = self.judge_ms(ms);
                 if let Some(d) = self.drill.as_mut() {
@@ -1268,6 +1423,16 @@ impl Play {
         if self.paused() {
             return;
         }
+        // 待ちモードは、見逃しを判定する前に止める（遅れたフレームでも見逃しにしない）
+        self.hold_if_due();
+        // 止まったまま叩かなければ一時停止する（ドラムだけで止められるように）
+        if let Some(w) = self.wait.as_mut()
+            && w.held.is_some()
+            && host_us() - w.quiet_since_us > i64::from(WAIT_REST_S) * 1_000_000
+        {
+            w.quiet_since_us = host_us();
+            self.practice_events.push(PracticeEvent::Rest);
+        }
         let now = self.now_ms();
         self.lay_laps(now);
         self.flash_demo(now);
@@ -1317,6 +1482,13 @@ impl Play {
             if e.offset_ms.is_none() && self.judge.is_auto(lane) {
                 if let Some(d) = self.drill.as_mut() {
                     d.on_hit(note.ms);
+                }
+                // 待ちモードは区間の音を鳴らさないので、自動で叩く音符の音はその場で鳴らす
+                if self.wait.is_some()
+                    && let (Some(a), Some(s)) = (self.audio.as_mut(), self.sounds.get(&note.wav))
+                {
+                    let (gain, pan) = self.chart_sounds.gain_pan(note.wav);
+                    a.play_hit(s, (gain, pan), hat_tag(Hat::of_lane(lane)), None);
                 }
                 let rim = self.is_rim_note(note);
                 self.push_fx(Fx::Hit {
@@ -1504,6 +1676,9 @@ impl Play {
         if let Some(d) = self.drill.as_mut() {
             d.on_hit(ms);
         }
+        if let Some(w) = self.wait.as_mut() {
+            w.quiet_since_us = host_us();
+        }
         let rim = lane == DrumLane::SD
             && matches!(
                 articulation,
@@ -1514,9 +1689,19 @@ impl Play {
             velocity,
             rim,
         });
-        let events = self.judge.hit(Hit { ms, lane, velocity });
+        // 待ちモードで止まっているあいだは、合うパッドだけを判定にかける（違うパッドは迷った所に数える）
+        let wrong = self.wrong_pad(lane);
+        let events = match &wrong {
+            Some(notes) => {
+                if let Some(p) = self.practice.as_mut() {
+                    p.on_wrong(notes);
+                }
+                Vec::new()
+            }
+            None => self.judge.hit(Hit { ms, lane, velocity }),
+        };
         // 自動で叩くレーンを叩いても空打ちには数えない
-        if events.is_empty() && !self.judge.is_auto(lane) {
+        if events.is_empty() && wrong.is_none() && !self.judge.is_auto(lane) {
             let stray = StrayHit {
                 at_ms: ms,
                 lane,
@@ -1535,6 +1720,7 @@ impl Play {
             }
         }
         self.record(&events, articulation, hh_pedal);
+        self.release_if_done();
         let mut timing = live;
         if self.drum_sounds && live.is_some() {
             // 取った音符の音を鳴らす。空打ちなら空打ちの音、無ければそのレーンの一番近い音符の音。
@@ -1729,7 +1915,8 @@ impl Play {
                     .filter(|l| l.rest)
                     .map(|l| l.plan.end_ms - l.plan.start_ms)
                     .sum();
-                end_ms - self.start_ms - rest
+                // 待ちモードで止まっていた時間も叩いていた時間に入れる
+                end_ms - self.start_ms - rest + self.held_ms()
             }
         };
         Some(ms.max(0.0).round() as i64)
@@ -1750,6 +1937,8 @@ impl Play {
         let (mean, sd) = mean_and_sd(&self.hit_offsets);
         // 練習で叩かずに休んだ周は、結果の数に入れない
         let (tally, notes) = match &self.practice {
+            // 待ちモードは点を付けないので、判定の数も出さない（演奏の画面と同じく 0）
+            Some(_) if self.wait.is_some() => (Tally::default(), self.judge.notes().len()),
             Some(p) => p.without_rest(self.judge.tally(), self.judge.notes().len()),
             None => (self.judge.tally().clone(), self.judge.notes().len()),
         };
@@ -1787,13 +1976,13 @@ impl Play {
                 options: p.options,
                 laps: p.summaries(self.now_ms()),
                 attempts: p.attempts(),
-                elapsed_ms: p
-                    .laps
-                    .first()
-                    .map_or(0.0, |l| (self.now_ms() - l.plan.audio.at_ms).max(0.0)),
+                elapsed_ms: p.laps.first().map_or(0.0, |l| {
+                    (self.now_ms() - l.plan.audio.at_ms).max(0.0) + self.held_ms()
+                }),
                 cleared: p.cleared(),
                 timed_out: p.timed_out_at_ms.is_some(),
                 toured: p.toured(),
+                waited: p.waited(),
                 strays: p.stray_hint(),
                 offset: p.offset_mean(),
                 picture: p.picture.clone(),
@@ -1892,7 +2081,8 @@ impl Play {
     /// 記録に残す形にする。何も叩かず何も過ぎていなければ None（すぐやめたときは残さない）。
     /// 音符をすべて自動で叩いたときと、早送りか巻き戻しをしたときも残さない（上流と同じ）
     pub fn session(&self) -> Option<Session> {
-        if self.all_auto() || self.skipped || self.replay.is_some() {
+        // 待ちモードは点を付けない（どの音符もずれ 0 で取るので、苦手やくせの記録に入れない。叩いた時間は残す）
+        if self.all_auto() || self.skipped || self.replay.is_some() || self.wait.is_some() {
             return None;
         }
         let w = self.judge.windows();
@@ -2710,6 +2900,64 @@ mod tests {
         assert!(!on.metronome());
         on.set_metronome(true);
         assert!(on.metronome());
+    }
+
+    #[test]
+    fn wait_mode_stops_at_each_note_until_the_right_pad() {
+        // BPM 120 で 1 小節 2000ms。小節 1 の頭に HH と BD、2・4 拍目に SD
+        let text = "#BPM 120\n#WAV01 hh.ogg\n#WAV02 sd.ogg\n#WAV03 bd.ogg\n\
+                    #00111: 01000000\n#00113: 03000000\n#00112: 00020002\n";
+        let path = std::env::temp_dir().join(format!("nxt-wait-{}.dtx", std::process::id()));
+        std::fs::write(&path, text).unwrap();
+        let options = PracticeOptions {
+            section: engine::practice::Section::new(1, 1),
+            style: Default::default(),
+            rule: Default::default(),
+            speed: SpeedPlan::Fixed(100),
+            pitch: Default::default(),
+            metronome: true,
+            step_laps: 2,
+            time_box_s: None,
+            way: Way::Wait,
+            part: Default::default(),
+            build: Default::default(),
+            stops: Default::default(),
+        };
+        let play = Play::load_practice(&path, 0.0, false, &Rules::default(), options);
+        std::fs::remove_file(&path).unwrap();
+        let mut play = play.unwrap();
+        play.audio = None;
+        assert!(play.waits());
+        // 待ちモードはメトロノームも区間の音も鳴らさない
+        assert!(!play.metronome());
+        assert!(play.section_audio.is_empty());
+        let first = play.judge.notes()[0].ms;
+        // 頭の音符を過ぎたら、そこで止まる。いっしょに叩く HH と BD を待つ
+        set_clock(&mut play, first + 30.0);
+        play.update();
+        let mut lanes = play.waiting_lanes();
+        lanes.sort_by_key(|&l| l as usize);
+        assert_eq!(lanes, vec![DrumLane::HH, DrumLane::BD]);
+        assert_eq!(play.now_ms(), first);
+        // ずっと待っても見逃しにならない
+        set_clock(&mut play, first + 5000.0);
+        play.update();
+        assert_eq!(play.now_ms(), first);
+        assert!((0..play.judge.notes().len()).all(|i| !play.judge.is_done(i)));
+        // 違うパッドは迷った所に数え、まだ待つ
+        play.on_key(DrumLane::SD, host_us());
+        assert_eq!(play.practice.as_ref().unwrap().laps[0].wrong, 1);
+        assert_eq!(play.waiting_lanes().len(), 2);
+        play.on_key(DrumLane::HH, host_us());
+        assert_eq!(play.waiting_lanes(), vec![DrumLane::BD]);
+        play.on_key(DrumLane::BD, host_us());
+        assert!(play.waiting_lanes().is_empty());
+        // 動かし直すと、止めた所から続く（止めていた時間だけ遅らせる）
+        let now = play.now_ms();
+        assert!((now - first).abs() < 50.0, "{now} vs {first}");
+        // 点を付けないので記録には残さない。止まっていた時間は叩いていた時間に入れる
+        assert!(play.session().is_none());
+        assert!(play.held_ms() >= 4900.0);
     }
 
     #[test]
