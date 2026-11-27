@@ -1,6 +1,6 @@
 //! リプレイの画面。記録したプレイを演奏の画面のまま再生し（叩いた所は音符と一緒に流れる白い線）、
 //! CY で止めると、止めた所の 2 小節を横の譜面とずれのグラフで見せる（見本の案 C、2026-11-25）。
-//! 入口は結果の画面（HH）と、選曲の簡易設定の「この曲のリプレイ」から開くプレイの一覧（[`ReplayList`]）。
+//! 入口は結果の画面（HH）と、選曲の左上のランキング（[`crate::ranking_view`]）。
 
 use chrono::TimeZone;
 use dtx::DrumLane;
@@ -8,14 +8,13 @@ use egui::Color32;
 use engine::judge::Judgement;
 use engine::practice::Section;
 use i18n::{t, tf};
-use records::PlayEntry;
 
 use crate::game::{Outcome, Play};
 use crate::gfx::{Canvas, Gfx};
 use crate::lag_view::judgement_color;
 use crate::play_view::PlayView;
 use crate::practice::section_label;
-use crate::result_view::{Rank, ResultView};
+use crate::result_view::ResultView;
 use crate::settings_ui::{self as ui, Pad};
 use crate::sfx::Se;
 
@@ -47,8 +46,6 @@ const JUMP_MEASURES: i32 = 4;
 const DETAIL_MEASURES: u32 = 2;
 
 const PANEL_FILL: Color32 = Color32::from_rgb(10, 10, 18);
-const PANEL_LINE: Color32 = Color32::from_rgb(70, 72, 88);
-const ORANGE: Color32 = Color32::from_rgb(0xFF, 0xB8, 0x40);
 const MISS_RED: Color32 = Color32::from_rgb(240, 96, 96);
 const REPLAY_RED: Color32 = Color32::from_rgb(220, 50, 70);
 
@@ -56,8 +53,8 @@ const REPLAY_RED: Color32 = Color32::from_rgb(220, 50, 70);
 pub enum Back {
     /// 来たときの結果の画面
     Result(Box<Outcome>, Box<ResultView>),
-    /// 選曲の上のプレイの一覧（選んでいた行のまま）
-    List(Box<ReplayList>),
+    /// 選曲（ランキングは選んでいた行のまま）
+    Select,
 }
 
 /// 再生しているリプレイ
@@ -90,7 +87,7 @@ pub fn when_label(started_at: i64) -> String {
 }
 
 /// 3 桁ごとに区切った数
-fn grouped(n: i64) -> String {
+pub fn grouped(n: i64) -> String {
     let digits = n.unsigned_abs().to_string();
     let mut out = String::new();
     for (i, ch) in digits.chars().enumerate() {
@@ -293,7 +290,7 @@ impl ReplayRun {
         };
         let back: ui::Hint<'static> = match self.back {
             Back::Result(..) => (&[Pad::LC], t("Back to Results (Esc)", "結果へ戻る（Esc）")),
-            Back::List(_) => (&[Pad::LC], t("Back to List (Esc)", "一覧へ戻る（Esc）")),
+            Back::Select => (&[Pad::LC], t("Song Select (Esc)", "選曲へ戻る（Esc）")),
         };
         vec![
             play,
@@ -720,315 +717,9 @@ fn cross(c: &Canvas, x: f32, y: f32, r: f32, color: Color32) {
     p.line_segment([c.pos(x - r, y + r), c.pos(x + r, y - r)], stroke);
 }
 
-/// 一覧の操作
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ListInput {
-    Up,
-    Down,
-    Decide,
-    Cancel,
-}
-
-/// 一覧で決めたこと
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ListDone {
-    /// このプレイ（セッションの番号）を再生する
-    Play(i64),
-    Close,
-}
-
-/// 選曲の簡易設定から開く、選んでいる曲のプレイの一覧（新しい順）
-pub struct ReplayList {
-    title: String,
-    entries: Vec<PlayEntry>,
-    /// 達成率が一番のプレイ
-    best: Option<i64>,
-    /// 今の譜面と違う譜面で遊んだプレイ（譜面を書き換えた）
-    changed: Vec<bool>,
-    cursor: usize,
-}
-
-/// 一覧に並べる行の数
-const LIST_ROWS: usize = 7;
-
-impl ReplayList {
-    /// `chart_hash` は今の譜面の中身（読めなければ None）
-    pub fn new(title: String, entries: Vec<PlayEntry>, chart_hash: Option<u64>) -> Self {
-        let best = entries
-            .iter()
-            .filter_map(|e| Some((e.session_id, e.score.as_ref()?.rate)))
-            .max_by(|a, b| a.1.total_cmp(&b.1))
-            .map(|(id, _)| id);
-        let changed = entries
-            .iter()
-            .map(|e| matches!((e.chart_hash, chart_hash), (Some(a), Some(b)) if a != b))
-            .collect();
-        Self {
-            title,
-            entries,
-            best,
-            changed,
-            cursor: 0,
-        }
-    }
-
-    pub fn input(&mut self, input: ListInput) -> (Option<Se>, Option<ListDone>) {
-        let n = self.entries.len();
-        match input {
-            ListInput::Up | ListInput::Down if n > 0 => {
-                self.cursor = if input == ListInput::Up {
-                    (self.cursor + n - 1) % n
-                } else {
-                    (self.cursor + 1) % n
-                };
-                (Some(Se::Move), None)
-            }
-            ListInput::Up | ListInput::Down => (None, None),
-            ListInput::Decide => match self.entries.get(self.cursor) {
-                Some(e) => (Some(Se::Decide), Some(ListDone::Play(e.session_id))),
-                None => (None, None),
-            },
-            ListInput::Cancel => (Some(Se::Cancel), Some(ListDone::Close)),
-        }
-    }
-
-    pub fn draw(&self, c: &Canvas, g: &mut Gfx) {
-        c.cover(Color32::from_black_alpha(185));
-        ui::text(
-            c,
-            g,
-            t("Replay", "リプレイ"),
-            40.0,
-            18.0,
-            &ui::bold(22.0, ui::TEXT),
-            300.0,
-        );
-        ui::text_right(
-            c,
-            g,
-            &self.title,
-            1240.0,
-            22.0,
-            &ui::plain(16.0, ui::DIM),
-            800.0,
-        );
-        ui::round_fill(c, 300.0, 70.0, 680.0, 590.0, 6.0, PANEL_FILL);
-        ui::round_frame(c, 300.0, 70.0, 680.0, 590.0, 6.0, 1.0, PANEL_LINE);
-        ui::text(
-            c,
-            g,
-            t("Plays of This Song", "この曲のプレイ"),
-            324.0,
-            84.0,
-            &ui::bold(17.0, ui::TEXT),
-            400.0,
-        );
-        let n = self.entries.len();
-        ui::text_right(
-            c,
-            g,
-            &tf!("Newest first · {n} plays", "新しい順・{n} 回"),
-            956.0,
-            88.0,
-            &ui::plain(13.0, ui::MUTED),
-            300.0,
-        );
-        if n == 0 {
-            ui::paragraph(
-                c,
-                g,
-                t(
-                    "No plays yet. Play this song once and you can watch it again here.",
-                    "まだプレイがありません。一度遊ぶと、ここから見直せます。",
-                ),
-                336.0,
-                140.0,
-                610.0,
-                26.0,
-                600.0,
-                &ui::plain(16.0, ui::DIM),
-            );
-        }
-        let top = self
-            .cursor
-            .saturating_sub(LIST_ROWS - 1)
-            .min(n.saturating_sub(LIST_ROWS));
-        for (row, (i, e)) in self
-            .entries
-            .iter()
-            .enumerate()
-            .skip(top)
-            .take(LIST_ROWS)
-            .enumerate()
-        {
-            let y = 124.0 + row as f32 * 70.0;
-            if i == self.cursor {
-                ui::round_fill(c, 316.0, y, 648.0, 62.0, 6.0, Color32::from_rgb(30, 28, 44));
-                ui::round_frame(c, 316.0, y, 648.0, 62.0, 6.0, 2.0, ORANGE);
-            } else {
-                ui::round_fill(c, 316.0, y, 648.0, 62.0, 6.0, Color32::from_rgb(16, 16, 26));
-            }
-            let mid = y + 31.0;
-            ui::text(
-                c,
-                g,
-                &when_label(e.started_at),
-                336.0,
-                mid - 12.0,
-                &ui::plain(17.0, ui::TEXT),
-                180.0,
-            );
-            let rank = Rank::of(&e.tally);
-            let rank_color = if matches!(rank, Rank::SS | Rank::S) {
-                ORANGE
-            } else {
-                ui::TEXT
-            };
-            ui::text_center(
-                c,
-                g,
-                &format!("{rank:?}"),
-                540.0,
-                mid - 17.0,
-                &ui::bold(26.0, rank_color),
-                60.0,
-            );
-            let rate = e
-                .score
-                .as_ref()
-                .map_or_else(|| "—".to_owned(), |s| format!("{:.2}%", s.rate));
-            ui::text(
-                c,
-                g,
-                &rate,
-                600.0,
-                mid - 13.0,
-                &ui::bold(19.0, ui::TEXT),
-                110.0,
-            );
-            if let Some(s) = &e.score {
-                ui::text(
-                    c,
-                    g,
-                    &grouped(s.score),
-                    720.0,
-                    mid - 10.0,
-                    &ui::plain(15.0, ui::DIM),
-                    90.0,
-                );
-            }
-            ui::text(
-                c,
-                g,
-                &format!("MISS {}", e.tally.miss),
-                820.0,
-                mid - 10.0,
-                &ui::plain(15.0, MISS_RED),
-                80.0,
-            );
-            let tag = if self.changed[i] {
-                Some((t("Edited", "譜面変更"), Color32::from_rgb(255, 154, 31)))
-            } else if self.best == Some(e.session_id) {
-                Some((t("Best", "ベスト"), Color32::from_rgb(255, 210, 58)))
-            } else if !e.completed {
-                Some((
-                    t("Unfinished", "途中まで"),
-                    Color32::from_rgb(150, 143, 172),
-                ))
-            } else {
-                None
-            };
-            if let Some((tag, color)) = tag {
-                let style = ui::bold(12.0, Color32::from_rgb(40, 20, 0));
-                let w = ui::text_width(g, tag, &style) + 16.0;
-                ui::round_fill(c, 952.0 - w, mid - 11.0, w, 22.0, 11.0, color);
-                ui::text_center(c, g, tag, 952.0 - w / 2.0, mid - 9.0, &style, w);
-            }
-        }
-        if top > 0 {
-            ui::triangle(c, 640.0, 116.0, 10.0, -2, ui::MUTED);
-        }
-        if top + LIST_ROWS < n {
-            ui::triangle(c, 640.0, 616.0, 10.0, 2, ui::MUTED);
-        }
-        ui::text(
-            c,
-            g,
-            t(
-                "Every play is saved for replay automatically, including earlier ones.",
-                "リプレイはプレイのたびに自動で残ります（これまでのプレイも見られます）",
-            ),
-            324.0,
-            628.0,
-            &ui::plain(13.0, ui::MUTED),
-            640.0,
-        );
-        ui::legend(
-            c,
-            g,
-            &[
-                (&[Pad::HT], t("Up", "上")),
-                (&[Pad::LT], t("Down", "下")),
-                (&[Pad::CY, Pad::RD], t("Play (Enter)", "再生する（Enter）")),
-                (&[Pad::LC], t("Song Select (Esc)", "選曲へ（Esc）")),
-            ],
-        );
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use engine::judge::Tally;
-
-    fn entry(id: i64, rate: Option<f64>, hash: Option<u64>) -> PlayEntry {
-        PlayEntry {
-            session_id: id,
-            started_at: 0,
-            chart_hash: hash,
-            tally: Tally::default(),
-            completed: true,
-            score: rate.map(|rate| records::PlayScore {
-                score: 0,
-                rate,
-                progress: String::new(),
-                cleared: true,
-            }),
-        }
-    }
-
-    #[test]
-    fn the_list_marks_the_best_play_and_edited_charts() {
-        let l = ReplayList::new(
-            String::new(),
-            vec![
-                entry(3, Some(70.0), Some(1)),
-                entry(2, Some(88.0), Some(1)),
-                entry(1, None, Some(9)),
-            ],
-            Some(1),
-        );
-        assert_eq!(l.best, Some(2));
-        assert_eq!(l.changed, vec![false, false, true]);
-    }
-
-    #[test]
-    fn the_list_wraps_and_picks_the_play_under_the_cursor() {
-        let mut l = ReplayList::new(
-            String::new(),
-            vec![entry(3, None, None), entry(2, None, None)],
-            None,
-        );
-        assert_eq!(l.input(ListInput::Up).1, None);
-        assert_eq!(l.input(ListInput::Decide).1, Some(ListDone::Play(2)));
-        l.input(ListInput::Down);
-        assert_eq!(l.input(ListInput::Decide).1, Some(ListDone::Play(3)));
-        assert_eq!(l.input(ListInput::Cancel).1, Some(ListDone::Close));
-        // 空の一覧では決められない
-        let mut empty = ReplayList::new(String::new(), Vec::new(), None);
-        assert_eq!(empty.input(ListInput::Decide), (None, None));
-    }
-
     #[test]
     fn numbers_and_times_are_written_like_the_result_screen() {
         assert_eq!(grouped(629_648), "629,648");

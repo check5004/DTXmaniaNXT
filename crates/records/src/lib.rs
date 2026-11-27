@@ -355,7 +355,7 @@ pub struct StrayHit {
     pub hh_pedal: Option<u8>,
 }
 
-/// 普通のプレイ 1 回（リプレイの一覧の行）
+/// 普通のプレイか引き継いだ記録 1 回（選曲のランキングの行）
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlayEntry {
     pub session_id: i64,
@@ -368,6 +368,14 @@ pub struct PlayEntry {
     pub completed: bool,
     /// スコアと達成率（自動で叩くレーンがあったプレイは None）
     pub score: Option<PlayScore>,
+}
+
+/// 選曲のランキングの 1 行
+#[derive(Debug, Clone, PartialEq)]
+pub struct RankEntry {
+    pub entry: PlayEntry,
+    /// リプレイを見られる（NXT で遊んだ普通のプレイ）。引き継いだ記録はスコアだけで見られない
+    pub replay: bool,
 }
 
 /// リプレイに使う、普通のプレイ 1 回の叩いた記録
@@ -768,22 +776,31 @@ impl Records {
             .collect())
     }
 
-    /// 譜面の普通のプレイ（練習と引き継いだものは入れない）。新しい順に `limit` 回まで
-    pub fn plays(&self, chart_path: &str, limit: usize) -> Result<Vec<PlayEntry>> {
+    /// 譜面のスコアの順位（選曲のランキング）。スコアの残っている普通のプレイと、ほかの DTXMania から
+    /// 引き継いだ記録を、スコアの高い順に `limit` 件まで（同じなら達成率の高い順、そのあと先に出した順）。
+    /// 練習・基礎練習と、自動で叩くレーンがあったプレイ（スコアが無い）は入れない
+    pub fn ranking(&self, chart_path: &str, limit: usize) -> Result<Vec<RankEntry>> {
         let mut q = self.conn.prepare(
             "SELECT s.id, s.started_at, s.chart_hash,
                  l.perfect, l.great, l.good, l.poor, l.miss, l.stray, l.max_combo, l.completed,
-                 p.score, p.rate, p.progress, p.cleared
+                 p.score, p.rate, p.progress, p.cleared,
+                 s.kind
              FROM sessions s
              JOIN charts c ON c.id = s.chart_id
              JOIN laps l ON l.session_id = s.id AND l.lap = 0
-             LEFT JOIN play_scores p ON p.session_id = s.id
-             WHERE c.path = ?1 AND s.kind = 'play'
-             ORDER BY s.started_at DESC, s.id DESC
+             JOIN play_scores p ON p.session_id = s.id
+             WHERE c.path = ?1 AND s.kind IN ('play', 'imported')
+             ORDER BY p.score DESC, p.rate DESC, s.started_at, s.id
              LIMIT ?2",
         )?;
-        q.query_map(params![chart_path, limit as i64], play_entry)?
-            .collect()
+        q.query_map(params![chart_path, limit as i64], |row| {
+            let kind: String = row.get(15)?;
+            Ok(RankEntry {
+                entry: play_entry(row)?,
+                replay: kind == SessionKind::Play.name(),
+            })
+        })?
+        .collect()
     }
 
     /// 普通のプレイ 1 回の、音符ごとの結果と空打ち（リプレイに使う）。無いか普通のプレイでなければ None
@@ -1313,40 +1330,59 @@ mod tests {
     }
 
     #[test]
-    fn plays_are_listed_newest_first_and_keep_their_takes() {
+    fn ranking_lists_scores_highest_first_and_plays_keep_their_takes() {
         let mut r = Records::open_in_memory().unwrap();
-        let old = r
-            .save(&chart(7), &play(100, 1.0, vec![hit(2, Judgement::Perfect)]))
+        let scored = |started_at, score, rate, hits| {
+            let mut p = play(started_at, 1.0, hits);
+            p.score = Some(PlayScore {
+                score,
+                rate,
+                progress: "1".repeat(PROGRESS_SECTIONS),
+                cleared: true,
+            });
+            p
+        };
+        let low = r
+            .save(
+                &chart(7),
+                &scored(100, 500, 10.0, vec![hit(2, Judgement::Perfect)]),
+            )
             .unwrap();
-        let mut scored = play(
+        let mut top = scored(
             200,
-            1.0,
+            1000,
+            12.5,
             vec![hit(3, Judgement::Good), hit(4, Judgement::Miss)],
         );
-        scored.settings = "{\"input_offset_ms\":-5}".into();
-        scored.laps[0].tally.miss = 1;
-        scored.score = Some(PlayScore {
-            score: 1000,
-            rate: 12.5,
-            progress: "1".repeat(PROGRESS_SECTIONS),
-            cleared: true,
-        });
-        let new = r.save(&chart(7), &scored).unwrap();
-        // 練習はリプレイの一覧に入れない
-        let mut practice = play(300, 1.0, vec![hit(5, Judgement::Perfect)]);
+        top.settings = "{\"input_offset_ms\":-5}".into();
+        top.laps[0].tally.miss = 1;
+        let new = r.save(&chart(7), &top).unwrap();
+        // 同じスコアなら達成率の高い方が上
+        let tie = r
+            .save(&chart(7), &scored(250, 500, 11.0, Vec::new()))
+            .unwrap();
+        // ほかの DTXMania から引き継いだ記録は入るがリプレイは無い
+        let mut imported = scored(50, 800, 11.5, Vec::new());
+        imported.kind = SessionKind::Imported;
+        let imported = r.save(&chart(7), &imported).unwrap();
+        // 自動で叩くレーンがあったプレイ（スコアが無い）と練習は入れない
+        r.save(&chart(7), &play(300, 1.0, Vec::new())).unwrap();
+        let mut practice = scored(400, 2000, 20.0, vec![hit(5, Judgement::Perfect)]);
         practice.kind = SessionKind::Practice;
         let practice = r.save(&chart(7), &practice).unwrap();
 
-        let list = r.plays("songs/a/master.dtx", 10).unwrap();
+        let list = r.ranking("songs/a/master.dtx", 10).unwrap();
         assert_eq!(
-            list.iter().map(|p| p.session_id).collect::<Vec<_>>(),
-            vec![new, old]
+            list.iter()
+                .map(|e| (e.entry.session_id, e.replay))
+                .collect::<Vec<_>>(),
+            vec![(new, true), (imported, false), (tie, true), (low, true)]
         );
-        assert_eq!(list[0].chart_hash, Some(7));
-        assert_eq!(list[0].tally.miss, 1);
-        assert_eq!(list[0].score.as_ref().map(|s| s.score), Some(1000));
-        assert!(list[1].score.is_none());
-        assert_eq!(r.plays("songs/a/master.dtx", 1).unwrap().len(), 1);
+        assert_eq!(list[0].entry.chart_hash, Some(7));
+        assert_eq!(list[0].entry.tally.miss, 1);
+        assert_eq!(list[0].entry.score.as_ref().map(|s| s.score), Some(1000));
+        assert_eq!(r.ranking("songs/a/master.dtx", 1).unwrap().len(), 1);
+        assert!(r.ranking("songs/b/master.dtx", 10).unwrap().is_empty());
 
         let takes = r.play_takes(new).unwrap().unwrap();
         assert_eq!(takes.chart_path, "songs/a/master.dtx");

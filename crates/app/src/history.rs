@@ -15,7 +15,7 @@ use engine::lag::{Advice, LagSample, advise};
 use engine::practice::Section;
 use library::Stats;
 use records::{
-    BestScore, ChartKey, ChartProgress, ClearRecord, PlayEntry, PlayScore, PlayTakes, PlayTime,
+    BestScore, ChartKey, ChartProgress, ClearRecord, PlayScore, PlayTakes, PlayTime, RankEntry,
     Records, SessionKind, SessionLag, time_kind,
 };
 
@@ -270,13 +270,13 @@ impl History {
             .ok()
     }
 
-    /// 譜面の普通のプレイ（リプレイの一覧）。新しい順に `limit` 回まで。記録が読めなければ空
-    pub fn plays(&self, path: &Path, limit: usize) -> Vec<PlayEntry> {
+    /// 譜面のスコアの順位（選曲のランキング）。高い順に `limit` 件まで。記録が読めなければ空
+    pub fn ranking(&self, path: &Path, limit: usize) -> Vec<RankEntry> {
         let Some(records) = self.records.as_ref() else {
             return Vec::new();
         };
         records
-            .plays(&path.to_string_lossy(), limit)
+            .ranking(&path.to_string_lossy(), limit)
             .map_err(|e| log::warn!("cannot read the records: {e}"))
             .unwrap_or_default()
     }
