@@ -22,7 +22,8 @@ use crate::drill::{DrillOutcome, DrillPlay};
 use crate::history::OvercomeCheck;
 use crate::midi::RawMidi;
 use crate::practice::{
-    CLEAR_HOLD_MS, LapSummary, Practice, PracticeOptions, StrayHint, count_per_measure,
+    CLEAR_HOLD_MS, LapSummary, Practice, PracticeOptions, StrayHint, TIME_UP_HOLD_MS,
+    count_per_measure,
 };
 use crate::replay::{Feed, Take};
 use crate::stretch::{SectionAudio, mix_bgm};
@@ -276,6 +277,8 @@ pub struct Outcome {
     pub strokes: Option<StrokeTally>,
     /// 記録に残したセッションの番号（普通のプレイなら、結果の画面からリプレイを見られる）
     pub session_id: Option<i64>,
+    /// 今日のメニューの 1 つなら、その進み具合（結果の画面で CY で次へ）
+    pub today: Option<crate::today::Mark>,
 }
 
 /// 練習 1 回の成績
@@ -289,6 +292,8 @@ pub struct PracticeOutcome {
     pub elapsed_ms: f64,
     /// 目標の段を越えた
     pub cleared: bool,
+    /// 時間の区切りを過ぎて終えた（今日のメニュー）
+    pub timed_out: bool,
     /// 空打ちが偏っているパッド（拾いすぎの疑い）
     pub strays: Option<StrayHint>,
     /// 最後まで叩いた周のずれの平均（ミリ秒）と打った数
@@ -805,9 +810,14 @@ impl Play {
             }
         }
         self.seen_attempts = p.done.len();
-        if let Some(at) = p.cleared_at_ms
+        // クリアは「クリア！」を見せてから、時間の区切りは「時間です」を見せてから結果へ
+        let end = p
+            .cleared_at_ms
+            .map(|at| at + CLEAR_HOLD_MS)
+            .or(p.timed_out_at_ms.map(|at| at + TIME_UP_HOLD_MS));
+        if let Some(end) = end
             && !self.finish_sent
-            && now - at >= CLEAR_HOLD_MS
+            && now >= end
         {
             self.finish_sent = true;
             self.practice_events
@@ -1677,6 +1687,7 @@ impl Play {
             started_at: self.started_at,
             strokes: self.stroke_tally(),
             session_id: None,
+            today: None,
             practice: self.practice.as_ref().map(|p| PracticeOutcome {
                 options: p.options,
                 laps: p.summaries(self.now_ms()),
@@ -1686,6 +1697,7 @@ impl Play {
                     .first()
                     .map_or(0.0, |l| (self.now_ms() - l.plan.audio.at_ms).max(0.0)),
                 cleared: p.cleared(),
+                timed_out: p.timed_out_at_ms.is_some(),
                 strays: p.stray_hint(),
                 offset: p.offset_mean(),
                 picture: p.picture.clone(),
@@ -2604,6 +2616,7 @@ mod tests {
             pitch: Default::default(),
             metronome: false,
             step_laps: 2,
+            time_box_s: None,
         };
         let play = Play::load_practice(&path, 0.0, false, &rules, options);
         std::fs::remove_file(&path).unwrap();

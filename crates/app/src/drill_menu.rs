@@ -1,6 +1,8 @@
 //! 基礎練習の画面（タイトルの「Drills」から開く。2026-11-25 見本の案 A、2026-11-27 に型が増えて 3 列に）。
 //!
 //! 左に分け方、真ん中にその分け方のドリル、右に選んだドリルの手順の絵、やり方と手順、テンポと段、これまでの最高。
+//! 左の列の一番上は「今日のメニュー」（`today`）。真ん中の列にその日の並び、右に全体の帯と選んだものの中身を出し、
+//! SD/FT で長さ（5・10・15 分、始めたら変えない）、CY で選んだものから始める。
 //! 左の列では HT/LT で分け方、CY か FT で真ん中の列へ。真ん中の列では HT/LT でドリル、SD/FT でテンポ（5 ずつ）、
 //! HH でやり方、RD で手順（右から・左から）、CY で始め、LC で左の列へ戻る（左の列の LC はタイトルへ）。
 //! テンポはドリルごとに、やり方と手順は全体で覚える。
@@ -12,6 +14,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::time::Instant;
 
+use chrono::{Datelike, NaiveDate};
 use egui::{Color32, Stroke};
 use engine::drill::{
     BLIND_ALPHA, BPM_STEP, COUNT_IN_MEASURES, Category, DEFAULT_RISE, DRILLS, Drill, Hand,
@@ -19,6 +22,7 @@ use engine::drill::{
 };
 use i18n::{count, t, tf};
 
+use crate::band::{Band, BandData};
 use crate::drill::{
     self, DrillRecords, LEFT_COLOR, RIGHT_COLOR, category_name, hand_letter, lead_name,
     pattern_line, way_name,
@@ -28,6 +32,7 @@ use crate::gfx::{Canvas, Gfx};
 use crate::settings_ui::{self as ui, Pad};
 use crate::sfx::Se;
 use crate::text::Style;
+use crate::today::{self, LENGTHS, Plan, Progress, SongPick, Task};
 
 /// 左の列（分け方）、真ん中の列（ドリル）、右の板
 const CATS: (f32, f32, f32, f32) = (40.0, 62.0, 226.0, 618.0);
@@ -38,6 +43,10 @@ const CAT_H: f32 = 48.0;
 const ROW_H: f32 = 42.0;
 /// 真ん中の列の、ドリルの行が始まる所（板の上から）
 const LIST_TOP: f32 = 44.0;
+/// 左の列の、今日のメニューの行と分け方の間
+const TODAY_GAP: f32 = 12.0;
+/// 今日のメニューの役目の札の幅
+const ROLE_W: f32 = 74.0;
 /// 左の列の下の、上げ幅とタイトルへの行の場所（板の下の端から）
 const FOOT_H: f32 = 92.0;
 const FOOT_ROW_H: f32 = 36.0;
@@ -45,6 +54,8 @@ const FOOT_ROW_H: f32 = 36.0;
 /// 選べる行
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Item {
+    /// 左の列の一番上の、今日のメニュー（真ん中の列にいるときも）
+    Today,
     /// 左の列の分け方
     Category(Category),
     /// 真ん中の列のドリル（`DRILLS` の添字）
@@ -62,6 +73,8 @@ enum Focus {
     Left,
     /// 真ん中の列（ドリル）
     Drills,
+    /// 真ん中の列（今日のメニュー）
+    Today,
 }
 
 /// 操作（パッドとキーボードから）
@@ -92,6 +105,8 @@ pub struct Response {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Done {
     Start(Run),
+    /// 今日のメニューを、この進み具合で、この番目から始める
+    Today(Box<Progress>, usize),
     Back,
 }
 
@@ -107,6 +122,10 @@ pub struct Prefs {
     pub way: String,
     /// 手順を左からにする
     pub lefty: bool,
+    /// 今日のメニューの長さ（分）
+    pub today_minutes: u32,
+    /// 最後に今日のメニューを開いていた（次も今日のメニューの行から）
+    pub on_today: bool,
 }
 
 impl Default for Prefs {
@@ -117,12 +136,44 @@ impl Default for Prefs {
             bpm: BTreeMap::new(),
             way: Way::Climb.key(),
             lefty: false,
+            today_minutes: today::DEFAULT_LENGTH,
+            on_today: false,
         }
     }
 }
 
+/// 今日のメニューのために、開くときに渡すもの
+#[derive(Debug, Clone)]
+pub struct TodaySetup {
+    pub day: NaiveDate,
+    /// 曲の苦手な所（記録から。無ければ曲の代わりに型を足す）
+    pub song: Option<SongPick>,
+    /// 始めたメニュー（今日のものだけ）
+    pub progress: Option<Progress>,
+    /// 今日のメニューを最後までやった
+    pub done_today: bool,
+    /// 今日のメニューの列を開いておく（今日のメニューの結果から戻ったとき）
+    pub open: bool,
+}
+
+/// 今日のメニューの列の中身
+struct TodayState {
+    minutes: u32,
+    day: NaiveDate,
+    song: Option<SongPick>,
+    progress: Option<Progress>,
+    done_today: bool,
+    /// 真ん中の列で選んでいるもの
+    cursor: usize,
+    /// 出している並び（始めていれば、始めたもの）
+    plan: Plan,
+}
+
 pub struct DrillMenu {
     focus: Focus,
+    /// 真ん中の列に今日のメニューを出している（左の列で今日のメニューの行にいるか、その列にいる）
+    showing_today: bool,
+    today: TodayState,
     /// 左の列の行（分け方、上げ幅、タイトルへ）
     left: usize,
     /// 真ん中の列に出している分け方
@@ -140,9 +191,10 @@ pub struct DrillMenu {
     entered: Instant,
 }
 
-/// 左の列の行（分け方、上げ幅、タイトルへ）
+/// 左の列の行（今日のメニュー、分け方、上げ幅、タイトルへ）
 fn left_items() -> Vec<Item> {
-    let mut v: Vec<Item> = Category::ALL.into_iter().map(Item::Category).collect();
+    let mut v = vec![Item::Today];
+    v.extend(Category::ALL.into_iter().map(Item::Category));
     v.extend([Item::Rise, Item::Back]);
     v
 }
@@ -166,8 +218,13 @@ pub fn run_seconds(run: &Run) -> f64 {
             .sum::<f64>()
 }
 
+/// 左の列の、分け方 `c`（`Category::ALL` の添字）の行
+fn left_of(c: usize) -> usize {
+    c + 1
+}
+
 impl DrillMenu {
-    pub fn new(prefs: &Prefs, records: DrillRecords) -> Self {
+    pub fn new(prefs: &Prefs, records: DrillRecords, setup: TodaySetup) -> Self {
         let bpm = DRILLS
             .iter()
             .filter_map(|d| prefs.bpm.get(d.id).map(|&b| (d.id, nudge_bpm(b, 0))))
@@ -177,8 +234,28 @@ impl DrillMenu {
         } else {
             DEFAULT_RISE
         };
+        let minutes = if LENGTHS.contains(&prefs.today_minutes) {
+            prefs.today_minutes
+        } else {
+            today::DEFAULT_LENGTH
+        };
+        let progress = setup.progress.filter(|p| p.plan.day == setup.day);
         let mut m = Self {
             focus: Focus::Left,
+            showing_today: true,
+            today: TodayState {
+                minutes: progress.as_ref().map_or(minutes, |p| p.plan.minutes),
+                day: setup.day,
+                song: setup.song,
+                done_today: setup.done_today || progress.as_ref().is_some_and(Progress::complete),
+                cursor: progress.as_ref().map_or(0, Progress::first_open),
+                progress,
+                plan: Plan {
+                    day: setup.day,
+                    minutes,
+                    steps: Vec::new(),
+                },
+            },
             left: 0,
             category: 0,
             picked: [0; Category::ALL.len()],
@@ -197,15 +274,64 @@ impl DrillMenu {
                 .position(|&c| c == DRILLS[i].category)
                 .unwrap_or(0);
             m.category = c;
-            m.left = c;
             m.picked[c] = drills_of(DRILLS[i].category)
                 .iter()
                 .position(|&x| x == i)
                 .unwrap_or(0);
-            m.focus = Focus::Drills;
+            if !setup.open && !prefs.on_today {
+                m.left = left_of(c);
+                m.focus = Focus::Drills;
+                m.showing_today = false;
+            }
+        }
+        // 今日のメニューの結果から戻ったら、今日のメニューの次のものに
+        if setup.open {
+            m.focus = Focus::Today;
+            m.left = 0;
+            m.showing_today = true;
         }
         m.follow();
+        m.refresh_today();
         m
+    }
+
+    /// 今日のメニューの並びを作り直す（始めていれば始めたもの）。テンポや手順を変えたときも
+    fn refresh_today(&mut self) {
+        let plan = match &self.today.progress {
+            Some(p) => p.plan.clone(),
+            None => {
+                let tempo = |d: &Drill| self.bpm_of(d);
+                today::plan(
+                    self.today.minutes,
+                    &today::Inputs {
+                        day: self.today.day,
+                        records: &self.records,
+                        tempo: &tempo,
+                        rise: self.rise,
+                        lefty: self.lefty,
+                        song: self.today.song.as_ref(),
+                    },
+                )
+            }
+        };
+        self.today.cursor = self.today.cursor.min(plan.steps.len().saturating_sub(1));
+        self.today.plan = plan;
+    }
+
+    /// 今日のメニューを途中まで進めている（長さは変えない）
+    fn today_locked(&self) -> bool {
+        self.today
+            .progress
+            .as_ref()
+            .is_some_and(|p| p.started() && !p.complete())
+    }
+
+    /// 今日のメニューの `k` 番目を終えた
+    fn today_done(&self, k: usize) -> bool {
+        self.today
+            .progress
+            .as_ref()
+            .is_some_and(|p| p.done.get(k) == Some(&true))
     }
 
     /// 選んでいる行
@@ -213,6 +339,7 @@ impl DrillMenu {
         match self.focus {
             Focus::Left => left_items()[self.left],
             Focus::Drills => Item::Drill(self.drill_index()),
+            Focus::Today => Item::Today,
         }
     }
 
@@ -262,14 +389,22 @@ impl DrillMenu {
                 .collect(),
             way: self.way.key(),
             lefty: self.lefty,
+            today_minutes: self.today.minutes,
+            on_today: self.showing_today,
         }
     }
 
     pub fn input(&mut self, input: Input) -> Response {
-        match self.focus {
+        let r = match self.focus {
             Focus::Left => self.input_left(input),
             Focus::Drills => self.input_drills(input),
+            Focus::Today => self.input_today(input),
+        };
+        // テンポ・上げ幅・手順が変われば、今日のメニューのテンポも変わる
+        if r.changed {
+            self.refresh_today();
         }
+        r
     }
 
     /// 左の列（分け方・上げ幅・タイトルへ）
@@ -285,11 +420,19 @@ impl DrillMenu {
                 };
                 if let Some(to) = to {
                     self.left = to;
-                    if let Item::Category(_) = items[to] {
-                        // 分け方を動かすと真ん中の列もその分け方に
-                        self.category = to;
-                        self.follow();
-                        r.changed = true;
+                    match items[to] {
+                        Item::Category(c) => {
+                            // 分け方を動かすと真ん中の列もその分け方に
+                            self.category = Category::ALL.iter().position(|&x| x == c).unwrap_or(0);
+                            self.showing_today = false;
+                            self.follow();
+                            r.changed = true;
+                        }
+                        Item::Today => {
+                            self.showing_today = true;
+                            r.changed = true;
+                        }
+                        _ => {}
                     }
                     r.se = Some(Se::Move);
                 }
@@ -305,11 +448,11 @@ impl DrillMenu {
                         r.changed = true;
                     }
                 }
-                Item::Category(_) if input == Input::Right => return self.enter(),
+                Item::Category(_) | Item::Today if input == Input::Right => return self.enter(),
                 _ => {}
             },
             Input::Decide => match items[self.left] {
-                Item::Category(_) | Item::Drill(_) => return self.enter(),
+                Item::Category(_) | Item::Drill(_) | Item::Today => return self.enter(),
                 Item::Rise => {
                     // 決定で上げ幅を順に回す
                     let i = RISES.iter().position(|&x| x == self.rise).unwrap_or(0);
@@ -332,9 +475,14 @@ impl DrillMenu {
         r
     }
 
-    /// 左の列の分け方から真ん中の列へ
+    /// 左の列の分け方（か今日のメニュー）から真ん中の列へ
     fn enter(&mut self) -> Response {
-        self.focus = Focus::Drills;
+        if left_items()[self.left] == Item::Today {
+            self.focus = Focus::Today;
+            self.today.cursor = self.today.progress.as_ref().map_or(0, Progress::first_open);
+        } else {
+            self.focus = Focus::Drills;
+        }
         self.follow();
         Response {
             se: Some(Se::Decide),
@@ -380,7 +528,7 @@ impl DrillMenu {
             Input::Cancel => {
                 // 左の列へ戻る（分け方の行に）
                 self.focus = Focus::Left;
-                self.left = self.category;
+                self.left = left_of(self.category);
                 r.se = Some(Se::Cancel);
             }
             Input::Way => {
@@ -393,6 +541,65 @@ impl DrillMenu {
                 r.se = Some(Se::Change);
                 r.changed = true;
             }
+        }
+        r
+    }
+
+    /// 真ん中の列（今日のメニュー）
+    fn input_today(&mut self, input: Input) -> Response {
+        let n = self.today.plan.steps.len();
+        let mut r = Response::default();
+        match input {
+            Input::Up | Input::Down => {
+                let at = self.today.cursor;
+                let to = if input == Input::Up {
+                    at.checked_sub(1)
+                } else {
+                    (at + 1 < n).then_some(at + 1)
+                };
+                if let Some(to) = to {
+                    self.today.cursor = to;
+                    r.se = Some(Se::Move);
+                }
+            }
+            Input::Left | Input::Right => {
+                // 途中まで進めたメニューの長さは変えない（終えた分が消えるので）
+                if self.today_locked() {
+                    return r;
+                }
+                let dir = if input == Input::Left { -1 } else { 1 };
+                let i = LENGTHS
+                    .iter()
+                    .position(|&m| m == self.today.minutes)
+                    .unwrap_or(1);
+                let j = (i as i32 + dir).clamp(0, LENGTHS.len() as i32 - 1) as usize;
+                if j != i {
+                    self.today.minutes = LENGTHS[j];
+                    // 終えたメニューの長さを変えたら、新しいメニューにする
+                    self.today.progress = None;
+                    self.today.cursor = 0;
+                    r.se = Some(Se::Change);
+                    r.changed = true;
+                }
+            }
+            Input::Decide => {
+                if n == 0 {
+                    return r;
+                }
+                // 終えたメニューは、もう一度はじめから数える
+                let progress = match &self.today.progress {
+                    Some(p) if !p.complete() => p.clone(),
+                    _ => Progress::new(self.today.plan.clone()),
+                };
+                r.se = Some(Se::Decide);
+                r.done = Some(Done::Today(Box::new(progress), self.today.cursor));
+            }
+            Input::Cancel => {
+                self.focus = Focus::Left;
+                self.left = 0;
+                r.se = Some(Se::Cancel);
+            }
+            Input::Way | Input::Lead => {}
         }
         r
     }
@@ -463,6 +670,17 @@ impl DrillMenu {
         let mut v: Vec<ui::Hint<'static>> =
             vec![(&[Pad::HT], t("Up", "上")), (&[Pad::LT], t("Down", "下"))];
         match self.selected() {
+            Item::Today if self.focus == Focus::Today => {
+                if !self.today_locked() {
+                    v.push((&[Pad::SD, Pad::FT], t("Length", "長さ")));
+                }
+                v.push((&[Pad::CY], t("Start (Enter)", "始める（Enter）")));
+                v.push((&[Pad::LC], t("Back (Esc)", "戻る（Esc）")));
+                return v;
+            }
+            Item::Today => {
+                v.push((&[Pad::CY], t("Open (Enter)", "開く（Enter）")));
+            }
             Item::Drill(_) => {
                 v.push((&[Pad::SD, Pad::FT], t("Tempo", "テンポ")));
                 v.push((&[Pad::HH], t("Mode (Tab)", "やり方（Tab）")));
@@ -490,15 +708,14 @@ impl DrillMenu {
 
     /// 札の行（やり方・手順）。札は（名前、選んでいるか、使えるか）。入りきらなければ字を小さく
     fn chip_row(
-        &self,
         c: &Canvas,
         g: &mut Gfx,
         label: &str,
         chips: &[(String, bool, bool)],
         y: f32,
+        on_list: bool,
     ) {
         let (x, _, w, _) = DETAIL;
-        let on_list = self.focus == Focus::Drills;
         ui::text(c, g, label, x + 20.0, y + 4.0, &plain(15.0, ui::DIM), 90.0);
         let (from, room) = (x + 104.0, w - 124.0);
         let gap = 6.0;
@@ -605,10 +822,18 @@ impl DrillMenu {
         ui::panel(c, x, y, w, h);
         let left = self.focus == Focus::Left;
         let items = left_items();
+        self.draw_today_row(c, g, (x, y + 12.0, w));
+        c.fill(
+            x + 16.0,
+            y + 12.0 + CAT_H + 5.0,
+            w - 32.0,
+            1.0,
+            Color32::from_white_alpha(50),
+        );
         for (k, cat) in Category::ALL.into_iter().enumerate() {
-            let ry = y + 12.0 + k as f32 * CAT_H;
-            let open = k == self.category;
-            let on = left && self.left == k;
+            let ry = y + 12.0 + CAT_H + TODAY_GAP + k as f32 * CAT_H;
+            let open = !self.showing_today && k == self.category;
+            let on = left && self.left == left_of(k);
             if open {
                 Self::row_mark(c, (x + 8.0, ry, w - 16.0, CAT_H - 6.0), on);
             }
@@ -687,6 +912,10 @@ impl DrillMenu {
 
     /// 真ん中の列（分け方のドリル）
     fn draw_list(&self, c: &Canvas, g: &mut Gfx) {
+        if self.showing_today {
+            self.draw_today_list(c, g);
+            return;
+        }
         let (x, y, w, h) = LIST;
         ui::panel(c, x, y, w, h);
         let cat = self.category();
@@ -767,6 +996,10 @@ impl DrillMenu {
     }
 
     fn draw_detail(&self, c: &Canvas, g: &mut Gfx) {
+        if self.showing_today {
+            self.draw_today_detail(c, g);
+            return;
+        }
         let (x, y, w, _) = DETAIL;
         ui::panel(c, x, y, w, DETAIL.3);
         let d = self.drill();
@@ -831,12 +1064,13 @@ impl DrillMenu {
                 (label, on, k.fits(d))
             })
             .collect();
-        self.chip_row(c, g, t("Mode", "やり方"), &ways, y + 232.0);
+        let on_list = self.focus == Focus::Drills;
+        Self::chip_row(c, g, t("Mode", "やり方"), &ways, y + 232.0, on_list);
         let leads: Vec<(String, bool, bool)> = [false, true]
             .into_iter()
             .map(|l| (lead_name(l).to_owned(), l == self.lefty, true))
             .collect();
-        self.chip_row(c, g, t("Lead Hand", "手順"), &leads, y + 266.0);
+        Self::chip_row(c, g, t("Lead Hand", "手順"), &leads, y + 266.0, on_list);
         rule(c, y + 304.0);
         // テンポ
         let tempo_on = matches!(self.selected(), Item::Drill(_));
@@ -948,8 +1182,15 @@ impl DrillMenu {
             draw_trail(c, &r.trail, (x + w - 176.0, y + 476.0, 150.0, 34.0));
         }
         // 始める
+        start_button(c, g, t("Start", "始める"), tempo_on);
+    }
+}
+
+/// 右のパネルの右下の、CY で始めるボタン。`on` は操作している列のとき
+fn start_button(c: &Canvas, g: &mut Gfx, label: &str, on: bool) {
+    let (x, y, w, _) = DETAIL;
+    {
         let (bx, by, bw, bh) = (x + w - 250.0, y + DETAIL.3 - 72.0, 230.0, 52.0);
-        let on = tempo_on;
         ui::round_fill(
             c,
             bx,
@@ -975,12 +1216,437 @@ impl DrillMenu {
         ui::text(
             c,
             g,
-            t("Start", "始める"),
+            label,
             bx + 70.0,
             by + 12.0,
             &bold(22.0, ui::TEXT),
             bw - 80.0,
         );
+    }
+}
+
+// ---- 今日のメニュー ----
+
+/// 曲や型の長さ（「1:05」）。約何分かは [`about_minutes`]
+fn step_time(secs: f64) -> String {
+    clock(secs * 1000.0)
+}
+
+/// 全体の長さ（「約 10 分」）
+fn about_minutes(secs: f64) -> String {
+    let m = (secs / 60.0).round().max(1.0) as u32;
+    tf!("About {m} min", "約 {m} 分")
+}
+
+/// 日付（「11月27日」）
+fn day_text(d: NaiveDate) -> String {
+    tf!("{}/{}", "{}月{}日", d.month(), d.day())
+}
+
+/// 役目の札（色の地に暗い字）
+fn role_pill(c: &Canvas, g: &mut Gfx, role: today::Role, (x, y): (f32, f32), dim: bool) {
+    let color = if dim {
+        role.color().gamma_multiply(0.4)
+    } else {
+        role.color()
+    };
+    ui::round_fill(c, x, y, ROLE_W, 22.0, 11.0, color);
+    ui::text_center(
+        c,
+        g,
+        role.label(),
+        x + ROLE_W / 2.0,
+        y + 3.0,
+        &bold(12.0, NOTE_LETTER),
+        ROLE_W - 8.0,
+    );
+}
+
+impl DrillMenu {
+    /// 左の列の一番上の行。右に長さか、進み具合か、終えた印
+    fn draw_today_row(&self, c: &Canvas, g: &mut Gfx, (x, ry, w): (f32, f32, f32)) {
+        let on = self.focus == Focus::Left && self.left == 0;
+        if self.showing_today {
+            Self::row_mark(c, (x + 8.0, ry, w - 16.0, CAT_H - 6.0), on);
+        }
+        ui::text(
+            c,
+            g,
+            t("Today's Menu", "今日のメニュー"),
+            x + 22.0,
+            ry + 9.0,
+            &bold(17.0, if self.showing_today { ACCENT } else { ui::TEXT }),
+            w - 80.0,
+        );
+        let st = &self.today;
+        let right = match &st.progress {
+            _ if st.done_today => "✓".to_owned(),
+            Some(p) if p.started() => format!("{}/{}", p.done_count(), p.done.len()),
+            _ => tf!("{} min", "{} 分", st.minutes),
+        };
+        let color = if st.done_today { BEST } else { ui::MUTED };
+        ui::text_right(
+            c,
+            g,
+            &right,
+            x + w - 20.0,
+            ry + 12.0,
+            &plain(14.0, color),
+            60.0,
+        );
+    }
+
+    /// 真ん中の列（今日のメニューの並び）
+    fn draw_today_list(&self, c: &Canvas, g: &mut Gfx) {
+        let (x, y, w, h) = LIST;
+        ui::panel(c, x, y, w, h);
+        let st = &self.today;
+        ui::text(
+            c,
+            g,
+            t("Today's Menu", "今日のメニュー"),
+            x + 18.0,
+            y + 12.0,
+            &bold(15.0, ACCENT),
+            w - 150.0,
+        );
+        ui::text_right(
+            c,
+            g,
+            &about_minutes(st.plan.seconds()),
+            x + w - 18.0,
+            y + 13.0,
+            &plain(14.0, ui::DIM),
+            130.0,
+        );
+        let active = self.focus == Focus::Today;
+        let mut ry = y + LIST_TOP;
+        for (k, step) in st.plan.steps.iter().enumerate().take(today::MAX_STEPS) {
+            let done = self.today_done(k);
+            let on = k == st.cursor;
+            if on {
+                Self::row_mark(c, (x + 8.0, ry, w - 16.0, ROW_H - 6.0), active);
+            }
+            role_pill(c, g, step.role, (x + 16.0, ry + 7.0), done);
+            let style = match (on, done) {
+                (true, _) => bold(16.0, ui::TEXT),
+                (false, true) => plain(16.0, ui::MUTED),
+                (false, false) => plain(16.0, ui::DIM),
+            };
+            ui::text(
+                c,
+                g,
+                &step.name(),
+                x + 26.0 + ROLE_W,
+                ry + 8.0,
+                &style,
+                w - ROLE_W - 100.0,
+            );
+            if done {
+                best_pill(c, g, "✓", x + w - 18.0, ry + (ROW_H - 6.0) / 2.0, 13.0);
+            } else {
+                ui::text_right(
+                    c,
+                    g,
+                    &step_time(step.seconds()),
+                    x + w - 20.0,
+                    ry + 10.0,
+                    &plain(14.0, ui::MUTED),
+                    60.0,
+                );
+            }
+            ry += ROW_H;
+        }
+        // 下に進み具合
+        let foot = match &st.progress {
+            _ if st.done_today => (t("Done for today ✓", "今日の分は完了 ✓").to_owned(), BEST),
+            Some(p) if p.started() => (
+                tf!(
+                    "{} of {} done",
+                    "{1} 個中 {0} 個 完了",
+                    p.done_count(),
+                    p.done.len()
+                ),
+                ui::DIM,
+            ),
+            _ => (
+                t(
+                    "A new mix every day, based on your records",
+                    "記録をもとに、毎日中身が変わります",
+                )
+                .to_owned(),
+                ui::MUTED,
+            ),
+        };
+        ui::text_center(
+            c,
+            g,
+            &foot.0,
+            x + w / 2.0,
+            y + h - 30.0,
+            &plain(13.0, foot.1),
+            w - 24.0,
+        );
+    }
+
+    /// 右のパネル（今日のメニュー）。上に長さと全体の帯、下に選んだものの中身
+    fn draw_today_detail(&self, c: &Canvas, g: &mut Gfx) {
+        let (x, y, w, h) = DETAIL;
+        ui::panel(c, x, y, w, h);
+        let st = &self.today;
+        ui::text(
+            c,
+            g,
+            t("Today's Menu", "今日のメニュー"),
+            x + 20.0,
+            y + 15.0,
+            &bold(24.0, ui::TEXT),
+            w - 200.0,
+        );
+        ui::text_right(
+            c,
+            g,
+            &day_text(st.day),
+            x + w - 20.0,
+            y + 22.0,
+            &plain(15.0, ui::DIM),
+            160.0,
+        );
+        // 長さ（途中まで進めたら変えられない）
+        let locked = self.today_locked();
+        let chips: Vec<(String, bool, bool)> = LENGTHS
+            .iter()
+            .map(|&m| (tf!("{m} min", "{m} 分"), m == st.minutes, !locked))
+            .collect();
+        let active = self.focus == Focus::Today;
+        Self::chip_row(c, g, t("Length", "長さ"), &chips, y + 60.0, active);
+        // 全体の帯
+        self.draw_strip(c, g, (x + 20.0, y + 104.0, w - 40.0, 40.0));
+        let left_secs: f64 = st
+            .plan
+            .steps
+            .iter()
+            .enumerate()
+            .filter(|(k, _)| !self.today_done(*k))
+            .map(|(_, s)| s.seconds() + 10.0)
+            .sum();
+        let status = match &st.progress {
+            Some(p) if p.started() && !p.complete() => tf!(
+                "{} of {} done · {} left",
+                "{1} 個中 {0} 個 完了・残り {2}",
+                p.done_count(),
+                p.done.len(),
+                about_minutes(left_secs)
+            ),
+            _ => tf!(
+                "{} steps · {}",
+                "{} 個・{}",
+                st.plan.steps.len(),
+                about_minutes(st.plan.seconds())
+            ),
+        };
+        ui::text(
+            c,
+            g,
+            &status,
+            x + 20.0,
+            y + 152.0,
+            &plain(14.0, ui::DIM),
+            w - 40.0,
+        );
+        c.fill(
+            x + 20.0,
+            y + 182.0,
+            w - 40.0,
+            1.0,
+            Color32::from_white_alpha(40),
+        );
+        // 選んでいるもの
+        let Some(step) = st.plan.steps.get(st.cursor) else {
+            return;
+        };
+        let done = self.today_done(st.cursor);
+        role_pill(c, g, step.role, (x + 20.0, y + 198.0), false);
+        ui::text(
+            c,
+            g,
+            &step.name(),
+            x + 30.0 + ROLE_W,
+            y + 192.0,
+            &bold(22.0, ui::TEXT),
+            w - ROLE_W - 60.0,
+        );
+        ui::text(
+            c,
+            g,
+            step.role.reason(),
+            x + 20.0,
+            y + 230.0,
+            &plain(14.0, ui::DIM),
+            w - 40.0,
+        );
+        match &step.task {
+            Task::Drill(run) => {
+                draw_pattern(
+                    c,
+                    g,
+                    run.drill,
+                    run.lefty,
+                    (x + 20.0, y + 258.0, w - 40.0, 118.0),
+                );
+                let tempo = match run.way {
+                    Way::Climb | Way::Limit if run.bpms.len() > 1 => tf!(
+                        "{} → {} BPM",
+                        "{} → {} BPM",
+                        run.bpms[0],
+                        run.bpms[run.bpms.len().min(4) - 1]
+                    ),
+                    _ => format!("{} BPM", run.bpms[0]),
+                };
+                let tempo = if run.way == Way::Limit {
+                    tf!("From {} BPM", "{} BPM から", run.bpms[0])
+                } else {
+                    tempo
+                };
+                let rows = [
+                    (t("Mode", "やり方"), way_name(run.way)),
+                    (t("Lead Hand", "手順"), lead_name(run.lefty).to_owned()),
+                    (t("Tempo", "テンポ"), tempo),
+                ];
+                for (i, (k, v)) in rows.iter().enumerate() {
+                    let ry = y + 392.0 + i as f32 * 30.0;
+                    ui::text(c, g, k, x + 20.0, ry, &plain(15.0, ui::DIM), 90.0);
+                    ui::text(c, g, v, x + 110.0, ry - 1.0, &bold(16.0, ui::TEXT), 170.0);
+                }
+                let (sx, sw) = (x + 300.0, w - 320.0);
+                draw_way(c, g, run, (sx, y + 388.0, sw, 86.0));
+                ui::text_center(
+                    c,
+                    g,
+                    &self.way_line(run),
+                    sx + sw / 2.0,
+                    y + 480.0,
+                    &plain(13.0, ui::DIM),
+                    sw + 20.0,
+                );
+            }
+            Task::Song { pick, seconds } => {
+                if !pick.artist.is_empty() {
+                    ui::text(
+                        c,
+                        g,
+                        &pick.artist,
+                        x + 20.0,
+                        y + 256.0,
+                        &plain(15.0, ui::MUTED),
+                        w - 40.0,
+                    );
+                }
+                let band = Band {
+                    x: x + 20.0,
+                    y: y + 290.0,
+                    w: w - 40.0,
+                    cell_h: 30.0,
+                    row_pitch: 50.0,
+                    max_rows: 2,
+                    striped: false,
+                };
+                let bottom = band.draw(
+                    c,
+                    g,
+                    &BandData {
+                        weakness: &pick.weakness,
+                        phrases: vec![pick.section],
+                        selected: Some(pick.section),
+                        cleared: Vec::new(),
+                    },
+                );
+                let rows = [
+                    (
+                        t("Section", "区間"),
+                        crate::practice::section_label(pick.section),
+                    ),
+                    (
+                        t("Time", "時間"),
+                        tf!(
+                            "Up to {} (ends after the step in play)",
+                            "最大 {}（時間が来たら、その段の終わりで終了）",
+                            clock(f64::from(*seconds) * 1000.0)
+                        ),
+                    ),
+                ];
+                for (i, (k, v)) in rows.iter().enumerate() {
+                    let ry = bottom + 20.0 + i as f32 * 30.0;
+                    ui::text(c, g, k, x + 20.0, ry, &plain(15.0, ui::DIM), 90.0);
+                    ui::text(
+                        c,
+                        g,
+                        v,
+                        x + 110.0,
+                        ry - 1.0,
+                        &bold(16.0, ui::TEXT),
+                        w - 130.0,
+                    );
+                }
+            }
+        }
+        // 途中まで進めたメニューは、次のものなら「続ける」
+        let next = st
+            .progress
+            .as_ref()
+            .filter(|p| p.started() && !p.complete())
+            .map(Progress::first_open);
+        let label = if done {
+            t("Play Again", "もう一度")
+        } else if next == Some(st.cursor) {
+            t("Continue", "続ける")
+        } else if next.is_none() && st.cursor == 0 {
+            t("Start", "始める")
+        } else {
+            t("Start Here", "ここから始める")
+        };
+        start_button(c, g, label, active);
+    }
+
+    /// 全体の帯（長さに比べた幅。終えたものは暗く ✓、選んでいるものに白い枠）
+    fn draw_strip(&self, c: &Canvas, g: &mut Gfx, (x, y, w, h): (f32, f32, f32, f32)) {
+        let steps = &self.today.plan.steps;
+        if steps.is_empty() {
+            return;
+        }
+        let gap = 4.0;
+        let total: f64 = steps.iter().map(today::Step::seconds).sum();
+        let room = w - gap * (steps.len() as f32 - 1.0);
+        let mut cx = x;
+        for (k, step) in steps.iter().enumerate() {
+            let bw = (room * (step.seconds() / total.max(1.0)) as f32).max(8.0);
+            let done = self.today_done(k);
+            let color = step.role.color();
+            let fill = if done {
+                color.gamma_multiply(0.3)
+            } else {
+                color.gamma_multiply(0.85)
+            };
+            ui::round_fill(c, cx, y, bw, h, 4.0, fill);
+            if k == self.today.cursor {
+                ui::round_frame(
+                    c,
+                    cx - 2.0,
+                    y - 2.0,
+                    bw + 4.0,
+                    h + 4.0,
+                    5.0,
+                    2.0,
+                    Color32::WHITE,
+                );
+            }
+            let label = if done { "✓" } else { step.role.label() };
+            let style = bold(12.0, if done { BEST } else { NOTE_LETTER });
+            if ui::text_width(g, label, &style) + 8.0 < bw {
+                ui::text_center(c, g, label, cx + bw / 2.0, y + h / 2.0 - 8.0, &style, bw);
+            }
+            cx += bw + gap;
+        }
     }
 }
 
@@ -1289,8 +1955,22 @@ fn draw_pattern(
 mod tests {
     use super::*;
 
+    fn setup() -> TodaySetup {
+        TodaySetup {
+            day: NaiveDate::from_ymd_opt(2026, 11, 27).unwrap(),
+            song: None,
+            progress: None,
+            done_today: false,
+            open: false,
+        }
+    }
+
+    /// はじめて開いた画面（今日のメニューの行にいる）から、分け方の最初（タイミング）へ動かしたもの
     fn menu() -> DrillMenu {
-        DrillMenu::new(&Prefs::default(), HashMap::new())
+        let mut m = DrillMenu::new(&Prefs::default(), HashMap::new(), setup());
+        assert_eq!(m.selected(), Item::Today);
+        m.input(Input::Down);
+        m
     }
 
     #[test]
@@ -1301,11 +1981,12 @@ mod tests {
             assert_eq!(all.iter().filter(|x| **x == i).count(), 1);
         }
         let left = left_items();
-        assert_eq!(left.len(), Category::ALL.len() + 2);
+        assert_eq!(left.len(), Category::ALL.len() + 3);
+        assert_eq!(left[0], Item::Today);
         assert_eq!(left[left.len() - 2..], [Item::Rise, Item::Back]);
-        // 分け方が全部、左の列に収まる
+        // 今日のメニューと分け方が全部、左の列に収まる
         let foot = CATS.1 + CATS.3 - FOOT_H;
-        assert!(CATS.1 + 12.0 + Category::ALL.len() as f32 * CAT_H <= foot);
+        assert!(CATS.1 + 12.0 + CAT_H + TODAY_GAP + Category::ALL.len() as f32 * CAT_H <= foot);
     }
 
     #[test]
@@ -1356,7 +2037,7 @@ mod tests {
         assert_eq!(p.last, second.id);
         assert_eq!(p.bpm.get(first.id), Some(&(start + BPM_STEP)));
         // 覚えた値から開き直すと、同じドリルの所（真ん中の列）に戻る
-        let again = DrillMenu::new(&p, HashMap::new());
+        let again = DrillMenu::new(&p, HashMap::new(), setup());
         assert_eq!(again.drill().id, second.id);
         assert!(matches!(again.selected(), Item::Drill(_)));
         assert_eq!(again.bpm_of(first), start + BPM_STEP);
@@ -1365,7 +2046,7 @@ mod tests {
             last: "gallop".to_owned(),
             ..Prefs::default()
         };
-        let m = DrillMenu::new(&p, HashMap::new());
+        let m = DrillMenu::new(&p, HashMap::new(), setup());
         assert_eq!(m.drill().id, "gallop");
         let Item::Drill(i) = m.selected() else {
             panic!()
@@ -1490,7 +2171,7 @@ mod tests {
         let p = m.prefs();
         assert_eq!(p.way, "endurance1");
         assert!(p.lefty);
-        let again = DrillMenu::new(&p, HashMap::new());
+        let again = DrillMenu::new(&p, HashMap::new(), setup());
         assert_eq!(again.run().way, Way::Endurance(1));
         assert!(again.run().lefty);
         // RD で始めない（始めるのは CY だけ）
@@ -1505,7 +2186,7 @@ mod tests {
             way: Way::Echo.key(),
             ..Prefs::default()
         };
-        let mut m = DrillMenu::new(&p, HashMap::new());
+        let mut m = DrillMenu::new(&p, HashMap::new(), setup());
         assert_eq!(m.run().way, Way::Climb);
         // 次は使えるものだけ（聞いてまねるの次のテンポを上げるの、さらに次）
         m.input(Input::Way);
@@ -1516,7 +2197,10 @@ mod tests {
             way: Way::Echo.key(),
             ..Prefs::default()
         };
-        assert_eq!(DrillMenu::new(&p, HashMap::new()).run().way, Way::Echo);
+        assert_eq!(
+            DrillMenu::new(&p, HashMap::new(), setup()).run().way,
+            Way::Echo
+        );
     }
 
     #[test]
@@ -1533,10 +2217,94 @@ mod tests {
             last: "paradiddle".to_owned(),
             ..Prefs::default()
         };
-        let mut m = DrillMenu::new(&p, records);
+        let mut m = DrillMenu::new(&p, records, setup());
         let best = |m: &DrillMenu| m.records.get(&(m.drill().id, m.lefty)).and_then(|r| r.best);
         assert_eq!(best(&m), Some(120));
         m.input(Input::Lead);
         assert_eq!(best(&m), None);
+    }
+
+    #[test]
+    fn todays_menu_is_first_and_starts_from_the_picked_step() {
+        let mut m = DrillMenu::new(&Prefs::default(), HashMap::new(), setup());
+        assert!(m.showing_today);
+        assert_eq!(m.today.minutes, today::DEFAULT_LENGTH);
+        let ten = m.today.plan.seconds();
+        // CY で列に入り、SD/FT で長さ
+        m.input(Input::Decide);
+        assert_eq!(m.focus, Focus::Today);
+        let r = m.input(Input::Right);
+        assert!(r.changed);
+        assert_eq!(m.today.minutes, 15);
+        assert_eq!(m.prefs().today_minutes, 15);
+        assert!(m.today.plan.seconds() > ten);
+        // 端では止まる
+        assert_eq!(m.input(Input::Right).se, None);
+        m.input(Input::Down);
+        m.input(Input::Down);
+        let r = m.input(Input::Decide);
+        let Some(Done::Today(p, from)) = r.done else {
+            panic!("{r:?}")
+        };
+        assert_eq!(from, 2);
+        assert!(!p.started());
+        assert_eq!(p.plan, m.today.plan);
+        // 次に開いたときも今日のメニューの行から
+        assert!(m.prefs().on_today);
+        let again = DrillMenu::new(&m.prefs(), HashMap::new(), setup());
+        assert!(again.showing_today);
+        assert_eq!(again.selected(), Item::Today);
+        // LC で左の列の今日のメニューの行へ
+        m.input(Input::Cancel);
+        assert_eq!(m.focus, Focus::Left);
+        assert_eq!(m.selected(), Item::Today);
+        // 分け方へ動くと、真ん中の列も分け方に
+        m.input(Input::Down);
+        assert!(!m.showing_today);
+        assert_eq!(m.selected(), Item::Category(Category::Timing));
+    }
+
+    #[test]
+    fn a_started_menu_comes_back_at_the_next_step_and_keeps_its_length() {
+        let fresh = DrillMenu::new(&Prefs::default(), HashMap::new(), setup());
+        let mut p = Progress::new(fresh.today.plan.clone());
+        p.done[0] = true;
+        p.done[1] = true;
+        let mut m = DrillMenu::new(
+            &Prefs {
+                last: "paradiddle".into(),
+                today_minutes: 5,
+                ..Prefs::default()
+            },
+            HashMap::new(),
+            TodaySetup {
+                progress: Some(p.clone()),
+                open: true,
+                ..setup()
+            },
+        );
+        // 今日のメニューの結果から戻ると、次のものを選んでいる（長さは始めたもの）
+        assert_eq!(m.focus, Focus::Today);
+        assert_eq!(m.today.cursor, 2);
+        assert_eq!(m.today.minutes, today::DEFAULT_LENGTH);
+        assert_eq!(m.today.plan, p.plan);
+        assert!(m.today_locked());
+        assert!(!m.input(Input::Right).changed);
+        let Some(Done::Today(back, 2)) = m.input(Input::Decide).done else {
+            panic!()
+        };
+        assert_eq!(back.done_count(), 2);
+        // 前の日のメニューは使わない
+        let old = DrillMenu::new(
+            &Prefs::default(),
+            HashMap::new(),
+            TodaySetup {
+                day: NaiveDate::from_ymd_opt(2026, 11, 28).unwrap(),
+                progress: Some(p),
+                ..setup()
+            },
+        );
+        assert!(old.today.progress.is_none());
+        assert_eq!(old.today.cursor, 0);
     }
 }

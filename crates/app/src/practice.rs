@@ -39,6 +39,8 @@ pub struct PracticeOptions {
     pub metronome: bool,
     /// 1 段の周の数
     pub step_laps: u32,
+    /// 時間の区切り（秒。今日のメニュー）。過ぎたら、その段の挑戦の終わりで結果へ。設定には残さない
+    pub time_box_s: Option<u32>,
 }
 
 /// 区間のほかの決めごと（設定に残し、次の練習でも使う）
@@ -165,6 +167,7 @@ impl PracticeSetup {
             pitch: self.pitch,
             metronome: self.metronome,
             step_laps: self.step_laps,
+            time_box_s: None,
         })
     }
 
@@ -378,6 +381,8 @@ pub struct Withdrawn {
 
 /// クリアしてから結果の画面へ進むまで（ミリ秒）。クリアを見せる間
 pub const CLEAR_HOLD_MS: f64 = 3000.0;
+/// 時間の区切りを過ぎたら、「時間です」を見せてから結果の画面へ（ミリ秒）
+pub const TIME_UP_HOLD_MS: f64 = 2000.0;
 
 /// 1 周（助走を入れて）叩かなければ休みとする。1 周がこれより短くても、これだけは待つ（ミリ秒）
 pub const REST_MIN_MS: f64 = 4000.0;
@@ -402,6 +407,8 @@ pub struct Practice {
     pub done: Vec<Attempt>,
     /// クリアした実時間（それからは周を並べない）
     pub cleared_at_ms: Option<f64>,
+    /// 時間の区切りを過ぎて終えた実時間（それからは周を並べない）
+    pub timed_out_at_ms: Option<f64>,
     /// 音符をすべて判定し終えた周の数（周は順に終わる）
     settled: usize,
     /// 次に並べる周を助走から入れる・そのときに知らせること
@@ -452,6 +459,7 @@ impl Practice {
             decided: false,
             done: Vec::new(),
             cleared_at_ms: None,
+            timed_out_at_ms: None,
             settled: 0,
             run_up_next: false,
             next_cue: None,
@@ -519,7 +527,7 @@ impl Practice {
     /// つなぐときは次の周の音が `ahead_ms` 先に迫ったら、区切るときは前の周の音符をすべて判定したら並べる。
     /// 段の周を並べ終えたら（同じ拍のミスが重なったら、その周で）、挑戦が終わるまで並べない。クリアしたら並べない
     pub fn wants_lap(&self, now_ms: f64, ahead_ms: f64) -> bool {
-        if self.cleared_at_ms.is_some() || self.resting {
+        if self.over() || self.resting {
             return false;
         }
         if self.laps.is_empty() {
@@ -592,7 +600,7 @@ impl Practice {
             self.listen_from_ms = now_ms;
         }
         let laid = self.laps.len() - self.attempt_start.min(self.laps.len());
-        if self.cleared_at_ms.is_none()
+        if !self.over()
             && laid > 0
             && self.settled == self.laps.len()
             && (self.decided || laid >= self.step_laps())
@@ -669,6 +677,12 @@ impl Practice {
             }
             Next::Again => {}
         }
+        // 時間の区切りを過ぎたら、次の挑戦は並べずに終える
+        if self.time_left_ms(now_ms).is_some_and(|left| left <= 0.0) {
+            log::info!("time is up after attempt {}", self.attempt);
+            self.timed_out_at_ms = Some(now_ms);
+            return;
+        }
         self.run_up_next = true;
         self.resume_pending = true;
         self.next_cue = Some(Cue::Step { from, next });
@@ -734,7 +748,7 @@ impl Practice {
     /// 叩かなかった周は成績にも記録にも入れず、今の段の挑戦は取りやめる（もう一度にも数えない）。
     /// 並べた周を叩き終えたら、同じ段を助走から数え直す。休みにしたら true（呼んだ側は一時停止の板を出す）
     pub fn check_rest(&mut self, now_ms: f64) -> bool {
-        if !self.rest_watch || self.resting || self.cleared_at_ms.is_some() {
+        if !self.rest_watch || self.resting || self.over() {
             return false;
         }
         let (Some(first), Some(last)) = (self.laps.first(), self.laps.last()) else {
@@ -786,7 +800,7 @@ impl Practice {
     /// 手で速度を `steps` 刻み動かす（次に並べる周から、助走のあと）。段階アップなら 1 段ずつ、固定なら 5% ずつ。
     /// 今の段はその速度の周から数え直す。クリアしたあとは動かさない
     pub fn nudge_speed(&mut self, steps: i64) {
-        if self.cleared_at_ms.is_some() {
+        if self.over() {
             return;
         }
         let from = self.speed;
@@ -831,6 +845,18 @@ impl Practice {
     /// 目標の段を越えた（固定の速度なら、その段を越えた）
     pub fn cleared(&self) -> bool {
         self.cleared_at_ms.is_some()
+    }
+
+    /// クリアしたか時間の区切りを過ぎて、もう周を並べない
+    pub fn over(&self) -> bool {
+        self.cleared_at_ms.is_some() || self.timed_out_at_ms.is_some()
+    }
+
+    /// 時間の区切りまでの残り（ミリ秒。区切りが無ければ None）。最初の周の区間の頭から数える
+    pub fn time_left_ms(&self, now_ms: f64) -> Option<f64> {
+        let limit = f64::from(self.options.time_box_s?) * 1000.0;
+        let from = self.laps.first().map_or(now_ms, |l| l.plan.start_ms);
+        Some(limit - (now_ms - from).max(0.0))
     }
 
     /// 越えた段の速度（下から）
@@ -1177,6 +1203,7 @@ mod tests {
                 pitch: Pitch::Keep,
                 metronome: true,
                 step_laps: laps,
+                time_box_s: None,
             },
             &tempo,
             notes,
@@ -1472,6 +1499,37 @@ mod tests {
         start: 70,
         target: 100,
     };
+
+    #[test]
+    fn a_time_box_ends_at_the_end_of_the_step_in_play() {
+        let mut p = practice_with(LoopStyle::Connect, LADDER, Section::new(1, 1), 4);
+        p.options.time_box_s = Some(1);
+        let mut jd = judge();
+        assert_eq!(p.time_left_ms(0.0), Some(1000.0));
+        for _ in 0..3 {
+            play_lap(&mut p, &mut jd, 70, true);
+        }
+        // 時間を過ぎても、段の途中では止めない
+        let last = p.laps.last().unwrap().plan.start_ms;
+        assert!(p.time_left_ms(last).unwrap() < 0.0);
+        assert!(p.timed_out_at_ms.is_none());
+        assert!(p.wants_lap(0.0, 1e12));
+        play_lap(&mut p, &mut jd, 70, true);
+        // 段を越えても、次の段は並べずに終える（クリアではない）
+        assert_eq!(p.done.len(), 1);
+        assert_eq!(p.done[0].passed, Some(true));
+        assert!(p.timed_out_at_ms.is_some());
+        assert!(!p.cleared() && p.over());
+        assert!(!p.wants_lap(0.0, 1e12));
+        // 区切りの無い練習は続く
+        let mut q = practice_with(LoopStyle::Connect, LADDER, Section::new(1, 1), 4);
+        let mut jd = judge();
+        assert_eq!(q.time_left_ms(0.0), None);
+        for _ in 0..4 {
+            play_lap(&mut q, &mut jd, 70, true);
+        }
+        assert!(!q.over());
+    }
 
     #[test]
     fn not_hitting_for_a_lap_rests_and_counts_the_step_again() {

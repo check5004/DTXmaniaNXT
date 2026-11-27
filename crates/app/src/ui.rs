@@ -46,6 +46,8 @@ pub enum ResultAction {
     Retry,
     /// 区間を選ぶ画面へ。`Some` ならその区間を選んでおく
     Practice(Option<Section>),
+    /// 今日のメニューの次へ
+    Next,
 }
 
 pub fn draw_result(ui: &mut egui::Ui, g: &mut Gfx, o: &Outcome) -> Vec<ResultAction> {
