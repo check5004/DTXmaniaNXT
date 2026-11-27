@@ -659,7 +659,7 @@ impl<'a> Measure<'a> {
                 let k = i + 1;
                 progress(tf!(
                     "Testing how fast a mute works ({k}/{n})…",
-                    "-INF が効くまでを測っています（{k}/{n}）…"
+                    "ミュートが効くまでを測っています（{k}/{n}）…"
                 ));
                 let change = self.write(addr, &off)?;
                 self.wait_until(change + d * 1000)?;
@@ -673,7 +673,7 @@ impl<'a> Measure<'a> {
                 let k = i + 1;
                 progress(tf!(
                     "Testing how fast an unmute works ({k}/{n})…",
-                    "音量を戻して効くまでを測っています（{k}/{n}）…"
+                    "ミュートを解除して効くまでを測っています（{k}/{n}）…"
                 ));
                 self.write(addr, &off)?;
                 self.wait_ms(450)?;
@@ -686,7 +686,7 @@ impl<'a> Measure<'a> {
             progress(
                 t(
                     "Muting while a hit is ringing…",
-                    "鳴っている途中で -INF にしています…",
+                    "鳴っている途中でミュートしています…",
                 )
                 .to_owned(),
             );

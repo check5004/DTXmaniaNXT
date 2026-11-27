@@ -105,7 +105,7 @@ pub fn hover_import(c: &Canvas, g: &mut Gfx, files: &[PathBuf]) {
     ui::text_center(
         c,
         g,
-        t("Drop to Read Its Settings", "ドロップして設定を読む"),
+        t("Drop to Read Its Settings", "ドロップして設定を読み込む"),
         640.0,
         330.0,
         &ui::bold(46.0, Color32::WHITE),
@@ -125,7 +125,7 @@ pub fn hover_import(c: &Canvas, g: &mut Gfx, files: &[PathBuf]) {
         g,
         t(
             "A DTXMania shortcut, exe, settings file, or folder",
-            "DTXMania のショートカット・exe・設定のファイル・フォルダ",
+            "DTXMania のショートカット・exe・設定ファイル・フォルダ",
         ),
         640.0,
         462.0,
@@ -208,7 +208,10 @@ mod tests {
         assert_eq!(
             hovering(&[PathBuf::from("/a/song.zip"), PathBuf::from("/a/b.7z")]),
             Hovering::Songs {
-                warning: Some("7z は読めません。展開してからフォルダをドロップしてください".into())
+                warning: Some(
+                    "7z ファイルは読み込めません。展開してからフォルダをドロップしてください"
+                        .into()
+                )
             }
         );
         assert_eq!(

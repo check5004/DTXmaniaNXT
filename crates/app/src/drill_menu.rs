@@ -428,14 +428,14 @@ impl DrillMenu {
             Item::Drill(_) => {
                 v.push((&[Pad::SD, Pad::FT], t("Tempo", "テンポ")));
                 v.push((&[Pad::CY, Pad::RD], t("Start (Enter)", "始める（Enter）")));
-                v.push((&[Pad::LC], t("Categories (Esc)", "分け方へ（Esc）")));
+                v.push((&[Pad::LC], t("Categories (Esc)", "カテゴリへ（Esc）")));
                 return v;
             }
             Item::Category(_) => {
                 v.push((&[Pad::CY, Pad::RD], t("Open (Enter)", "開く（Enter）")));
             }
             Item::Rise => {
-                v.push((&[Pad::SD, Pad::FT], t("Change", "変える")));
+                v.push((&[Pad::SD, Pad::FT], t("Change", "変更")));
             }
             Item::Back => {
                 v.push((
@@ -765,7 +765,7 @@ impl DrillMenu {
         ui::text(
             c,
             g,
-            t("Best", "これまで"),
+            t("Best", "ベスト"),
             x + 20.0,
             y + 468.0,
             &plain(15.0, ui::DIM),

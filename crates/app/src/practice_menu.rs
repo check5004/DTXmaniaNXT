@@ -863,7 +863,7 @@ impl PracticeMenu {
             tx.draw(c, left + 28.0, ly, 1.0, 1.0);
         }
         let audio = match sound {
-            Sound::Loading => Some(t("♪ Loading the song…", "♪ 曲の音を読んでいます…")),
+            Sound::Loading => Some(t("♪ Loading the song…", "♪ 曲を読み込んでいます…")),
             Sound::Playing(_) => Some(t(
                 "♪ Playing with the count-in, as in practice",
                 "♪ 練習と同じく、カウントから流しています",
@@ -1102,8 +1102,8 @@ impl PracticeMenu {
                     "切れ目なく: 区間の終わりから切れ目なく頭へ戻ります（ビート向き）。",
                 ),
                 LoopStyle::Restart => t(
-                    "Restart Each Loop: you play through the first hit of the next measure, then it restarts with a lead-in. Good for fills.",
-                    "毎回区切る: 次の小節の頭の 1 打まで叩き、助走からやり直します（フィル向き）。",
+                    "Restart Each Loop: you play through the first hit of the next measure, then it restarts from one measure before the section. Good for fills.",
+                    "毎回区切る: 次の小節の頭の 1 打まで叩き、区間の 1 小節前からやり直します（フィル向き）。",
                 ),
             }
             .to_owned(),

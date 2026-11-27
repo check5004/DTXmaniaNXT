@@ -137,8 +137,8 @@ impl Cat {
             ),
             Cat::Sound => t("Volume and which sounds play.", "音量と、鳴らす音。"),
             Cat::Play => t(
-                "Game rules (STAGE FAILED, gauge), judgment windows, timing display, and records.",
-                "ゲームの決まり（STAGE FAILED、ゲージ）、判定の幅、ずれの表示、記録。",
+                "Rules (such as Fail on Empty Gauge), judgment windows, timing display, and records.",
+                "ルール（ゲージ切れで中断など）、判定の幅、ずれの表示、記録。",
             ),
             Cat::Songs => t(
                 "Song folders, rescanning, and the chart editor.",
@@ -1314,8 +1314,8 @@ pub fn rows(page: Page, info: &ConfigInfo<'_>) -> Vec<Row> {
                 String::new(),
                 if practice {
                     t(
-                        "Restarts the current section from the lead-in (R on the keyboard).",
-                        "今の区間を、助走からやり直します（キーボードなら R）。",
+                        "Restarts the current section from one measure before it (R on the keyboard).",
+                        "今の区間を、1 小節前からやり直します（キーボードなら R）。",
                     )
                 } else {
                     t(
@@ -1550,7 +1550,7 @@ pub fn rows(page: Page, info: &ConfigInfo<'_>) -> Vec<Row> {
                 crate::credits::VOICE.to_owned(),
                 tf!(
                     "Voice: {}\nMusic: made with Google Lyria 3\nSkin art and sounds: DTXmaniaNXT (CC BY 4.0)\nSelect to open the full list in your browser.",
-                    "声: {}\n曲: Google の Lyria 3 で作成\nスキンの絵と音: DTXmaniaNXT（CC BY 4.0）\n決定で、くわしい一覧をブラウザで開きます。",
+                    "声: {}\n曲: Google の Lyria 3 で作成\nスキンの絵と音: DTXmaniaNXT（CC BY 4.0）\n決定で、詳しい一覧をブラウザで開きます。",
                     crate::credits::VOICE
                 ),
                 None,

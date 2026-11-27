@@ -131,7 +131,7 @@ fn draw_card(c: &Canvas, g: &mut Gfx, d: &DrillPlay, summary: Option<&Summary>, 
     );
     let left = STEPS - 1 - step;
     let (right, color) = if done {
-        (t("Done", "おわり").to_owned(), OK_COLOR)
+        (t("Done", "終了").to_owned(), OK_COLOR)
     } else if left == 0 {
         (t("Last step", "最後の段").to_owned(), CURRENT_COLOR)
     } else {
@@ -263,7 +263,7 @@ fn draw_gap(c: &Canvas, g: &mut Gfx, d: &DrillPlay, m: u32, cycle: u32) {
         (
             t(
                 "No click now. Keep the beat.",
-                "いまはクリックなし。拍を保って",
+                "今はクリックなし。テンポを保って",
             ),
             CURRENT_COLOR,
         )

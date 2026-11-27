@@ -434,7 +434,7 @@ fn by_player(lib: &Library, stats: &Stats, now: i64) -> Vec<Node> {
         .collect();
     group(t("Last Played", "最後に遊んだ日"), recent)
         .into_iter()
-        .chain(group(t("Best Rank", "一番よいランク"), ranks))
+        .chain(group(t("Best Rank", "ベストランク"), ranks))
         .collect()
 }
 
@@ -627,11 +627,11 @@ mod tests {
             },
         );
         let p = sorted(&lib(), SortKind::Player, &stats, now);
-        assert_eq!(titles(&p), ["最後に遊んだ日", "一番よいランク"]);
+        assert_eq!(titles(&p), ["最後に遊んだ日", "ベストランク"]);
         let recent = inner(&p, "最後に遊んだ日");
         assert_eq!(titles(&recent), ["今日", "1 年以内", "まだ遊んでいない"]);
         assert_eq!(titles(&inner(&recent, "今日")), ["apple"]);
-        let ranks = inner(&p, "一番よいランク");
+        let ranks = inner(&p, "ベストランク");
         assert_eq!(titles(&ranks), ["S", "C", "ランクなし"]);
         // apple の 0、バラード、Banana
         assert_eq!(inner(&ranks, "ランクなし").len(), 3);

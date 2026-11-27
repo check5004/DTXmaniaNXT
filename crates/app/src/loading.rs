@@ -167,7 +167,7 @@ impl<T: Send + 'static> Job<T> {
             // 結果を送らずにスレッドが終わった（パニックか、スレッドを作れなかった）
             Err(TryRecvError::Disconnected) => Some(Err(anyhow!(t(
                 "The song loader stopped unexpectedly",
-                "曲を読むスレッドが途中で止まりました"
+                "曲の読み込みが途中で止まりました"
             )))),
         }
     }

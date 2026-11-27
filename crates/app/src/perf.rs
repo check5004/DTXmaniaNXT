@@ -323,7 +323,7 @@ impl PerfView {
         match r.frames {
             Some(f) => {
                 job.num(&format!("{:.0}", f.fps), fps_color(f.hitches));
-                job.label(i18n::t(" fps   Dropped ", " fps　落ちたフレーム "));
+                job.label(i18n::t(" fps   Dropped ", " fps　フレーム落ち "));
                 job.num(&f.hitches.to_string(), fps_color(f.hitches));
                 job.label(i18n::t(" (last 1 s)", "（直近 1 秒）"));
             }
@@ -343,9 +343,9 @@ impl PerfView {
             job.paint(c, left, line_y, Align2::LEFT_TOP);
             line_y += row - 3.0;
             let mut job = Job::new(small);
-            job.label(i18n::t("Build ", "画面を作る "));
+            job.label(i18n::t("Build ", "画面の組み立て "));
             job.num(&format!("{:.1} / {:.1}", f.build_avg, f.build_max), LABEL);
-            job.label(i18n::t("   GPU ", "　GPU へ "));
+            job.label(i18n::t("   GPU ", "　GPU "));
             job.num(&format!("{:.1} / {:.1}", f.work_avg, f.work_max), LABEL);
             job.label(" ms");
             job.paint(c, left, line_y, Align2::LEFT_TOP);

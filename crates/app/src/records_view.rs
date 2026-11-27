@@ -274,7 +274,7 @@ impl RecordsView {
         let (week, week_days) = self.log.this_week(self.today);
         let streak = self.log.streak(self.today);
         let (third_label, third_value, third_color) = if streak >= 2 {
-            (t("Streak", "続けて"), days_text(streak), ui::STRONG)
+            (t("Streak", "連続"), days_text(streak), ui::STRONG)
         } else {
             (
                 t("Days Played", "遊んだ日"),
@@ -320,7 +320,7 @@ impl RecordsView {
                 g,
                 t(
                     "Records can't be opened, so nothing is shown.",
-                    "記録のファイルを開けないので、出せるものがありません。",
+                    "記録のファイルを開けないため、表示できるものがありません。",
                 ),
                 BARS.0,
                 BARS.1 + BARS.3 / 2.0 - 10.0,
@@ -583,7 +583,7 @@ impl RecordsView {
                         Some(_) => ("±0".to_owned(), ui::MUTED),
                         // 前の DTXMania から取り込んだ記録だけのときは、1 回目と言わない
                         None if s.record.plays.iter().all(|p| p.imported) => {
-                            (t("Imported", "取り込んだ記録").to_owned(), ui::MUTED)
+                            (t("Imported", "引き継いだ記録").to_owned(), ui::MUTED)
                         }
                         None => (t("1st play", "1 回目").to_owned(), ui::MUTED),
                     };

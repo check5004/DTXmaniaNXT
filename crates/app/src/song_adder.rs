@@ -62,7 +62,7 @@ impl Outcome {
         match self {
             Outcome::Added { added, .. } if added.already => t(
                 "This song has already been added",
-                "この曲はもう追加してあります",
+                "この曲はすでに追加されています",
             )
             .to_owned(),
             Outcome::Added { dest, songs, .. } => {
@@ -72,7 +72,7 @@ impl Outcome {
             }
             Outcome::InLibrary { .. } => t(
                 "This folder is already in your song folder. Rescanned songs.",
-                "このフォルダはもう曲のフォルダに入っています。曲を再読み込みしました",
+                "このフォルダはすでに曲のフォルダにあります。曲を再読み込みしました",
             )
             .to_owned(),
             Outcome::Register { dir } => {
@@ -157,7 +157,7 @@ pub fn error_message(from: &Path, error: &ImportError) -> String {
             if matches!(ext.as_str(), "RAR" | "7z" | "LZH" | "tar" | "TAR") {
                 tf!(
                     "{ext} files can't be read. Extract it, then drop the folder.",
-                    "{ext} は読めません。展開してからフォルダをドロップしてください"
+                    "{ext} ファイルは読み込めません。展開してからフォルダをドロップしてください"
                 )
             } else {
                 tf!(
@@ -177,7 +177,7 @@ pub fn error_message(from: &Path, error: &ImportError) -> String {
         .to_owned(),
         ImportError::Method(_) => tf!(
             "\"{name}\" uses a compression method that can't be read. Extract it, then drop the folder.",
-            "「{name}」は読めない圧縮のしかたです。展開してからフォルダをドロップしてください"
+            "「{name}」は対応していない圧縮形式です。展開してからフォルダをドロップしてください"
         ),
         ImportError::Broken(_) => tf!(
             "\"{name}\" seems to be broken. Try downloading it again.",
@@ -189,13 +189,16 @@ pub fn error_message(from: &Path, error: &ImportError) -> String {
         ),
         ImportError::ContainsSongFolder => tf!(
             "\"{name}\" contains a song folder, so it can't be copied",
-            "「{name}」には曲のフォルダが入っているので、写せません"
+            "「{name}」には曲のフォルダが入っているため、コピーできません"
         ),
         ImportError::Io(e) => tf!(
             "Couldn't add \"{name}\": {e}",
             "「{name}」を追加できませんでした: {e}"
         ),
-        ImportError::Stopped => tf!("Stopped adding \"{name}\"", "「{name}」の追加をやめました"),
+        ImportError::Stopped => tf!(
+            "Stopped adding \"{name}\"",
+            "「{name}」の追加を中止しました"
+        ),
     }
 }
 
@@ -534,11 +537,11 @@ mod tests {
         );
         assert_eq!(
             summary(&[added("a", 1, true), failed()]).unwrap(),
-            "この曲はもう追加してあります（1 件は追加できませんでした）"
+            "この曲はすでに追加されています（1 件は追加できませんでした）"
         );
         assert_eq!(
             summary(&[failed(), failed()]).unwrap(),
-            "RAR は読めません。展開してからフォルダをドロップしてください"
+            "RAR ファイルは読み込めません。展開してからフォルダをドロップしてください"
         );
     }
 
@@ -551,7 +554,7 @@ mod tests {
         );
         assert_eq!(
             msg,
-            "RAR は読めません。展開してからフォルダをドロップしてください"
+            "RAR ファイルは読み込めません。展開してからフォルダをドロップしてください"
         );
     }
 }
