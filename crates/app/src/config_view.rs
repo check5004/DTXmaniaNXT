@@ -3001,7 +3001,7 @@ fn hints_for(view: &ConfigView, row: Option<&Row>) -> Vec<ui::Hint<'static>> {
                 (&[Pad::HT], t("Up", "上")),
                 (&[Pad::LT], t("Down", "下")),
                 (&[Pad::SD, Pad::FT], t("Jump 10", "10 ずつ")),
-                (&[Pad::CY, Pad::RD], t("Confirm (Enter)", "決める（Enter）")),
+                (&[Pad::CY], t("Confirm (Enter)", "決める（Enter）")),
                 (&[Pad::LC], t("Cancel (Esc)", "やめて元に戻す（Esc）")),
             ]
         } else {
