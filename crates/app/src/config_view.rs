@@ -292,7 +292,7 @@ pub enum ItemId {
     Resume,
     /// はじめからやり直す
     Retry,
-    /// 演奏をやめて結果へ
+    /// 演奏をやめる（普通の演奏は選曲へ、練習と基礎練習は結果へ）
     Quit,
     /// 練習をやめて、区間と速度を選ぶ板へ（今の決めごとを選んでおく）
     Reselect,
@@ -1326,7 +1326,8 @@ pub fn rows(page: Page, info: &ConfigInfo<'_>) -> Vec<Row> {
                 .to_owned(),
                 None,
             ));
-            // 練習は自分でやめるまで終わらないので、やめる行も上に置く（ドラムなら LT 数回で届く）
+            // やめる行はやり直すのすぐ下に置く（設定の行の下だと遠い。ドラムなら LT 数回で届く）。
+            // 練習は練習メニューへ戻る方をよく使うので、そちらを先に
             if practice {
                 r.push(action(
                     ItemId::Reselect,
@@ -1339,8 +1340,8 @@ pub fn rows(page: Page, info: &ConfigInfo<'_>) -> Vec<Row> {
                     .to_owned(),
                     None,
                 ));
-                r.push(quit_row(practice));
             }
+            r.push(quit_row(practice));
             let r = s.at(t("Change During Play", "演奏中に変えられる設定"));
             if let Some(p) = info.play.filter(|p| !p.practice) {
                 r.push(seek_row(p, v.number(settings::SKIP_MS)));
@@ -1365,9 +1366,6 @@ pub fn rows(page: Page, info: &ConfigInfo<'_>) -> Vec<Row> {
                 .filter(|d| d.in_play && d.key != settings::SKIP_MS && d.key != settings::METRONOME)
             {
                 r.push(table_row(d, v));
-            }
-            if !practice {
-                s.at(" ").push(quit_row(practice));
             }
         }
         Page::Cat(Cat::Display) => {
@@ -2078,8 +2076,8 @@ fn quit_row(practice: bool) -> Row {
             )
         } else {
             t(
-                "Stop playing and go to the results (your play so far is recorded).",
-                "演奏をやめて、結果の画面へ（ここまでの記録になります）。",
+                "Stop playing and go back to song select. Your play so far is still saved to your records.",
+                "演奏をやめて選曲に戻ります。ここまでの演奏は記録に残ります。",
             )
         }
         .to_owned(),
@@ -5306,8 +5304,13 @@ mod tests {
         });
         let list = rows(Page::Pause, &info);
         let all = ids(&list);
-        assert_eq!(all[..3], [ItemId::Resume, ItemId::Retry, ItemId::Seek]);
-        assert_eq!(all.last(), Some(&ItemId::Quit));
+        // やめる行はやり直すのすぐ下（一番下だと遠い）。設定の行はその下から
+        assert_eq!(
+            all[..4],
+            [ItemId::Resume, ItemId::Retry, ItemId::Quit, ItemId::Seek]
+        );
+        assert_eq!(all.iter().filter(|&&i| i == ItemId::Quit).count(), 1);
+        assert_eq!(list[find(&list, ItemId::Quit)].name, "演奏をやめる");
         // 演奏の前にしか効かない項目は出さない
         assert!(!all.contains(&ItemId::Value(Setting::StageFailed)));
         assert!(!all.contains(&ItemId::Table(settings::AUTO_ALL)));
@@ -5321,6 +5324,14 @@ mod tests {
         let mut v = ConfigView::panel(Page::Pause);
         v.input(ConfigInput::Down, &list);
         v.input(ConfigInput::Down, &list);
+        assert_eq!(
+            v.input(ConfigInput::Decide, &list),
+            Response::action(Se::Decide, ConfigAction::Run(ItemId::Quit))
+        );
+        let mut v = ConfigView::panel(Page::Pause);
+        for _ in 0..3 {
+            v.input(ConfigInput::Down, &list);
+        }
         assert_eq!(
             v.input(ConfigInput::Left, &list),
             Response::action(Se::Move, ConfigAction::Set(ItemId::Seek, 78))
