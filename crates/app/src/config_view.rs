@@ -26,7 +26,7 @@ use engine::practice::{
     LoopStyle, PassRule, SPEED_MAX, SPEED_MIN, SPEED_STEP, STEP_LAPS_CHOICES, STEP_SPEED,
     SpeedPlan, snap_speed,
 };
-use library::Progress;
+use library::{Progress, SortKind};
 use winit::keyboard::KeyCode;
 
 use crate::config::{Config, MASTER_VOLUME_STEP};
@@ -288,6 +288,8 @@ pub enum ItemId {
     SongRecords,
     /// 簡易設定から、設定の画面へ
     AllSettings,
+    /// 選曲の並べ方（[`SortKind::ALL`] の何番目か。キーボードなら ← →）
+    Sort,
     /// 一時停止をやめて演奏に戻る
     Resume,
     /// はじめからやり直す
@@ -978,6 +980,8 @@ pub struct ConfigInfo<'a> {
     pub song: bool,
     /// 演奏中（一時停止の一覧に出す、曲の位置）
     pub play: Option<PlayPos>,
+    /// 選曲の今の並べ方（簡易設定の「並べ替え」の行。選曲でなければ None）
+    pub sort: Option<SortKind>,
     /// 補正とおすすめ（簡易設定・一時停止・設定の画面を開いたときに記録から出す）
     pub timing: Option<TimingInfo>,
     /// つながっているモニター（出すモニターの選択肢。左から）
@@ -999,6 +1003,19 @@ pub struct ImportInfo<'a> {
     /// 引き継ぐ前の設定を残した日時（「引き継ぐ前に戻す」を出す）
     pub backup: Option<&'a str>,
 }
+
+/// 並べ替えの名前（[`SortKind::ALL`] の順。選曲の上のアイコンと同じ）
+const SORT_NAMES: [Tr; 9] = [
+    tr("Recommended", "おすすめ"),
+    tr("BOX", "BOX"),
+    tr("Title", "曲名"),
+    tr("Artist", "アーティスト"),
+    tr("Difficulty", "難易度"),
+    tr("Level", "レベル"),
+    tr("Player", "遊んだ記録"),
+    tr("All Songs", "全曲"),
+    tr("Skill", "スキル"),
+];
 
 /// 出すモニターの選択肢の、窓のあるモニター（選んでいない）の名前
 const MONITOR_AUTO: Tr = tr("Auto (current monitor)", "自動（今のモニター）");
@@ -1270,6 +1287,21 @@ pub fn rows(page: Page, info: &ConfigInfo<'_>) -> Vec<Row> {
                     )
                     .to_owned(),
                     None,
+                ));
+                r.push(heading(" "));
+            }
+            // 並べ替え（パッドの SD・FT は難易度なので、ドラムだけならここで）
+            if let Some(kind) = info.sort {
+                r.push(choice(
+                    ItemId::Sort,
+                    t("Sort Songs", "並べ替え"),
+                    &SORT_NAMES.map(|n| n.get()),
+                    kind.index(),
+                    None,
+                    t(
+                        "Changes how songs are listed. On the song list, ← → also work.",
+                        "曲の並べ方を変えます。曲の一覧でキーボードの ← → を押しても変わります。",
+                    ),
                 ));
                 r.push(heading(" "));
             }
@@ -2903,7 +2935,7 @@ fn hints_for(view: &ConfigView, row: Option<&Row>) -> Vec<ui::Hint<'static>> {
     if view.confirm.is_some() {
         return vec![
             (&[Pad::HT, Pad::LT], t("Choose", "選ぶ")),
-            (&[Pad::CY, Pad::RD], t("Confirm (Enter)", "決める（Enter）")),
+            (&[Pad::CY], t("Confirm (Enter)", "決める（Enter）")),
             (&[Pad::LC], t("Cancel (Esc)", "やめる（Esc）")),
         ];
     }
@@ -2912,14 +2944,14 @@ fn hints_for(view: &ConfigView, row: Option<&Row>) -> Vec<ui::Hint<'static>> {
             vec![
                 (&[Pad::HT], t("Increase", "増やす")),
                 (&[Pad::LT], t("Decrease", "減らす")),
-                (&[Pad::CY, Pad::RD], t("Confirm (Enter)", "決める（Enter）")),
+                (&[Pad::CY], t("Confirm (Enter)", "決める（Enter）")),
                 (&[Pad::LC], t("Cancel (Esc)", "やめて元に戻す（Esc）")),
             ]
         } else {
             vec![
                 (&[Pad::HT], t("Up", "上")),
                 (&[Pad::LT], t("Down", "下")),
-                (&[Pad::CY, Pad::RD], t("Confirm (Enter)", "決める（Enter）")),
+                (&[Pad::CY], t("Confirm (Enter)", "決める（Enter）")),
                 (&[Pad::LC], t("Cancel (Esc)", "やめて元に戻す（Esc）")),
             ]
         };
@@ -2928,7 +2960,7 @@ fn hints_for(view: &ConfigView, row: Option<&Row>) -> Vec<ui::Hint<'static>> {
         return vec![
             (&[Pad::HT], t("Up", "上")),
             (&[Pad::LT], t("Down", "下")),
-            (&[Pad::CY, Pad::RD], t("Open (Enter)", "開く（Enter）")),
+            (&[Pad::CY], t("Open (Enter)", "開く（Enter）")),
             (&[Pad::LC], t("Exit Settings (Esc)", "設定を出る（Esc）")),
         ];
     }
@@ -2949,7 +2981,7 @@ fn hints_for(view: &ConfigView, row: Option<&Row>) -> Vec<ui::Hint<'static>> {
     } else if row.is_some_and(|r| matches!(r.ctl, Ctl::Page(_))) {
         v.push((&[Pad::FT], t("→ Open", "→ 開く")));
     }
-    v.push((&[Pad::CY, Pad::RD], decide));
+    v.push((&[Pad::CY], decide));
     let top = view.panel && view.stack.len() == 1;
     let back = match (top, view.page()) {
         (true, Page::Pause) => t("Resume (Space)", "続ける（Space）"),
@@ -4353,6 +4385,7 @@ mod tests {
             song_count: 3,
             song: true,
             play: None,
+            sort: None,
             timing: None,
             monitors: &[],
             import: None,

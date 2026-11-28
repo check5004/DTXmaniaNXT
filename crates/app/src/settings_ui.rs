@@ -534,7 +534,7 @@ pub fn pad_roles(c: &Canvas, g: &mut Gfx, x: f32, y: f32, w: f32, h: f32) {
         (Pad::HT, 0.4, 0.2, t("Up", "上")),
         (Pad::LT, 0.6, 0.2, t("Down", "下")),
         (Pad::CY, 0.88, 0.2, t("Select", "決定")),
-        (Pad::RD, 0.9, 0.55, t("Select", "決定")),
+        (Pad::RD, 0.9, 0.55, ""),
         (Pad::SD, 0.32, 0.6, t("Left", "左")),
         (Pad::FT, 0.72, 0.62, t("Right", "右")),
         (Pad::BD, 0.52, 0.8, ""),

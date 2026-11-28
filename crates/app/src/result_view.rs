@@ -463,20 +463,21 @@ enum Top<'a> {
     Drill(&'a crate::drill::DrillOutcome),
 }
 
-/// 基礎練習の結果のパッドの役目。もう一度か、基礎練習の画面へ（次に何をするかは自分で選ぶ）
+/// 基礎練習の結果のパッドの役目。基礎練習の画面へ（次に何をするかは自分で選ぶ。同じドリルは選んだままなので、
+/// もう一度なら戻って CY）。もう一度はキーボードの R だけ
 fn drill_hints() -> Vec<ui::Hint<'static>> {
     vec![
-        (&[Pad::SD], t("Play Again (R)", "もう一度（R）")),
         (
-            &[Pad::CY, Pad::RD, Pad::LC],
+            &[Pad::CY, Pad::LC],
             t("Drills (Enter)", "基礎練習へ（Enter）"),
         ),
+        (&[], t("Play Again (R)", "もう一度（R）")),
     ]
 }
 
 /// 今日のメニューの結果のパッドの役目。CY で次へ（最後なら終える）、LC で今日のメニューへ
 fn today_hints(m: &crate::today::Mark, page: Page, practice: bool) -> Vec<ui::Hint<'static>> {
-    let mut v: Vec<ui::Hint<'static>> = vec![(&[Pad::SD], t("Play Again (R)", "もう一度（R）"))];
+    let mut v: Vec<ui::Hint<'static>> = Vec::new();
     if practice {
         v.push(match page {
             Page::Summary => (&[Pad::HT, Pad::LT], t("Loop Table (→)", "周ごとの表（→）")),
@@ -495,6 +496,7 @@ fn today_hints(m: &crate::today::Mark, page: Page, practice: bool) -> Vec<ui::Hi
         &[Pad::LC],
         t("Today's Menu (Esc)", "今日のメニューへ（Esc）"),
     ));
+    v.push((&[], t("Play Again (R)", "もう一度（R）")));
     v
 }
 
@@ -641,42 +643,43 @@ fn result_hints(
             t("Score and Rank (←)", "スコアとランク（←）"),
         ),
     };
-    let mut v: Vec<ui::Hint<'static>> = vec![(&[Pad::SD], t("Play Again (R)", "もう一度（R）"))];
-    // 練習の結果からは練習メニューへ戻る（CY・LC・RD のどれでも）
+    // パッドはページと戻るだけ（何気なく叩いても別の画面へ飛んだり補正が変わったりしないように）。
+    // 練習の結果からは練習メニューへ戻る
+    let mut v: Vec<ui::Hint<'static>> = vec![
+        turn,
+        if practice {
+            (
+                &[Pad::CY, Pad::LC],
+                t("Practice Menu (Enter)", "練習メニューへ（Enter）"),
+            )
+        } else {
+            (
+                &[Pad::CY, Pad::LC],
+                t("Song Select (Enter)", "選曲へ（Enter）"),
+            )
+        },
+    ];
+    // ここからはキーボードだけ
+    v.push((&[], t("Play Again (R)", "もう一度（R）")));
     if !practice {
-        v.push((&[Pad::RD], t("Practice a Section (P)", "区間練習（P）")));
+        v.push((&[], t("Practice a Section (P)", "区間練習（P）")));
     }
     if replay {
-        v.push((&[Pad::HH], t("Replay (V)", "リプレイ（V）")));
+        v.push((&[], t("Replay (V)", "リプレイ（V）")));
     }
     // ずれの板のおすすめ（板は 1 ページ目だけ）
     if page == Page::Summary
         && let Some(lag) = lag
     {
         if lag.applied.is_some() {
-            v.push((
-                &[Pad::FT],
-                t("Undo Suggested Offset (O)", "補正を元に戻す（O）"),
-            ));
+            v.push((&[], t("Undo Suggested Offset (O)", "補正を元に戻す（O）")));
         } else if lag.advice.changes() {
             v.push((
-                &[Pad::FT],
+                &[],
                 t("Use Suggested Offset (O)", "おすすめの補正にする（O）"),
             ));
         }
     }
-    v.push(turn);
-    v.push(if practice {
-        (
-            &[Pad::CY, Pad::RD, Pad::LC],
-            t("Practice Menu (Enter)", "練習メニューへ（Enter）"),
-        )
-    } else {
-        (
-            &[Pad::CY, Pad::LC],
-            t("Song Select (Enter)", "選曲へ（Enter）"),
-        )
-    });
     v
 }
 
@@ -900,16 +903,13 @@ mod tests {
                 .find(|x| x.1.starts_with(what))
                 .map(|x| x.0.to_vec())
         };
-        // 練習の結果：SD でもう一度、CY・RD・LC で練習メニューへ（選曲へは戻らない）
+        // 練習の結果：CY・LC で練習メニューへ（選曲へは戻らない）。もう一度はキーボードだけ
         let h = result_hints(Page::Summary, true, None, false);
-        assert_eq!(pads(&h, "もう一度"), Some(vec![Pad::SD]));
-        assert_eq!(
-            pads(&h, "練習メニューへ"),
-            Some(vec![Pad::CY, Pad::RD, Pad::LC])
-        );
+        assert_eq!(pads(&h, "もう一度"), Some(vec![]));
+        assert_eq!(pads(&h, "練習メニューへ"), Some(vec![Pad::CY, Pad::LC]));
         assert_eq!(pads(&h, "選曲へ"), None);
         assert_eq!(pads(&h, "周ごとの表"), Some(vec![Pad::HT, Pad::LT]));
-        // ふだんの結果：おすすめがあるときだけ FT を出す
+        // ふだんの結果：おすすめがあるときだけ出す。区間練習・リプレイ・補正はキーボードだけ
         let advice = engine::lag::Advice {
             global: None,
             song: None,
@@ -924,9 +924,10 @@ mod tests {
             applied: None,
         };
         let h = result_hints(Page::Summary, false, Some(&lag), true);
-        assert_eq!(pads(&h, "区間練習"), Some(vec![Pad::RD]));
-        assert_eq!(pads(&h, "リプレイ"), Some(vec![Pad::HH]));
-        assert_eq!(pads(&h, "おすすめの補正にする"), Some(vec![Pad::FT]));
+        assert_eq!(pads(&h, "区間練習"), Some(vec![]));
+        assert_eq!(pads(&h, "リプレイ"), Some(vec![]));
+        assert_eq!(pads(&h, "おすすめの補正にする"), Some(vec![]));
+        assert_eq!(pads(&h, "選曲へ"), Some(vec![Pad::CY, Pad::LC]));
         assert_eq!(
             pads(
                 &result_hints(Page::Analysis, false, Some(&lag), true),
@@ -939,7 +940,8 @@ mod tests {
                 global_ms: 0,
                 ..advice
             },
-            ..lag
+            charts: Vec::new(),
+            applied: None,
         };
         assert_eq!(
             pads(
@@ -956,13 +958,14 @@ mod tests {
             ),
             None
         );
-        // 足のパッドは使わない
+        // パッドはページと戻るだけ（足のパッドも使わない）
         for page in [Page::Summary, Page::Analysis] {
             for practice in [true, false] {
                 assert!(
-                    result_hints(page, practice, None, !practice)
+                    result_hints(page, practice, Some(&lag), !practice)
                         .iter()
-                        .all(|h| !h.0.contains(&Pad::BD))
+                        .flat_map(|h| h.0)
+                        .all(|p| [Pad::HT, Pad::LT, Pad::CY, Pad::LC].contains(p))
                 );
             }
         }
