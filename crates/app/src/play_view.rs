@@ -31,94 +31,25 @@ pub const JUDGE_LINE_Y: f32 = 561.0;
 const BLIND_SHADE: Color32 = Color32::from_rgba_premultiplied(18, 16, 32, 235);
 const BLIND_EDGE: Color32 = Color32::from_rgb(0x9A, 0x86, 0xE8);
 const BLIND_TAG: Color32 = Color32::from_rgb(0x4A, 0x3C, 0x8C);
-/// 帯の印の間（ドット）。これより詰まるなら間引く
+/// 帯の「？」の間（ドット）。これより詰まるなら間引く
 const BLIND_MARK_GAP: f32 = 140.0;
 
-/// 隠した小節の帯の見せ方（見本を選んでもらうまで、開発用に `DTXMANIANXT_HIDE_LOOK` で切り替える）
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum BlindLook {
-    /// A 暗い幕と「？」
-    Question,
-    /// B しま模様の幕と、目に斜線の印
-    Blindfold,
-}
-
-impl BlindLook {
-    fn current() -> Self {
-        match std::env::var("DTXMANIANXT_HIDE_LOOK").as_deref() {
-            Ok("b") => Self::Blindfold,
-            _ => Self::Question,
-        }
-    }
-
-    /// 帯 1 つ。`rect` は帯の見えている所、`marks` は印の y（帯と一緒に流れる）、`phase` はしまの位置の基準の y
-    fn draw_band(
-        self,
-        c: &Canvas,
-        g: &mut Gfx,
-        (x, y, w, h): (f32, f32, f32, f32),
-        marks: &[f32],
-        phase: f32,
-    ) {
-        c.fill(x, y, w, h, BLIND_SHADE);
-        let clip = c.with_clip(c.rect(x, y, w, h));
-        match self {
-            Self::Question => {
-                let style = Style {
-                    px: (w * 0.5).clamp(26.0, 48.0),
-                    color: BLIND_EDGE.gamma_multiply(0.75),
-                    bold: true,
-                    shadow: None,
-                    edge: None,
-                    gradient: None,
-                };
-                if let Some(t) = g.texts.get("?", &style) {
-                    for &my in marks {
-                        t.draw(&clip, x + (w - t.w) / 2.0, my - t.h / 2.0, 1.0, 1.0);
-                    }
-                }
-            }
-            Self::Blindfold => {
-                // 斜めのしま（帯と一緒に流れる）
-                let stripe = BLIND_EDGE.gamma_multiply(0.16);
-                let step = 26.0;
-                let mut k = ((y - phase) / step).floor() - (w / step).ceil() - 1.0;
-                while phase + k * step < y + h + w {
-                    let y0 = phase + k * step;
-                    clip.quad(
-                        [
-                            (x, y0),
-                            (x + w, y0 - w),
-                            (x + w, y0 - w + step * 0.45),
-                            (x, y0 + step * 0.45),
-                        ],
-                        stripe,
-                    );
-                    k += 1.0;
-                }
-                // 目に斜線の印
-                let r = (w * 0.2).clamp(11.0, 18.0);
-                let ink = BLIND_EDGE.gamma_multiply(0.9);
-                let s = c.scale();
-                let p = clip.painter();
-                for &cy in marks {
-                    let cx = x + w / 2.0;
-                    p.circle_filled(c.pos(cx, cy), r * 1.25 * s, BLIND_SHADE);
-                    p.add(egui::Shape::ellipse_stroke(
-                        c.pos(cx, cy),
-                        egui::vec2(r, r * 0.55) * s,
-                        egui::Stroke::new(2.0 * s, ink),
-                    ));
-                    p.circle_filled(c.pos(cx, cy), r * 0.28 * s, ink);
-                    p.line_segment(
-                        [
-                            c.pos(cx - r * 0.95, cy + r * 0.8),
-                            c.pos(cx + r * 0.95, cy - r * 0.8),
-                        ],
-                        egui::Stroke::new(2.5 * s, ink),
-                    );
-                }
-            }
+/// 隠した小節の帯 1 つ（暗い幕と「？」。2026-11-28 ユーザーが見本の A を選んだ）。
+/// `rect` は帯の見えている所、`marks` は「？」の y（帯と一緒に流れる）
+fn draw_blind_band(c: &Canvas, g: &mut Gfx, (x, y, w, h): (f32, f32, f32, f32), marks: &[f32]) {
+    c.fill(x, y, w, h, BLIND_SHADE);
+    let clip = c.with_clip(c.rect(x, y, w, h));
+    let style = Style {
+        px: (w * 0.5).clamp(26.0, 48.0),
+        color: BLIND_EDGE.gamma_multiply(0.75),
+        bold: true,
+        shadow: None,
+        edge: None,
+        gradient: None,
+    };
+    if let Some(t) = g.texts.get("?", &style) {
+        for &my in marks {
+            t.draw(&clip, x + (w - t.w) / 2.0, my - t.h / 2.0, 1.0, 1.0);
         }
     }
 }
@@ -1855,7 +1786,6 @@ impl PlayView {
                 }
             }
         }
-        let look = BlindLook::current();
         let n = fold.bars.len();
         for (k, &(from, to)) in fold.bars.iter().enumerate() {
             let near = ahead(from).max(0.0);
@@ -1865,7 +1795,7 @@ impl PlayView {
             }
             let (y0, y1) = (looks.ahead_y(near), looks.ahead_y(far));
             let (top, h) = (y0.min(y1), (y0 - y1).abs());
-            // 印は小節を等分した所の真ん中に（帯と一緒に流れる。詰まるなら間引く）
+            // 「？」は小節を等分した所の真ん中に（帯と一緒に流れる。詰まるなら間引く）
             let bar_px = ahead(to) - ahead(from);
             let parts = ((bar_px / BLIND_MARK_GAP).floor() as usize).clamp(1, 8);
             let marks: Vec<f32> = (0..parts)
@@ -1874,9 +1804,8 @@ impl PlayView {
                     looks.ahead_y(a)
                 })
                 .collect();
-            let phase = looks.ahead_y(ahead(from));
             for &(x, w) in &cols {
-                look.draw_band(c, g, (x, top, w, h), &marks, phase);
+                draw_blind_band(c, g, (x, top, w, h), &marks);
             }
             // 隠し始めと隠し終わりにふち
             let starts = k == 0 || (fold.bars[k - 1].1 - from).abs() > 1.0;
