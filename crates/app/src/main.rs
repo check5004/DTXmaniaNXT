@@ -36,11 +36,13 @@ mod gfx;
 mod history;
 mod inputs;
 mod jobs;
+mod kit_view;
 mod lag_view;
 mod lane_layout;
 mod loading;
 mod logging;
 mod midi;
+mod module_kits;
 mod module_link;
 mod module_probe;
 mod movie;
@@ -398,6 +400,8 @@ struct SongTiming {
     /// この曲の補正（ミリ秒）
     offset_ms: f64,
     advice: engine::lag::Advice,
+    /// この曲で V51 を切り替えるキット
+    kit: Option<u16>,
 }
 
 impl SongTiming {
@@ -468,6 +472,12 @@ struct App {
     title: TitleView,
     /// 終わる（次のイベントでループを抜ける）
     quit: bool,
+    /// 曲ごとの音源のキット（V51）
+    kits: module_kits::Kits,
+    /// 簡易設定で V51 のキットを選んで、V51 を切り替えている（簡易設定を閉じたら前のキットに戻す）
+    auditioning: bool,
+    /// 選曲で選んでいる譜面と、その曲に決めた V51 のキット（譜面が変わったら読み直す）
+    select_kit: (Option<Option<PathBuf>>, Option<u16>),
     /// 起動できなかったわけ（ループを抜けてから知らせる）
     startup_error: Option<anyhow::Error>,
     /// 画面の切り替えのシャッター（NX v2.0 `GitaDoraTransition`）
@@ -742,6 +752,9 @@ impl App {
             sfx,
             title,
             quit: false,
+            kits: module_kits::Kits::start(),
+            auditioning: false,
+            select_kit: (None, None),
             startup_error: None,
             shutter: Shutter::new(),
             after_close: None,
@@ -950,6 +963,8 @@ impl App {
         self.quick = None;
         // 遊んだあとは記録が増えている（リプレイから戻ったときは選んでいた行のまま）
         self.ranking.invalidate();
+        // 曲のために切り替えた V51 のキットを前のキットに戻す
+        self.kits.apply(None);
         self.screen = Screen::Select;
         self.view.enter();
         self.shutter.open(SELECT_OPEN_DELAY);
@@ -1596,7 +1611,29 @@ impl App {
             let path = path.clone();
             Job::spawn("chart loader", move || settings.load(&path, practice))
         };
-        self.screen = Screen::Loading(Box::new(Loading::new(&path, &label, wait, job)));
+        let mut loading = Loading::new(&path, &label, wait, job);
+        loading.kit = self.switch_kit_for(&path);
+        self.screen = Screen::Loading(Box::new(loading));
+    }
+
+    /// この曲に V51 のキットを決めていれば、切り替え始める。読み込みの画面に出す名前を返す。
+    /// 決めていなければ、選んでいたあいだに切り替えたキットを前のキットに戻す
+    fn switch_kit_for(&mut self, path: &std::path::Path) -> Option<String> {
+        // 簡易設定で選んでいたキットは、ここで曲のキットか前のキットにする
+        self.auditioning = false;
+        let Some(kit) = self.history.song_kit(path, module_kits::MODULE) else {
+            self.kits.apply(None);
+            return None;
+        };
+        let name = {
+            let st = self.kits.state();
+            if !st.available() {
+                return None;
+            }
+            module_kits::label(kit, st.name(kit))
+        };
+        self.kits.apply(Some(kit));
+        Some(name)
     }
 
     /// 曲を読むのに使う設定（読むスレッドへ渡す）
@@ -1732,8 +1769,14 @@ impl App {
             }
             None => {}
         }
-        if let Screen::Loading(l) = &mut self.screen
+        // V51 のキットを切り替えていれば、鳴る音が変わるまで待つ（長くても MAX_WAIT まで）
+        let kit_ready = |l: &Loading| {
+            l.kit.is_none() || l.elapsed() >= module_kits::MAX_WAIT || self.kits.state().settled()
+        };
+        if let Screen::Loading(l) = &self.screen
             && l.done()
+            && kit_ready(l)
+            && let Screen::Loading(l) = &mut self.screen
             && let Some(p) = l.play.take()
         {
             self.enter_play(*p);
@@ -1870,6 +1913,21 @@ impl App {
             None => (Vec::new(), None, String::new()),
         };
         self.ranking.load(chart, level, entries, hash);
+    }
+
+    /// 選曲で選んでいる曲に決めた V51 のキット（番号と名前）。決めていないか、V51 を使っていなければ None
+    fn select_kit_label(&mut self) -> Option<String> {
+        let chart = self.songs.selected_chart();
+        if self.select_kit.0.as_ref() != Some(&chart) {
+            let kit = chart
+                .as_deref()
+                .and_then(|p| self.history.song_kit(p, module_kits::MODULE));
+            self.select_kit = (Some(chart), kit);
+        }
+        let kit = self.select_kit.1?;
+        let st = self.kits.state();
+        st.available()
+            .then(|| module_kits::label(kit, st.name(kit)))
     }
 
     /// ランキングで選んだ記録の音を鳴らし、リプレイを開く
@@ -2152,6 +2210,13 @@ impl App {
             self.show_added_song();
         }
         self.check_ports();
+        self.kits
+            .set_quiet(matches!(self.screen, Screen::Play(..) | Screen::Loading(_)));
+        // 簡易設定で選んでいたキットは、閉じたら前のキットに戻す
+        if self.auditioning && self.quick.is_none() {
+            self.auditioning = false;
+            self.kits.audition(None);
+        }
         let mut assigned = None;
         let closing = self.after_close.is_some();
         // 届いた MIDI を読み、見張りに見せてから、いまの画面へ渡す
@@ -2593,8 +2658,47 @@ impl App {
         info.timing = self.timing.as_ref().map(SongTiming::info);
         if let Screen::Play(p, _) = &self.screen {
             info.play = Some(play_pos(p));
+        } else {
+            info.kit = self.kit_info();
         }
         info
+    }
+
+    /// 簡易設定の「V51 のキット」の行に出すもの。曲を選んでいないか、V51 を使っていなければ None
+    fn kit_info(&self) -> Option<config_view::KitInfo> {
+        let timing = self.timing.as_ref().filter(|t| !t.charts.is_empty())?;
+        let st = self.kits.state();
+        if !st.available() {
+            return None;
+        }
+        let mut labels = Vec::with_capacity(usize::from(drum_module::v51::KIT_COUNT) + 1);
+        labels.push(t("Not Set", "決めない").to_owned());
+        labels.extend((1..=drum_module::v51::KIT_COUNT).map(|k| module_kits::label(k, st.name(k))));
+        Some(config_view::KitInfo {
+            at: timing.kit.unwrap_or(0),
+            labels,
+            missing: st.found == Some(false),
+        })
+    }
+
+    /// この曲の V51 のキットを決めて記録に残し、V51 もそのキットにする（叩いて確かめられるように）
+    fn set_song_kit(&mut self, v: i64) {
+        let Some(t) = &mut self.timing else {
+            return;
+        };
+        if t.charts.is_empty() {
+            return;
+        }
+        let kit = u16::try_from(v)
+            .ok()
+            .filter(|k| (1..=drum_module::v51::KIT_COUNT).contains(k));
+        t.kit = kit;
+        self.history
+            .set_song_kit(&t.charts, module_kits::MODULE, kit);
+        // 選曲の札も読み直す
+        self.select_kit.0 = None;
+        self.kits.audition(kit);
+        self.auditioning = true;
     }
 
     /// 選曲の簡易設定（パッドは RD、キーボードは F2）を開く
@@ -2605,14 +2709,20 @@ impl App {
         self.sfx.play(Se::Decide);
         let chart = self.songs.selected_chart();
         self.load_timing(chart.as_deref());
+        // 起動したあとで V51 をつないでいれば、ここで見つけてキットの名前を読む
+        self.kits.check();
         self.quick = Some(Box::new(ConfigView::panel(config_view::Page::Quick)));
     }
 
     /// 補正の行に出す、この曲（`chart`）の補正とおすすめを記録から出す
     fn load_timing(&mut self, chart: Option<&std::path::Path>) {
-        let (charts, offset_ms) = match chart {
-            Some(p) => (self.songs.song_charts(p), self.history.song_offset(p)),
-            None => (Vec::new(), 0.0),
+        let (charts, offset_ms, kit) = match chart {
+            Some(p) => (
+                self.songs.song_charts(p),
+                self.history.song_offset(p),
+                self.history.song_kit(p, module_kits::MODULE),
+            ),
+            None => (Vec::new(), 0.0, None),
         };
         let advice = self
             .history
@@ -2621,6 +2731,7 @@ impl App {
             charts,
             offset_ms,
             advice,
+            kit,
         });
     }
 
@@ -2858,6 +2969,7 @@ impl App {
                 let r = config_view::OFFSET_RANGE;
                 self.set_song_offset((v as f64).clamp(-r, r));
             }
+            ItemId::SongKit => self.set_song_kit(v),
             ItemId::Table(key) => {
                 self.config.settings.set_raw(key, v);
                 if settings::VOLUMES.contains(&key) {
@@ -3686,6 +3798,7 @@ impl App {
             charts,
             offset_ms,
             advice,
+            kit: None,
         });
         let applied = match applied {
             Some((global, song)) => {
@@ -4231,10 +4344,14 @@ impl App {
                 self.view.draw(&c, &mut self.gfx, &self.songs);
                 self.refresh_ranking();
                 self.ranking.draw(&c, &mut self.gfx);
+                if let Some(label) = self.select_kit_label() {
+                    kit_view::draw_tag(&c, &mut self.gfx, &label);
+                }
                 if let Some(m) = &self.menu {
                     let sound = self.menu_sound.unwrap_or(practice_menu::Sound::Off);
                     m.draw(&c, &mut self.gfx, sound);
                 }
+                let kit_info = self.quick.as_ref().and_then(|_| self.kit_info());
                 if let Some(q) = &mut self.quick {
                     let mut info = config_info(
                         &self.config,
@@ -4245,6 +4362,7 @@ impl App {
                     );
                     info.song = self.songs.selected_chart().is_some();
                     info.timing = self.timing.as_ref().map(SongTiming::info);
+                    info.kit = kit_info;
                     let rows = config_view::rows(q.page(), &info);
                     q.draw_panel(&c, &mut self.gfx, &rows, &info);
                 }
@@ -4382,6 +4500,7 @@ fn config_info<'a>(
         timing: None,
         monitors,
         import: None,
+        kit: None,
     }
 }
 
@@ -4692,6 +4811,8 @@ fn run() -> Result<()> {
     // 前に V51 の値を書き換えたまま終わっていたら（落ちたなど）、ここで書き戻す
     module_link::restore_on_start();
     event_loop.run_app(&mut app)?;
+    // 曲のために切り替えた V51 のキットを前のキットに戻す
+    app.kits.finish();
     // 開発者メニューの道具が動いていたら、後片付け（音源の設定を戻すなど）を待ってから終える
     dev_view::shutdown(Duration::from_secs(10));
     app.updater.apply_on_exit();
