@@ -3,7 +3,8 @@
 //! - 曲を始めるとき（読み込みの画面）に、その曲に決めたキットへ V51 を切り替える
 //! - 選曲に戻るとき・アプリを終えるときに、切り替える前のキットに戻す。書き戻しの記録
 //!   （[`crate::module_link`]）を使うので、落ちても次に起動したときに戻る
-//! - キットを選んでいるあいだは、選んでいるキットに V51 を切り替える（叩いて音を確かめられる）
+//! - キットを選んでいるあいだは、選んでいるキットに V51 を切り替え、鳴る音が変わったころに
+//!   試しのフレーズ（[`crate::kit_phrase`]）を V51 で鳴らす。次を選ぶと途中でやめる
 //! - キットの名前は V51 から読み、設定のフォルダの `v51_kits.toml` に覚えておく
 //!
 //! V51 とのやり取りはこのスレッド 1 本で順に行い、画面のスレッドは待たない。V51 とのつながりは
@@ -13,7 +14,7 @@
 use std::collections::VecDeque;
 use std::fs;
 use std::path::PathBuf;
-use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, TryRecvError, channel};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -24,8 +25,10 @@ use midir::MidiOutput;
 use serde::{Deserialize, Serialize};
 
 use crate::config::Config;
+use crate::kit_phrase;
 use crate::midi;
 use crate::module_link::{Restored, V51, looks_like_v51};
+use crate::time::host_us;
 
 /// 曲ごとのキットを記録に残すときの音源の名前
 pub const MODULE: &str = "roland-v51";
@@ -43,6 +46,11 @@ const NAMES_DELAY: Duration = Duration::from_secs(5);
 const QUIT_WAIT: Duration = Duration::from_millis(2500);
 /// 書き戻しの記録に残すわけ
 const REASON: &str = "kit for a song";
+/// フレーズの音がこれより近づいたら、受け取りを待たずに眠って時刻どおりに送る
+/// （`recv_timeout` は Windows では 15 ms ほど遅れることがある）
+const EXACT: Duration = Duration::from_millis(20);
+/// 送ったノートが V51 から返ってくる（Soft Thru が ON のとき）とみなす長さ
+const ECHO_WINDOW_US: i64 = 80_000;
 
 /// 今の様子（画面のスレッドが読む）
 #[derive(Debug, Clone, Default)]
@@ -85,8 +93,9 @@ impl State {
 enum Cmd {
     /// 曲のためにキットを切り替える（None なら前のキットに戻す）。すぐに
     Apply(Option<u16>),
-    /// 選んでいるキットを鳴らす（None なら前のキットに戻す）。選ぶのが止まってから
-    Audition(Option<u16>),
+    /// 選んでいるキットにする（None なら前のキットに戻す）。選ぶのが止まってから。
+    /// `play` なら、鳴る音が変わったころに試しのフレーズを鳴らす
+    Audition { kit: Option<u16>, play: bool },
     /// キットの名前を読む
     ReadNames,
     /// 演奏しているあいだは名前を読まない
@@ -155,10 +164,19 @@ impl Kits {
         self.send(Cmd::Apply(kit));
     }
 
-    /// 選んでいるキット `kit` を鳴らす（None なら前のキットに戻す）
+    /// 選んだキット `kit` にして、試しのフレーズを鳴らす（None なら前のキットで鳴らす）
     pub fn audition(&self, kit: Option<u16>) {
         self.state().busy = true;
-        self.send(Cmd::Audition(kit));
+        self.send(Cmd::Audition { kit, play: true });
+    }
+
+    /// 選び終えた。前のキットに戻し、鳴らしているフレーズもやめる
+    pub fn end_audition(&self) {
+        self.state().busy = true;
+        self.send(Cmd::Audition {
+            kit: None,
+            play: false,
+        });
     }
 
     /// V51 がまだ見つかっていないか、名前を読み終えていなければ、V51 らしいポートがあるときだけ読み直す
@@ -220,6 +238,23 @@ struct Want {
     kit: Option<u16>,
     /// この時刻になったら行う
     at: Instant,
+    /// 切り替えたら試しのフレーズを鳴らす
+    play: bool,
+}
+
+/// 鳴らしている試しのフレーズ
+struct Playing {
+    start: Instant,
+    events: Vec<kit_phrase::Event>,
+    /// 次に送るもの
+    next: usize,
+}
+
+impl Playing {
+    /// 次に送る時刻（送り終えたら None）
+    fn due(&self) -> Option<Instant> {
+        self.events.get(self.next).map(|e| self.start + e.at)
+    }
 }
 
 struct Worker {
@@ -233,6 +268,7 @@ struct Worker {
     /// 名前を読み始める時刻（起動したとき）
     names_at: Option<Instant>,
     quiet: bool,
+    playing: Option<Playing>,
 }
 
 impl Worker {
@@ -245,6 +281,7 @@ impl Worker {
             names: VecDeque::new(),
             names_at,
             quiet: false,
+            playing: None,
         }
     }
 
@@ -254,33 +291,58 @@ impl Worker {
 
     fn run(mut self, rx: &Receiver<Cmd>) {
         loop {
-            match rx.recv_timeout(self.wait()) {
-                Ok(cmd) => {
-                    self.take(cmd);
-                    continue;
-                }
+            let wait = self.wait();
+            let got = if self.playing.is_none() {
+                rx.recv_timeout(wait)
+            } else if wait > EXACT {
+                rx.recv_timeout(wait - EXACT)
+            } else {
+                // フレーズの次の音まで眠る（Windows でも 1 ms より細かく起きる）
+                std::thread::sleep(wait);
+                rx.try_recv().map_err(|e| match e {
+                    TryRecvError::Empty => RecvTimeoutError::Timeout,
+                    TryRecvError::Disconnected => RecvTimeoutError::Disconnected,
+                })
+            };
+            match got {
+                Ok(cmd) => self.take(cmd),
                 Err(RecvTimeoutError::Timeout) => self.step(),
                 Err(RecvTimeoutError::Disconnected) => break,
             }
         }
+        self.stop_phrase();
         // 終えるときは、選んでいたキットも曲のキットも前のキットに戻す
         if self.state().switched {
-            self.switch(None);
+            self.switch(None, false);
         }
     }
 
     fn take(&mut self, cmd: Cmd) {
         let now = Instant::now();
         match cmd {
-            Cmd::Apply(kit) => self.want = Some(Want { kit, at: now }),
-            Cmd::Audition(kit) => {
+            Cmd::Apply(kit) => {
+                self.stop_phrase();
+                self.want = Some(Want {
+                    kit,
+                    at: now,
+                    play: false,
+                });
+            }
+            Cmd::Audition { kit, play } => {
+                self.stop_phrase();
                 self.want = Some(Want {
                     kit,
                     at: now + AUDITION_DELAY,
+                    play,
                 });
             }
             Cmd::ReadNames => self.queue_names(),
-            Cmd::Quiet(on) => self.quiet = on,
+            Cmd::Quiet(on) => {
+                self.quiet = on;
+                if on {
+                    self.stop_phrase();
+                }
+            }
         }
     }
 
@@ -290,6 +352,9 @@ impl Worker {
         let until = |t: Instant| t.saturating_duration_since(now);
         if let Some(w) = self.want {
             return until(w.at);
+        }
+        if let Some(t) = self.playing.as_ref().and_then(Playing::due) {
+            return until(t);
         }
         if !self.quiet {
             if !self.names.is_empty() {
@@ -310,10 +375,15 @@ impl Worker {
         let now = Instant::now();
         if let Some(w) = self.want.filter(|w| w.at <= now) {
             self.want = None;
-            self.switch(w.kit);
+            self.switch(w.kit, w.play);
             return;
         }
         if self.want.is_some() {
+            return;
+        }
+        // フレーズを鳴らしているあいだ（鳴る音が変わるのを待つあいだも）は名前を読まない
+        if self.playing.is_some() {
+            self.play_due(now);
             return;
         }
         if !self.quiet {
@@ -360,39 +430,115 @@ impl Worker {
         self.link.as_mut()
     }
 
-    /// やり取りに失敗した。つながりを閉じ、名前を読むのもやめる
+    /// やり取りに失敗した。つながりを閉じ、名前を読むのもフレーズもやめる
     fn lost(&mut self, e: &anyhow::Error) {
         log::warn!("V51 kits: {e:#}");
         self.link = None;
         self.names.clear();
+        self.playing = None;
         let mut st = self.state();
         st.reading = None;
         st.busy = false;
     }
 
-    /// キット `kit` にする（None なら前のキットに戻す）
-    fn switch(&mut self, kit: Option<u16>) {
+    /// キット `kit` にする（None なら前のキットに戻す）。`play` なら、そのあと試しのフレーズを鳴らす
+    fn switch(&mut self, kit: Option<u16>, play: bool) {
         let Some(link) = self.link() else {
             self.state().busy = false;
             return;
         };
         let result = match kit {
             Some(kit) => switch_to(link, kit).map(|sent| (Some(kit), sent, true)),
-            None => restore(link).map(|now| (now, false, false)),
+            None => restore(link).map(|(now, sent)| (now, sent, false)),
         };
         let pending = link.pending() > 0;
         match result {
             Ok((now, sent, switched)) => {
-                let mut st = self.state();
-                st.now = now;
-                if sent {
-                    st.switched_at = Some(Instant::now());
+                let start = {
+                    let mut st = self.state();
+                    st.now = now;
+                    if sent {
+                        st.switched_at = Some(Instant::now());
+                    }
+                    st.switched = pending && switched;
+                    // 次の頼みが来ていれば、それが終わるまで busy のまま
+                    st.busy = self.want.is_some();
+                    // キットを書いたなら、鳴る音が変わるのを待ってから
+                    match st.switched_at {
+                        Some(t) if sent => t + SETTLE,
+                        _ => Instant::now(),
+                    }
+                };
+                if play && let Some(kit) = now {
+                    self.prepare_phrase(kit, start);
                 }
-                st.switched = pending && switched;
-                // 次の頼みが来ていれば、それが終わるまで busy のまま
-                st.busy = self.want.is_some();
             }
             Err(e) => self.lost(&e),
+        }
+    }
+
+    /// キット `kit` のノート番号を読み、試しのフレーズを `start` から鳴らす用意をする
+    fn prepare_phrase(&mut self, kit: u16, start: Instant) {
+        let Some(link) = self.link() else {
+            return;
+        };
+        match link.read(v51::kit_midi(kit)) {
+            Ok(midi) => {
+                self.playing = Some(Playing {
+                    start,
+                    events: kit_phrase::events(&midi),
+                    next: 0,
+                });
+            }
+            Err(e) => self.lost(&e),
+        }
+    }
+
+    /// フレーズの、時刻が来た音を送る
+    fn play_due(&mut self, now: Instant) {
+        let Some(mut p) = self.playing.take() else {
+            return;
+        };
+        if p.due().is_none_or(|t| t > now) {
+            self.playing = Some(p);
+            return;
+        }
+        let Some(link) = self.link() else {
+            return;
+        };
+        let mut failed = None;
+        while let Some(t) = p.due()
+            && t <= now
+        {
+            let e = p.events[p.next];
+            if let Err(err) = link.send(&e.bytes) {
+                failed = Some(err);
+                break;
+            }
+            if let Some((ch, note)) = e.note() {
+                remember_sent(ch, note, host_us());
+            }
+            p.next += 1;
+        }
+        if let Some(e) = failed {
+            self.lost(&e);
+        } else if p.due().is_some() {
+            self.playing = Some(p);
+        }
+    }
+
+    /// 鳴らしているフレーズをやめる（途中なら、受けたハイハットのペダルの位置を戻す）
+    fn stop_phrase(&mut self) {
+        let Some(p) = self.playing.take() else {
+            return;
+        };
+        if p.next == 0 || p.due().is_none() {
+            return;
+        }
+        if let (Some(bytes), Some(link)) = (kit_phrase::stop(&p.events), self.link.as_mut())
+            && let Err(e) = link.send(&bytes)
+        {
+            self.lost(&e);
         }
     }
 
@@ -486,18 +632,57 @@ fn switch_to(link: &mut impl Link, kit: u16) -> Result<bool> {
     Ok(true)
 }
 
-/// 書き戻しの記録から前のキットに戻し、今のキットを読み直す
-fn restore(link: &mut impl Link) -> Result<Option<u16>> {
+/// 書き戻しの記録から前のキットに戻し、今のキットを読み直す。書き戻したら true も返す
+fn restore(link: &mut impl Link) -> Result<(Option<u16>, bool)> {
+    let mut wrote = false;
     if link.pending() > 0 {
         let r = link.restore()?;
         if !r.failed.is_empty() {
             log::warn!("V51: could not restore {}", r.failed.join("; "));
         }
+        wrote = r.written > 0;
     }
     let data = link.read(v51::current())?;
-    Ok(v51::KIT_NUM
+    let now = v51::KIT_NUM
         .read(&data)
-        .and_then(|n| u16::try_from(n + 1).ok()))
+        .and_then(|n| u16::try_from(n + 1).ok());
+    Ok((now, wrote))
+}
+
+/// 最近 V51 に送ったノート（チャンネル、ノート番号、送ったホスト時刻）
+static SENT: Mutex<VecDeque<(u8, u8, i64)>> = Mutex::new(VecDeque::new());
+
+fn sent_notes() -> MutexGuard<'static, VecDeque<(u8, u8, i64)>> {
+    SENT.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+fn remember_sent(channel: u8, note: u8, at_us: i64) {
+    let mut sent = sent_notes();
+    sent.retain(|&(_, _, t)| at_us - t <= ECHO_WINDOW_US);
+    sent.push_back((channel, note, at_us));
+}
+
+/// 届いた MIDI が、試しのフレーズで送ったノートが V51 から返ってきたものか
+/// （V51 の Soft Thru が ON のとき。叩いたものとして画面に渡さない）
+pub fn is_echo(bytes: &[u8], arrival_us: i64) -> bool {
+    let &[status, note, velocity] = bytes else {
+        return false;
+    };
+    if status & 0xF0 != 0x90 || velocity == 0 {
+        return false;
+    }
+    let mut sent = sent_notes();
+    if sent.is_empty() {
+        return false;
+    }
+    sent.retain(|&(_, _, t)| arrival_us - t <= ECHO_WINDOW_US);
+    let found = sent
+        .iter()
+        .position(|&(c, n, t)| c == status & 0x0F && n == note && arrival_us >= t);
+    if let Some(i) = found {
+        sent.remove(i);
+    }
+    found.is_some()
 }
 
 /// V51 の名前の MIDI 出力ポートがあるか（無ければ、起動したときに V51 を探さない）
@@ -656,7 +841,7 @@ mod tests {
         assert!(switch_to(&mut v, 200).unwrap());
         assert_eq!(v.kit(), 200);
         assert_eq!(v.writes[1], vec![0, 0, 0x0C, 0x07]);
-        assert_eq!(restore(&mut v).unwrap(), Some(1));
+        assert_eq!(restore(&mut v).unwrap(), (Some(1), true));
         assert_eq!(v.kit(), 1);
         assert_eq!(v.pending(), 0);
     }
@@ -668,7 +853,23 @@ mod tests {
         assert!(v.writes.is_empty());
         assert_eq!(v.pending(), 0);
         // 戻すものが無くても今のキットは読む
-        assert_eq!(restore(&mut v).unwrap(), Some(5));
+        assert_eq!(restore(&mut v).unwrap(), (Some(5), false));
+    }
+
+    #[test]
+    fn notes_sent_and_soon_returned_are_echoes() {
+        // ほかのテストと取り合わないように、ここでしか使わないノート番号にする
+        let t = 1_000_000_000;
+        remember_sent(9, 120, t);
+        remember_sent(9, 121, t);
+        // 返ってきたら 1 回だけ消す
+        assert!(is_echo(&[0x99, 120, 100], t + 3_000));
+        assert!(!is_echo(&[0x99, 120, 100], t + 4_000));
+        // チャンネルが違う、ノートオフ、遅すぎるものは返りではない
+        assert!(!is_echo(&[0x98, 121, 100], t + 3_000));
+        assert!(!is_echo(&[0x99, 121, 0], t + 3_000));
+        assert!(!is_echo(&[0x99, 121, 100], t + ECHO_WINDOW_US + 1));
+        assert!(!is_echo(&[0xB9, 4, 127], t));
     }
 
     #[test]

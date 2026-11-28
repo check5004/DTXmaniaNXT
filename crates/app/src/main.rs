@@ -36,6 +36,7 @@ mod gfx;
 mod history;
 mod inputs;
 mod jobs;
+mod kit_phrase;
 mod kit_view;
 mod lag_view;
 mod lane_layout;
@@ -2215,7 +2216,7 @@ impl App {
         // 簡易設定で選んでいたキットは、閉じたら前のキットに戻す
         if self.auditioning && self.quick.is_none() {
             self.auditioning = false;
-            self.kits.audition(None);
+            self.kits.end_audition();
         }
         let mut assigned = None;
         let closing = self.after_close.is_some();
@@ -2223,6 +2224,8 @@ impl App {
         let received: Vec<(midi::RawMidi, Vec<MidiMessage>)> = match &self.midi {
             Some(midi) => midi
                 .drain()
+                // 試しのフレーズで V51 に送ったノートが返ってきたものは、叩いたものとしない
+                .filter(|raw| !module_kits::is_echo(&raw.bytes, raw.arrival_us))
                 .map(|raw| {
                     let msgs = MidiMessage::parse_all(&raw.bytes);
                     for m in &msgs {

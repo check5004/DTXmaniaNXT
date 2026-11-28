@@ -255,6 +255,14 @@ impl Unit {
 pub const NOTE_OFF: i32 = 128;
 /// [KitMidi] のチャンネルの「GLOBAL」（本体の SYSTEM MIDI の Global MIDI Channel を使う）
 pub const CHANNEL_GLOBAL: i32 = 16;
+/// チャンネルが GLOBAL のときに送るチャンネル（工場出荷の Global MIDI Channel、10 ch）
+pub const GLOBAL_CHANNEL_DEFAULT: u8 = 9;
+/// [KitMidi] の中の、ハイハットを閉じて叩いたときのノート番号（Note Hi-Hat Close Head）
+pub const HH_CLOSE_NOTE: Field = Field::unsigned(off(0, 0x00, 0x54));
+/// [KitMidi] の中の、ハイハットのペダルを踏んだときのノート番号（Note Hi-Hat Closed Pedal）
+pub const HH_PEDAL_NOTE: Field = Field::unsigned(off(0, 0x00, 0x5C));
+/// 工場出荷の設定で Hi-Hat Pedal CC になっている CC（Foot Controller）。0 で開き、127 で閉じる
+pub const HH_PEDAL_CC: u8 = 4;
 
 /// レイヤー
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -463,6 +471,14 @@ mod tests {
         assert_eq!(Unit::Tom1Head.note_field().read(&block), Some(48));
         assert_eq!(Unit::Tom1Head.channel_field().read(&block), Some(9));
         assert_eq!(Unit::Aux4Rim.note_field().offset + 4, off(0, 0x01, 0x1C));
+        // ハイハットはオープン（00 4C）、クローズ（00 54）、ペダル（00 5C）の順
+        assert_eq!(Unit::HiHatHead.note_field().offset, off(0, 0x00, 0x4C));
+        assert_eq!(HH_CLOSE_NOTE.offset, off(0, 0x00, 0x54));
+        assert_eq!(HH_PEDAL_NOTE.offset, off(0, 0x00, 0x5C));
+        assert_eq!(
+            HH_PEDAL_NOTE.offset + 4,
+            Unit::Crash1Head.note_field().offset
+        );
     }
 
     #[test]

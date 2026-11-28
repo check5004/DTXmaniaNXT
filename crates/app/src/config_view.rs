@@ -1157,8 +1157,8 @@ fn kit_row(k: &KitInfo) -> Row {
         )
     } else {
         t(
-            "Switches the V51 to this kit when this song starts, and back when you return to song select. The V51 changes as you choose, so hit the pads to hear it.",
-            "この曲を始めるときに V51 をこのキットにし、選曲に戻ると前のキットに戻します。選ぶと V51 も切り替わるので、叩いて確かめられます。",
+            "Switches the V51 to this kit when this song starts, and back when you return to song select. The V51 changes as you choose and plays a short beat with a tom fill.",
+            "この曲を始めるときに V51 をこのキットにし、選曲に戻ると前のキットに戻します。選ぶと V51 も切り替わり、8 ビートとタム回しを鳴らします。",
         )
     }
     .to_owned();
@@ -4883,7 +4883,7 @@ mod tests {
         // 曲の行（区間練習・記録）のすぐ下
         assert_eq!(list[i - 1].id, Some(ItemId::SongRecords));
         assert_eq!(list[i].value, "12 Kit");
-        assert!(list[i].desc.contains("叩いて確かめられます"));
+        assert!(list[i].desc.contains("タム回しを鳴らします"));
         // 曲を選んでいなければ出さない（BOX など）
         let no_song = ConfigInfo {
             song: false,

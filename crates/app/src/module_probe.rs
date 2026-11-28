@@ -43,7 +43,7 @@ pub const TOOL: Tool = Tool {
 /// 鳴らす強さ
 const VELOCITY: u8 = 100;
 /// パッドのチャンネルが GLOBAL のときに送るチャンネル（本体の既定の 10 ch）
-const GLOBAL_CHANNEL_GUESS: u8 = 9;
+const GLOBAL_CHANNEL_GUESS: u8 = v51::GLOBAL_CHANNEL_DEFAULT;
 /// 叩く間
 const HIT_GAP_US: i64 = 700_000;
 
