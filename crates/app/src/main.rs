@@ -611,7 +611,8 @@ enum AfterClose {
     Title,
     /// 設定。`true` なら出たら選曲へ
     Config(bool),
-    /// 演奏を一時停止の板の「演奏をやめる」でやめた。結果の画面へ（数はやめた時刻の曲の時刻 `at_ms` までで）
+    /// 練習か基礎練習をやめた（一時停止の板の「練習をやめる」「やめて結果へ」か、セットの合間の「やめる」）。
+    /// 結果の画面へ（数はやめた時刻の曲の時刻 `at_ms` までで）
     Result {
         at_ms: f64,
     },
@@ -1131,6 +1132,8 @@ impl App {
     fn closed(&mut self, next: AfterClose) {
         match next {
             AfterClose::Select => {
+                // 演奏の途中から戻るときは、そこまでの記録を残す
+                self.save_unfinished();
                 self.close_menu();
                 self.go_to_select();
             }
@@ -2022,7 +2025,7 @@ impl App {
         let drill = p.drill.as_ref().map(|d| (d.run.drill.id, d.run.lefty));
         // 基礎練習の最高は、今回を残す前の記録（同じ手順）と比べる
         let best_before = drill.and_then(|k| self.history.drill_records().get(&k)?.best);
-        // Esc でやめたときも結果は出す（記録は「最後まで遊んでいない」として残す）
+        // 練習を途中でやめたときも結果は出す（記録は「最後まで遊んでいない」として残す）
         let cleared = p.finished();
         let session = self
             .history
@@ -2297,7 +2300,7 @@ impl App {
         } else if finished {
             self.finish_play(None);
         } else if let Some(at_ms) = quit_at {
-            // 一時停止の板の「演奏をやめる」と同じく、シャッターを閉じてから結果へ
+            // 一時停止の板の「練習をやめる」と同じく、シャッターを閉じてから結果へ
             self.close_then(AfterClose::Result { at_ms }, Duration::ZERO);
         } else if rested && self.quick.is_none() && self.after_close.is_none() {
             // ドラムだけで止められるように、叩くのをやめたら一時停止する（叩かなかった周は数えない）
@@ -2760,10 +2763,17 @@ impl App {
             }
             ConfigAction::Run(ItemId::Quit) => {
                 if let Screen::Play(play, _) = &self.screen {
-                    // Esc でやめていたときと同じく、シャッターを閉じてから結果へ
-                    let at_ms = play.now_ms();
+                    // 普通の演奏は、途中でやめたら結果を出さずに選曲へ（ここまでの記録は STAGE FAILED と同じく残す）。
+                    // 練習と基礎練習は、ここまでの周や段の結果へ（結果を出さずに戻る行は別にある）
+                    let next = if play.practice.is_none() && play.drill.is_none() {
+                        AfterClose::Select
+                    } else {
+                        AfterClose::Result {
+                            at_ms: play.now_ms(),
+                        }
+                    };
                     self.quick = None;
-                    self.close_then(AfterClose::Result { at_ms }, Duration::ZERO);
+                    self.close_then(next, Duration::ZERO);
                 }
             }
             ConfigAction::Run(ItemId::Reselect) if matches!(&self.screen, Screen::Play(p, _) if p.drill.is_some()) =>
