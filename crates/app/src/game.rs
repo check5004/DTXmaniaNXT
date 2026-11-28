@@ -351,6 +351,19 @@ pub struct WeakMap {
     pub practice_laps: usize,
 }
 
+/// 隠した小節の帯を描くための中身
+#[derive(Debug, Clone, PartialEq)]
+pub struct BlindView {
+    /// 隠した小節（画面の時刻の範囲。時刻の順）
+    pub bars: Vec<(f64, f64)>,
+    /// 隠すレーン（`DrumLane as usize` のビット）
+    pub lanes: u16,
+    /// 全部隠す（レーンの並び全体を暗くする）
+    pub all: bool,
+    /// 隠し始めに出す札
+    pub label: String,
+}
+
 pub struct Play {
     pub path: PathBuf,
     pub title: String,
@@ -1254,6 +1267,28 @@ impl Play {
         self.song_ms_at(host_us())
     }
 
+    /// 判定の音符 `i` を隠すか（基礎練習の見ないで・聞いてまねる、曲の練習の音符を隠す）
+    pub fn hides_note(&self, i: usize) -> bool {
+        match (&self.drill, &self.practice) {
+            (Some(d), _) => self
+                .judge
+                .notes()
+                .get(i)
+                .is_some_and(|n| d.hides(n.at.measure, n.lane)),
+            (None, Some(p)) => p.hides(i),
+            (None, None) => false,
+        }
+    }
+
+    /// 画面の時刻 `from_ms` から `to_ms` までにある、隠した小節の帯（隠すやり方でなければ None）
+    pub fn blindfold_view(&self, from_ms: f64, to_ms: f64) -> Option<BlindView> {
+        match (&self.drill, &self.practice) {
+            (Some(d), _) => d.blind_view(from_ms, to_ms),
+            (None, Some(p)) => p.blind_view(from_ms, to_ms),
+            (None, None) => None,
+        }
+    }
+
     /// 画面の時刻 `now_ms` の、譜面の中の時刻。練習は周の速さと並びをほどく（ふつうはそのまま）
     pub fn chart_ms(&self, now_ms: f64) -> f64 {
         self.practice
@@ -2011,8 +2046,10 @@ impl Play {
         articulation: Option<Articulation>,
         hh_pedal: Option<u8>,
     ) {
+        let now = self.now_ms();
+        let edge = now + self.view_ahead_ms + LAY_MARGIN_MS;
         if let Some(p) = self.practice.as_mut() {
-            p.on_events(events);
+            p.on_events(events, (now, edge));
         }
         for e in events {
             let note = &self.judge.notes()[e.note];
@@ -2035,13 +2072,15 @@ impl Play {
                 beat_pos,
             });
         }
-        // 限界チャレンジは、同じ段で 3 つ落としたらそこで終える
+        // 限界チャレンジは、同じ段で 3 つ落としたらそこで終える。見ないで・聞いてまねるは、隠した音符を
+        // 続けてミスしたら、画面の上の端より先の小節から音符を出す
         let mut stop = false;
+        let edge_ms = self.now_ms() + self.view_ahead_ms + LAY_MARGIN_MS;
         if let Some(d) = self.drill.as_mut() {
             for e in events {
                 let note = &self.judge.notes()[e.note];
                 if !self.judge.is_auto(note.lane)
-                    && d.on_judged(note.at.measure, e.judgement, note.ms)
+                    && d.on_judged((note.at.measure, note.lane), e.judgement, note.ms, edge_ms)
                 {
                     stop = true;
                 }
@@ -2905,6 +2944,7 @@ mod tests {
             way: Way::Wait,
             part: Default::default(),
             build: Default::default(),
+            hide: Default::default(),
             stops: Default::default(),
         };
         let play = Play::load_practice(&path, 0.0, false, &Rules::default(), options);
@@ -2967,6 +3007,7 @@ mod tests {
             way: Default::default(),
             part: Default::default(),
             build: Default::default(),
+            hide: Default::default(),
             stops: Default::default(),
         };
         let play = Play::load_practice(&path, 0.0, false, &rules, options);

@@ -10,6 +10,7 @@ use std::path::PathBuf;
 use chrono::{Datelike, NaiveDate};
 use engine::drill::{BPM_MIN, Category, DRILLS, Drill, Run, Way};
 use engine::practice::Section;
+use engine::practice_way::Hide;
 use i18n::t;
 
 use crate::drill::{self, DrillRecords};
@@ -345,7 +346,7 @@ fn shape(minutes: u32) -> Shape {
 }
 
 /// ビートのやり方（日ごとに回す。テンポを上げる・聞いてまねる・見ないで）
-const GROOVE_WAYS: [Way; 3] = [Way::Climb, Way::Echo, Way::Blind];
+const GROOVE_WAYS: [Way; 3] = [Way::Climb, Way::Echo, Way::Blind(Hide::All)];
 
 /// 今日のメニューを決める。同じ日・同じ記録なら同じ中身
 pub fn plan(minutes: u32, input: &Inputs) -> Plan {

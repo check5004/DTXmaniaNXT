@@ -24,7 +24,7 @@ use crate::band::{Band, BandData, CLEARED_COLOR};
 use crate::chart_picture::{Look, WEAK_COLOR};
 use crate::gfx::{Canvas, Gfx};
 use crate::practice::{
-    PracticeOptions, PracticeSetup, build_label, no_stops_line, part_label, pass_line,
+    PracticeOptions, PracticeSetup, build_label, hide_label, no_stops_line, part_label, pass_line,
     section_label, style_label, way_help, way_label,
 };
 use crate::settings_ui::{self as ui, Pad};
@@ -297,7 +297,7 @@ impl PracticeMenu {
     /// 苦手な所の下の行
     fn rows(&self) -> Vec<Item> {
         let mut v = vec![Item::Way];
-        if matches!(self.setup.way, Way::Part | Way::Build) {
+        if matches!(self.setup.way, Way::Part | Way::Build | Way::Hide) {
             v.push(Item::WayOption);
         }
         if !self.setup.way.tours() {
@@ -449,7 +449,7 @@ impl PracticeMenu {
         }
     }
 
-    /// パート練習のパート、積み上げの向きを `d`（-1 か 1）動かす。パートは曲に音符のあるものだけ
+    /// パート練習のパート、積み上げの向き、隠す音符を `d`（-1 か 1）動かす。パートは曲に音符のあるものだけ
     fn change_option(&mut self, d: i64) -> Response {
         let s = &mut self.setup;
         match s.way {
@@ -467,6 +467,15 @@ impl PracticeMenu {
                     Build::Forward => Build::Backward,
                     Build::Backward => Build::Forward,
                 };
+            }
+            Way::Hide => {
+                let hides = s.hides();
+                let i = hides.iter().position(|&h| h == s.hide).unwrap_or(0) as i64;
+                let next = hides[(i + d).rem_euclid(hides.len() as i64) as usize];
+                if next == s.hide {
+                    return Response::se(Se::Cancel);
+                }
+                s.hide = next;
             }
             _ => return Response::default(),
         }
@@ -864,6 +873,7 @@ impl PracticeMenu {
             let label = match item {
                 Item::Way => t("Mode", "やり方"),
                 Item::WayOption if self.setup.way == Way::Part => t("Your Part", "叩くパート"),
+                Item::WayOption if self.setup.way == Way::Hide => t("Hide", "隠す音符"),
                 Item::WayOption => t("Direction", "向き"),
                 Item::Section => t("Pick Your Own", "自分で選ぶ"),
                 Item::Length => t("Length", "長さ"),
@@ -877,6 +887,9 @@ impl PracticeMenu {
                 Item::Way => way_label(self.setup.way).to_owned(),
                 Item::WayOption if self.setup.way == Way::Part => {
                     part_label(self.setup.part).to_owned()
+                }
+                Item::WayOption if self.setup.way == Way::Hide => {
+                    hide_label(self.setup.hide).to_owned()
                 }
                 Item::WayOption => build_label(self.setup.build).to_owned(),
                 Item::Section => self.custom.map(section_label).unwrap_or_default(),
@@ -1091,7 +1104,12 @@ impl PracticeMenu {
             if let Some(tx) = g.texts.get(&head, &speed) {
                 tx.draw_fit(c, hx, py + 3.0, right - hx);
             }
-            let help = way_help(s.way, s.part, s.build, section.measures(), cards.len());
+            let help = way_help(
+                s.way,
+                (s.part, s.build, s.hide),
+                section.measures(),
+                cards.len(),
+            );
             let lines = g.texts.wrap(&help, 14.0, right - left);
             for (i, line) in lines.iter().take(3).enumerate() {
                 if let Some(tx) = g.texts.get(line, &grey) {
@@ -1120,7 +1138,7 @@ impl PracticeMenu {
                 )
             } else {
                 t(
-                    "This section has no notes for your part.",
+                    "This section has no notes for the part you picked.",
                     "この区間には、選んだパートの音符がありません。",
                 )
             };
@@ -1557,6 +1575,7 @@ mod tests {
             way: Default::default(),
             part: Default::default(),
             build: Default::default(),
+            hide: Default::default(),
             fills: Vec::new(),
             seams: Vec::new(),
             weak_tour: Vec::new(),
@@ -1717,7 +1736,7 @@ mod tests {
     #[test]
     fn the_mode_row_switches_ways_and_shows_the_part_or_direction() {
         use dtx::DrumLane;
-        use engine::practice_way::{Part, lane_mask};
+        use engine::practice_way::{Hide, Part, lane_mask};
         let mut s = setup(16, None);
         s.lanes_per_measure = vec![lane_mask([DrumLane::SD, DrumLane::BD]); 16];
         let mut m = PracticeMenu::new(s, None, None);
@@ -1759,7 +1778,15 @@ mod tests {
         }
         assert_eq!(m.setup.way, Way::Climb);
         m.input(MenuInput::Left);
-        assert_eq!(m.setup.way, Way::Fade);
+        assert_eq!(m.setup.way, Way::Hide);
+        // 音符を隠すは、隠す音符の行（全部から足へ）
+        assert!(m.items().contains(&Item::WayOption));
+        m.input(MenuInput::Down);
+        m.input(MenuInput::Right);
+        assert_eq!(m.setup.hide, Hide::Part(Part::Feet));
+        m.cursor = m.item_index(Item::Way);
+        m.input(MenuInput::Right);
+        assert_eq!(m.setup.way, Way::Climb);
         assert!(!m.items().contains(&Item::WayOption));
     }
 

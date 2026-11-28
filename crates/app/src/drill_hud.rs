@@ -9,11 +9,13 @@
 //! - 叩いているあいだは、レーンの上に何も重ねない（叩く手の文字は音符の横に `play_view` が描く）
 
 use egui::{Color32, Stroke};
-use engine::drill::{BLIND_ALPHA, COUNT_IN_MEASURES, Grade, MANY_MISSES, Summary, Way};
+use engine::drill::{COUNT_IN_MEASURES, Grade, MANY_MISSES, Summary, Way};
+use engine::practice_way::{PEEK_AFTER, PEEK_BARS};
 use i18n::{t, tf};
 
 use crate::drill::DrillPlay;
 use crate::gfx::{Canvas, Gfx, Opt, src};
+use crate::practice::PEEK_NOTE_MS;
 use crate::practice_hud::{
     Align, CARD, COUNT_POP_MS, COUNT_Y, CURRENT_COLOR, DIGIT_Y, GREY, INK, LABEL_Y, LANES_W,
     LANES_X, LAP_X, OK_COLOR, SLIP_COLOR, SPEED_X, bold, card_frame, dot, edged, put, put_mid,
@@ -204,7 +206,7 @@ fn draw_card(c: &Canvas, g: &mut Gfx, d: &DrillPlay, summary: Option<&Summary>, 
                     current: current.map(|s| s - from),
                     grades: &grades[from..to],
                     marks: true,
-                    fades: &[],
+                    hidden: &[],
                     flag: false,
                 },
                 pic,
@@ -212,11 +214,7 @@ fn draw_card(c: &Canvas, g: &mut Gfx, d: &DrillPlay, summary: Option<&Summary>, 
         }
         Way::Endurance(_) => parts(c, g, d, summary, now, pic),
         _ => {
-            let fades: &[f32] = if run.way == Way::Blind {
-                &BLIND_ALPHA
-            } else {
-                &[]
-            };
+            let hidden: Vec<bool> = (0..run.steps()).map(|i| run.step_hidden(i)).collect();
             stairs(
                 c,
                 g,
@@ -225,7 +223,7 @@ fn draw_card(c: &Canvas, g: &mut Gfx, d: &DrillPlay, summary: Option<&Summary>, 
                     current,
                     grades: &grades,
                     marks: true,
-                    fades,
+                    hidden: &hidden,
                     flag: run.way == Way::Climb,
                 },
                 pic,
@@ -304,13 +302,13 @@ fn draw_card(c: &Canvas, g: &mut Gfx, d: &DrillPlay, summary: Option<&Summary>, 
     );
     match (run.way, run.drill.gap) {
         (Way::Echo, _) => {
-            // いまはお手本を聞くか、自分で叩くか
+            // いまはお手本を見て聞くか、自分で叩くか
             let (text, color) = if m >= COUNT_IN_MEASURES && run.is_demo(m) {
-                (t("Listen", "聞いて"), DEMO_COLOR)
+                (t("Watch & Listen", "見て聞いて"), DEMO_COLOR)
             } else if m >= COUNT_IN_MEASURES {
-                (t("Your turn", "叩いて"), CURRENT_COLOR)
+                (t("Your Turn", "まねて叩いて"), CURRENT_COLOR)
             } else {
-                (t("Listen first", "まず聞いて"), DEMO_COLOR)
+                (t("Watch First", "まず見て聞いて"), DEMO_COLOR)
             };
             put(
                 c,
@@ -318,11 +316,29 @@ fn draw_card(c: &Canvas, g: &mut Gfx, d: &DrillPlay, summary: Option<&Summary>, 
                 text,
                 &bold(28.0, color),
                 x + 14.0,
-                y + 276.0,
+                y + 270.0,
                 Align::Left,
                 w - 28.0,
                 1.0,
             );
+            if d.peeked_at_ms
+                .is_some_and(|at| (0.0..PEEK_NOTE_MS).contains(&(now - at)))
+            {
+                put(
+                    c,
+                    g,
+                    &tf!(
+                        "Missed in a row: the next {PEEK_BARS} turns show the notes",
+                        "続けてミスしたので、次の {PEEK_BARS} 回は音符を出します"
+                    ),
+                    &edged(13.0, DEMO_COLOR),
+                    x + 14.0,
+                    y + 306.0,
+                    Align::Left,
+                    w - 28.0,
+                    1.0,
+                );
+            }
         }
         (Way::Limit, _) => {
             // この段で落とした数（3 つで終わり）
@@ -365,22 +381,46 @@ fn draw_card(c: &Canvas, g: &mut Gfx, d: &DrillPlay, summary: Option<&Summary>, 
         }
         (_, Some((on, off))) => draw_gap(c, g, d, m, on + off),
         _ => {
-            let text = if run.way == Way::Blind {
-                t(
-                    "Notes fade each step. Play from memory.",
-                    "段ごとに音符が薄くなります。体で覚えた形で",
-                )
-            } else {
-                t(
-                    "Misses don't stop you. Each step moves on.",
-                    "ミスが続いても止まらずに次の段へ",
-                )
+            let peeked = d
+                .peeked_at_ms
+                .is_some_and(|at| (0.0..PEEK_NOTE_MS).contains(&(now - at)));
+            let (text, color) = match run.way {
+                _ if peeked => (
+                    tf!(
+                        "Missed in a row: the next {PEEK_BARS} bars show the notes",
+                        "続けてミスしたので、次の {PEEK_BARS} 小節は音符を出します"
+                    ),
+                    DEMO_COLOR,
+                ),
+                Way::Blind(_) => (
+                    tf!(
+                        "Hidden from step 2. Miss {PEEK_AFTER} bars in a row and the notes come back for {PEEK_BARS}",
+                        "2 段目から隠します。{PEEK_AFTER} 小節続けてミスしたら {PEEK_BARS} 小節だけ出します"
+                    ),
+                    Color32::WHITE,
+                ),
+                Way::Echo => (
+                    t(
+                        "Watch a bar, then play it back with the notes hidden",
+                        "お手本のあと、隠した 1 小節をまねて叩きます",
+                    )
+                    .to_owned(),
+                    Color32::WHITE,
+                ),
+                _ => (
+                    t(
+                        "Misses don't stop you. Each step moves on.",
+                        "ミスが続いても止まらずに次の段へ",
+                    )
+                    .to_owned(),
+                    Color32::WHITE,
+                ),
             };
             put(
                 c,
                 g,
-                text,
-                &edged(14.0, Color32::WHITE),
+                &text,
+                &edged(14.0, color),
                 x + 14.0,
                 y + 290.0,
                 Align::Left,
@@ -534,14 +574,14 @@ pub struct Stairs<'a> {
     pub grades: &'a [Option<Grade>],
     /// 終えた段の中に出来の印を出す
     pub marks: bool,
-    /// 段ごとの音符の濃さ（見ないで。空なら出さない）
-    pub fades: &'a [f32],
+    /// 段ごとに音符を隠すか（見ないで。空なら出さない）
+    pub hidden: &'a [bool],
     /// いちばん上の段に旗（目標）
     pub flag: bool,
 }
 
 /// 段の絵。高さで上がっていくことを見せ、中にテンポ。今の段は橙に「いまここ」、
-/// 終えた段は出来の色と、`marks` なら中に出来の印。`fades` があれば段の下の方に音符の見え方
+/// 終えた段は出来の色と、`marks` なら中に出来の印。`hidden` があれば段の下の方に、音符を見せるか隠すか
 pub fn stairs(c: &Canvas, g: &mut Gfx, s: &Stairs, (x, y, w, h): (f32, f32, f32, f32)) {
     let n = s.bpms.len().max(1) as f32;
     let gap = if n > 6.0 { 4.0 } else { 8.0 };
@@ -627,15 +667,30 @@ pub fn stairs(c: &Canvas, g: &mut Gfx, s: &Stairs, (x, y, w, h): (f32, f32, f32,
                 sw,
             );
         }
-        // 見ないで: 段の下に音符の見え方（だんだん薄く、最後は点線の枠だけ）
-        if let Some(&a) = s.fades.get(i) {
-            let (nw, nh) = ((sw * 0.5).min(34.0), 10.0);
+        // 見ないで: 段の下に音符の見え方（見せる段は白い音符、隠す段は暗い帯に「?」）
+        if let Some(&hide) = s.hidden.get(i) {
+            let (nw, nh) = ((sw * 0.5).min(34.0), 14.0);
             let nx = bx + (sw - nw) / 2.0;
-            let ny = y + h - 18.0;
-            if a > 0.0 {
-                round_fill(c, (nx, ny, nw, nh), 3.0, Color32::WHITE.gamma_multiply(a));
+            let ny = y + h - 21.0;
+            if hide {
+                round_fill(
+                    c,
+                    (nx, ny, nw, nh),
+                    3.0,
+                    Color32::from_rgba_unmultiplied(4, 4, 10, 200),
+                );
+                put_mid(
+                    c,
+                    g,
+                    "?",
+                    &edged(12.0, Color32::from_white_alpha(170)),
+                    nx + nw / 2.0,
+                    ny + nh / 2.0,
+                    Align::Center,
+                    nw,
+                );
             } else {
-                round_frame(c, (nx, ny, nw, nh), 3.0, Color32::from_white_alpha(80));
+                round_fill(c, (nx, ny + 2.0, nw, nh - 4.0), 3.0, Color32::WHITE);
             }
         }
     }
@@ -739,11 +794,12 @@ mod tests {
         let notes = tempo.drum_notes(&chart);
         let mut d = DrillPlay::new(run, &tempo, &notes);
         use engine::judge::Judgement::{Miss, Perfect};
-        assert!(!d.on_judged(3, Miss, 0.0));
-        assert!(!d.on_judged(3, Perfect, 0.0));
-        assert!(!d.on_judged(4, Miss, 0.0));
-        assert!(d.on_judged(4, Miss, 5000.0));
-        assert!(!d.on_judged(5, Miss, 6000.0));
+        let sd = dtx::DrumLane::SD;
+        assert!(!d.on_judged((3, sd), Miss, 0.0, 0.0));
+        assert!(!d.on_judged((3, sd), Perfect, 0.0, 0.0));
+        assert!(!d.on_judged((4, sd), Miss, 0.0, 0.0));
+        assert!(d.on_judged((4, sd), Miss, 5000.0, 5000.0));
+        assert!(!d.on_judged((5, sd), Miss, 6000.0, 6000.0));
         assert_eq!(d.misses_in(1), 3);
         assert_eq!(step_at(&d, 9), 1);
         assert!(done_at(&d, 9));

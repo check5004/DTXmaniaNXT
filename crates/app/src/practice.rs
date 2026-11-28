@@ -20,8 +20,9 @@ use engine::practice::{
     speed_percent,
 };
 use engine::practice_way::{
-    Build, MAX_STOPS, Mark, Part, Stops, TOUR_LAPS, WAIT_LAPS, Way, break_muted, build_lengths,
-    build_section, fade_rank, fade_share, find_fills, find_seams, lane_mask, shuffle,
+    Blindfold, Build, Hide, MAX_STOPS, Mark, PEEK_AFTER, PEEK_BARS, Part, Stops, TOUR_LAPS,
+    WAIT_LAPS, Way, break_muted, build_lengths, build_section, find_fills, find_seams, lane_mask,
+    shuffle,
 };
 use i18n::{count, t, tf};
 use records::{ClearRecord, StrayHit};
@@ -45,10 +46,11 @@ pub struct PracticeOptions {
     pub step_laps: u32,
     /// 時間の区切り（秒。今日のメニュー）。過ぎたら、その段の挑戦の終わりで結果へ。設定には残さない
     pub time_box_s: Option<u32>,
-    /// やり方と、パート練習で叩くパート・積み上げの向き
+    /// やり方と、パート練習で叩くパート・積み上げの向き・音符を隠すで隠す音符
     pub way: Way,
     pub part: Part,
     pub build: Build,
+    pub hide: Hide,
     /// めぐるやり方でめぐる所（めぐる順）。ほかのやり方では空
     pub stops: Stops,
 }
@@ -65,6 +67,7 @@ pub struct PracticePrefs {
     pub way: Way,
     pub part: Part,
     pub build: Build,
+    pub hide: Hide,
 }
 
 impl Default for PracticePrefs {
@@ -79,6 +82,7 @@ impl Default for PracticePrefs {
             way: Way::default(),
             part: Part::default(),
             build: Build::default(),
+            hide: Hide::default(),
         }
     }
 }
@@ -109,6 +113,7 @@ pub struct PracticeSetup {
     pub way: Way,
     pub part: Part,
     pub build: Build,
+    pub hide: Hide,
     /// 譜面から探したフィルと、形が変わる所（フィルだけ・つなぎ目でめぐる所）
     pub fills: Vec<Section>,
     pub seams: Vec<Section>,
@@ -170,6 +175,7 @@ impl PracticeSetup {
             way: previous.map_or(prefs.way, |p| p.way),
             part: previous.map_or(prefs.part, |p| p.part),
             build: previous.map_or(prefs.build, |p| p.build),
+            hide: previous.map_or(prefs.hide, |p| p.hide),
             fills,
             seams,
             weak_tour: Vec::new(),
@@ -234,6 +240,7 @@ impl PracticeSetup {
             way: self.way,
             part: self.part,
             build: self.build,
+            hide: self.hide,
         }
     }
 
@@ -255,6 +262,24 @@ impl PracticeSetup {
             .any(|&l| l & part.mask() != 0)
     }
 
+    /// 区間 `s` に、隠す音符 `hide` があるか
+    pub fn hide_in(&self, s: Section, hide: Hide) -> bool {
+        (s.first..=s.last)
+            .filter_map(|m| self.lanes_per_measure.get(m as usize))
+            .any(|&l| l & hide.mask() != 0)
+    }
+
+    /// 曲に音符のある、隠せる音符（音符を隠すで選べるもの）。全部と足と手はいつも出す
+    pub fn hides(&self) -> Vec<Hide> {
+        let all = self.lanes_per_measure.iter().fold(0, |a, &l| a | l);
+        Hide::ALL
+            .into_iter()
+            .filter(|h| {
+                matches!(h, Hide::All | Hide::Part(Part::Hands | Part::Feet)) || all & h.mask() != 0
+            })
+            .collect()
+    }
+
     /// 曲に音符のあるパート（パート練習で選べるもの）。手と足はいつも出す
     pub fn parts(&self) -> Vec<Part> {
         let all = self.lanes_per_measure.iter().fold(0, |a, &l| a | l);
@@ -270,7 +295,9 @@ impl PracticeSetup {
         if self.way.tours() {
             return !self.stops().is_empty();
         }
-        self.notes_in(s) > 0 && (self.way != Way::Part || self.part_in(s, self.part))
+        self.notes_in(s) > 0
+            && (self.way != Way::Part || self.part_in(s, self.part))
+            && (self.way != Way::Hide || self.hide_in(s, self.hide))
     }
 
     /// 始められるなら練習の決めごと。めぐるやり方の区間は、選んでいた区間のまま（めぐる所は `stops`）
@@ -294,6 +321,7 @@ impl PracticeSetup {
             way: self.way,
             part: self.part,
             build: self.build,
+            hide: self.hide,
             stops: Stops::new(&stops),
         })
     }
@@ -448,6 +476,8 @@ pub struct LapState {
     pub in_attempt: usize,
     /// お手本の周（自動で叩くのを見て聞くだけ。判定の音符は無い）
     pub demo: bool,
+    /// 音符を隠す周（音符を隠すの、段の 2 周目から）
+    pub hidden: bool,
     /// 叩いた区間（積み上げでは区間の一部）
     pub section: Section,
     /// 判定の音符ごとの、曲のブレイクで音の消えている所か
@@ -631,6 +661,12 @@ pub struct Practice {
     /// （`next_lap` が作り、`push_lap` が周に移す）
     next_demo: bool,
     next_muted: Vec<bool>,
+    /// 音符を隠すで、隠すレーン（区間に音符のあるレーンのうち、隠すと決めたもの）
+    hidden_lanes: u16,
+    /// 音符を隠すで、隠した音符を続けてミスしたら次の小節から音符を出す（小節は周をまたいで数える）
+    pub blindfold: Blindfold,
+    /// 最後に音符を出すと決めた実時間（しばらく知らせる）
+    pub peeked_at_ms: Option<f64>,
 }
 
 /// 取り下げるには、周の音が鳴り始めるまでこれだけ余裕が要る（ミリ秒。音の出力の遅れのぶん）
@@ -666,6 +702,18 @@ impl Practice {
         };
         let times = SectionTimes::new(tempo, first);
         let picture = ChartPicture::new(&chart_notes, tempo);
+        let hidden_lanes = if options.way == Way::Hide {
+            let s = options.section;
+            let used = lane_mask(
+                chart_notes
+                    .iter()
+                    .filter(|n| s.contains(n.at.measure))
+                    .map(|n| n.lane),
+            );
+            options.hide.mask() & used
+        } else {
+            0
+        };
         Self {
             options,
             tempo: tempo.clone(),
@@ -705,6 +753,9 @@ impl Practice {
             pending_demo: Vec::new(),
             next_demo: false,
             next_muted: Vec::new(),
+            hidden_lanes,
+            blindfold: Blindfold::default(),
+            peeked_at_ms: None,
         }
     }
 
@@ -939,34 +990,74 @@ impl Practice {
         Some((mean?, all.len()))
     }
 
-    /// 消える譜面で、判定の音符 `note` を見せる濃さ（0 か 1）。段の周を重ねるごとに見せる音符を減らし、
-    /// 同じ段の前の周で落とした音は見せる。ほかのやり方はいつも 1
-    pub fn note_alpha(&self, note: usize) -> f32 {
-        if self.options.way != Way::Fade {
-            return 1.0;
-        }
-        let Some(lap) = self.lap_of.get(note).and_then(|&i| self.laps.get(i)) else {
-            return 1.0;
-        };
-        let Some(&(_, lane, at)) = lap.slots.get(note - lap.notes.start) else {
-            return 1.0;
-        };
-        let share = fade_share(lap.in_attempt, self.step_laps());
-        if fade_rank(at, lane) < share {
-            return 1.0;
-        }
-        let missed_before = self.laps.iter().any(|l| {
-            l.attempt == lap.attempt
-                && l.plan.index < lap.plan.index
-                && l.missed_notes.contains(&(at, lane))
-        });
-        if missed_before { 1.0 } else { 0.0 }
+    /// 音符を隠すで、周 `lap` の区間の小節 `measure` の通し番号（周をまたいで数える）。区間の外は None
+    fn bar_of(lap: &LapState, measure: u32) -> Option<u32> {
+        let s = lap.section;
+        s.contains(measure)
+            .then(|| lap.plan.index as u32 * s.measures() + (measure - s.first))
     }
 
-    /// 消える譜面で、周 `lap`（添字）に見せる音符の割合（0〜1）
-    pub fn fade_share_of(&self, lap: usize) -> Option<f64> {
-        let l = self.laps.get(lap)?;
-        (self.options.way == Way::Fade).then(|| fade_share(l.in_attempt, self.step_laps()))
+    /// 音符を隠すで、判定の音符 `note` を隠すか。段の 2 周目から、隠すレーンの音符を隠す。
+    /// 続けてミスして音符を出すと決めた小節と、区切るときの着地（区間の外）は隠さない
+    pub fn hides(&self, note: usize) -> bool {
+        let Some(lap) = self.lap_of.get(note).and_then(|&i| self.laps.get(i)) else {
+            return false;
+        };
+        if !lap.hidden {
+            return false;
+        }
+        let Some(&(_, lane, at)) = lap.slots.get(note - lap.notes.start) else {
+            return false;
+        };
+        self.hidden_lanes & (1 << lane as u16) != 0
+            && Self::bar_of(lap, at.measure).is_some_and(|b| !self.blindfold.shown(b))
+    }
+
+    /// 音符を隠すで、実時間 `from_ms` から `to_ms` までにある隠した小節の帯（ほかのやり方は None）
+    pub fn blind_view(&self, from_ms: f64, to_ms: f64) -> Option<crate::game::BlindView> {
+        if self.hidden_lanes == 0 {
+            return None;
+        }
+        let mut bars = Vec::new();
+        for lap in self.laps.iter().filter(|l| l.hidden) {
+            for m in lap.section.first..=lap.section.last {
+                let a = lap.plan.real_ms(self.tempo.measure_start_ms(m as usize));
+                let b = lap
+                    .plan
+                    .real_ms(self.tempo.measure_start_ms(m as usize + 1));
+                if b < from_ms || a > to_ms {
+                    continue;
+                }
+                if Self::bar_of(lap, m).is_some_and(|i| !self.blindfold.shown(i)) {
+                    bars.push((a, b));
+                }
+            }
+        }
+        Some(crate::game::BlindView {
+            bars,
+            lanes: self.hidden_lanes,
+            all: self.options.hide == Hide::All,
+            label: hide_tag(self.options.hide, self.hidden_lanes),
+        })
+    }
+
+    /// まだ画面に入っていない最初の小節の通し番号。`edge_ms` は画面の上の端の実時間。
+    /// 並べた周に無ければ、次に並べる周の頭
+    fn unseen_bar(&self, edge_ms: f64) -> u32 {
+        let n = self.options.section.measures();
+        for lap in &self.laps {
+            for m in lap.section.first..=lap.section.last {
+                let a = lap.plan.real_ms(self.tempo.measure_start_ms(m as usize));
+                if a > edge_ms
+                    && let Some(b) = Self::bar_of(lap, m)
+                {
+                    return b;
+                }
+            }
+        }
+        self.laps
+            .last()
+            .map_or(0, |l| (l.plan.index as u32 + 1) * n)
     }
 
     /// 音符をすべて判定し終えた周を数える。挑戦の周を叩き終えたら（同じ拍のミスが重なったら、並べた周を
@@ -1221,6 +1312,8 @@ impl Practice {
         }
         let lap = self.laps.pop()?;
         self.lap_of.truncate(lap.notes.start);
+        self.blindfold
+            .forget_from(lap.plan.index as u32 * self.options.section.measures());
         self.faint.retain(|f| f.0 < lap.plan.audio.at_ms);
         self.demo.retain(|f| f.0 < lap.plan.audio.at_ms);
         if lap.cue.is_some() {
@@ -1515,6 +1608,11 @@ impl Practice {
             rest: false,
             attempt: self.attempt,
             in_attempt: index - self.attempt_start.min(index) + 1,
+            hidden: self
+                .options
+                .way
+                .hides_lap(index - self.attempt_start.min(index) + 1)
+                && !self.next_demo,
             demo: std::mem::take(&mut self.next_demo),
             section: self.current_section(),
             muted: std::mem::take(&mut self.next_muted),
@@ -1524,13 +1622,28 @@ impl Practice {
         });
     }
 
-    /// 判定の結果を周ごとに数える。今の挑戦で同じ拍のミスが重なったら、その周で挑戦を終える
-    pub fn on_events(&mut self, events: &[JudgeEvent]) {
+    /// 判定の結果を周ごとに数える。今の挑戦で同じ拍のミスが重なったら、その周で挑戦を終える。
+    /// 音符を隠すで、隠した音符を続けてミスしたら、画面の上の端（実時間 `edge_ms`）より先の小節から音符を出す
+    pub fn on_events(&mut self, events: &[JudgeEvent], (now_ms, edge_ms): (f64, f64)) {
         let mut missed = false;
         for e in events {
             let Some(&i) = self.lap_of.get(e.note) else {
                 continue;
             };
+            if matches!(e.judgement, Judgement::Poor | Judgement::Miss) && self.hides(e.note) {
+                let lap = &self.laps[i];
+                let bar = lap
+                    .slots
+                    .get(e.note - lap.notes.start)
+                    .and_then(|&(_, _, at)| Self::bar_of(lap, at.measure));
+                let unseen = self.unseen_bar(edge_ms);
+                if let Some(bar) = bar
+                    && self.blindfold.miss(bar, unseen)
+                {
+                    self.peeked_at_ms = Some(now_ms);
+                    log::info!("missed hidden bars in a row: showing from bar {unseen}");
+                }
+            }
             let lap = &mut self.laps[i];
             lap.tally.add(e.judgement);
             lap.judged += 1;
@@ -1686,7 +1799,7 @@ pub fn way_label(w: Way) -> &'static str {
         Way::Demo => t("Watch, Then Play", "お手本と交互"),
         Way::Build => t("Build Up", "積み上げ"),
         Way::Break => t("Song Break", "曲のブレイク"),
-        Way::Fade => t("Vanishing Notes", "消える譜面"),
+        Way::Hide => t("Hidden Notes", "音符を隠す"),
         Way::Tour => t("Weak Spot Tour", "苦手めぐり"),
         Way::Fills => t("Fills Only", "フィルだけ"),
         Way::Seams => t("Transitions", "つなぎ目"),
@@ -1706,6 +1819,30 @@ pub fn part_label(p: Part) -> &'static str {
     }
 }
 
+/// 隠す音符の名前（練習メニューの行、基礎練習のやり方の名前）
+pub fn hide_label(h: Hide) -> &'static str {
+    match h {
+        Hide::All => t("All Notes", "全部"),
+        Hide::Part(Part::Feet) => t("Feet", "足"),
+        Hide::Part(Part::Hands) => t("Hands", "手"),
+        Hide::Part(Part::HiHat) => t("Hi-Hat", "ハイハット"),
+        Hide::Part(Part::Snare) => t("Snare", "スネア"),
+        Hide::Part(Part::Toms) => t("Toms", "タム"),
+        Hide::Part(Part::Cymbals) => t("Cymbals", "シンバル"),
+    }
+}
+
+/// 隠し始めの札（「バスドラムを隠す」）。`lanes` は実際に隠すレーン（足がバスドラムだけなら「バスドラム」）
+pub fn hide_tag(h: Hide, lanes: u16) -> String {
+    match h {
+        Hide::All => t("Notes Hidden", "音符を隠す").to_owned(),
+        Hide::Part(Part::Feet) if lanes == lane_mask([DrumLane::BD]) => {
+            t("Kick Hidden", "バスドラムを隠す").to_owned()
+        }
+        h => tf!("{} Hidden", "{}を隠す", hide_label(h)),
+    }
+}
+
 /// 積み上げの向きの名前
 pub fn build_label(b: Build) -> &'static str {
     match b {
@@ -1716,7 +1853,12 @@ pub fn build_label(b: Build) -> &'static str {
 
 /// やり方の説明（練習メニューの右の板）。`measures` は区間の長さ（積み上げの長さを出す）、
 /// `stops` はめぐる所の数
-pub fn way_help(way: Way, part: Part, build: Build, measures: u32, stops: usize) -> String {
+pub fn way_help(
+    way: Way,
+    (part, build, hide): (Part, Build, Hide),
+    measures: u32,
+    stops: usize,
+) -> String {
     match way {
         Way::Climb => t(
             "Climbs from the start speed to the target speed, one step at a time.",
@@ -1750,11 +1892,11 @@ pub fn way_help(way: Way, part: Part, build: Build, measures: u32, stops: usize)
             "曲の音とクリックが 2 小節ずつ消えます。消えているあいだもリズムを保ち、戻ったときに曲と合っているかを見ます。",
         )
         .to_owned(),
-        Way::Fade => t(
-            "Notes thin out with each loop of a step, and the last loop shows none. Notes you miss come back in the next loop.",
-            "段の中で周を重ねるごとに音符が減り、最後の周は何も見えません。ミスした音は次の周で戻ってきます。",
-        )
-        .to_owned(),
+        Way::Hide => tf!(
+            "Learn it by watching the first loop of each step, then play from memory with {} hidden. If you miss {PEEK_AFTER} measures in a row, the next {PEEK_BARS} measures show the notes again.",
+            "段の 1 周目は音符を見て覚え、2 周目から{}を隠して叩きます。{PEEK_AFTER} 小節続けてミスしたら、次の {PEEK_BARS} 小節は音符を出します。",
+            hide_help_name(hide)
+        ),
         Way::Tour => {
             let n = count(stops, "spot", "spots", "か所");
             tf!(
@@ -1780,6 +1922,17 @@ pub fn way_help(way: Way, part: Part, build: Build, measures: u32, stops: usize)
             "The notes stop and wait until you hit the right pad. Forget the timing and learn the order and which pad to hit. No scoring; ends after {WAIT_LAPS} loops.",
             "合うパッドを叩くまで譜面が止まります。時間は気にせず、叩く順番と叩き分けだけを覚えます。点は付けず、{WAIT_LAPS} 周で終わります。"
         ),
+    }
+}
+
+/// 続けてミスして音符を出すと決めたことを、知らせておく時間（ミリ秒）
+pub const PEEK_NOTE_MS: f64 = 4000.0;
+
+/// 説明の中の、隠す音符の名前（「すべての音符」「足の音符」）
+pub fn hide_help_name(h: Hide) -> String {
+    match h {
+        Hide::All => t("all the notes", "すべての音符").to_owned(),
+        h => tf!("the {} notes", "{}の音符", hide_label(h).to_lowercase()),
     }
 }
 
@@ -1941,6 +2094,7 @@ mod tests {
                 way: Default::default(),
                 part: Default::default(),
                 build: Default::default(),
+                hide: Default::default(),
                 stops: Default::default(),
             },
             &tempo,
@@ -1973,7 +2127,7 @@ mod tests {
                 lane: DrumLane::SD,
                 velocity: 100,
             });
-            p.on_events(&ev);
+            p.on_events(&ev, (0.0, f64::MAX));
         }
         for i in 0..3 {
             let ev = judge.hit(engine::judge::Hit {
@@ -1981,10 +2135,10 @@ mod tests {
                 lane: DrumLane::SD,
                 velocity: 100,
             });
-            p.on_events(&ev);
+            p.on_events(&ev, (0.0, f64::MAX));
         }
         let ev = judge.advance(4000.0);
-        p.on_events(&ev);
+        p.on_events(&ev, (0.0, f64::MAX));
         let s = p.summaries(4000.0);
         assert_eq!(s.len(), 2);
         assert_eq!((s[0].tally.perfect, s[0].passed), (4, Some(true)));
@@ -2021,11 +2175,11 @@ mod tests {
                 lane: DrumLane::SD,
                 velocity: 100,
             });
-            p.on_events(&ev);
+            p.on_events(&ev, (0.0, f64::MAX));
         }
         let start2 = p.laps[1].plan.start_ms;
         let ev = judge.advance(start2 - 300.0);
-        p.on_events(&ev);
+        p.on_events(&ev, (0.0, f64::MAX));
         assert_eq!(p.laps[0].tally.miss, 2);
         let slot = |b| BeatSlot {
             measure: 1,
@@ -2039,10 +2193,10 @@ mod tests {
                 lane: DrumLane::SD,
                 velocity: 100,
             });
-            p.on_events(&ev);
+            p.on_events(&ev, (0.0, f64::MAX));
         }
         let ev = judge.advance(start2 + 5000.0);
-        p.on_events(&ev);
+        p.on_events(&ev, (0.0, f64::MAX));
         let r = p.report();
         assert_eq!((r.laps, r.clean_laps), (2, 0));
         let t = r.spots;
@@ -2096,7 +2250,7 @@ mod tests {
                 velocity: 100,
             });
             assert_eq!(ev[0].judgement, Judgement::Perfect);
-            p.on_events(&ev);
+            p.on_events(&ev, (0.0, f64::MAX));
         }
         assert_eq!(p.laps[0].summary().passed, Some(true));
         // 2 周目の助走は 1 周目の音の終わり（着地の 2 拍あと）から
@@ -2133,6 +2287,7 @@ mod tests {
             way: Default::default(),
             part: Default::default(),
             build: Default::default(),
+            hide: Default::default(),
             fills: Vec::new(),
             seams: Vec::new(),
             weak_tour: Vec::new(),
@@ -2178,6 +2333,7 @@ mod tests {
             way: Default::default(),
             part: Default::default(),
             build: Default::default(),
+            hide: Default::default(),
             fills: Vec::new(),
             seams: Vec::new(),
             weak_tour: Vec::new(),
@@ -2236,7 +2392,7 @@ mod tests {
                     velocity: 100,
                 })
             };
-            p.on_events(&ev);
+            p.on_events(&ev, (0.0, f64::MAX));
         }
         let i = p.laps.len() - 1;
         // 空打ちは数えないので、最後の音符を判定したらすぐ数える
@@ -2417,7 +2573,7 @@ mod tests {
                     velocity: 100,
                 })
             };
-            p.on_events(&ev);
+            p.on_events(&ev, (0.0, f64::MAX));
         }
         p.settle(0.0);
         play_lap_missing(&mut p, &mut judge, 70, &[6]);
@@ -2454,7 +2610,7 @@ mod tests {
                     velocity: 100,
                 })
             };
-            p.on_events(&ev);
+            p.on_events(&ev, (0.0, f64::MAX));
         }
         assert!(p.decided);
         assert!(!p.wants_lap(0.0, 1e12));
@@ -2560,7 +2716,7 @@ mod tests {
         p.push_lap(lap, range);
         assert!(!p.wants_lap(0.0, 2000.0));
         let ev = judge.advance(10_000.0);
-        p.on_events(&ev);
+        p.on_events(&ev, (0.0, f64::MAX));
         let end = p.laps[0].plan.end_ms;
         p.settle(end + 117.0);
         // 全部落としても、どの拍もまだ 1 回なので段は続ける
@@ -2685,6 +2841,7 @@ mod tests {
             way: Default::default(),
             part: Default::default(),
             build: Default::default(),
+            hide: Default::default(),
             fills: Vec::new(),
             seams: Vec::new(),
             weak_tour: Vec::new(),
@@ -2798,31 +2955,37 @@ mod tests {
     }
 
     #[test]
-    fn vanishing_notes_thin_out_and_misses_come_back() {
-        let mut p = practice_way(Way::Fade, SpeedPlan::Fixed(100), Section::new(0, 3), 4);
+    fn hidden_notes_show_on_the_first_loop_and_come_back_after_two_missed_measures() {
+        let mut p = practice_way(Way::Hide, SpeedPlan::Fixed(100), Section::new(0, 3), 4);
         let mut judge = judge();
-        let shown = |p: &Practice, i: usize| {
-            p.laps[i]
-                .notes
-                .clone()
-                .filter(|&n| p.note_alpha(n) > 0.0)
-                .count()
-        };
+        let hidden =
+            |p: &Practice, i: usize| p.laps[i].notes.clone().filter(|&n| p.hides(n)).count();
+        // 1 周目は見て覚える
         let i = play_lap(&mut p, &mut judge, 100, true);
-        assert_eq!(shown(&p, i), 16);
-        let i = play_lap(&mut p, &mut judge, 100, true);
-        let second = shown(&p, i);
-        assert!((6..16).contains(&second), "{second}");
-        // 3 周目で 6 番目の音符を落とすと、4 周目（何も見えない周）でもその音符だけ見える
-        let i = play_lap_missing(&mut p, &mut judge, 100, &[5]);
-        assert!(shown(&p, i) <= second);
+        assert_eq!(hidden(&p, i), 0);
+        assert!(!p.laps[i].hidden);
+        // 2 周目から隠す（小節 0 と 1 の頭を続けてミス）
+        let i = play_lap_missing(&mut p, &mut judge, 100, &[0, 4]);
+        assert!(p.laps[i].hidden);
+        assert_eq!(p.blindfold.peeks(), 1);
+        // 2 周目の小節は 4 つとも帯（ミスしたあとも、画面に入っていた小節は隠したまま）
+        let view = p.blind_view(f64::MIN, f64::MAX).unwrap();
+        assert_eq!(view.bars.len(), 4);
+        assert_eq!(view.lanes, lane_mask([DrumLane::SD]));
+        assert!(view.all);
+        // まだ画面に入っていない 3 周目の小節 0・1 は音符を出し、2・3 はまた隠す
         let (lap, notes) = p.next_lap(100, f64::MIN);
         let range = judge.extend(notes);
         p.push_lap(lap, range.clone());
-        let visible: Vec<usize> = range.filter(|&n| p.note_alpha(n) > 0.0).collect();
-        assert_eq!(visible.len(), 1);
-        assert_eq!(visible[0] - p.laps[3].notes.start, 5);
-        assert_eq!(p.fade_share_of(3), Some(0.0));
+        let shown: Vec<usize> = range
+            .filter(|&n| !p.hides(n))
+            .map(|n| n - p.laps[2].notes.start)
+            .collect();
+        assert_eq!(shown, (0..8).collect::<Vec<_>>());
+        assert_eq!(p.blind_view(f64::MIN, f64::MAX).unwrap().bars.len(), 6);
+        // 隠すやり方でなければ帯は無い
+        let climb = practice_way(Way::Climb, SpeedPlan::Fixed(100), Section::new(0, 3), 4);
+        assert!(climb.blind_view(f64::MIN, f64::MAX).is_none());
     }
 
     #[test]
@@ -2858,6 +3021,7 @@ mod tests {
             way: Way::Part,
             part: Part::Toms,
             build: Build::Forward,
+            hide: Default::default(),
             fills: Vec::new(),
             seams: Vec::new(),
             weak_tour: Vec::new(),
@@ -3008,6 +3172,7 @@ mod tests {
             way: Way::Tour,
             part: Part::Hands,
             build: Build::Forward,
+            hide: Default::default(),
             fills: vec![Section::new(3, 3), Section::new(7, 7)],
             seams: Vec::new(),
             weak_tour: Vec::new(),

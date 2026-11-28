@@ -7,7 +7,7 @@
 //! - 左右は「手順どおりに叩いた」として数える（電子ドラムはどちらの手かを送ってこない）
 
 use egui::{Color32, Stroke};
-use engine::drill::{BLIND_ALPHA, COUNT_IN_MEASURES, Grade, Hand, Lean, Way};
+use engine::drill::{COUNT_IN_MEASURES, Grade, Hand, Lean, Way};
 use i18n::{t, tf};
 
 use crate::drill::{DrillOutcome, LEFT_COLOR, RIGHT_COLOR, hand_name, lead_name, way_name};
@@ -166,11 +166,7 @@ pub fn draw(c: &Canvas, g: &mut Gfx, o: &DrillOutcome, name: &str, perfect_ms: f
         draw_parts(c, g, o, (sx, y + 66.0, sw, 120.0));
     } else {
         let bpms: Vec<u32> = shown.iter().map(|&i| run.bpms[i]).collect();
-        let fades: &[f32] = if run.way == Way::Blind {
-            &BLIND_ALPHA
-        } else {
-            &[]
-        };
+        let hidden: Vec<bool> = shown.iter().map(|&i| run.step_hidden(i)).collect();
         // 出来の印は段の下に色付きで出す
         stairs(
             c,
@@ -180,7 +176,7 @@ pub fn draw(c: &Canvas, g: &mut Gfx, o: &DrillOutcome, name: &str, perfect_ms: f
                 current: None,
                 grades: &grades,
                 marks: false,
-                fades,
+                hidden: &hidden,
                 flag: run.way == Way::Climb,
             },
             (sx, y + 66.0, sw, 120.0),
