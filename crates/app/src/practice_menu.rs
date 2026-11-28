@@ -1349,8 +1349,8 @@ impl PracticeMenu {
             }
             .to_owned(),
             SetRow::Metronome => t(
-                "When ON, a soft click plays on every beat of the section (louder on the first beat of each measure). The 4-beat count-in before each step plays even when OFF.",
-                "ON なら、区間のあいだ拍ごとに小さくクリックを鳴らします（小節の頭は強く）。各段の始めの 4 拍のカウントは、OFF でも鳴ります。",
+                "When ON, a click plays on every beat of the section (higher on the first beat of each measure). The 4-beat count-in before each step plays even when OFF.\nTo change how loud it is, use Metronome under Volume.",
+                "ON なら、区間のあいだ拍ごとにクリックを鳴らします（小節の頭は高い音）。各段の始めの 4 拍のカウントは、OFF でも鳴ります。\n大きさは「音量」の「メトロノーム」で変えられます。",
             )
             .to_owned(),
             SetRow::Done => t(

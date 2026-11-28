@@ -17,7 +17,7 @@ use engine::stroke::{Stroke, StrokeTally};
 use i18n::tf;
 use records::{Lap, NoteHit, SectionClear, Session, SessionKind, StrayHit};
 
-use crate::audio::{AudioOut, Bus, HitTiming, Sound, click, drum_voice, load_sound};
+use crate::audio::{AudioOut, Bus, HitTiming, Sound, click, click_gain, drum_voice, load_sound};
 use crate::chart_sound::{AutoMix, ChartSounds, Hat};
 use crate::drill::{DrillOutcome, DrillPlay};
 use crate::history::OvercomeCheck;
@@ -35,18 +35,6 @@ const LEAD_IN_MS: f64 = 2000.0;
 
 /// 練習で、助走の前に置く空白（ミリ秒）
 const PRACTICE_LEAD_IN_MS: f64 = 1000.0;
-
-/// カウントのクリックの音量
-const CLICK_GAIN: f32 = 0.8;
-
-/// メトロノーム（周の中の拍のクリック）の音量。BGM の邪魔をしないよう、カウントより小さく
-const METRONOME_GAIN: f32 = 0.45;
-
-/// 練習でない演奏のメトロノームの音量（小節の頭、拍。上流の Metronome と同じく拍は小節の頭の 4 割）
-const METRONOME_BAR_GAIN: f32 = 1.0;
-const METRONOME_BEAT_GAIN: f32 = 0.4;
-/// 基礎練習のクリックの拍の音量（クリックに合わせて叩くので、曲のときより大きく）
-const DRILL_BEAT_GAIN: f32 = 0.7;
 
 /// 基礎練習で、最後の小節が終わってから結果へ移るまで（ミリ秒）
 const DRILL_TAIL_MS: f64 = 1000.0;
@@ -995,7 +983,7 @@ impl Play {
                     // 助走のカウントは、待ちモードでも鳴らす（助走のあいだは止まらないので、遅れは並べたときのまま）
                     for (i, &c) in lap.clicks.iter().enumerate() {
                         let click = if i == 0 { accent } else { plain };
-                        a.play_at(click, c + lag, CLICK_GAIN, Bus::Click);
+                        a.play_at(click, c + lag, click_gain(i == 0), Bus::Click);
                     }
                     if self.metronome {
                         for &(c, bar) in &lap.beats {
@@ -1004,7 +992,7 @@ impl Play {
                                 continue;
                             }
                             let click = if bar { accent } else { plain };
-                            a.play_at_tagged(click, c, METRONOME_GAIN, METRONOME_TAG, Bus::Click);
+                            a.play_at_tagged(click, c, click_gain(bar), METRONOME_TAG, Bus::Click);
                         }
                     }
                 }
@@ -1070,12 +1058,8 @@ impl Play {
             if self.drill.as_ref().is_some_and(|d| !d.clicks_at(l.ms)) {
                 continue;
             }
-            let (click, gain) = match (l.bar, self.drill.is_some()) {
-                (true, _) => (accent, METRONOME_BAR_GAIN),
-                (false, false) => (plain, METRONOME_BEAT_GAIN),
-                (false, true) => (plain, DRILL_BEAT_GAIN),
-            };
-            a.play_at_tagged(click, l.ms, gain, METRONOME_TAG, Bus::Click);
+            let click = if l.bar { accent } else { plain };
+            a.play_at_tagged(click, l.ms, click_gain(l.bar), METRONOME_TAG, Bus::Click);
         }
     }
 
@@ -1119,7 +1103,7 @@ impl Play {
                             continue;
                         }
                         let click = if bar { accent } else { plain };
-                        a.play_at_tagged(click, c, METRONOME_GAIN, METRONOME_TAG, Bus::Click);
+                        a.play_at_tagged(click, c, click_gain(bar), METRONOME_TAG, Bus::Click);
                     }
                 }
             }
