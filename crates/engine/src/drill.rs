@@ -4,6 +4,8 @@
 //! 既定の「テンポを上げる」は 4 段でテンポを上げ、1 段 4 小節ずつ叩く（約 45 秒）。
 //! ミスで段をくり返さず、どの段で崩れたかは結果で見せる（2026-11-25 の見本）。
 //! やり方はほかに、限界チャレンジ・持久・見ないで・聞いてまねる（2026-11-27 の見本）。
+//! 見ないでと聞いてまねるは音符を隠す。隠す所は暗い帯にし、音符も帯もいつも上から流れてくる
+//! （途中で急に現れたり、薄くなったりしない。2026-11-28 のユーザーの感想から）。
 //! 「左から」は型の R と L を入れ替える（どのやり方とも合わせられる）。
 //! 型はレーンごとの文字列で書き、譜面（DTX の文字）にしてふつうの演奏と同じ判定に流す。
 //! 型の小節 0 はカウントで、音符は 1 小節目から置く。
@@ -18,6 +20,7 @@ use dtx::{DrumLane, NotePos};
 use crate::accent;
 use crate::analysis::mean_and_sd;
 use crate::judge::{Judgement, Tally};
+use crate::practice_way::{Hide, Part, lane_mask};
 
 /// 段の数
 pub const STEPS: usize = 4;
@@ -43,8 +46,8 @@ pub const LIMIT_MAX_STEPS: usize = 24;
 /// 持久: 選べる長さ（分）と、ずれを見る区切りの長さ（秒）
 pub const ENDURANCE_MINUTES: [u32; 3] = [1, 2, 3];
 pub const ENDURANCE_SEGMENT_S: f64 = 30.0;
-/// 見ないで: 段ごとの音符の濃さ（最後の段は見えない）
-pub const BLIND_ALPHA: [f32; STEPS] = [1.0, 0.55, 0.25, 0.0];
+/// 見ないで: 音符を見せる段の数（そのあとの段は隠す）
+pub const BLIND_SEEN_STEPS: usize = 1;
 
 /// 叩く手足
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -104,21 +107,24 @@ pub enum Way {
     Limit,
     /// 持久。テンポを変えずに決めた分数（1〜3 分）叩き続け、30 秒ごとに区切って見る
     Endurance(u32),
-    /// 見ないで。段が進むごとに音符が薄くなり、最後の段は見えない（テンポは変えない）
-    Blind,
-    /// 聞いてまねる。お手本の 1 小節（音だけ、譜面は出さない）と自分の 1 小節を交互に（テンポは変えない）
+    /// 見ないで。1 段目は見て覚え、2 段目から音符を隠す（全部か、手か足。テンポは変えない）
+    Blind(Hide),
+    /// 聞いてまねる。お手本の 1 小節（音符が流れて自動で鳴る）と、音符を隠した自分の 1 小節を交互に
+    /// （テンポは変えない）
     Echo,
 }
 
 impl Way {
     /// 選ぶ順（HH で順に回す）
-    pub const ALL: [Way; 7] = [
+    pub const ALL: [Way; 9] = [
         Self::Climb,
         Self::Limit,
         Self::Endurance(1),
         Self::Endurance(2),
         Self::Endurance(3),
-        Self::Blind,
+        Self::Blind(Hide::All),
+        Self::Blind(Hide::Part(Part::Feet)),
+        Self::Blind(Hide::Part(Part::Hands)),
         Self::Echo,
     ];
 
@@ -128,7 +134,8 @@ impl Way {
             Self::Climb => "climb".to_owned(),
             Self::Limit => "limit".to_owned(),
             Self::Endurance(m) => format!("endurance{m}"),
-            Self::Blind => "blind".to_owned(),
+            Self::Blind(Hide::All) => "blind".to_owned(),
+            Self::Blind(h) => format!("blind_{}", h.key()),
             Self::Echo => "echo".to_owned(),
         }
     }
@@ -138,9 +145,18 @@ impl Way {
     }
 
     /// ドリル `d` で使えるか。クリックの消えるドリルは、テンポを上げ続ける限界チャレンジと、
-    /// 小節ごとに交代する聞いてまねるには使わない（消える小節と重なって分からなくなるので）
+    /// 小節ごとに交代する聞いてまねるには使わない（消える小節と重なって分からなくなるので）。
+    /// 手か足だけを隠す見ないでは、手と足の両方を使うドリルだけ
     pub fn fits(self, d: &Drill) -> bool {
-        !(d.gap.is_some() && matches!(self, Self::Limit | Self::Echo))
+        match self {
+            Self::Limit | Self::Echo => d.gap.is_none(),
+            Self::Blind(Hide::Part(p)) => {
+                let lanes = d.lanes();
+                lanes.iter().any(|l| p.lanes().contains(l))
+                    && lanes.iter().any(|l| !p.lanes().contains(l))
+            }
+            _ => true,
+        }
     }
 
     /// ドリル `d` で選んだとき実際に使うやり方（使えなければテンポを上げる）
@@ -1542,7 +1558,7 @@ impl Run {
                     .max(1.0) as usize;
                 (vec![target; n], per)
             }
-            Way::Blind | Way::Echo => (vec![target; STEPS], STEP_MEASURES),
+            Way::Blind(_) | Way::Echo => (vec![target; STEPS], STEP_MEASURES),
         };
         Self {
             drill,
@@ -1613,20 +1629,39 @@ impl Run {
         v
     }
 
-    /// 譜面の小節 `measure` の音符の濃さ（見ないでは段ごとに薄く、ほかは 1）
-    pub fn note_alpha(&self, measure: u32) -> f32 {
-        match (self.way, self.step_of(measure)) {
-            (Way::Blind, Some(s)) => BLIND_ALPHA[s.min(STEPS - 1)],
-            _ => 1.0,
+    /// 段 `step` で音符を隠すか（見ないでの 2 段目から。聞いてまねるは自分の小節だけ隠すので段では見ない）
+    pub fn step_hidden(&self, step: usize) -> bool {
+        matches!(self.way, Way::Blind(_)) && step >= BLIND_SEEN_STEPS && step < self.steps()
+    }
+
+    /// 譜面の小節 `measure` で音符を隠すか（見ないでの 2 段目から、聞いてまねるの自分の小節）。
+    /// 隠す小節は、隠す小節の中の通し番号（0 から）を返す。続けてミスしたかは、この番号で数える
+    pub fn hidden_index(&self, measure: u32) -> Option<u32> {
+        let step = self.step_of(measure)?;
+        match self.way {
+            Way::Blind(_) if self.step_hidden(step) => Some(measure),
+            // お手本の小節と自分の小節が交互なので、自分の小節だけを数える
+            Way::Echo if !self.is_demo(measure) => Some((measure - COUNT_IN_MEASURES) / 2),
+            _ => None,
         }
     }
 
-    /// お手本の音（譜面の小節、小節の中の位置 0〜1、レーン）。聞いてまねるの、お手本の小節だけ
-    pub fn demo_notes(&self) -> Vec<(u32, f64, DrumLane)> {
+    /// 隠すレーン（`DrumLane as usize` のビット）。型で使うレーンのうち、隠すと決めたもの
+    pub fn hidden_lanes(&self) -> u16 {
+        let hide = match self.way {
+            Way::Blind(h) => h,
+            Way::Echo => Hide::All,
+            _ => return 0,
+        };
+        hide.mask() & lane_mask(self.drill.lanes())
+    }
+
+    /// お手本の音（譜面の小節と型の音符。小節の中の位置は [`PatternNote::pos`]）。聞いてまねるの、お手本の小節だけ
+    pub fn demo_notes(&self) -> Vec<(u32, PatternNote)> {
         if self.way != Way::Echo {
             return Vec::new();
         }
-        let notes = self.drill.notes();
+        let notes = self.notes();
         (COUNT_IN_MEASURES..self.measure_count())
             .filter(|&m| self.is_demo(m))
             .flat_map(|m| {
@@ -1634,7 +1669,7 @@ impl Run {
                 notes
                     .iter()
                     .filter(move |n| Some(n.measure) == pm)
-                    .map(move |n| (m, n.pos(), n.lane))
+                    .map(move |&n| (m, n))
             })
             .collect()
     }
@@ -2367,19 +2402,22 @@ mod tests {
 
     #[test]
     fn ways_go_round_and_skip_what_does_not_fit() {
-        let para = drill("paradiddle");
+        let groove = drill("eight_beat");
         let mut seen = vec![Way::Climb];
         let mut w = Way::Climb;
         for _ in 0..Way::ALL.len() - 1 {
-            w = w.next_for(para);
+            w = w.next_for(groove);
             seen.push(w);
         }
         assert_eq!(seen, Way::ALL);
+        let para = drill("paradiddle");
         assert_eq!(Way::Echo.next_for(para), Way::Climb);
+        // スネアだけのドリルは、手か足だけを隠す見ないでを飛ばす
+        assert_eq!(Way::Blind(Hide::All).next_for(para), Way::Echo);
         // クリックの消えるドリルは限界チャレンジと聞いてまねるを飛ばす
         let gap = drill("gap_2");
         assert_eq!(Way::Climb.next_for(gap), Way::Endurance(1));
-        assert_eq!(Way::Blind.next_for(gap), Way::Climb);
+        assert_eq!(Way::Blind(Hide::All).next_for(gap), Way::Climb);
         assert_eq!(Way::Limit.for_drill(gap), Way::Climb);
         assert_eq!(Run::with(gap, Way::Echo, 100, 10, false).way, Way::Climb);
         for w in Way::ALL {
@@ -2451,16 +2489,37 @@ mod tests {
     }
 
     #[test]
-    fn eyes_off_fades_the_notes_step_by_step() {
-        let run = Run::with(drill("paradiddle"), Way::Blind, 100, 10, false);
+    fn eyes_off_shows_the_first_step_and_hides_the_rest() {
+        let run = Run::with(drill("eight_beat"), Way::Blind(Hide::All), 100, 10, false);
         assert!(run.bpms.iter().all(|&b| b == 100));
-        let alpha: Vec<f32> = (0..run.steps())
-            .map(|i| run.note_alpha(run.step_range(i).start))
-            .collect();
-        assert_eq!(alpha, BLIND_ALPHA);
-        assert_eq!(run.note_alpha(0), 1.0);
-        let climb = Run::new(drill("paradiddle"), 100, 10);
-        assert_eq!(climb.note_alpha(16), 1.0);
+        let hidden: Vec<bool> = (0..run.steps()).map(|i| run.step_hidden(i)).collect();
+        assert_eq!(hidden, [false, true, true, true]);
+        // カウントと 1 段目（小節 1〜4）は見せ、小節 5 から隠す
+        assert_eq!(run.hidden_index(0), None);
+        assert_eq!(run.hidden_index(4), None);
+        assert_eq!(run.hidden_index(5), Some(5));
+        assert_eq!(run.hidden_index(16), Some(16));
+        assert_eq!(run.hidden_index(17), None);
+        let all = lane_mask([DrumLane::HH, DrumLane::SD, DrumLane::BD]);
+        assert_eq!(run.hidden_lanes(), all);
+        // 足だけ隠すと、バスドラムだけ
+        let feet = Run::with(
+            drill("eight_beat"),
+            Way::Blind(Hide::Part(Part::Feet)),
+            100,
+            10,
+            false,
+        );
+        assert_eq!(feet.hidden_lanes(), lane_mask([DrumLane::BD]));
+        // スネアだけのドリルでは、手か足だけを隠すやり方は選べない
+        let para = drill("paradiddle");
+        assert!(Way::Blind(Hide::All).fits(para));
+        assert!(!Way::Blind(Hide::Part(Part::Feet)).fits(para));
+        assert!(!Way::Blind(Hide::Part(Part::Hands)).fits(para));
+        assert!(Way::Blind(Hide::Part(Part::Hands)).fits(drill("eight_beat")));
+        let climb = Run::new(para, 100, 10);
+        assert_eq!(climb.hidden_index(16), None);
+        assert_eq!(climb.hidden_lanes(), 0);
     }
 
     #[test]
@@ -2469,6 +2528,9 @@ mod tests {
         assert!(run.bpms.iter().all(|&b| b == 100));
         let demo: Vec<bool> = (0..6).map(|m| run.is_demo(m)).collect();
         assert_eq!(demo, [false, true, false, true, false, true]);
+        // 隠すのは自分の小節で、自分の小節だけを通しで数える
+        let hidden: Vec<Option<u32>> = (0..6).map(|m| run.hidden_index(m)).collect();
+        assert_eq!(hidden, [None, None, Some(0), None, Some(1), None]);
         assert_eq!(run.pattern_measure(1), run.pattern_measure(2));
         let chart = dtx::parse(&run.to_dtx("echo"));
         let tempo = dtx::TempoMap::build(&chart);
@@ -2480,7 +2542,7 @@ mod tests {
         // お手本の音は、お手本の小節に同じ数だけ
         let heard = run.demo_notes();
         assert_eq!(heard.len(), per_bar * 8);
-        assert!(heard.iter().all(|&(m, _, _)| run.is_demo(m)));
+        assert!(heard.iter().all(|&(m, _)| run.is_demo(m)));
         assert!(notes.iter().all(|n| run.hand_at(n.at, n.lane).is_some()));
         // 4 小節の型は、お手本と自分の 2 小節ごとに次の小節へ
         let fill = drill("fill_four_bars");

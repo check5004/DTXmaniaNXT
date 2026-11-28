@@ -17,9 +17,10 @@ use std::time::Instant;
 use chrono::{Datelike, NaiveDate};
 use egui::{Color32, Stroke};
 use engine::drill::{
-    BLIND_ALPHA, BPM_STEP, COUNT_IN_MEASURES, Category, DEFAULT_RISE, DRILLS, Drill, Hand,
-    LIMIT_RISE, LIMIT_STEP_MEASURES, MANY_MISSES, RISES, Run, Way, nudge_bpm,
+    BPM_STEP, COUNT_IN_MEASURES, Category, DEFAULT_RISE, DRILLS, Drill, Hand, LIMIT_RISE,
+    LIMIT_STEP_MEASURES, MANY_MISSES, RISES, Run, Way, nudge_bpm,
 };
+use engine::practice_way::Hide;
 use i18n::{count, t, tf};
 
 use crate::band::{Band, BandData};
@@ -794,13 +795,13 @@ impl DrillMenu {
                 "テンポを変えずに {}・30 秒ごとに見る",
                 clock(f64::from(secs) * 1000.0)
             ),
-            Way::Blind => tf!(
-                "Notes fade each step, then vanish · about {secs} s",
-                "段ごとに薄くなり、最後は見えない・約 {secs} 秒"
+            Way::Blind(_) => tf!(
+                "Learn it in step 1, notes hidden from step 2 · about {secs} s",
+                "1 段目で覚え、2 段目から隠す・約 {secs} 秒"
             ),
             Way::Echo => tf!(
-                "Hear a bar (no notes), then play it · about {secs} s",
-                "お手本 1 小節（音だけ）→ 自分 1 小節・約 {secs} 秒"
+                "Watch a bar, then play it with the notes hidden · about {secs} s",
+                "お手本 1 小節 → 隠して自分で 1 小節・約 {secs} 秒"
             ),
         }
     }
@@ -1663,25 +1664,24 @@ const WAY_CHIPS: [Way; 5] = [
     Way::Climb,
     Way::Limit,
     Way::Endurance(0),
-    Way::Blind,
+    Way::Blind(Hide::All),
     Way::Echo,
 ];
 
-/// 同じ札か（持久は長さを問わない）
+/// 同じ札か（持久は長さを、見ないでは隠す音符を問わない）
 fn same_chip(a: Way, b: Way) -> bool {
-    matches!((a, b), (Way::Endurance(_), Way::Endurance(_))) || a == b
+    matches!(
+        (a, b),
+        (Way::Endurance(_), Way::Endurance(_)) | (Way::Blind(_), Way::Blind(_))
+    ) || a == b
 }
 
 /// やり方の絵（テンポとテンポの段・消え方・交代・区切り）
 fn draw_way(c: &Canvas, g: &mut Gfx, run: &Run, (x, y, w, h): (f32, f32, f32, f32)) {
     let none = vec![None; run.steps()];
     match run.way {
-        Way::Climb | Way::Blind => {
-            let fades: &[f32] = if run.way == Way::Blind {
-                &BLIND_ALPHA
-            } else {
-                &[]
-            };
+        Way::Climb | Way::Blind(_) => {
+            let hidden: Vec<bool> = (0..run.steps()).map(|i| run.step_hidden(i)).collect();
             crate::drill_hud::stairs(
                 c,
                 g,
@@ -1690,7 +1690,7 @@ fn draw_way(c: &Canvas, g: &mut Gfx, run: &Run, (x, y, w, h): (f32, f32, f32, f3
                     current: None,
                     grades: &none,
                     marks: false,
-                    fades,
+                    hidden: &hidden,
                     flag: run.way == Way::Climb,
                 },
                 (x, y + 4.0, w, h - 4.0),
@@ -1707,7 +1707,7 @@ fn draw_way(c: &Canvas, g: &mut Gfx, run: &Run, (x, y, w, h): (f32, f32, f32, f3
                     current: None,
                     grades: &none[..n],
                     marks: false,
-                    fades: &[],
+                    hidden: &[],
                     flag: false,
                 },
                 (x, y + 4.0, w - 30.0, h - 4.0),

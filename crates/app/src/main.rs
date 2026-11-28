@@ -2070,6 +2070,7 @@ impl App {
             way: p.way,
             part: p.part,
             build: p.build,
+            hide: p.hide,
             stops: engine::practice_way::Stops::default(),
         }
     }

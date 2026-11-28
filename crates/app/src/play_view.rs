@@ -27,6 +27,39 @@ use crate::text::Style;
 
 /// 判定の線の y（上流 `nJudgeLinePosY.Drums` の既定）
 pub const JUDGE_LINE_Y: f32 = 561.0;
+/// 隠した小節の帯の色（レーンの色を覆って、ほかの所と見分けられる色）と、ふちと札の色
+const BLIND_SHADE: Color32 = Color32::from_rgba_premultiplied(18, 16, 32, 235);
+const BLIND_EDGE: Color32 = Color32::from_rgb(0x9A, 0x86, 0xE8);
+const BLIND_TAG: Color32 = Color32::from_rgb(0x4A, 0x3C, 0x8C);
+/// 帯の「？」の間（ドット）。これより詰まるなら間引く
+const BLIND_MARK_GAP: f32 = 140.0;
+
+/// 隠した小節の帯 1 つ（暗い幕と「？」。2026-11-28 ユーザーが見本の A を選んだ）。
+/// `rect` は帯の見えている所、`marks` は「？」の y（帯と一緒に流れる）
+fn draw_blind_band(c: &Canvas, g: &mut Gfx, (x, y, w, h): (f32, f32, f32, f32), marks: &[f32]) {
+    c.fill(x, y, w, h, BLIND_SHADE);
+    let clip = c.with_clip(c.rect(x, y, w, h));
+    let style = Style {
+        px: (w * 0.5).clamp(26.0, 48.0),
+        color: BLIND_EDGE.gamma_multiply(0.75),
+        bold: true,
+        shadow: None,
+        edge: None,
+        gradient: None,
+    };
+    if let Some(t) = g.texts.get("?", &style) {
+        for &my in marks {
+            t.draw(&clip, x + (w - t.w) / 2.0, my - t.h / 2.0, 1.0, 1.0);
+        }
+    }
+}
+
+/// 隠し始めの札の地
+fn ui_tag(c: &Canvas, (x, y, w, h): (f32, f32, f32, f32)) {
+    c.painter()
+        .rect_filled(c.rect(x, y, w, h), 4.0 * c.scale(), BLIND_TAG);
+}
+
 /// 下から上へ流すときの判定の線の y（上流の Reverse）
 const REVERSE_JUDGE_LINE_Y: f32 = 159.0;
 /// 進み具合のバーの左（上流 `CActPerfProgressBar`。左バスドラムのレーンを足したらそのぶん右へ）
@@ -1156,6 +1189,7 @@ impl PlayView {
         }
         self.draw_jacket(c, g, play);
         self.draw_lanes(c, g, now);
+        self.draw_blindfold(c, g, play, now_ms, px_per_ms);
         self.draw_lines(c, g, play, now_ms, px_per_ms);
         self.draw_waiting(c, play, now);
         self.draw_chips(c, g, play, now_ms, px_per_ms, now);
@@ -1572,16 +1606,28 @@ impl PlayView {
             if play.judge.is_done(i) || !visible(n.ms) {
                 continue;
             }
-            // 基礎練習の「見ないで」は段ごとに薄く、曲の練習の「消える譜面」は周ごとに消える
-            let fade = match (&play.drill, &play.practice) {
-                (Some(d), _) => d.note_alpha(n.at.measure, now_ms),
-                (None, Some(p)) => p.note_alpha(i),
-                (None, None) => 1.0,
-            };
-            if fade > 0.0
-                && let Some(alpha) = looks.chip_alpha(ahead(n.ms))
-            {
-                shown.push((n.lane, y, alpha * fade, play.is_rim_note(n)));
+            // 基礎練習の「見ないで」「聞いてまねる」と曲の練習の「音符を隠す」は、隠した小節の音符を描かない
+            // （隠すかは小節が画面に入る前に決まり、画面の途中で現れたり消えたりしない）
+            if play.hides_note(i) {
+                continue;
+            }
+            if let Some(alpha) = looks.chip_alpha(ahead(n.ms)) {
+                shown.push((n.lane, y, alpha, play.is_rim_note(n)));
+            }
+        }
+        // 聞いてまねるのお手本の音符は、流して見せ、判定の線に来たら消える（自動で鳴る）
+        if let Some(d) = &play.drill {
+            for &(ms, n) in d.demo.iter().filter(|x| x.0 >= now_ms) {
+                let lane = n.lane;
+                if !visible(ms) {
+                    continue;
+                }
+                if looks.beyond_edge(looks.ahead_y(ahead(ms))) {
+                    break;
+                }
+                if let Some(alpha) = looks.chip_alpha(ahead(ms)) {
+                    shown.push((lane, looks.ahead_y(ahead(ms)), 0.85 * alpha, false));
+                }
             }
         }
         // 練習の助走など、判定しない音符は薄く。お手本の周の音符は、判定ラインに来たら消える（自動で叩く）
@@ -1673,30 +1719,153 @@ impl PlayView {
             if play.judge.is_done(i) || ahead(n.ms) > DRAW_AHEAD_PX {
                 continue;
             }
-            let fade = d.note_alpha(n.at.measure, now_ms);
-            let Some(alpha) = looks.chip_alpha(ahead(n.ms)).filter(|_| fade > 0.0) else {
+            if d.hides(n.at.measure, n.lane) {
+                continue;
+            }
+            let Some(alpha) = looks.chip_alpha(ahead(n.ms)) else {
                 continue;
             };
-            let alpha = alpha * fade;
-            let (x, _, w, _) = chip(&looks, n.lane);
-            if d.accents.get(i).copied().unwrap_or(false) {
-                accent_mark(c, x - 3.0, y, alpha);
+            let accent = d.accents.get(i).copied().unwrap_or(false);
+            let hand = d.hands.get(i).copied().flatten();
+            self.draw_hand(c, g, (hand, accent), (n.lane, y), alpha);
+        }
+        // 聞いてまねるのお手本の音符にも手順とアクセントを（お手本の音符と同じく薄く）
+        for &(ms, n) in d.demo.iter().filter(|x| x.0 >= now_ms) {
+            let y = looks.ahead_y(ahead(ms));
+            if looks.beyond_edge(y) {
+                break;
             }
-            let (hand, color) = match d.hands.get(i).copied().flatten() {
-                Some(engine::drill::Hand::Right) => ("R", crate::drill::RIGHT_COLOR),
-                Some(engine::drill::Hand::Left) => ("L", crate::drill::LEFT_COLOR),
-                _ => continue,
-            };
-            let style = Style {
-                px: 20.0,
-                color,
-                bold: true,
-                shadow: None,
-                edge: Some((Color32::BLACK, 2.0)),
-                gradient: None,
-            };
-            if let Some(t) = g.texts.get(hand, &style) {
-                t.draw(c, x + w - 2.0, y - t.h / 2.0, 1.0, alpha);
+            if ahead(ms) > DRAW_AHEAD_PX {
+                continue;
+            }
+            if let Some(alpha) = looks.chip_alpha(ahead(ms)) {
+                self.draw_hand(c, g, (Some(n.hand), n.accent), (n.lane, y), 0.85 * alpha);
+            }
+        }
+    }
+
+    /// 音符の右に叩く手（R・L）を 1 つ（足は出さない）。アクセントなら左に > の印
+    fn draw_hand(
+        &self,
+        c: &Canvas,
+        g: &mut Gfx,
+        (hand, accent): (Option<engine::drill::Hand>, bool),
+        (lane, y): (DrumLane, f32),
+        alpha: f32,
+    ) {
+        let (x, _, w, _) = chip(&self.looks, lane);
+        if accent {
+            accent_mark(c, x - 3.0, y, alpha);
+        }
+        let (hand, color) = match hand {
+            Some(engine::drill::Hand::Right) => ("R", crate::drill::RIGHT_COLOR),
+            Some(engine::drill::Hand::Left) => ("L", crate::drill::LEFT_COLOR),
+            _ => return,
+        };
+        let style = Style {
+            px: 20.0,
+            color,
+            bold: true,
+            shadow: None,
+            edge: Some((Color32::BLACK, 2.0)),
+            gradient: None,
+        };
+        if let Some(t) = g.texts.get(hand, &style) {
+            t.draw(c, x + w - 2.0, y - t.h / 2.0, 1.0, alpha);
+        }
+    }
+
+    /// 隠した小節の帯。隠すレーンを暗くし、小節ごとに印を出す（帯も音符と同じく上から流れてくる）。
+    /// 帯の始まり（判定の線の側の端）に、何を隠すか
+    fn draw_blindfold(&self, c: &Canvas, g: &mut Gfx, play: &Play, now_ms: f64, px_per_ms: f32) {
+        let Some(fold) = play.blindfold_view(
+            now_ms - 2000.0,
+            now_ms + f64::from(DRAW_AHEAD_PX / px_per_ms.max(0.01)) + 500.0,
+        ) else {
+            return;
+        };
+        if fold.bars.is_empty() {
+            return;
+        }
+        let looks = self.looks;
+        let ahead = |ms: f64| ((ms - now_ms) as f32) * px_per_ms;
+        // 隠すレーンの横の範囲（全部隠すなら、レーンの並び全体）
+        let mut cols: Vec<(f32, f32)> = Vec::new();
+        if fold.all {
+            cols.push((LANES_LEFT, looks.layout.width()));
+        } else {
+            for lane in DrumLane::ALL {
+                if fold.lanes & (1 << lane as u16) == 0 {
+                    continue;
+                }
+                let (lx, lw) = looks.layout.judge[looks.lane_of(lane).i()];
+                let (x, w) = (lx as f32, lw as f32);
+                match cols
+                    .iter_mut()
+                    .find(|(a, b)| x <= a + b + 1.0 && a <= &mut (x + w + 1.0))
+                {
+                    Some((a, b)) => {
+                        let right = (*a + *b).max(x + w);
+                        *a = a.min(x);
+                        *b = right - *a;
+                    }
+                    None => cols.push((x, w)),
+                }
+            }
+        }
+        let n = fold.bars.len();
+        for (k, &(from, to)) in fold.bars.iter().enumerate() {
+            let near = ahead(from).max(0.0);
+            let far = ahead(to).min(DRAW_AHEAD_PX + 64.0);
+            if far <= near {
+                continue;
+            }
+            let (y0, y1) = (looks.ahead_y(near), looks.ahead_y(far));
+            let (top, h) = (y0.min(y1), (y0 - y1).abs());
+            // 「？」は小節を等分した所の真ん中に（帯と一緒に流れる。詰まるなら間引く）
+            let bar_px = ahead(to) - ahead(from);
+            let parts = ((bar_px / BLIND_MARK_GAP).floor() as usize).clamp(1, 8);
+            let marks: Vec<f32> = (0..parts)
+                .map(|i| {
+                    let a = ahead(from) + bar_px * (i as f32 + 0.5) / parts as f32;
+                    looks.ahead_y(a)
+                })
+                .collect();
+            for &(x, w) in &cols {
+                draw_blind_band(c, g, (x, top, w, h), &marks);
+            }
+            // 隠し始めと隠し終わりにふち
+            let starts = k == 0 || (fold.bars[k - 1].1 - from).abs() > 1.0;
+            let ends = k + 1 == n || (fold.bars[k + 1].0 - to).abs() > 1.0;
+            for (edge, at) in [(starts, ahead(from)), (ends, ahead(to))] {
+                if edge && (0.0..DRAW_AHEAD_PX + 64.0).contains(&at) {
+                    let ey = looks.ahead_y(at);
+                    for &(x, w) in &cols {
+                        c.fill(x, ey - 1.0, w, 2.0, BLIND_EDGE);
+                    }
+                }
+            }
+            // 隠し始めに何を隠すか
+            if starts && ahead(from) >= 0.0 {
+                let y = looks.ahead_y(ahead(from));
+                let style = Style {
+                    px: 14.0,
+                    color: Color32::WHITE,
+                    bold: true,
+                    shadow: None,
+                    edge: None,
+                    gradient: None,
+                };
+                if let Some(t) = g.texts.get(&fold.label, &style) {
+                    let (x, _) = cols[0];
+                    let ty = if looks.reverse {
+                        y + 3.0
+                    } else {
+                        y - t.h - 5.0
+                    };
+                    ui_tag(c, (x + 2.0, ty - 2.0, t.w + 12.0, t.h + 4.0));
+                    t.draw(c, x + 8.0, ty, 1.0, 1.0);
+                }
             }
         }
     }

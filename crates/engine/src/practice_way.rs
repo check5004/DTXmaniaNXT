@@ -8,8 +8,15 @@
 //!
 //! 待ちモードは、正しいパッドを叩くまで譜面が止まる。時間は気にせず、順番と叩き分けだけを覚える。
 //! 点は付けず、[`WAIT_LAPS`] 周で終える（譜面を止めるのは演奏の側）。
+//!
+//! 隠して叩くは、段の 1 周目で見て覚え、2 周目から選んだ音符（全部か、パートひとつ）を隠す。
+//! 隠した所は暗い帯にして、隠していることが分かるようにする（帯も音符と同じく上から流れてくる）。
+//! 続けてミスしたらもう覚えていないとみなし、まだ画面に入っていない小節から音符を出す（[`Blindfold`]）。
+//! 音符はいつも上から流れてくる。途中で急に現れたり、薄くなったりはしない。
 
-use dtx::{DrumLane, DrumNote, NotePos};
+use std::collections::BTreeSet;
+
+use dtx::{DrumLane, DrumNote};
 
 use crate::practice::{Attempt, Section, Span};
 
@@ -27,8 +34,8 @@ pub enum Way {
     Build,
     /// 曲のブレイク。曲の音とクリックが 2 小節ずつ消える（判定はそのまま）
     Break,
-    /// 消える譜面。段の中で周を重ねるごとに音符が減り、最後の周は見えない。落とした音は次の周で戻る
-    Fade,
+    /// 隠して叩く。段の 1 周目は見て覚え、2 周目から選んだ音符（[`Hide`]）を隠す
+    Hide,
     /// 苦手めぐり。記録の苦手な所を、まぜた順に 1 か所 2 周ずつめぐる
     Tour,
     /// フィルだけ。譜面からフィルの小節を探し、順にめぐる
@@ -51,7 +58,7 @@ impl Way {
         Self::Fills,
         Self::Seams,
         Self::Break,
-        Self::Fade,
+        Self::Hide,
     ];
 
     /// 設定と記録に書く名前
@@ -62,7 +69,7 @@ impl Way {
             Self::Demo => "demo",
             Self::Build => "build",
             Self::Break => "break",
-            Self::Fade => "fade",
+            Self::Hide => "hide",
             Self::Tour => "tour",
             Self::Fills => "fills",
             Self::Seams => "seams",
@@ -71,6 +78,10 @@ impl Way {
     }
 
     pub fn from_key(s: &str) -> Option<Self> {
+        // 0.14 までの「消える譜面」は隠して叩くに
+        if s == "fade" {
+            return Some(Self::Hide);
+        }
         Self::ALL.into_iter().find(|w| w.key() == s)
     }
 
@@ -102,10 +113,15 @@ impl Way {
     pub fn demo_lap(self, k: usize) -> bool {
         self == Self::Demo && k % 2 == 1
     }
+
+    /// 段の `k` 周目（1 から）で音符を隠すか。隠して叩くの 2 周目から（1 周目は見て覚える）
+    pub fn hides_lap(self, k: usize) -> bool {
+        self == Self::Hide && k >= 2
+    }
 }
 
 /// パート練習で叩くパート
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum Part {
     /// 手（足のパッドのほか全部）
     #[default]
@@ -260,36 +276,109 @@ pub fn cut_span(span: Span, cuts: &[(f64, f64)], speed: f64) -> Vec<Span> {
     out
 }
 
-/// 消える譜面で、段の `k` 周目（1 から、`laps` 周のうち）に見せる音符の割合（0〜1）。
-/// 1 周目はぜんぶ、最後の周は 0
-pub fn fade_share(k: usize, laps: usize) -> f64 {
-    if laps <= 1 {
-        return 0.0;
-    }
-    let k = k.clamp(1, laps);
-    1.0 - (k - 1) as f64 / (laps - 1) as f64
+/// 隠して叩く・見ないで・聞いてまねるで隠す音符（全部か、パートひとつ）
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum Hide {
+    #[default]
+    All,
+    Part(Part),
 }
 
-/// 消える譜面で、音符を隠す順番（0〜1）。小節と位置とレーンから決め、周が変わっても同じ音符は同じ値
-/// （割合が減るほど隠れる音符が増える。低い値の音符ほど長く見える）
-pub fn fade_rank(at: NotePos, lane: DrumLane) -> f64 {
-    let mut h: u32 = 0x811c_9dc5;
-    for b in at
-        .measure
-        .to_le_bytes()
-        .into_iter()
-        .chain(at.num.to_le_bytes())
-        .chain(at.den.to_le_bytes())
-        .chain([lane as u8])
-    {
-        h ^= u32::from(b);
-        h = h.wrapping_mul(0x0100_0193);
+impl Hide {
+    /// 選ぶ順（全部のつぎは足。バスドラムだけを隠すのがよく使う形）
+    pub const ALL: [Hide; 7] = [
+        Self::All,
+        Self::Part(Part::Feet),
+        Self::Part(Part::Hands),
+        Self::Part(Part::HiHat),
+        Self::Part(Part::Snare),
+        Self::Part(Part::Toms),
+        Self::Part(Part::Cymbals),
+    ];
+
+    /// 設定に書く名前
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::Part(p) => p.key(),
+        }
     }
-    // 下の桁は偏るので、混ぜてから上の桁を使う
-    h ^= h >> 15;
-    h = h.wrapping_mul(0x2c1b_3c6d);
-    h ^= h >> 12;
-    f64::from(h >> 8) / f64::from(1u32 << 24)
+
+    pub fn from_key(s: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|h| h.key() == s)
+    }
+
+    /// 隠すレーン（`DrumLane as usize` のビット）
+    pub fn mask(self) -> u16 {
+        match self {
+            Self::All => lane_mask(DrumLane::ALL),
+            Self::Part(p) => p.mask(),
+        }
+    }
+
+    pub fn hides(self, lane: DrumLane) -> bool {
+        self.mask() & (1 << lane as u16) != 0
+    }
+}
+
+/// 隠した音符を何小節続けてミスしたら、もう覚えていないとみなすか
+pub const PEEK_AFTER: u32 = 2;
+/// そのとき音符を出す小節の数
+pub const PEEK_BARS: u32 = 2;
+
+/// 隠した音符のミスを小節ごとに見て、続けてミスしたら次の小節から音符を出す。
+///
+/// 小節は叩く順の通し番号で渡す（基礎練習は譜面の小節、曲の練習は周をまたいで数える）。
+/// 音符を出すのは、まだ画面に入っていない小節から（音符はいつも上から流れてくる。画面の途中で現れない）
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Blindfold {
+    /// 隠した音符をミスした小節
+    missed: BTreeSet<u32>,
+    /// 音符を出す小節
+    shown: BTreeSet<u32>,
+    /// 最後に音符を出すと決めたときの、ミスの続いた最後の小節（その小節までのミスは数え直さない）
+    last_streak: Option<u32>,
+    /// 音符を出すと決めた回数
+    peeks: u32,
+}
+
+impl Blindfold {
+    /// 隠した音符をミスした。`bar` はその小節、`unseen` はまだ画面に入っていない最初の小節。
+    /// [`PEEK_AFTER`] 小節続けてミスしたら、`unseen` から [`PEEK_BARS`] 小節の音符を出すと決めて true
+    pub fn miss(&mut self, bar: u32, unseen: u32) -> bool {
+        if self.shown.contains(&bar) || !self.missed.insert(bar) {
+            return false;
+        }
+        let from = self.last_streak.map_or(0, |b| b + 1);
+        let streak = (1..PEEK_AFTER).all(|k| {
+            bar.checked_sub(k)
+                .is_some_and(|b| b >= from && self.missed.contains(&b))
+        });
+        if !streak {
+            return false;
+        }
+        self.last_streak = Some(bar);
+        self.peeks += 1;
+        self.shown
+            .extend(unseen.max(bar + 1)..unseen.max(bar + 1) + PEEK_BARS);
+        true
+    }
+
+    /// 小節 `bar` の音符を出すか（隠す小節でも、続けてミスしたあとは出す）
+    pub fn shown(&self, bar: u32) -> bool {
+        self.shown.contains(&bar)
+    }
+
+    /// 音符を出すと決めた回数
+    pub fn peeks(&self) -> u32 {
+        self.peeks
+    }
+
+    /// 小節 `from` から後ろを忘れる（並べた周を取り下げたとき）
+    pub fn forget_from(&mut self, from: u32) {
+        self.missed.retain(|&b| b < from);
+        self.shown.retain(|&b| b < from);
+    }
 }
 
 /// めぐるやり方で、1 か所を叩く周の数
@@ -637,6 +726,7 @@ pub fn find_seams(notes: &[DrumNote], measures: usize) -> Vec<Section> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dtx::NotePos;
 
     #[test]
     fn keys_round_trip_and_step_wraps() {
@@ -649,8 +739,8 @@ mod tests {
         for b in Build::ALL {
             assert_eq!(Build::from_key(b.key()), Some(b));
         }
-        assert_eq!(Way::Climb.step(-1), Way::Fade);
-        assert_eq!(Way::Fade.step(1), Way::Climb);
+        assert_eq!(Way::Climb.step(-1), Way::Hide);
+        assert_eq!(Way::Hide.step(1), Way::Climb);
         assert_eq!(Way::Climb.step(1), Way::Part);
     }
 
@@ -716,10 +806,6 @@ mod tests {
     fn breaks_go_two_on_two_off() {
         let v: Vec<bool> = (0..8).map(break_muted).collect();
         assert_eq!(v, [false, false, true, true, false, false, true, true]);
-    }
-
-    fn pos(measure: u32, num: u32, den: u32) -> NotePos {
-        NotePos { measure, num, den }
     }
 
     /// 4/4・120 BPM の小節 `m` の、16 分の位置 `step` の音符
@@ -893,21 +979,44 @@ mod tests {
     }
 
     #[test]
-    fn fading_goes_from_all_to_none() {
-        assert_eq!(fade_share(1, 4), 1.0);
-        assert!((fade_share(2, 4) - 2.0 / 3.0).abs() < 1e-9);
-        assert_eq!(fade_share(4, 4), 0.0);
-        assert_eq!(fade_share(1, 1), 0.0);
-        // 隠す順番はばらけていて、同じ音符は同じ値
-        let ranks: Vec<f64> = (0..200)
-            .map(|i| fade_rank(pos(i / 16, i % 16, 16), DrumLane::SD))
-            .collect();
-        assert!(ranks.iter().all(|r| (0.0..1.0).contains(r)));
-        let low = ranks.iter().filter(|&&r| r < 0.5).count();
-        assert!((70..130).contains(&low), "{low}");
-        assert_eq!(
-            fade_rank(pos(3, 1, 4), DrumLane::HH),
-            fade_rank(pos(3, 1, 4), DrumLane::HH)
-        );
+    fn hiding_picks_all_or_one_part() {
+        for h in Hide::ALL {
+            assert_eq!(Hide::from_key(h.key()), Some(h));
+        }
+        assert_eq!(Way::from_key("fade"), Some(Way::Hide));
+        assert!(Hide::All.hides(DrumLane::LC));
+        let feet = Hide::Part(Part::Feet);
+        assert!(feet.hides(DrumLane::BD) && !feet.hides(DrumLane::SD));
+        assert!(!Way::Hide.hides_lap(1) && Way::Hide.hides_lap(2));
+        assert!(!Way::Climb.hides_lap(2));
+    }
+
+    #[test]
+    fn two_missed_bars_in_a_row_show_the_next_bars_off_screen() {
+        let mut b = Blindfold::default();
+        // 1 小節だけのミスでは出さない。間があいたら数え直す
+        assert!(!b.miss(3, 5));
+        assert!(!b.miss(3, 5));
+        assert!(!b.miss(5, 7));
+        // 5・6 と続いたら、まだ画面に入っていない 8・9 を出す
+        assert!(b.miss(6, 8));
+        assert!(!b.shown(7) && b.shown(8) && b.shown(9) && !b.shown(10));
+        assert_eq!(b.peeks(), 1);
+        // 出すと決めた 6 の次の 7 だけのミスでは、もう一度は出さない（7・続く小節で数える）
+        assert!(!b.miss(7, 9));
+        // 出している小節は隠していないので数えない
+        assert!(!b.miss(8, 10));
+        assert!(!b.miss(9, 11));
+        assert!(!b.miss(11, 13));
+        assert!(b.miss(12, 14));
+        assert!(b.shown(14) && b.shown(15));
+        assert_eq!(b.peeks(), 2);
+        // 画面に入っていない小節が手前でも、ミスした小節の次より前は出さない
+        let mut c = Blindfold::default();
+        c.miss(0, 0);
+        assert!(c.miss(1, 0));
+        assert!(c.shown(2) && c.shown(3) && !c.shown(1));
+        c.forget_from(3);
+        assert!(c.shown(2) && !c.shown(3));
     }
 }
