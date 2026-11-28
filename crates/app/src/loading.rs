@@ -107,6 +107,15 @@ impl Loading {
             BIG.draw(c, t.as_ref(), 187.0, 152.0, &whole.to_string());
             BIG.draw(c, t.as_ref(), 307.0, 152.0, &format!("{frac:02}"));
         }
+        // 間違えて選んだ曲から戻る方法（LC を続けて 2 回。最初の音符の少し前まで効く）
+        crate::settings_ui::legend(
+            c,
+            g,
+            &[(
+                &[crate::settings_ui::Pad::LC],
+                t("Hit Twice to Go Back (Esc)", "2 回叩くと戻る（Esc）"),
+            )],
+        );
     }
 
     /// ジャケット（v2：長い辺を 384 に合わせ、回さずに中心を画面の中心から (-348, 84)（上が正）へ。

@@ -34,6 +34,7 @@ mod frames;
 mod game;
 mod gfx;
 mod history;
+mod input_gate;
 mod inputs;
 mod jobs;
 mod lag_view;
@@ -104,6 +105,7 @@ use crate::config_view::{
 use crate::game::{GaugeRule, HitSoundRule, Outcome, Play, Rules};
 use crate::gfx::{Canvas, Gfx};
 use crate::history::History;
+use crate::input_gate::{InputGate, Scene};
 use crate::lag_view::LagResult;
 use crate::loading::{Job, Loading};
 use crate::midi::MidiIn;
@@ -459,6 +461,10 @@ struct App {
     ports_checked: Instant,
     /// 選曲の画面で最後に HH を叩いた時刻（2 回で難易度を変える）
     last_hh_us: Option<i64>,
+    /// 最後に LC を叩いた時刻（間違えて始めた曲から 2 回で戻る）
+    last_lc_us: Option<i64>,
+    /// 場面（画面と、重ねている練習メニュー・板）が変わった直後は、パッドと Esc を少しのあいだ受け付けない
+    gate: InputGate<std::mem::Discriminant<Screen>>,
     gfx: Gfx,
     /// 選曲画面の動き
     view: SelectView,
@@ -738,6 +744,8 @@ impl App {
             monitor: MidiMonitor::default(),
             ports_checked: Instant::now(),
             last_hh_us: None,
+            last_lc_us: None,
+            gate: InputGate::new(Instant::now()),
             gfx,
             view: SelectView::new(),
             sfx,
@@ -2177,13 +2185,30 @@ impl App {
             None => Vec::new(),
         };
         let paused_panel = self.quick.is_some();
+        self.track_scene();
+        let mut early_lc: Vec<i64> = Vec::new();
         match &mut self.screen {
             // シャッターを閉じているあいだは叩いても何もしない（演奏をやめたあとの音符も数えない）
             _ if closing => {}
             // 一時停止の板を開いているあいだは、パッドで板を操作する
             Screen::Play(play, _) if !paused_panel => {
+                // 最初の叩く音符の少し前までは、LC を 2 回で間違えて始めた曲から戻れる（back_out）
+                let early = play.before_first_note();
                 for (raw, msgs) in &received {
                     play.on_midi(raw, msgs);
+                    let Some(input) = self.menu_inputs.get_mut(raw.port).filter(|_| early) else {
+                        continue;
+                    };
+                    for &m in msgs {
+                        if let Some(InputEvent::Hit {
+                            lane: Some(DrumLane::LC),
+                            host_us,
+                            ..
+                        }) = input.feed(m, raw.arrival_us)
+                        {
+                            early_lc.push(host_us);
+                        }
+                    }
                 }
             }
             // 開発者メニューで MIDI を記録しているあいだは、届いたものを全部渡す（パッドで操作しない）
@@ -2225,6 +2250,9 @@ impl App {
                     self.on_menu_pad(lane, at);
                 }
             }
+        }
+        for at in early_lc {
+            self.back_out(at);
         }
         if let Screen::Config(view, _) = &mut self.screen
             && !closing
@@ -2820,12 +2848,20 @@ impl App {
             KeyCode::ArrowDown => ConfigInput::Down,
             KeyCode::ArrowLeft => ConfigInput::Left,
             KeyCode::ArrowRight => ConfigInput::Right,
-            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space => ConfigInput::Decide,
-            KeyCode::Escape | KeyCode::Backspace => ConfigInput::Cancel,
-            KeyCode::Pause if paused => {
+            // 一時停止の Esc は、選択肢などを開いていなければやめる（Esc を続けて 2 回で演奏をやめられる。
+            // 普通の演奏は選曲へ、練習と基礎練習は結果へ。一時停止の「やめる」の行と同じ）
+            KeyCode::Escape if paused && self.quick.as_ref().is_some_and(|q| q.at_top()) => {
+                self.sfx.play(Se::Cancel);
+                self.quick_action(ConfigAction::Run(ItemId::Quit));
+                return;
+            }
+            // 開いたキー（Space・Pause）でそのまま続ける
+            KeyCode::Space | KeyCode::Pause if paused => {
                 self.resume_play();
                 return;
             }
+            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space => ConfigInput::Decide,
+            KeyCode::Escape | KeyCode::Backspace => ConfigInput::Cancel,
             KeyCode::KeyR if paused => {
                 self.quick_action(ConfigAction::Run(ItemId::Retry));
                 return;
@@ -3138,6 +3174,11 @@ impl App {
 
     fn on_key(&mut self, code: KeyCode) {
         if self.after_close.is_some() || self.applying.is_some() {
+            return;
+        }
+        self.track_scene();
+        // 場面が変わった直後の Esc は受け付けない（連打しても 1 画面ずつしか戻らない）
+        if code == KeyCode::Escape && !self.gate.esc(Instant::now()) {
             return;
         }
         let at = host_us();
@@ -3528,12 +3569,73 @@ impl App {
         self.menu_input(input);
     }
 
+    /// 今の場面を門に見せる（変わっていれば、少しのあいだパッドと Esc を受け付けない。`input_gate`）
+    fn track_scene(&mut self) {
+        let scene = Scene {
+            screen: std::mem::discriminant(&self.screen),
+            menu: self.menu.is_some(),
+            quick: self.quick.is_some(),
+            result: matches!(self.screen, Screen::Result(..)),
+        };
+        self.gate.observe(scene, Instant::now());
+    }
+
+    /// 間違えて始めた曲から戻る（読み込み中と、最初の叩く音符の少し前まで、LC を続けて 2 回）。
+    /// 記録には残さず、始めた所（選曲・練習メニュー・基礎練習の画面・今日のメニュー）へ戻る
+    fn back_out(&mut self, at_us: i64) {
+        if self.after_close.is_some() {
+            return;
+        }
+        let double = self.last_lc_us.is_some_and(|t| at_us - t <= DOUBLE_HIT_US);
+        self.last_lc_us = (!double).then_some(at_us);
+        if !double {
+            return;
+        }
+        let today = self.today.as_ref().is_some_and(|p| p.current.is_some());
+        let (next, delay) = match &mut self.screen {
+            Screen::Loading(_) => {
+                self.sfx.stop_loading();
+                (AfterClose::Select, LOADING_CANCEL_CLOSE_DELAY)
+            }
+            Screen::Play(play, _) if play.before_first_note() => {
+                play.discard();
+                play.silence();
+                let next = if today && (play.drill.is_some() || play.practice.is_some()) {
+                    AfterClose::TodayMenu
+                } else if play.drill.is_some() {
+                    AfterClose::Drills
+                } else if let Some(o) = play.practice.as_ref().map(|p| p.restart_options()) {
+                    AfterClose::Setup(play.path.clone(), Some(o), None)
+                } else {
+                    AfterClose::Select
+                };
+                (next, Duration::ZERO)
+            }
+            _ => return,
+        };
+        log::info!("backed out of a play before the first note");
+        self.sfx.play(Se::Cancel);
+        self.close_then(next, delay);
+    }
+
     /// メニューの画面での電子ドラムの操作（上流の割り当てがもと）。
     /// HT で上、LT で下、CY か RD で決定、LC で戻る。選曲は HH を 2 回で難易度、RD で簡易設定（決定は CY だけ）。
     /// 結果は SD でもう一度、RD で区間練習、CY か LC で選曲へ（練習の結果なら CY・RD・LC で練習メニューへ）。
     /// 足で踏むパッド（BD・LP・LBD）は演奏の合間に踏んでしまうので、メニューの操作には使わない
     fn on_menu_pad(&mut self, lane: DrumLane, at_us: i64) {
         if self.after_close.is_some() || self.applying.is_some() {
+            return;
+        }
+        self.track_scene();
+        // 読み込み中は、間違えて始めた曲から LC 2 回で戻るだけ（叩き続けていても効く）
+        if matches!(self.screen, Screen::Loading(_)) {
+            if lane == DrumLane::LC {
+                self.back_out(at_us);
+            }
+            return;
+        }
+        // 場面が変わった直後と、そのあと叩き続けているあいだは何もしない（前の画面で叩いた続きが効かないように）
+        if !self.gate.pad(Instant::now()) {
             return;
         }
         if self.quick.is_some() && matches!(self.screen, Screen::Select | Screen::Play(..)) {
