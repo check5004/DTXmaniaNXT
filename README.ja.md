@@ -305,7 +305,7 @@ cargo test --all
 | `crates/nx` | DTXManiaNX のフォルダの読み込み（`Config.ini`・`score.ini`） |
 | `crates/video` | 譜面の動画（#AVI）。Windows では Media Foundation を使用 |
 | `crates/i18n` | 画面に出す英語と日本語の文 |
-| `crates/drum_module` | 電子ドラムの音源と MIDI でやり取りする部分（Roland V51 の SysEx、番地表、書き換えた値の書き戻し） |
+| `crates/drum_module` | 電子ドラムの音源と MIDI でやり取りする部分（Roland V71・V51・V31 の SysEx、番地表、書き換えた値の書き戻し） |
 | `crates/app` | アプリ本体（winit + wgpu + egui、cpal、midir）。NX のスキンを上流と同じ座標で描画 |
 | `assets/skin` | 同梱しているスキン。絵も音もすべて自前の素材（[クレジットと権利](#クレジットと権利)を参照） |
 | `tools/skin` | 新しいスキンの素材（絵と音）の生成の指示文と組み立て |

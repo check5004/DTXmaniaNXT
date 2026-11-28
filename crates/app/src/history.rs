@@ -237,6 +237,32 @@ impl History {
         }
     }
 
+    /// この曲で音源 `module` に使うキット。決めていないか、記録が読めなければ None
+    pub fn song_kit(&self, path: &Path, module: &str) -> Option<u16> {
+        let records = self.records.as_ref()?;
+        records
+            .song_kit(&path.to_string_lossy(), module)
+            .map_err(|e| log::warn!("cannot read the records: {e}"))
+            .ok()
+            .flatten()
+    }
+
+    /// この曲で音源 `module` に使うキットを、曲の譜面 `charts` すべてに残す（None なら決めていないことに）
+    pub fn set_song_kit(&mut self, charts: &[PathBuf], module: &str, kit: Option<u16>) {
+        let Some(records) = self.records.as_mut() else {
+            log::warn!("records are off: the song kit is not kept");
+            return;
+        };
+        let paths: Vec<String> = charts
+            .iter()
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect();
+        let refs: Vec<&str> = paths.iter().map(String::as_str).collect();
+        if let Err(e) = records.set_song_kit(&refs, module, kit, unix_now()) {
+            log::warn!("cannot save the song kit: {e}");
+        }
+    }
+
     /// 補正のおすすめ。`charts` はこの曲の譜面（難易度すべて）、`global_now` と `song_now` は今の補正。
     /// 記録が読めなければ、記録の無いときと同じ（何もすすめない）
     pub fn lag_advice(&self, charts: &[PathBuf], global_now: f64, song_now: f64) -> Advice {

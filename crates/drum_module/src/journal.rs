@@ -1,6 +1,6 @@
 //! 音源の値を書き換える前の値の記録。
 //!
-//! V51 は書き換えた値をそのまま本体に保存するので、書く前に元の値を読んでここに残し、
+//! 音源（V71・V51・V31）は書き換えた値をそのまま本体に保存するので、書く前に元の値を読んでここに残し、
 //! ファイルに書き出してから DT1 を送る。用が済んだら新しいものから順に書き戻す。
 //! アプリが途中で落ちても、次に起動したときにこの記録から戻せる。
 //!
@@ -10,9 +10,15 @@ use serde::{Deserialize, Serialize};
 
 use crate::roland::{Address, hex, parse_hex};
 
+/// 機種の名前を残していない記録（V51 しか書き換えなかったころのもの）の機種
+const LEGACY_MODEL: &str = "V51";
+
 /// 書き換え 1 回分
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Entry {
+    /// 機種の名前（`V51`。ほかの機種に書き戻さないように）
+    #[serde(default)]
+    pub model: String,
     /// 送った MIDI 出力ポートの名前（探す手がかり。挿し直すと変わることがある）
     pub port: String,
     /// 送った先の Device ID
@@ -36,6 +42,7 @@ pub struct Entry {
 
 impl Entry {
     pub fn new(
+        model: &str,
         port: &str,
         device: u8,
         addr: Address,
@@ -44,6 +51,7 @@ impl Entry {
         at: &str,
     ) -> Self {
         Self {
+            model: model.to_owned(),
             port: port.to_owned(),
             device,
             address: addr.hex(),
@@ -52,6 +60,15 @@ impl Entry {
             at: at.to_owned(),
             block: String::new(),
             block_size: 0,
+        }
+    }
+
+    /// 機種の名前（残していなければ V51）
+    pub fn model(&self) -> &str {
+        if self.model.is_empty() {
+            LEGACY_MODEL
+        } else {
+            &self.model
         }
     }
 
@@ -102,14 +119,21 @@ impl Journal {
         self.entries.is_empty()
     }
 
-    /// `device` の `addr` から `len` バイトが、どれも記録のどれかに入っているか
+    /// 機種 `model` の記録の数
+    pub fn count(&self, model: &str) -> usize {
+        self.entries.iter().filter(|e| e.model() == model).count()
+    }
+
+    /// 機種 `model`・`device` の `addr` から `len` バイトが、どれも記録のどれかに入っているか
     /// （元の値を残さずに書くのを防ぐ）
-    pub fn covers(&self, device: u8, addr: Address, len: usize) -> bool {
+    pub fn covers(&self, model: &str, device: u8, addr: Address, len: usize) -> bool {
         let start = addr.to_index();
         (start..start + len as u32).all(|i| {
-            self.entries
-                .iter()
-                .any(|e| e.device == device && e.range().is_some_and(|(s, end)| s <= i && i < end))
+            self.entries.iter().any(|e| {
+                e.model() == model
+                    && e.device == device
+                    && e.range().is_some_and(|(s, end)| s <= i && i < end)
+            })
         })
     }
 
@@ -122,18 +146,19 @@ impl Journal {
         let Some(len) = entry.original_bytes().map(|b| b.len()) else {
             return false;
         };
-        if self.covers(entry.device, addr, len) {
+        if self.covers(entry.model(), entry.device, addr, len) {
             return false;
         }
         self.entries.push(entry);
         true
     }
 
-    /// 書き戻す順（新しいものから。同じ所が重なっていても、最後に一番古い元の値が残る）
-    pub fn restore_plan(&self) -> Vec<(&Entry, Address, Vec<u8>)> {
+    /// 機種 `model` に書き戻す順（新しいものから。同じ所が重なっていても、最後に一番古い元の値が残る）
+    pub fn restore_plan(&self, model: &str) -> Vec<(&Entry, Address, Vec<u8>)> {
         self.entries
             .iter()
             .rev()
+            .filter(|e| e.model() == model)
             .filter_map(|e| Some((e, e.addr()?, e.original_bytes()?)))
             .collect()
     }
@@ -159,6 +184,7 @@ mod tests {
     fn entry(addr: Address, original: &[u8]) -> Entry {
         Entry::new(
             "V51",
+            "V51 Generic Mode",
             0x10,
             addr,
             original,
@@ -171,12 +197,13 @@ mod tests {
     fn keeps_the_first_original() {
         let vol = Address::new(0x04, 0, 0x23, 0x02);
         let mut j = Journal::default();
-        assert!(!j.covers(0x10, vol, 4));
+        assert!(!j.covers("V51", 0x10, vol, 4));
         assert!(j.remember(entry(vol, &[0, 0, 0, 0])));
-        assert!(j.covers(0x10, vol, 4));
-        assert!(j.covers(0x10, vol.offset(1), 2));
-        assert!(!j.covers(0x10, vol, 5));
-        assert!(!j.covers(0x11, vol, 4));
+        assert!(j.covers("V51", 0x10, vol, 4));
+        assert!(j.covers("V51", 0x10, vol.offset(1), 2));
+        assert!(!j.covers("V51", 0x10, vol, 5));
+        assert!(!j.covers("V51", 0x11, vol, 4));
+        assert!(!j.covers("V71", 0x10, vol, 4));
         // -INF にしたあとでもう一度残そうとしても、最初の値のまま
         assert!(!j.remember(entry(vol, &[0x0F, 0x0D, 0x0A, 0x07])));
         assert_eq!(j.entries.len(), 1);
@@ -205,11 +232,34 @@ mod tests {
         j.remember(entry(a, &[0, 0, 1, 2]));
         // 一部が重なる書き換え（後から広く残した）
         j.remember(entry(a.offset(2), &[9, 9, 0, 0]));
-        let plan = j.restore_plan();
+        let plan = j.restore_plan("V51");
         assert_eq!(plan.len(), 2);
         assert_eq!(plan[0].1, a.offset(2));
         assert_eq!(plan[1].1, a);
         assert_eq!(plan[1].2, vec![0, 0, 1, 2]);
+    }
+
+    #[test]
+    fn keeps_models_apart() {
+        let vol = Address::new(0x04, 0, 0x23, 0x02);
+        let mut j = Journal::default();
+        assert!(j.remember(entry(vol, &[0, 0, 0, 0])));
+        // ほかの機種の同じ番地は別に残す
+        let v71 = Entry {
+            model: "V71".into(),
+            ..entry(vol, &[0, 0, 0, 3])
+        };
+        assert!(j.remember(v71));
+        assert_eq!((j.count("V51"), j.count("V71"), j.count("V31")), (1, 1, 0));
+        assert_eq!(j.restore_plan("V71")[0].2, vec![0, 0, 0, 3]);
+        assert_eq!(j.restore_plan("V51")[0].2, vec![0, 0, 0, 0]);
+        // 機種を残していない前の記録は V51 のもの
+        let old = Journal::from_toml(
+            "[[entry]]\nport = \"V51\"\ndevice = 16\naddress = \"04 00 23 02\"\noriginal = \"00 00 00 00\"\n",
+        )
+        .unwrap();
+        assert_eq!(old.entries[0].model(), "V51");
+        assert_eq!(old.count("V51"), 1);
     }
 
     #[test]
@@ -233,7 +283,7 @@ mod tests {
             }],
         };
         assert_eq!(j.broken(), 1);
-        assert!(j.restore_plan().is_empty());
+        assert!(j.restore_plan("V51").is_empty());
         let mut j = Journal::default();
         assert!(!j.remember(Entry {
             original: "80".into(),
