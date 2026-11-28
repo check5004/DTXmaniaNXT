@@ -4,7 +4,7 @@
 //! 左の列の一番上は「今日のメニュー」（`today`）。真ん中の列にその日の並び、右に全体の帯と選んだものの中身を出し、
 //! SD/FT で長さ（5・10・15 分、始めたら変えない）、CY で選んだものから始める。
 //! 左の列では HT/LT で分け方、CY か FT で真ん中の列へ。真ん中の列では HT/LT でドリル、SD/FT でテンポ（5 ずつ）、
-//! HH でやり方、RD で手順（右から・左から）、CY で始め、LC で左の列へ戻る（左の列の LC はタイトルへ）。
+//! HH を 2 回でやり方、RD を 2 回で手順（右から・左から。どちらも確かめてから）、CY で始め、LC で左の列へ戻る（左の列の LC はタイトルへ）。
 //! テンポはドリルごとに、やり方と手順は全体で覚える。
 //! 1 回はやり方ごとに決まった長さで必ず終わり（限界チャレンジは 3 つ落とすか上の端まで）、
 //! 終えたらこの画面の同じドリルに戻る。
@@ -335,6 +335,21 @@ impl DrillMenu {
     }
 
     /// 選んでいる行
+    /// HH・RD（やり方・手順）が効くか（ドリルの列にいるとき）
+    pub fn can_change_way(&self) -> bool {
+        self.focus == Focus::Drills
+    }
+
+    /// HH で変わる先のやり方の名前
+    pub fn next_way_name(&self) -> String {
+        way_name(self.way().next_for(self.drill()))
+    }
+
+    /// RD で変わる先の手順の名前
+    pub fn other_lead_name(&self) -> &'static str {
+        lead_name(!self.lefty)
+    }
+
     pub fn selected(&self) -> Item {
         match self.focus {
             Focus::Left => left_items()[self.left],
@@ -683,8 +698,8 @@ impl DrillMenu {
             }
             Item::Drill(_) => {
                 v.push((&[Pad::SD, Pad::FT], t("Tempo", "テンポ")));
-                v.push((&[Pad::HH], t("Mode (Tab)", "やり方（Tab）")));
-                v.push((&[Pad::RD], t("Lead Hand (H)", "手順（H）")));
+                v.push((&[Pad::HH], t("×2 Mode (Tab)", "×2 やり方（Tab）")));
+                v.push((&[Pad::RD], t("×2 Lead Hand (H)", "×2 手順（H）")));
                 v.push((&[Pad::CY], t("Start (Enter)", "始める（Enter）")));
                 v.push((&[Pad::LC], t("Categories (Esc)", "カテゴリへ（Esc）")));
                 return v;

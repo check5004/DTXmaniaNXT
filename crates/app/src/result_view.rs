@@ -466,7 +466,7 @@ enum Top<'a> {
 /// 基礎練習の結果のパッドの役目。もう一度か、基礎練習の画面へ（次に何をするかは自分で選ぶ）
 fn drill_hints() -> Vec<ui::Hint<'static>> {
     vec![
-        (&[Pad::SD], t("Play Again (R)", "もう一度（R）")),
+        (&[Pad::SD], t("×2 Play Again (R)", "×2 もう一度（R）")),
         (
             &[Pad::CY, Pad::RD, Pad::LC],
             t("Drills (Enter)", "基礎練習へ（Enter）"),
@@ -476,7 +476,8 @@ fn drill_hints() -> Vec<ui::Hint<'static>> {
 
 /// 今日のメニューの結果のパッドの役目。CY で次へ（最後なら終える）、LC で今日のメニューへ
 fn today_hints(m: &crate::today::Mark, page: Page, practice: bool) -> Vec<ui::Hint<'static>> {
-    let mut v: Vec<ui::Hint<'static>> = vec![(&[Pad::SD], t("Play Again (R)", "もう一度（R）"))];
+    let mut v: Vec<ui::Hint<'static>> =
+        vec![(&[Pad::SD], t("×2 Play Again (R)", "×2 もう一度（R）"))];
     if practice {
         v.push(match page {
             Page::Summary => (&[Pad::HT, Pad::LT], t("Loop Table (→)", "周ごとの表（→）")),
@@ -641,13 +642,17 @@ fn result_hints(
             t("Score and Rank (←)", "スコアとランク（←）"),
         ),
     };
-    let mut v: Vec<ui::Hint<'static>> = vec![(&[Pad::SD], t("Play Again (R)", "もう一度（R）"))];
+    let mut v: Vec<ui::Hint<'static>> =
+        vec![(&[Pad::SD], t("×2 Play Again (R)", "×2 もう一度（R）"))];
     // 練習の結果からは練習メニューへ戻る（CY・LC・RD のどれでも）
     if !practice {
-        v.push((&[Pad::RD], t("Practice a Section (P)", "区間練習（P）")));
+        v.push((
+            &[Pad::RD],
+            t("×2 Practice a Section (P)", "×2 区間練習（P）"),
+        ));
     }
     if replay {
-        v.push((&[Pad::HH], t("Replay (V)", "リプレイ（V）")));
+        v.push((&[Pad::HH], t("×2 Replay (V)", "×2 リプレイ（V）")));
     }
     // ずれの板のおすすめ（板は 1 ページ目だけ）
     if page == Page::Summary
@@ -656,12 +661,15 @@ fn result_hints(
         if lag.applied.is_some() {
             v.push((
                 &[Pad::FT],
-                t("Undo Suggested Offset (O)", "補正を元に戻す（O）"),
+                t("×2 Undo Suggested Offset (O)", "×2 補正を元に戻す（O）"),
             ));
         } else if lag.advice.changes() {
             v.push((
                 &[Pad::FT],
-                t("Use Suggested Offset (O)", "おすすめの補正にする（O）"),
+                t(
+                    "×2 Use Suggested Offset (O)",
+                    "×2 おすすめの補正にする（O）",
+                ),
             ));
         }
     }
@@ -895,10 +903,16 @@ mod tests {
     #[test]
     fn the_legend_shows_what_each_pad_does() {
         let _ja = i18n::scoped(i18n::Lang::Ja);
+        // 2 回叩いて確かめる操作は「×2」を付けて出す
         let pads = |h: &[ui::Hint<'static>], what: &str| {
             h.iter()
-                .find(|x| x.1.starts_with(what))
+                .find(|x| x.1.trim_start_matches("×2 ").starts_with(what))
                 .map(|x| x.0.to_vec())
+        };
+        let twice = |h: &[ui::Hint<'static>], what: &str| {
+            h.iter()
+                .find(|x| x.1.trim_start_matches("×2 ").starts_with(what))
+                .is_some_and(|x| x.1.starts_with("×2 "))
         };
         // 練習の結果：SD でもう一度、CY・RD・LC で練習メニューへ（選曲へは戻らない）
         let h = result_hints(Page::Summary, true, None, false);
@@ -927,6 +941,11 @@ mod tests {
         assert_eq!(pads(&h, "区間練習"), Some(vec![Pad::RD]));
         assert_eq!(pads(&h, "リプレイ"), Some(vec![Pad::HH]));
         assert_eq!(pads(&h, "おすすめの補正にする"), Some(vec![Pad::FT]));
+        for what in ["もう一度", "区間練習", "リプレイ", "おすすめの補正にする"]
+        {
+            assert!(twice(&h, what), "{what}");
+        }
+        assert!(!twice(&h, "選曲へ"));
         assert_eq!(
             pads(
                 &result_hints(Page::Analysis, false, Some(&lag), true),

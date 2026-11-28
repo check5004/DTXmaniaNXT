@@ -407,8 +407,8 @@ pub fn draw_result(c: &Canvas, g: &mut Gfx, o: &Outcome) {
         15.0,
         Color32::WHITE,
     );
-    // パッドの印（FT）と、キーボードの O
-    let hint = tf!("FT / O: {hint}", "FT / O：{hint}");
+    // パッドの印（FT を 2 回）と、キーボードの O
+    let hint = tf!("FT ×2 / O: {hint}", "FT ×2 / O：{hint}");
     draw_text_right(c, g, &hint, bx + bw - 10.0, by + 11.0, 13.0, white);
 }
 

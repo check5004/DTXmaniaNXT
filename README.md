@@ -76,8 +76,15 @@ Screens laid out like DTXManiaNX v2.0, with new artwork and sounds. Everything i
 | Sort (song select) | <kbd>←</kbd> <kbd>→</kbd> | SD / FT |
 | Quick settings (song select) | <kbd>F2</kbd> | RD |
 | Pause (while playing) | <kbd>Esc</kbd> or <kbd>Space</kbd> | |
+| Quit the song (while playing) | <kbd>Esc</kbd> twice | |
+| Back out of a song you started by mistake | <kbd>Esc</kbd> twice | LC twice before the first note |
 
-The foot pedals (BD, LP) never control menus, so a stray kick between songs does nothing.
+The game is built for people who keep tapping their kit between songs:
+
+- The foot pedals (BD, LP) never control menus.
+- Right after the screen changes, pads do nothing for a moment. If you keep hitting, they wait until you stop.
+- Things that are a hassle to undo need the same pad twice in a row, then a confirmation (CY for yes, LC for no). On the result screen that is SD (play again), RD (practice), HH (replay) and FT (offset). The drill menu's HH and RD and the replay's RD work the same way. Keyboard shortcuts work right away.
+- Mashing <kbd>Esc</kbd> goes back one screen at a time and stops there, so it never quits the game.
 
 Playing on the keyboard: <kbd>A</kbd> <kbd>S</kbd> <kbd>Z</kbd> <kbd>D</kbd> <kbd>G</kbd> <kbd>F</kbd> <kbd>H</kbd> <kbd>J</kbd> <kbd>K</kbd> <kbd>L</kbd> are LC, HH, LP, SD, HT, BD, LT, FT, CY and RD, and <kbd>Q</kbd> is the open hi-hat. While playing, <kbd>↑</kbd> <kbd>↓</kbd> change the scroll speed, <kbd>R</kbd> restarts and <kbd>←</kbd> <kbd>→</kbd> skip back and forward. <kbd>F11</kbd> or <kbd>Alt</kbd>+<kbd>Enter</kbd> toggles full screen, and <kbd>F12</kbd> saves a screenshot.
 </details>
@@ -108,7 +115,7 @@ If you played these songs in DTXManiaNX, the best results in its `score.ini` fil
 
 <p align="center"><img src="docs/readme/practice.svg" width="960" alt="Climb the steps to clear: four laps per step at 70, 80, 90 and 100 percent. A map of the section marks beats missed once in yellow and twice in red. Missing the same beat twice means try that step again, and two tries again in a row drop one step."></p>
 
-Press <kbd>P</kbd> on song select or the result screen to open the practice menu (on drums: RD on the result screen, or RD then CY on song select). It lists your weak spots from past plays. Each one comes with a picture of its notes, and the notes you often miss are marked, so you can see which phrase it is, not just a bar number. The selected spot also plays on a loop so you can hear it, starting a bar early with the same count-in as practice. Pick one, or choose your own bars, and start. The section loops with a count-in and a metronome, from a slower speed up to your target. When you finish, you are back in the practice menu with the next weak spot selected.
+Press <kbd>P</kbd> on song select or the result screen to open the practice menu (on drums: RD twice and then CY on the result screen, or RD then CY on song select). It lists your weak spots from past plays. Each one comes with a picture of its notes, and the notes you often miss are marked, so you can see which phrase it is, not just a bar number. The selected spot also plays on a loop so you can hear it, starting a bar early with the same count-in as practice. Pick one, or choose your own bars, and start. The section loops with a count-in and a metronome, from a slower speed up to your target. When you finish, you are back in the practice menu with the next weak spot selected.
 
 - **One step is 4 laps.** If you don't miss the same beat twice, you move up to the next speed without stopping.
 - **Same beat missed twice?** You try that step again. Two tries in a row and it steps down 10 %.
@@ -148,7 +155,7 @@ Your drum hits are timestamped the moment they arrive and compared with where th
 
 - **Hit error bar.** While you play, a small bar under the score shows each hit as early or late. It never covers the lanes.
 - **Offsets.** One offset for your whole setup (for audio and MIDI latency), plus one per song for charts whose music is a little off.
-- **Suggested offset.** The result screen works out an offset from your recent plays. Hit FT (or <kbd>O</kbd>) to use it.
+- **Suggested offset.** The result screen works out an offset from your recent plays. Hit FT twice and confirm with CY (or press <kbd>O</kbd>) to use it.
 
 ## Made for electronic drums
 

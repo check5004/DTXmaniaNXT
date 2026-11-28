@@ -13,13 +13,15 @@ pub const RESULT_SETTLE: Duration = Duration::from_millis(1000);
 /// 受け付けないあいだに叩いたら、そこからこれだけ叩くのを止めるまで受け付けない
 pub const KEEP_QUIET: Duration = Duration::from_millis(400);
 
-/// 今の場面。`screen` は画面の種類、`menu` は選曲に重ねる練習メニュー、`quick` は簡易設定・一時停止の板
+/// 今の場面。`screen` は画面の種類、`menu` は選曲に重ねる練習メニュー、`quick` は簡易設定・一時停止の板、
+/// `confirm` は「もう一度遊びますか？」などの確かめ（`pad_guard`）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Scene<K> {
     pub screen: K,
     pub menu: bool,
     pub quick: bool,
-    /// 結果の画面（パッドを受け付けない時間を長くする）
+    pub confirm: bool,
+    /// 結果の画面（入ってきたときは、パッドを受け付けない時間を長くする）
     pub result: bool,
 }
 
@@ -40,7 +42,7 @@ impl<K: Copy + PartialEq> InputGate<K> {
     }
 
     /// 今の場面を見せる。変わっていれば、少しのあいだ受け付けない。
-    /// 板（一時停止・簡易設定）を開け閉めしただけなら Esc は止めない（Esc を続けて 2 回で演奏をやめられるように）
+    /// 板（一時停止・簡易設定）や確かめを開け閉めしただけなら Esc は止めない（Esc を続けて 2 回で演奏をやめられるように）
     pub fn observe(&mut self, scene: Scene<K>, now: Instant) {
         let Some(before) = self.scene.replace(scene) else {
             return;
@@ -48,7 +50,7 @@ impl<K: Copy + PartialEq> InputGate<K> {
         if before == scene {
             return;
         }
-        let settle = if scene.result {
+        let settle = if scene.result && before.screen != scene.screen {
             RESULT_SETTLE
         } else {
             SCENE_SETTLE
@@ -87,6 +89,7 @@ mod tests {
             screen,
             menu: false,
             quick: false,
+            confirm: false,
             result: false,
         }
     }
@@ -130,6 +133,18 @@ mod tests {
         assert!(!g.pad(ms(t0, 600)));
         assert!(!g.pad(ms(t0, 900)));
         assert!(g.pad(ms(t0, 1300)));
+        // 結果の画面の中で確かめを開いたときは 0.5 秒（Esc は止めない）
+        g.observe(
+            Scene {
+                result: true,
+                confirm: true,
+                ..scene(1)
+            },
+            ms(t0, 5000),
+        );
+        assert!(!g.pad(ms(t0, 5100)));
+        assert!(g.esc(ms(t0, 5100)));
+        assert!(g.pad(ms(t0, 5100 + 400)));
     }
 
     #[test]
