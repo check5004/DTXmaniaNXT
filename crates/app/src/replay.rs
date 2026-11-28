@@ -41,6 +41,8 @@ pub struct RecordedRules {
     pub auto: Vec<DrumLane>,
     /// この曲の補正（ミリ秒）
     pub song_offset_ms: f64,
+    /// 早すぎた GOOD と POOR を取り直す判定で遊んだ（0.15.2 から。前の版の記録には無い）
+    pub retake: bool,
 }
 
 impl RecordedRules {
@@ -99,6 +101,7 @@ impl RecordedRules {
             gauge,
             auto,
             song_offset_ms: get("song_offset_ms").and_then(Json::num).unwrap_or(0.0),
+            retake: matches!(get("retake"), Some(Json::Bool(true))),
         }
     }
 
@@ -113,6 +116,7 @@ impl RecordedRules {
         rules.groups = self.groups.unwrap_or_default();
         rules.gauge = self.gauge.unwrap_or_default();
         rules.auto = self.auto.clone();
+        rules.retake = self.retake;
         rules.metronome = false;
     }
 }
@@ -234,16 +238,25 @@ pub fn rehearse(mut judge: Judge, takes: Vec<Take>) -> Rehearsal {
         for e in judge.advance(t.ms) {
             judged[e.note] = Some((e.judgement, e.offset_ms));
         }
-        let events = judge.hit(Hit {
-            ms: t.ms,
-            lane: t.lane,
-            velocity: t.velocity,
-        });
-        for e in &events {
+        let struck = judge.strike(
+            Hit {
+                ms: t.ms,
+                lane: t.lane,
+                velocity: t.velocity,
+            },
+            None,
+        );
+        for e in &struck.events {
             judged[e.note] = Some((e.judgement, e.offset_ms));
         }
-        matched.push(events.first().map(|e| e.note));
-        last = Some((t.ms, events.iter().map(|e| e.note).collect()));
+        // 判定を待っている音符を取った打撃も、その音符の音を鳴らしたので取ったものとする
+        matched.push(struck.took());
+        let took = struck
+            .events
+            .iter()
+            .map(|e| e.note)
+            .chain(struck.held.iter().copied());
+        last = Some((t.ms, took.collect()));
         kept.push(t);
     }
     for e in judge.advance(f64::INFINITY) {

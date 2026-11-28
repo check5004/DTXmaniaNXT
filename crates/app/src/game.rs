@@ -162,6 +162,9 @@ pub struct Rules {
     pub auto_mix: AutoMix,
     /// メトロノームを鳴らす
     pub metronome: bool,
+    /// 早すぎた GOOD と POOR はすぐに決めず、もっと近い打撃が来たら取り直す（[`Judge::set_retake`]）。
+    /// 遊ぶときはいつも使う。前の版で遊んだ記録のリプレイは使わない（遊んだときと同じ判定にする）
+    pub retake: bool,
 }
 
 /// 叩いた音の鳴らし方（上流の HH / FT / CY Priority と Muting LP）
@@ -271,6 +274,8 @@ pub struct LastInput {
     pub lane: Option<DrumLane>,
     pub velocity: u8,
     pub hh_pedal: Option<u8>,
+    /// ハイハットを半開きで叩いた（HH と HHO のどちらの音符も取れる）
+    pub half_open: bool,
 }
 
 /// 1 曲を遊び終えたときの成績
@@ -465,6 +470,9 @@ pub struct Play {
     wait: Option<WaitClock>,
     /// 間違えて始めた曲として、記録にも遊んだ時間にも残さない（[`Self::discard`]）
     discarded: bool,
+    /// 判定を待っている音符（[`Judge::set_retake`]）ごとの、取った打撃の番号と叩き方・ハイハットの開き具合
+    /// （決まったときの記録と、取り直されて空打ちになったときの記録に使う）
+    held_takes: HashMap<usize, (u64, Option<Articulation>, Option<u8>)>,
 }
 
 impl Play {
@@ -692,6 +700,7 @@ impl Play {
             ),
         };
         judge.set_auto(auto);
+        judge.set_retake(rules.retake);
         judge.set_pedal_windows(rules.pedal_windows);
         let drill = drill.map(|run| DrillPlay::new(run, &tempo, judge.notes()));
         // 聞いてまねるのお手本は、作った音を自動で鳴らす音として時刻を決めて鳴らす（判定はしない）
@@ -843,6 +852,7 @@ impl Play {
             demo_seen_ms: f64::NEG_INFINITY,
             wait: waits.then(WaitClock::default),
             discarded: false,
+            held_takes: HashMap::new(),
         };
         play.lay_laps(start_ms);
         play.lay_auto(start_ms);
@@ -1250,7 +1260,7 @@ impl Play {
 
     /// 待ちモードで、止まって待っているあいだにレーン `lane` を叩いたら、合わないパッドか。
     /// 合わなければ、まだ叩いていない待っている音符（判定の音符の添字）
-    fn wrong_pad(&self, lane: DrumLane) -> Option<Vec<usize>> {
+    fn wrong_pad(&self, lane: DrumLane, also: Option<DrumLane>) -> Option<Vec<usize>> {
         let w = self.wait.as_ref().filter(|w| w.held.is_some())?;
         if self.judge.is_auto(lane) {
             return None;
@@ -1262,9 +1272,10 @@ impl Play {
             .copied()
             .filter(|&i| !self.judge.is_done(i))
             .collect();
-        let fits = open
-            .iter()
-            .any(|&i| groups.accepts(lane, self.judge.notes()[i].lane));
+        let fits = open.iter().any(|&i| {
+            let note = self.judge.notes()[i].lane;
+            groups.accepts(lane, note) || also.is_some_and(|a| groups.accepts(a, note))
+        });
         (!fits && !open.is_empty()).then_some(open)
     }
 
@@ -1392,6 +1403,7 @@ impl Play {
             return Some(to);
         }
         self.judge.jump_to(self.judge_ms(to));
+        self.held_takes.clear();
         self.move_clock(now, to);
         Some(to)
     }
@@ -1407,6 +1419,7 @@ impl Play {
             (f.end_ms + self.song_offset_ms).max(self.start_ms),
         );
         self.judge = f.fresh.clone();
+        self.held_takes.clear();
         f.next_hit = 0;
         let song_offset = self.song_offset_ms;
         f.next_sound = f.takes.partition_point(|t| t.ms + song_offset < to);
@@ -1541,7 +1554,15 @@ impl Play {
                 });
             }
         }
-        self.record(&events, None, None);
+        // 判定を待っていた音符は、取った打撃の叩き方とともに残す
+        let (held, rest): (Vec<JudgeEvent>, Vec<JudgeEvent>) = events
+            .iter()
+            .partition(|e| self.held_takes.contains_key(&e.note));
+        for e in held {
+            let (_, articulation, hh_pedal) = self.held_takes.remove(&e.note).unwrap_or_default();
+            self.record(&[e], articulation, hh_pedal);
+        }
+        self.record(&rest, None, None);
         self.show(&events);
     }
 
@@ -1560,7 +1581,7 @@ impl Play {
             }
             f.next_hit += 1;
             self.advance_to(t.ms);
-            self.strike(t, None);
+            self.strike(t, None, false);
         }
     }
 
@@ -1613,6 +1634,7 @@ impl Play {
                     articulation,
                     velocity,
                     hh_pedal,
+                    half_open,
                 }) => {
                     self.last_input = Some(LastInput {
                         source: name.clone(),
@@ -1621,9 +1643,10 @@ impl Play {
                         lane,
                         velocity,
                         hh_pedal,
+                        half_open,
                     });
                     if let Some(lane) = lane {
-                        hits.push((lane, velocity, host_us, articulation, hh_pedal));
+                        hits.push((lane, velocity, host_us, articulation, hh_pedal, half_open));
                     }
                 }
                 Some(InputEvent::HiHatPedal { value, .. }) => self.hh_pedal = Some(value),
@@ -1631,9 +1654,15 @@ impl Play {
                 None => {}
             }
         }
-        for (lane, velocity, host_us, articulation, hh_pedal) in hits {
+        for (lane, velocity, host_us, articulation, hh_pedal, half_open) in hits {
             let at = (host_us, raw.arrival_us);
-            self.hit(lane, velocity, at, Some(articulation), hh_pedal);
+            self.hit(
+                lane,
+                velocity,
+                at,
+                Some(articulation),
+                (hh_pedal, half_open),
+            );
         }
         for pad in chokes {
             self.choke(pad);
@@ -1666,8 +1695,9 @@ impl Play {
             lane: Some(lane),
             velocity: 100,
             hh_pedal: None,
+            half_open: false,
         });
-        self.hit(lane, 100, (at_us, at_us), None, None);
+        self.hit(lane, 100, (at_us, at_us), None, (None, false));
     }
 
     /// 開発用: キーボードで、電子ドラムと同じく強さのある打を送る（`DTXMANIANXT_KEY_VELOCITY=1`）。
@@ -1681,24 +1711,26 @@ impl Play {
             lane: Some(lane),
             velocity,
             hh_pedal: None,
+            half_open: false,
         });
         self.hit(
             lane,
             velocity,
             (at_us, at_us),
             Some(Articulation::Head),
-            None,
+            (None, false),
         );
     }
 
-    /// `at_us` は叩いた時刻と、アプリに届いた時刻（ホスト時刻）
+    /// `at_us` は叩いた時刻と、アプリに届いた時刻（ホスト時刻）。`hh_pedal` は叩いた瞬間のハイハットの開き具合と、
+    /// 半開きだったか（[`InputEvent::Hit`]）
     fn hit(
         &mut self,
         lane: DrumLane,
         velocity: u8,
         (at_us, arrival_us): (i64, i64),
         articulation: Option<Articulation>,
-        hh_pedal: Option<u8>,
+        (hh_pedal, half_open): (Option<u8>, bool),
     ) {
         // 上流と同じく、止めているあいだは叩いても何もしない。リプレイでは叩いても数えない
         if self.paused() || self.replay.is_some() {
@@ -1721,11 +1753,13 @@ impl Play {
                 target: None,
             },
             Some(timing),
+            half_open,
         );
     }
 
-    /// 判定の時刻 `t.ms` に叩いた。`live` は叩いた時刻（遊んでいるとき）。リプレイなら None で、音は先に出力へ渡してある
-    fn strike(&mut self, t: Take, live: Option<HitTiming>) {
+    /// 判定の時刻 `t.ms` に叩いた。`live` は叩いた時刻（遊んでいるとき）。リプレイなら None で、音は先に出力へ渡してある。
+    /// `half_open` はハイハットを半開きで叩いたこと（HH と HHO のどちらの音符も取れる）
+    fn strike(&mut self, t: Take, live: Option<HitTiming>, half_open: bool) {
         let Take {
             ms,
             lane,
@@ -1753,30 +1787,33 @@ impl Play {
             velocity,
             rim,
         });
+        let also = match lane {
+            DrumLane::HH if half_open => Some(DrumLane::HHO),
+            DrumLane::HHO if half_open => Some(DrumLane::HH),
+            _ => None,
+        };
         // 待ちモードで止まっているあいだは、合うパッドだけを判定にかける（違うパッドは迷った所に数える）
-        let wrong = self.wrong_pad(lane);
-        let events = match &wrong {
+        let wrong = self.wrong_pad(lane, also);
+        let struck = match &wrong {
             Some(notes) => {
                 if let Some(p) = self.practice.as_mut() {
                     p.on_wrong(notes);
                 }
-                Vec::new()
+                Default::default()
             }
-            None => self.judge.hit(Hit { ms, lane, velocity }),
+            None => self.judge.strike(Hit { ms, lane, velocity }, also),
         };
+        self.note_held(&struck, articulation, hh_pedal);
+        let events = struck.events.clone();
         // 自動で叩くレーンを叩いても空打ちには数えない
-        if events.is_empty() && wrong.is_none() && !self.judge.is_auto(lane) {
-            let stray = StrayHit {
+        if struck.is_stray() && wrong.is_none() && !self.judge.is_auto(lane) {
+            self.add_stray(StrayHit {
                 at_ms: ms,
                 lane,
                 velocity,
                 articulation,
                 hh_pedal,
-            };
-            match self.practice.as_mut() {
-                Some(p) => p.on_stray(stray, self.judge.widest_poor()),
-                None => self.strays.push(stray),
-            }
+            });
             // 上流の Tight: MISS を出し、コンボを切り、ゲージを減らす（MISS の数には入れない）
             if self.tight {
                 self.judge.break_combo();
@@ -1789,9 +1826,9 @@ impl Play {
         if self.drum_sounds && live.is_some() {
             // 取った音符の音を鳴らす。空打ちなら空打ちの音、無ければそのレーンの一番近い音符の音。
             // `sound_lane` は鳴らす音のレーン（上流が音を止めるかを決めるチップのチャンネル）
-            let (wav, sound_lane) = match events.first() {
-                Some(e) => {
-                    let (w, l) = self.hit_wav(lane, &self.judge.notes()[e.note], ms, articulation);
+            let (wav, sound_lane) = match struck.took() {
+                Some(i) => {
+                    let (w, l) = self.hit_wav(lane, &self.judge.notes()[i], ms, articulation);
                     (Some(w), l)
                 }
                 None => (self.stray_wav(lane, ms, articulation), lane),
@@ -1818,13 +1855,52 @@ impl Play {
         }
         self.show(&events);
         // スネアの音符を違う所で叩いたら知らせる（判定はそのまま）
-        if let (Some(a), Some(e)) = (articulation, events.first()) {
-            let note = &self.judge.notes()[e.note];
+        if let (Some(a), Some(i)) = (articulation, struck.took()) {
+            let note = &self.judge.notes()[i];
             if note.lane == DrumLane::SD
                 && let Some(want) = Stroke::of_note(self.is_rim_note(note)).wrong_for(a)
             {
                 self.push_fx(Fx::WrongStroke { want });
             }
+        }
+    }
+
+    /// 空打ちを残す（練習なら、その空打ちの周へ）
+    fn add_stray(&mut self, stray: StrayHit) {
+        match self.practice.as_mut() {
+            Some(p) => p.on_stray(stray, self.judge.widest_poor()),
+            None => self.strays.push(stray),
+        }
+    }
+
+    /// 判定を待つ音符を覚え、取り直されて空打ちになった前の打撃を空打ちとして残す
+    fn note_held(
+        &mut self,
+        struck: &engine::judge::Struck,
+        articulation: Option<Articulation>,
+        hh_pedal: Option<u8>,
+    ) {
+        for &(id, hit) in &struck.displaced {
+            let (a, p) = self
+                .held_takes
+                .values()
+                .find(|(i, _, _)| *i == id)
+                .map_or((None, None), |&(_, a, p)| (a, p));
+            self.held_takes.retain(|_, (i, _, _)| *i != id);
+            self.add_stray(StrayHit {
+                at_ms: hit.ms,
+                lane: hit.lane,
+                velocity: hit.velocity,
+                articulation: a,
+                hh_pedal: p,
+            });
+        }
+        for e in &struck.events {
+            self.held_takes.remove(&e.note);
+        }
+        for &i in &struck.held {
+            self.held_takes
+                .insert(i, (struck.id, articulation, hh_pedal));
         }
     }
 
@@ -2146,6 +2222,7 @@ impl Play {
         let now = self.now_ms();
         self.end_ms = self.end_ms.min(now + DRILL_STOP_MS);
         self.judge.jump_to(f64::INFINITY);
+        self.held_takes.clear();
         if let Some(a) = self.audio.as_mut() {
             a.stop(METRONOME_TAG);
         }
@@ -2181,6 +2258,9 @@ impl Play {
         }
         if self.tight {
             settings += ",\"tight\":true";
+        }
+        if self.judge.retakes() {
+            settings += ",\"retake\":true";
         }
         let groups = self.judge.groups();
         if groups != LaneGroups::default() {
@@ -2604,7 +2684,7 @@ mod tests {
         inputs.sort_by(|a, b| a.ms.total_cmp(&b.ms));
         for t in inputs {
             p.advance_to(t.ms);
-            p.strike(t, None);
+            p.strike(t, None, false);
         }
         p.advance_to(f64::INFINITY);
         let tally = p.judge.tally().clone();
@@ -2650,6 +2730,69 @@ mod tests {
         // 叩いた音は、取った音符の音（空打ちは一番近い音符の音、FT には無い）
         let f = r.replay().unwrap();
         assert!(f.sounds.iter().filter(|s| s.is_some()).count() == notes.len() - 4);
+    }
+
+    #[test]
+    fn an_early_extra_hit_is_taken_back_and_replays_the_same() {
+        // BPM 120 で 1 小節 2000ms。HH は 8 分（250ms 間隔）
+        let text = "#BPM 120\n#WAV01 hh.ogg\n#00111: 0101010101010101\n";
+        let path = std::env::temp_dir().join(format!("nxt-retake-{}.dtx", std::process::id()));
+        std::fs::write(&path, text).unwrap();
+        let rules = Rules {
+            retake: true,
+            ..Rules::default()
+        };
+        let mut p = Play::load(&path, 0.0, false, &rules).unwrap();
+        let notes = p.judge.notes().to_vec();
+        let take = |ms: f64, velocity: u8| Take {
+            ms,
+            lane: DrumLane::HH,
+            velocity,
+            articulation: Some(Articulation::Bow),
+            hh_pedal: Some(127),
+            target: None,
+        };
+        // 最初の音符の 100ms 前に、左ペダルを踏んだときの弱い HH。ほかはちょうどに叩く
+        let mut inputs = vec![take(notes[0].ms - 100.0, 8)];
+        inputs.extend(notes.iter().map(|n| take(n.ms, 100)));
+        for t in inputs {
+            p.advance_to(t.ms);
+            p.strike(t, None, false);
+        }
+        p.advance_to(f64::INFINITY);
+        let tally = p.judge.tally().clone();
+        assert_eq!(tally.perfect as usize, notes.len());
+        assert_eq!((tally.poor, tally.stray), (0, 1));
+        let session = p.session().unwrap();
+        assert!(session.settings.contains("\"retake\":true"));
+        let lap = &session.laps[0];
+        // 弱い HH は空打ちとして残る（叩き方と開き具合も）
+        assert_eq!(lap.strays.len(), 1);
+        assert_eq!(lap.strays[0].velocity, 8);
+        assert_eq!(lap.strays[0].hh_pedal, Some(127));
+        assert!(lap.hits.iter().all(|h| h.judgement == Judgement::Perfect));
+        let rec = records::PlayTakes {
+            entry: records::PlayEntry {
+                session_id: 1,
+                started_at: 0,
+                chart_hash: Some(p.chart_hash),
+                tally: lap.tally.clone(),
+                completed: true,
+                score: None,
+            },
+            chart_path: path.to_string_lossy().into_owned(),
+            settings: session.settings.clone(),
+            hits: lap.hits.clone(),
+            strays: lap.strays.clone(),
+        };
+        let mut now_rules = Rules::default();
+        let recorded = crate::replay::RecordedRules::parse(&session.settings);
+        assert!(recorded.retake);
+        recorded.apply(&mut now_rules);
+        let mut r = Play::load_replay(&path, &now_rules, 0.0, &rec).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        r.replay_jump(f64::MAX);
+        assert_eq!(r.judge.tally(), &tally);
     }
 
     #[test]

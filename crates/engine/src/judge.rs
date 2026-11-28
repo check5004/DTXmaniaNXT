@@ -216,6 +216,58 @@ pub struct JudgeEvent {
     pub velocity: Option<u8>,
 }
 
+/// 1 打の結果（[`Judge::strike`]）
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Struck {
+    /// この打撃の番号（判定を待つ音符と、空打ちになった打撃を見分ける）
+    pub id: u64,
+    /// 決まった判定
+    pub events: Vec<JudgeEvent>,
+    /// 取ったが、判定を待っている音符（[`Judge::set_retake`]）。もっと近い打撃が来なければ
+    /// [`Judge::advance`] が決める
+    pub held: Vec<usize>,
+    /// この打撃に音符を取り直されて、空打ちになった前の打撃（番号と打撃。空打ちの数にも入れる）
+    pub displaced: Vec<(u64, Hit)>,
+}
+
+impl Struck {
+    /// 取った最初の音符（決まったものと、判定を待っているもの）。空打ちなら None
+    pub fn took(&self) -> Option<usize> {
+        self.events
+            .first()
+            .map(|e| e.note)
+            .or_else(|| self.held.first().copied())
+    }
+
+    /// 何も取らなかった（空打ち）
+    pub fn is_stray(&self) -> bool {
+        self.events.is_empty() && self.held.is_empty()
+    }
+}
+
+/// 早すぎた打撃でいったん取った音符（[`Judge::set_retake`]）
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Held {
+    event: JudgeEvent,
+    hit: Hit,
+    /// 打撃の番号
+    id: u64,
+    /// 同じ打撃で、ほかに決まった音符がある（取り直されても空打ちにはしない）
+    partial: bool,
+}
+
+impl Held {
+    /// これより後は、もっと近い打撃が来ない（音符の時刻から、早すぎたのと同じずれだけ過ぎた時刻）
+    fn deadline(&self, note_ms: f64) -> f64 {
+        note_ms + self.event.offset_ms.map_or(0.0, f64::abs)
+    }
+
+    /// 曲の時刻 `ms` の打撃なら、この音符を取り直せる（ずれが前の打撃より小さい）
+    fn beaten_at(&self, ms: f64, note_ms: f64) -> bool {
+        (ms - note_ms).abs() < self.event.offset_ms.map_or(0.0, f64::abs)
+    }
+}
+
 /// 成績の集計
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Tally {
@@ -264,6 +316,12 @@ pub struct Judge {
     tally: Tally,
     /// 自動で叩くレーン（音符のレーン。`DrumLane as usize` の添字）
     auto: [bool; 12],
+    /// 早すぎた GOOD と POOR を、すぐには決めない（[`Judge::set_retake`]）
+    retake: bool,
+    /// 早すぎた打撃で取って、判定を待っている音符
+    held: Vec<Held>,
+    /// 次の打撃の番号
+    next_id: u64,
 }
 
 impl Judge {
@@ -287,6 +345,9 @@ impl Judge {
             first_open: 0,
             tally: Tally::default(),
             auto: [false; 12],
+            retake: false,
+            held: Vec::new(),
+            next_id: 0,
         }
     }
 
@@ -302,6 +363,19 @@ impl Judge {
     /// ペダル（BD・LP・LBD）の音符の判定の幅を決める。決めなければほかのレーンと同じ
     pub fn set_pedal_windows(&mut self, windows: HitWindows) {
         self.pedal_windows = windows;
+    }
+
+    /// 早すぎた打撃の GOOD と POOR を、すぐには決めない（上流には無い）。音符の時刻から同じずれだけ過ぎるまでに
+    /// もっと近い打撃が来たら、そちらで取り直して、前の打撃は空打ちにする。
+    /// 左ペダルを踏んだときに音源が出す弱いハイハットや二重のトリガーに先に音符を取られ、本当の打撃が次の音符を
+    /// 早すぎる POOR で取ってしまう（ずれが続く）のを防ぐ。決めなければ上流と同じく、最初の打撃で決める
+    pub fn set_retake(&mut self, on: bool) {
+        self.retake = on;
+    }
+
+    /// 早すぎた打撃の判定を待つか（[`Judge::set_retake`]）
+    pub fn retakes(&self) -> bool {
+        self.retake
     }
 
     /// コンボを切る（上流の Tight で、音符の無いところを叩いたとき。判定の数は変えない）
@@ -388,47 +462,113 @@ impl Judge {
         self.windows.poor.max(self.pedal_windows.poor)
     }
 
+    /// 1 打を判定する（[`Judge::strike`] の、決まった判定だけ）
+    pub fn hit(&mut self, hit: Hit) -> Vec<JudgeEvent> {
+        self.strike(hit, None).events
+    }
+
     /// 1 打を判定する。取れるレーンごとに、まだ判定していない一番近い音符を探し、
     /// 判定の幅に入ったもののうち一番早い音符を取る。同じ時刻の音符が複数あればまとめて取る。
-    /// 何も取れなければ空（空打ち）
-    pub fn hit(&mut self, hit: Hit) -> Vec<JudgeEvent> {
-        let mut candidates: Vec<usize> = DrumLane::ALL
-            .into_iter()
-            .filter(|&lane| !self.is_auto(lane) && self.groups.accepts(hit.lane, lane))
-            .filter_map(|lane| self.nearest_open(lane, hit.ms))
-            .collect();
-        let Some(earliest) = candidates
-            .iter()
-            .map(|&i| self.notes[i].ms)
-            .min_by(f64::total_cmp)
-        else {
-            self.tally.stray += 1;
-            return Vec::new();
+    /// 何も取れなければ空打ち。
+    ///
+    /// `also` は、この打撃がそのレーンとしても取れること（ハイハットを半開きで叩いたときの、HH と HHO のもう一方。
+    /// 音源が開いたか閉じたかを決めたが、どちらのつもりかはわからない）。自分のレーンで取れる音符より
+    /// 叩いた時刻に近ければ、`also` でだけ取れる音符を取る。
+    ///
+    /// [`Judge::set_retake`] なら、判定を待っている音符も、前の打撃より近ければ取り直す
+    pub fn strike(&mut self, hit: Hit, also: Option<DrumLane>) -> Struck {
+        let id = self.next_id;
+        self.next_id += 1;
+        let own = self.takeable(hit.ms, |g, l| g.accepts(hit.lane, l));
+        let other = match also {
+            Some(a) => self.takeable(hit.ms, |g, l| g.accepts(a, l) && !g.accepts(hit.lane, l)),
+            None => Vec::new(),
         };
-        candidates.retain(|&i| (self.notes[i].ms - earliest).abs() < 1e-6);
-        candidates.sort_unstable();
-        candidates
-            .into_iter()
-            .map(|i| {
-                let offset = hit.ms - self.notes[i].ms;
-                let judgement = self
-                    .windows_for(self.notes[i].lane)
-                    .classify(offset)
-                    .unwrap_or(Judgement::Poor);
-                self.close(i, judgement);
-                JudgeEvent {
-                    note: i,
-                    judgement,
-                    offset_ms: Some(offset),
-                    velocity: Some(hit.velocity),
+        let earliest = |c: &[usize]| c.iter().map(|&i| self.notes[i].ms).min_by(f64::total_cmp);
+        let near = |ms: f64| (ms - hit.ms).abs();
+        let (mut chosen, at) = match (earliest(&own), earliest(&other)) {
+            (Some(a), Some(b)) if near(b) < near(a) => (other, b),
+            (Some(a), _) => (own, a),
+            (None, Some(b)) => (other, b),
+            (None, None) => {
+                self.tally.stray += 1;
+                return Struck {
+                    id,
+                    ..Struck::default()
+                };
+            }
+        };
+        chosen.retain(|&i| (self.notes[i].ms - at).abs() < 1e-6);
+        chosen.sort_unstable();
+        let mut out = Struck {
+            id,
+            ..Struck::default()
+        };
+        let mut holding = Vec::new();
+        for i in chosen {
+            let offset = hit.ms - self.notes[i].ms;
+            let judgement = self
+                .windows_for(self.notes[i].lane)
+                .classify(offset)
+                .unwrap_or(Judgement::Poor);
+            if let Some(k) = self.held.iter().position(|h| h.event.note == i) {
+                let old = self.held.remove(k);
+                if !old.partial && !self.held.iter().any(|h| h.id == old.id) {
+                    self.tally.stray += 1;
+                    out.displaced.push((old.id, old.hit));
                 }
-            })
-            .collect()
+            }
+            let event = JudgeEvent {
+                note: i,
+                judgement,
+                offset_ms: Some(offset),
+                velocity: Some(hit.velocity),
+            };
+            self.done[i] = true;
+            if self.retake && offset < 0.0 && matches!(judgement, Judgement::Good | Judgement::Poor)
+            {
+                holding.push(event);
+            } else {
+                self.tally.add(judgement);
+                out.events.push(event);
+            }
+        }
+        let partial = !out.events.is_empty();
+        for event in holding {
+            out.held.push(event.note);
+            self.held.push(Held {
+                event,
+                hit,
+                id,
+                partial,
+            });
+        }
+        out
+    }
+
+    /// 判定を待っている音符の数
+    pub fn held_count(&self) -> usize {
+        self.held.len()
     }
 
     /// 時刻 `now_ms` までに来た自動で叩くレーンの音符を PERFECT で取り、判定の幅を過ぎた音符を見逃しにする
     pub fn advance(&mut self, now_ms: f64) -> Vec<JudgeEvent> {
         let mut out = Vec::new();
+        // 判定を待っている音符は、もっと近い打撃が来なくなったら決める
+        let mut k = 0;
+        while k < self.held.len() {
+            let h = self.held[k];
+            if h.deadline(self.notes[h.event.note].ms) <= now_ms {
+                self.held.remove(k);
+                for other in self.held.iter_mut().filter(|o| o.id == h.id) {
+                    other.partial = true;
+                }
+                self.tally.add(h.event.judgement);
+                out.push(h.event);
+            } else {
+                k += 1;
+            }
+        }
         if self.has_auto() {
             let mut i = self.first_open;
             while i < self.notes.len() && self.notes[i].ms <= now_ms {
@@ -479,6 +619,7 @@ impl Judge {
         for d in &mut self.done[at..] {
             *d = false;
         }
+        self.held.clear();
         self.first_open = at;
     }
 
@@ -487,18 +628,35 @@ impl Judge {
         self.tally.add(j);
     }
 
-    /// `lane` のまだ判定していない音符のうち、判定の幅の中で `ms` に一番近いもの
+    /// `lanes` に入る（自動で叩かない）レーンごとの、[`Judge::nearest_open`] の音符
+    fn takeable(&self, ms: f64, lanes: impl Fn(&LaneGroups, DrumLane) -> bool) -> Vec<usize> {
+        DrumLane::ALL
+            .into_iter()
+            .filter(|&lane| !self.is_auto(lane) && lanes(&self.groups, lane))
+            .filter_map(|lane| self.nearest_open(lane, ms))
+            .collect()
+    }
+
+    /// `lane` のまだ判定していない音符（判定を待っていて、前の打撃より近い音符も）のうち、
+    /// 判定の幅の中で `ms` に一番近いもの
     fn nearest_open(&self, lane: DrumLane, ms: f64) -> Option<usize> {
         let poor = self.windows_for(lane).poor;
         let lo = self.notes.partition_point(|n| n.ms < ms - poor);
         let hi = self.notes.partition_point(|n| n.ms <= ms + poor);
         (lo..hi)
-            .filter(|&i| !self.done[i] && self.notes[i].lane == lane)
+            .filter(|&i| self.notes[i].lane == lane && (!self.done[i] || self.retakable(i, ms)))
             .min_by(|&a, &b| {
                 (self.notes[a].ms - ms)
                     .abs()
                     .total_cmp(&(self.notes[b].ms - ms).abs())
             })
+    }
+
+    /// 判定を待っている音符 `i` を、曲の時刻 `ms` の打撃で取り直せるか
+    fn retakable(&self, i: usize, ms: f64) -> bool {
+        self.held
+            .iter()
+            .any(|h| h.event.note == i && h.beaten_at(ms, self.notes[i].ms))
     }
 }
 
@@ -527,6 +685,107 @@ mod tests {
 
     fn judge(notes: Vec<DrumNote>) -> Judge {
         Judge::new(notes, HitWindows::default(), LaneGroups::default())
+    }
+
+    fn retaking(notes: Vec<DrumNote>) -> Judge {
+        let mut j = judge(notes);
+        j.set_retake(true);
+        j
+    }
+
+    #[test]
+    fn a_closer_hit_takes_back_a_note_hit_too_early() {
+        // 左ペダルを踏んだときの弱い HH が 100ms 早く来て、本当の HH はちょうど
+        let mut j = retaking(vec![note(0.0, HH), note(500.0, HH)]);
+        let ghost = j.strike(hit(-100.0, HH), None);
+        assert!(ghost.events.is_empty() && ghost.held == vec![0] && !ghost.is_stray());
+        // 判定を待っている音符は叩いたものとして描かない
+        assert!(j.is_done(0));
+        assert!(j.advance(-50.0).is_empty());
+        let real = j.strike(hit(3.0, HH), None);
+        assert_eq!(real.events.len(), 1);
+        assert_eq!(real.events[0].judgement, Judgement::Perfect);
+        assert_eq!(real.displaced, vec![(ghost.id, hit(-100.0, HH))]);
+        assert!(j.advance(1000.0).iter().all(|e| e.note == 1));
+        let t = j.tally();
+        assert_eq!((t.perfect, t.poor, t.miss, t.stray), (1, 0, 1, 1));
+    }
+
+    #[test]
+    fn an_early_extra_hit_does_not_shift_the_following_notes() {
+        // 16 分（100ms 間隔）の HH。弱い HH が 20ms 早く来て最初の音符を取ると、本当の打撃は次の音符を
+        // 100ms 早い POOR で取ってしまう。次の本当の打撃がそれを取り直し、ずれは続かない
+        let notes: Vec<DrumNote> = (0..4).map(|i| note(f64::from(i) * 100.0, HH)).collect();
+        let mut j = retaking(notes);
+        assert_eq!(
+            j.strike(hit(-20.0, HH), None).events[0].judgement,
+            Judgement::Perfect
+        );
+        let shifted = j.strike(hit(0.0, HH), None);
+        assert_eq!(shifted.held, vec![1]);
+        for ms in [100.0, 200.0, 300.0] {
+            j.advance(ms);
+            let s = j.strike(hit(ms, HH), None);
+            assert_eq!(s.events[0].judgement, Judgement::Perfect, "{ms}");
+        }
+        j.advance(1000.0);
+        let t = j.tally();
+        assert_eq!((t.perfect, t.poor, t.stray), (4, 0, 1));
+        assert_eq!(t.max_combo, 4);
+    }
+
+    #[test]
+    fn a_held_note_is_judged_when_no_closer_hit_can_come() {
+        let mut j = retaking(vec![note(0.0, SD)]);
+        let early = j.strike(hit(-75.0, SD), None);
+        assert_eq!(early.held, vec![0]);
+        // 音符の時刻から同じずれ（75ms）だけ過ぎるまでは待つ
+        assert!(j.advance(74.0).is_empty());
+        let e = j.advance(75.0);
+        assert_eq!(e.len(), 1);
+        assert_eq!(e[0].judgement, Judgement::Good);
+        assert_eq!(e[0].offset_ms, Some(-75.0));
+        // もう取り直せない
+        assert!(j.strike(hit(76.0, SD), None).is_stray());
+        assert_eq!(j.tally().good, 1);
+    }
+
+    #[test]
+    fn late_and_good_hits_are_judged_at_once() {
+        // 遅い打撃より近い打撃は後から来ないので待たない。GREAT 以上も待たない
+        let mut j = retaking(vec![note(0.0, SD), note(1000.0, SD)]);
+        assert_eq!(
+            j.strike(hit(100.0, SD), None).events[0].judgement,
+            Judgement::Poor
+        );
+        assert_eq!(
+            j.strike(hit(950.0, SD), None).events[0].judgement,
+            Judgement::Great
+        );
+        // 待たない決まりなら、早すぎた POOR もすぐ決まる（上流と同じ）
+        let mut j = judge(vec![note(0.0, SD)]);
+        assert_eq!(
+            j.strike(hit(-100.0, SD), None).events[0].judgement,
+            Judgement::Poor
+        );
+        assert!(j.strike(hit(0.0, SD), None).is_stray());
+    }
+
+    #[test]
+    fn a_half_open_hi_hat_can_take_either_hi_hat_lane() {
+        // HHO のあとの HHC を、閉じ切る前に叩いた（音源は開いたノートを送る）
+        let notes = vec![note(0.0, HHO), note(250.0, HH), note(500.0, HHO)];
+        let mut j = judge(notes.clone());
+        j.hit(hit(0.0, HHO));
+        let s = j.strike(hit(255.0, HHO), Some(HH));
+        assert_eq!(s.events[0].note, 1);
+        // 自分のレーンの音符のほうが近ければ、そちらを取る
+        let s = j.strike(hit(470.0, HH), Some(HHO));
+        assert_eq!(s.events[0].note, 2);
+        // 半開きでなければ叩き分ける
+        let mut j = judge(notes);
+        j.hit(hit(0.0, HHO));
+        assert!(j.strike(hit(255.0, HHO), None).is_stray());
     }
 
     #[test]

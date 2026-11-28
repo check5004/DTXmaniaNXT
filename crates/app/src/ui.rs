@@ -570,11 +570,19 @@ fn play_info(ui: &mut egui::Ui, o: &PlayOverlay<'_>, s: f32) {
                 i.articulation.map_or("-", articulation_label)
             )));
             ui.label(small(tf!(
-                "Lane {} / velocity {} / hi-hat pedal {}",
-                "レーン {} / ベロシティ {} / ハイハットのペダル {}",
+                "Lane {} / velocity {} / hi-hat pedal {}{}",
+                "レーン {} / ベロシティ {} / ハイハットのペダル {}{}",
                 i.lane.map_or("-", lane_label),
                 i.velocity,
-                opt(i.hh_pedal)
+                opt(i.hh_pedal),
+                if i.half_open {
+                    t(
+                        " (half-open: counts as HH or HHO)",
+                        "（半開き。HH でも HHO でも取れる）",
+                    )
+                } else {
+                    ""
+                }
             )));
         }
         None => {
