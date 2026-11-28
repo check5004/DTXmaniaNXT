@@ -184,6 +184,26 @@ const PIECES: [(f32, f32); LANES] = [
 /// 判定の文字の縦の段（上流 `n文字の縦表示位置`、`ELane` の順）
 const JUDGE_ROW: [i32; LANES] = [-1, 1, 1, 2, 0, 0, 1, -1, 2, 1, 2];
 
+/// アクセントの印（>）。先を (`tip_x`, `y`) に、左へ開く。黒い縁取りで、どの背景でも見えるように
+pub fn accent_mark(c: &Canvas, tip_x: f32, y: f32, alpha: f32) {
+    let (w, h) = (11.0, 9.0);
+    let pts = [
+        c.pos(tip_x - w, y - h),
+        c.pos(tip_x, y),
+        c.pos(tip_x - w, y + h),
+    ];
+    let p = c.painter();
+    let edge = egui::Stroke::new(6.5 * c.scale(), Color32::BLACK.gamma_multiply(alpha));
+    let ink = egui::Stroke::new(
+        3.5 * c.scale(),
+        crate::drill::ACCENT_COLOR.gamma_multiply(alpha),
+    );
+    for stroke in [edge, ink] {
+        p.line_segment([pts[0], pts[1]], stroke);
+        p.line_segment([pts[1], pts[2]], stroke);
+    }
+}
+
 /// チップの x と、7_chips_drums.png の切り出しの左と幅、まわりの模様（下の段のコマ送り）を描くか
 /// （上流 `tUpdateAndDraw_Chip_Drums` と `tUpdateAndDraw_Chip_PatternOnly_Drums`）。
 /// 水色の左バスドラムは、[`left_bass_chips`] の絵から切り出す（BD のレーンなら BD の列、足したレーンなら LP の列）
@@ -1597,7 +1617,8 @@ impl PlayView {
         }
         // 聞いてまねるのお手本の音符は、流して見せ、判定の線に来たら消える（自動で鳴る）
         if let Some(d) = &play.drill {
-            for &(ms, lane, _) in d.demo.iter().filter(|x| x.0 >= now_ms) {
+            for &(ms, n) in d.demo.iter().filter(|x| x.0 >= now_ms) {
+                let lane = n.lane;
                 if !visible(ms) {
                     continue;
                 }
@@ -1680,7 +1701,8 @@ impl PlayView {
         }
     }
 
-    /// 基礎練習で、音符の右に叩く手（R・L）を出す。足は書かなくても分かるので出さない
+    /// 基礎練習で、音符の右に叩く手（R・L）を出す。足は書かなくても分かるので出さない。
+    /// アクセントの音符は、左に楽譜と同じ > の印を付ける
     fn draw_hands(&self, c: &Canvas, g: &mut Gfx, play: &Play, now_ms: f64, px_per_ms: f32) {
         let Some(d) = &play.drill else {
             return;
@@ -1703,10 +1725,12 @@ impl PlayView {
             let Some(alpha) = looks.chip_alpha(ahead(n.ms)) else {
                 continue;
             };
-            self.draw_hand(c, g, d.hands.get(i).copied().flatten(), (n.lane, y), alpha);
+            let accent = d.accents.get(i).copied().unwrap_or(false);
+            let hand = d.hands.get(i).copied().flatten();
+            self.draw_hand(c, g, (hand, accent), (n.lane, y), alpha);
         }
-        // 聞いてまねるのお手本の音符にも手順を（お手本の音符と同じく薄く）
-        for &(ms, lane, hand) in d.demo.iter().filter(|x| x.0 >= now_ms) {
+        // 聞いてまねるのお手本の音符にも手順とアクセントを（お手本の音符と同じく薄く）
+        for &(ms, n) in d.demo.iter().filter(|x| x.0 >= now_ms) {
             let y = looks.ahead_y(ahead(ms));
             if looks.beyond_edge(y) {
                 break;
@@ -1715,26 +1739,29 @@ impl PlayView {
                 continue;
             }
             if let Some(alpha) = looks.chip_alpha(ahead(ms)) {
-                self.draw_hand(c, g, Some(hand), (lane, y), 0.85 * alpha);
+                self.draw_hand(c, g, (Some(n.hand), n.accent), (n.lane, y), 0.85 * alpha);
             }
         }
     }
 
-    /// 音符の右に叩く手（R・L）を 1 つ。足は出さない
+    /// 音符の右に叩く手（R・L）を 1 つ（足は出さない）。アクセントなら左に > の印
     fn draw_hand(
         &self,
         c: &Canvas,
         g: &mut Gfx,
-        hand: Option<engine::drill::Hand>,
+        (hand, accent): (Option<engine::drill::Hand>, bool),
         (lane, y): (DrumLane, f32),
         alpha: f32,
     ) {
+        let (x, _, w, _) = chip(&self.looks, lane);
+        if accent {
+            accent_mark(c, x - 3.0, y, alpha);
+        }
         let (hand, color) = match hand {
             Some(engine::drill::Hand::Right) => ("R", crate::drill::RIGHT_COLOR),
             Some(engine::drill::Hand::Left) => ("L", crate::drill::LEFT_COLOR),
             _ => return,
         };
-        let (x, _, w, _) = chip(&self.looks, lane);
         let style = Style {
             px: 20.0,
             color,

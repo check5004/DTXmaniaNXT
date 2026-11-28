@@ -7,7 +7,7 @@
 use std::path::PathBuf;
 
 use dtx::{DrumLane, TempoMap};
-use engine::drill::{Category, Drill, Hand, MANY_MISSES, Run, Summary, Way};
+use engine::drill::{Category, Drill, Hand, MANY_MISSES, PatternNote, Run, Summary, Way};
 use engine::judge::Judgement;
 use engine::practice_way::{Blindfold, Hide};
 use i18n::{t, tf};
@@ -15,6 +15,8 @@ use i18n::{t, tf};
 /// 右手と左手の色（音符の横の文字、結果のずれ）
 pub const RIGHT_COLOR: egui::Color32 = egui::Color32::from_rgb(0xFF, 0x96, 0x46);
 pub const LEFT_COLOR: egui::Color32 = egui::Color32::from_rgb(0x5A, 0xBE, 0xFF);
+/// アクセントの色（音符の > の印、強さの棒）
+pub const ACCENT_COLOR: egui::Color32 = egui::Color32::from_rgb(0xFF, 0xB8, 0x40);
 
 /// 記録に使う譜面のパスの頭
 pub const PATH_PREFIX: &str = "drill:";
@@ -69,6 +71,18 @@ pub fn name(d: &Drill) -> &'static str {
         "single_stroke_four" => t("Single Stroke Four", "シングルストローク 4"),
         "single_stroke_seven" => t("Single Stroke Seven", "シングルストローク 7"),
         "double_triplets" => t("Double Strokes in Triplets", "3 連のダブルストローク"),
+        // アクセント
+        "accent_eighths" => t("Accents on the Beat", "8 分の表にアクセント"),
+        "accent_upbeats" => t("Accents on the Upbeats", "8 分の裏にアクセント"),
+        "accent_sixteenth_1" => t("16ths: Accent on 1", "16 分の 1 つ目にアクセント"),
+        "accent_sixteenth_2" => t("16ths: Accent on e", "16 分の 2 つ目にアクセント"),
+        "accent_sixteenth_3" => t("16ths: Accent on &", "16 分の 3 つ目にアクセント"),
+        "accent_sixteenth_4" => t("16ths: Accent on a", "16 分の 4 つ目にアクセント"),
+        "accent_moving" => t("Moving Accent", "アクセント移動"),
+        "accent_triplets" => t("Triplets: Accent on 1", "3 連の頭にアクセント"),
+        "accent_threes" => t("Accents in Threes", "3 つおきのアクセント"),
+        "accent_doubles" => t("Accented Doubles", "ダブルストロークの頭にアクセント"),
+        "hats_accent_upbeats" => t("Hi-Hat Upbeat Accents", "ハイハットの裏にアクセント"),
         // ビート
         "eight_beat_basic" => t("Basic 8-Beat", "8 ビート（基本）"),
         "eight_beat" => t("8-Beat: Kick on 3&", "8 ビート：3 拍目の裏にバスドラ"),
@@ -161,6 +175,7 @@ pub fn category_name(c: Category) -> &'static str {
     match c {
         Category::Timing => t("Timing", "タイミング"),
         Category::Rudiments => t("Rudiments", "ルーディメンツ"),
+        Category::Accents => t("Accents", "アクセント"),
         Category::Grooves => t("Beats", "ビート"),
         Category::Styles => t("Styles", "ジャンル"),
         Category::Fills => t("Fills and Toms", "タム回しとフィル"),
@@ -268,6 +283,8 @@ pub struct DrillPlay {
     measure_ms: Vec<f64>,
     /// 判定の音符ごとの手足（判定の音符と同じ並び）
     pub hands: Vec<Option<Hand>>,
+    /// 判定の音符ごとの、アクセントの音か（判定の音符と同じ並び）
+    pub accents: Vec<bool>,
     /// 最後に叩いた時刻（判定の時刻）。休みを見つけるのに使う
     last_hit_ms: Option<f64>,
     /// 休みを知らせた
@@ -278,8 +295,8 @@ pub struct DrillPlay {
     pub stopped: Option<(usize, f64)>,
     /// 見ないで・聞いてまねるで、隠した音符を続けてミスしたら次の小節から音符を出す
     pub blindfold: Blindfold,
-    /// 聞いてまねるのお手本の音符（譜面の時刻、レーン、叩く手足）。流して見せ、自動で鳴らす（判定しない）
-    pub demo: Vec<(f64, DrumLane, Hand)>,
+    /// 聞いてまねるのお手本の音符（譜面の時刻と型の音符）。流して見せ、自動で鳴らす（判定しない）
+    pub demo: Vec<(f64, PatternNote)>,
     /// 最後に音符を出すと決めた時刻（譜面の時刻。しばらく知らせる）
     pub peeked_at_ms: Option<f64>,
 }
@@ -292,12 +309,18 @@ impl DrillPlay {
         let measure_ms = (0..=run.measure_count() as usize)
             .map(|m| tempo.measure_start_ms(m))
             .collect();
-        let hands = notes.iter().map(|n| run.hand_at(n.at, n.lane)).collect();
+        let pattern: Vec<_> = notes.iter().map(|n| run.note_at(n.at, n.lane)).collect();
+        let hands = pattern.iter().map(|p| p.map(|p| p.hand)).collect();
+        let accents = pattern
+            .iter()
+            .map(|p| p.is_some_and(|p| p.accent))
+            .collect();
         let misses = vec![0; run.steps()];
         let mut d = Self {
             run,
             measure_ms,
             hands,
+            accents,
             last_hit_ms: None,
             rest_sent: false,
             misses,
@@ -310,9 +333,9 @@ impl DrillPlay {
             .run
             .demo_notes()
             .into_iter()
-            .map(|(m, pos, lane, hand)| {
+            .map(|(m, n)| {
                 let (from, to) = (d.measure_start_ms(m), d.measure_start_ms(m + 1));
-                (from + pos * (to - from), lane, hand)
+                (from + n.pos() * (to - from), n)
             })
             .collect();
         d
@@ -320,7 +343,7 @@ impl DrillPlay {
 
     /// お手本の音の時刻（譜面の時刻）とレーン。聞いてまねるだけ
     pub fn demo_hits(&self) -> Vec<(f64, DrumLane)> {
-        self.demo.iter().map(|&(ms, lane, _)| (ms, lane)).collect()
+        self.demo.iter().map(|&(ms, n)| (ms, n.lane)).collect()
     }
 
     /// 譜面の小節 `m` を隠すか（見ないでの 2 段目から、聞いてまねるの自分の小節。
@@ -655,7 +678,7 @@ mod tests {
         assert_eq!(heard.len(), 8 * 8);
         assert_eq!(heard[0], (2000.0, DrumLane::SD));
         assert_eq!(heard[8].0, 6000.0);
-        assert_eq!(p.demo[1].2, Hand::Left);
+        assert_eq!(p.demo[1].1.hand, Hand::Left);
         // 自分の小節を 2 つ続けてミスしたら、画面に入っていない次の自分の小節から 2 つ出す
         // （小節 4 のミスを判定したとき、画面の上の端が 13 秒なら小節 6 はもう見えている）
         let sd = (2, DrumLane::SD);
@@ -718,6 +741,12 @@ mod tests {
         let p = play("paradiddle", 100, 10);
         let s: String = p.hands[..8].iter().map(|h| h.unwrap().letter()).collect();
         assert_eq!(s, "RLRRLRLL");
+        let a: String = p.accents[..8]
+            .iter()
+            .map(|&a| if a { '>' } else { '-' })
+            .collect();
+        assert_eq!(a, ">--->---");
+        assert!(play("single_stroke", 100, 10).accents.iter().all(|a| !a));
     }
 
     #[test]

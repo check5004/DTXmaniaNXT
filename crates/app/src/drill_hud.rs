@@ -6,6 +6,7 @@
 //!   持久は 30 秒ほどの区切りごとのばらつき。聞いてまねるは「聞いて」「叩いて」を大きく。
 //!   クリックの消えるドリルなら、鳴る小節と消える小節の並び
 //! - カウントの小節は、レーンの真ん中に拍の数字を大きく
+//! - アクセントのある型は、欄の下に最近の 16 打の強さ（アクセントの拍は橙、点線はふつうの強さ）
 //! - 叩いているあいだは、レーンの上に何も重ねない（叩く手の文字は音符の横に `play_view` が描く）
 
 use egui::{Color32, Stroke};
@@ -13,7 +14,7 @@ use engine::drill::{COUNT_IN_MEASURES, Grade, MANY_MISSES, Summary, Way};
 use engine::practice_way::{PEEK_AFTER, PEEK_BARS};
 use i18n::{t, tf};
 
-use crate::drill::DrillPlay;
+use crate::drill::{ACCENT_COLOR, DrillPlay};
 use crate::gfx::{Canvas, Gfx, Opt, src};
 use crate::practice::PEEK_NOTE_MS;
 use crate::practice_hud::{
@@ -22,6 +23,11 @@ use crate::practice_hud::{
     round_fill, round_frame, score_digits,
 };
 use crate::text::Style;
+
+/// 欄の下に出す、最近の打の数
+const METER_STROKES: usize = 16;
+/// ふつうの音の強さの棒
+pub const NORMAL_STROKE: Color32 = Color32::from_rgb(120, 126, 145);
 
 /// 3 つ以上落とした段
 pub const MANY_COLOR: Color32 = Color32::from_rgb(0xFF, 0x78, 0x68);
@@ -248,6 +254,7 @@ fn draw_card(c: &Canvas, g: &mut Gfx, d: &DrillPlay, summary: Option<&Summary>, 
             w - 28.0,
             1.0,
         );
+        draw_strength(c, g, d, summary, (x + 14.0, y + 262.0, w - 28.0, 52.0));
         return;
     }
     let bars = run.step_measures;
@@ -380,6 +387,8 @@ fn draw_card(c: &Canvas, g: &mut Gfx, d: &DrillPlay, summary: Option<&Summary>, 
             );
         }
         (_, Some((on, off))) => draw_gap(c, g, d, m, on + off),
+        // アクセントのある型は、強さが届いたら説明の代わりに最近の強さ
+        _ if draw_strength(c, g, d, summary, (x + 14.0, y + 268.0, w - 28.0, 52.0)) => {}
         _ => {
             let peeked = d
                 .peeked_at_ms
@@ -429,6 +438,75 @@ fn draw_card(c: &Canvas, g: &mut Gfx, d: &DrillPlay, summary: Option<&Summary>, 
             );
         }
     }
+}
+
+/// 最近叩いた強さ（アクセントのあるレーンの 16 打、古い順に左から）。アクセントの拍は橙で、
+/// まわりより強くなかった所は中を抜く。ふつうの音は灰、点線はふつうの強さ（並んだふつうの音の中央値）。
+/// アクセントの無い型と、強さが届いていない（キーボード、まだ叩いていない）ときは描かずに false
+fn draw_strength(
+    c: &Canvas,
+    g: &mut Gfx,
+    d: &DrillPlay,
+    summary: Option<&Summary>,
+    (x, y, w, h): (f32, f32, f32, f32),
+) -> bool {
+    let lanes = d.run.drill.accent_lanes();
+    let Some(s) = summary.filter(|_| !lanes.is_empty()) else {
+        return false;
+    };
+    let strokes = s.recent_strokes(&lanes, METER_STROKES);
+    if strokes.is_empty() {
+        return false;
+    }
+    put(
+        c,
+        g,
+        t("Strength", "強さ"),
+        &edged(13.0, GREY),
+        x,
+        y,
+        Align::Left,
+        60.0,
+        1.0,
+    );
+    let gx = x + 52.0;
+    let gap = 4.0;
+    let bw = ((w - 52.0) - gap * (METER_STROKES as f32 - 1.0)) / METER_STROKES as f32;
+    let bottom = y + h;
+    let scale = (h - 4.0) / 127.0;
+    for (i, st) in strokes.iter().enumerate() {
+        let v = f32::from(st.velocity.unwrap_or(0));
+        let bh = (v * scale).max(2.0);
+        let r = (gx + i as f32 * (bw + gap), bottom - bh, bw, bh);
+        match (st.accent, st.stood_out) {
+            (true, Some(false)) => round_frame(c, r, 2.0, ACCENT_COLOR),
+            (true, _) => round_fill(c, r, 2.0, ACCENT_COLOR),
+            (false, _) => round_fill(c, r, 2.0, NORMAL_STROKE),
+        }
+    }
+    let normal = engine::accent::median(
+        strokes
+            .iter()
+            .filter(|st| !st.accent)
+            .filter_map(|st| st.velocity.map(f64::from))
+            .collect(),
+    );
+    if let Some(n) = normal {
+        let ly = bottom - n as f32 * scale;
+        let end = gx + METER_STROKES as f32 * (bw + gap) - gap;
+        let mut lx = gx - 4.0;
+        while lx < end {
+            c.fill(
+                lx,
+                ly,
+                4.0_f32.min(end - lx),
+                1.0,
+                Color32::from_white_alpha(220),
+            );
+            lx += 8.0;
+        }
+    }
+    true
 }
 
 /// 持久の区切り（30 秒ほど）の帯。済んだ区切りは出来の色で、高さはばらつき（低いほどそろっている）

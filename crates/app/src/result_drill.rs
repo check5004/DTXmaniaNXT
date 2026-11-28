@@ -5,13 +5,19 @@
 //!   叩いた順のずれの点（段の区切りとテンポを下に）。限界チャレンジは終えた段までの段、
 //!   持久は 30 秒ほどの区切りごとのばらつき、聞いてまねるはお手本の小節に色を敷く
 //! - 左右は「手順どおりに叩いた」として数える（電子ドラムはどちらの手かを送ってこない）
+//! - アクセントのある型で強さが届いたら、左上にアクセントの出た割合、段の印の下に段ごとの割合、
+//!   ずれの点を半分の高さにして、その下に型の場所ごとの強さ（[`engine::accent`] でまわりと比べる）
 
 use egui::{Color32, Stroke};
-use engine::drill::{COUNT_IN_MEASURES, Grade, Hand, Lean, Way};
+use engine::drill::{COUNT_IN_MEASURES, Grade, Hand, Lean, Strength, Way};
 use i18n::{t, tf};
 
-use crate::drill::{DrillOutcome, LEFT_COLOR, RIGHT_COLOR, hand_name, lead_name, way_name};
-use crate::drill_hud::{MANY_COLOR, Stairs, clock, grade_color, grade_mark, stairs, up_to};
+use crate::drill::{
+    ACCENT_COLOR, DrillOutcome, LEFT_COLOR, RIGHT_COLOR, hand_name, lead_name, way_name,
+};
+use crate::drill_hud::{
+    MANY_COLOR, NORMAL_STROKE, Stairs, clock, grade_color, grade_mark, stairs, up_to,
+};
 use crate::gfx::{Canvas, Gfx};
 use crate::settings_ui as ui;
 use crate::text::Style;
@@ -22,7 +28,9 @@ const PANEL: (f32, f32, f32, f32) = (480.0, 24.0, 780.0, 596.0);
 const LAG_RANGE_MS: f64 = 40.0;
 const DOT_RANGE_MS: f64 = 60.0;
 const FOOT_COLOR: Color32 = Color32::from_gray(200);
-const ACCENT: Color32 = Color32::from_rgb(0xFF, 0xB8, 0x40);
+const ACCENT: Color32 = ACCENT_COLOR;
+/// 強さを見せるとき、ずれの点の図の高さ（残りが強さの図）
+const DOTS_H_WITH_STRENGTH: f32 = 150.0;
 /// クリックの消えた小節の地の色
 const SILENT_COLOR: Color32 = Color32::from_rgba_premultiplied(40, 26, 70, 90);
 /// 聞いてまねるのお手本の小節の地の色
@@ -89,6 +97,30 @@ pub fn draw_headline(c: &Canvas, g: &mut Gfx, o: &DrillOutcome) {
         }
         None => 0.0,
     };
+    if let Some(rate) = o.summary.strength.as_ref().and_then(|s| s.total().rate()) {
+        let p = (rate * 100.0).round() as u32;
+        ui::text(
+            c,
+            g,
+            &tf!("Accents {p}%", "アクセント {p}%"),
+            30.0,
+            108.0,
+            &bold(26.0, ACCENT),
+            400.0,
+        );
+        ui::text(
+            c,
+            g,
+            t(
+                "Accents played clearly louder than the notes around them",
+                "まわりの音よりはっきり強く叩けたアクセントの割合",
+            ),
+            32.0,
+            142.0,
+            &edged(13.0, Color32::from_gray(210)),
+            420.0,
+        );
+    }
     if !o.new_best() {
         return;
     }
@@ -194,6 +226,26 @@ pub fn draw(c: &Canvas, g: &mut Gfx, o: &DrillOutcome, name: &str, perfect_ms: f
         let px = if n > 6.0 { 15.0 } else { 20.0 };
         ui::text_center(c, g, mark, cx, y + 194.0, &bold(px, color), cell + gap);
     }
+    let strength = o.summary.strength.as_ref();
+    // 段ごとのアクセントの出た割合（印の下）
+    if let Some(st) = strength {
+        let px = if n > 6.0 { 11.0 } else { 13.0 };
+        for (i, &step) in shown.iter().enumerate() {
+            let Some(rate) = st.steps.get(step).and_then(|a| a.rate()) else {
+                continue;
+            };
+            let cx = sx + i as f32 * (cell + gap) + cell / 2.0;
+            ui::text_center(
+                c,
+                g,
+                &format!(">{:.0}%", rate * 100.0),
+                cx,
+                y + 218.0,
+                &bold(px, ACCENT),
+                cell + gap,
+            );
+        }
+    }
     let legend = match run.way {
         Way::Limit => t(
             "◎ no misses   ○ 1–2 misses   × 3 (the end)",
@@ -208,23 +260,181 @@ pub fn draw(c: &Canvas, g: &mut Gfx, o: &DrillOutcome, name: &str, perfect_ms: f
             "◎ ミスなし　○ ミス 1〜2　× 3 つ以上",
         ),
     };
+    let legend = if strength.is_some() {
+        tf!("{legend}　> accents", "{legend}　> アクセント")
+    } else {
+        legend.to_owned()
+    };
     ui::text(
         c,
         g,
-        legend,
+        &legend,
         sx,
-        y + 226.0,
+        y + if strength.is_some() { 238.0 } else { 226.0 },
         &edged(12.0, Color32::from_gray(180)),
-        sw + 40.0,
+        sw + 60.0,
     );
     draw_hands(c, g, o, (x + 370.0, y + 60.0, w - 392.0, 180.0));
-    draw_dots(
+    let bottom = (x + 22.0, y + 262.0, w - 44.0, h - 286.0);
+    match strength {
+        Some(st) => {
+            let (bx, by, bw, bh) = bottom;
+            draw_dots(c, g, o, perfect_ms, (bx, by, bw, DOTS_H_WITH_STRENGTH));
+            let top = by + DOTS_H_WITH_STRENGTH + 8.0;
+            draw_strength(c, g, o, st, (bx, top, bw, by + bh - top));
+        }
+        None => draw_dots(c, g, o, perfect_ms, bottom),
+    }
+}
+
+/// 型の場所ごとの強さ（平均）。横は型の小節（拍の番号と線）、棒の高さは強さ（0〜127）、
+/// 橙がアクセント（まわりより強くなかった所は中を抜く）、灰がふつうの音、点線がふつうの強さ。
+/// アクセントのあるレーンが 2 つ以上なら、レーンごとに段を分ける
+fn draw_strength(
+    c: &Canvas,
+    g: &mut Gfx,
+    o: &DrillOutcome,
+    st: &Strength,
+    (x, y, w, h): (f32, f32, f32, f32),
+) {
+    let drill = o.run.drill;
+    let measures = drill.measures();
+    let title = if measures == 1 {
+        t("Strength across the bar (average)", "1 小節の強さ（平均）").to_owned()
+    } else {
+        tf!(
+            "Strength across {measures} bars (average)",
+            "{measures} 小節の強さ（平均）"
+        )
+    };
+    ui::text(
         c,
         g,
-        o,
-        perfect_ms,
-        (x + 22.0, y + 262.0, w - 44.0, h - 286.0),
+        &title,
+        x,
+        y,
+        &edged(14.0, Color32::from_gray(200)),
+        300.0,
     );
+    // 凡例（右から）
+    let mut lx = x + w;
+    let st13 = edged(13.0, Color32::from_gray(210));
+    for (label, color, dashed) in [
+        (
+            t("normal level", "ふつうの強さ"),
+            Color32::from_white_alpha(220),
+            true,
+        ),
+        (t("normal", "ふつう"), NORMAL_STROKE, false),
+        (t("accent", "アクセント"), ACCENT, false),
+    ] {
+        let tw = ui::text_width(g, label, &st13);
+        lx -= tw;
+        ui::text(c, g, label, lx, y, &st13, tw + 2.0);
+        if dashed {
+            for k in 0..3 {
+                c.fill(lx - 18.0 + k as f32 * 5.0, y + 9.0, 3.0, 1.0, color);
+            }
+        } else {
+            ui::round_fill(c, lx - 16.0, y + 3.0, 11.0, 12.0, 2.0, color);
+        }
+        lx -= 30.0;
+    }
+    let (px, py, pw, ph) = (x + 40.0, y + 24.0, w - 40.0, h - 24.0);
+    ui::round_fill(
+        c,
+        px,
+        py,
+        pw,
+        ph,
+        6.0,
+        Color32::from_rgba_unmultiplied(4, 4, 10, 200),
+    );
+    let mw = pw / measures.max(1) as f32;
+    // 拍の線と番号（拍子どおり。7/8 などはクリックのまとまりごと）、小節の区切り
+    let beats = drill.count_in_clicks();
+    for m in 0..measures {
+        let mx = px + m as f32 * mw;
+        for (b, &(pos, _)) in beats.iter().enumerate() {
+            let bx = mx + pos as f32 * mw;
+            if b > 0 || m > 0 {
+                let a = if b == 0 { 90 } else { 35 };
+                c.fill(bx, py, 1.0, ph, Color32::from_white_alpha(a));
+            }
+            ui::text(
+                c,
+                g,
+                &(b + 1).to_string(),
+                bx + 3.0,
+                py + 2.0,
+                &edged(11.0, Color32::from_gray(150)),
+                20.0,
+            );
+        }
+    }
+    let rows = st.shapes.len().max(1);
+    let letter_h = 16.0;
+    let row_h = (ph - 14.0) / rows as f32;
+    for (k, shape) in st.shapes.iter().enumerate() {
+        let top = py + 14.0 + k as f32 * row_h;
+        let base = top + row_h - letter_h - 2.0;
+        let scale = (row_h - letter_h - 6.0) / 127.0;
+        if rows > 1 {
+            ui::text(
+                c,
+                g,
+                shape.lane.name(),
+                x,
+                base - 20.0,
+                &bold(13.0, ui::lane_color(shape.lane)),
+                38.0,
+            );
+        }
+        for cell in &shape.cells {
+            let n = cell.note;
+            let cw = mw / n.cells as f32;
+            let cx = px + n.measure as f32 * mw + (n.cell as f32 + 0.5) * cw;
+            let bw = (cw * 0.6).clamp(3.0, 26.0);
+            if let Some(mean) = cell.mean {
+                let bh = (mean as f32 * scale).max(2.0);
+                let r = (cx - bw / 2.0, base - bh, bw, bh);
+                let stood = shape
+                    .normal
+                    .is_none_or(|normal| engine::accent::stands_out(mean.round() as u8, normal));
+                match (n.accent, stood) {
+                    (true, true) => ui::round_fill(c, r.0, r.1, r.2, r.3, 3.0, ACCENT),
+                    (true, false) => ui::round_frame(c, r.0, r.1, r.2, r.3, 3.0, 2.0, ACCENT),
+                    (false, _) => ui::round_fill(c, r.0, r.1, r.2, r.3, 3.0, NORMAL_STROKE),
+                }
+            }
+            // 叩く手（アクセントは大文字、ふつうは小文字。足は書かない）
+            if cw >= 12.0 && !n.hand.is_foot() {
+                let letter = match (n.hand, n.accent) {
+                    (Hand::Right, true) => "R",
+                    (Hand::Right, false) => "r",
+                    (_, true) => "L",
+                    _ => "l",
+                };
+                ui::text_center(
+                    c,
+                    g,
+                    letter,
+                    cx,
+                    base + 1.0,
+                    &bold(13.0, hand_color(Some(n.hand))),
+                    cw.max(14.0),
+                );
+            }
+        }
+        if let Some(normal) = shape.normal {
+            let ly = base - normal as f32 * scale;
+            let mut lx = px + 4.0;
+            while lx < px + pw - 4.0 {
+                c.fill(lx, ly, 4.0, 1.0, Color32::from_white_alpha(220));
+                lx += 8.0;
+            }
+        }
+    }
 }
 
 /// 音符を判定した段（添字の順）。限界チャレンジで終えた段の後ろは入らない

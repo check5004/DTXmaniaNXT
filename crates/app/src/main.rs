@@ -524,6 +524,9 @@ struct App {
     drop_hover: Vec<PathBuf>,
     /// 音符をすべて自動で叩く（開発用。`DTXMANIANXT_AUTOPLAY=1`。設定の自動演奏より優先）
     autoplay: bool,
+    /// キーボードで叩いた音に強さを付ける（開発用。`DTXMANIANXT_KEY_VELOCITY=1`。Shift を押していれば強く）。
+    /// 電子ドラムの無い所で、アクセントと強さの表示を確かめるため
+    key_velocity: bool,
     /// 新しい版を確かめ、頼まれたら落とし、終えるときか再起動で入れ替える
     updater: update::Updater,
     /// 「再起動して入れ替える」を選んだ（入れ替える版と時刻）。「更新しています」を出してから閉じる
@@ -781,6 +784,7 @@ impl App {
             reveal_ready: false,
             drop_hover: Vec::new(),
             autoplay: std::env::var_os("DTXMANIANXT_AUTOPLAY").is_some_and(|v| v == "1"),
+            key_velocity: std::env::var_os("DTXMANIANXT_KEY_VELOCITY").is_some_and(|v| v == "1"),
             updater,
             applying: None,
             update_since: Instant::now(),
@@ -3309,7 +3313,11 @@ impl App {
             Screen::Play(..) if self.quick.is_some() => self.on_quick_key(code),
             Screen::Play(play, _) => {
                 if let Some(lane) = lane {
-                    play.on_key(lane, at);
+                    if self.key_velocity {
+                        play.on_dev_key(lane, at, self.modifiers.shift_key());
+                    } else {
+                        play.on_key(lane, at);
+                    }
                     return;
                 }
                 self.on_play_key(code);
