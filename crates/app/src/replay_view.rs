@@ -295,7 +295,10 @@ impl ReplayRun {
         vec![
             play,
             step,
-            (&[Pad::RD], t("Practice Here (P)", "ここを区間練習（P）")),
+            (
+                &[Pad::RD],
+                t("×2 Practice Here (P)", "×2 ここを区間練習（P）"),
+            ),
             back,
         ]
     }

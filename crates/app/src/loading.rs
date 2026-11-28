@@ -118,6 +118,15 @@ impl Loading {
             BIG.draw(c, t.as_ref(), 187.0, 152.0, &whole.to_string());
             BIG.draw(c, t.as_ref(), 307.0, 152.0, &format!("{frac:02}"));
         }
+        // 間違えて選んだ曲から戻る方法（LC を続けて 2 回。最初の音符の少し前まで効く）
+        crate::settings_ui::legend(
+            c,
+            g,
+            &[(
+                &[crate::settings_ui::Pad::LC],
+                t("Hit Twice to Go Back (Esc)", "2 回叩くと戻る（Esc）"),
+            )],
+        );
     }
 
     /// 音源のキットを切り替えていること（曲名とアーティストの下。橙の点を点滅させる）

@@ -1335,8 +1335,8 @@ pub fn rows(page: Page, info: &ConfigInfo<'_>) -> Vec<Row> {
                 },
                 String::new(),
                 t(
-                    "Unpause and continue from where you stopped (Esc works too).",
-                    "一時停止をやめて、止めたところから続けます（Esc でも戻ります）。",
+                    "Unpause and continue from where you stopped (Space works too).",
+                    "一時停止をやめて、止めたところから続けます（Space でも戻ります）。",
                 )
                 .to_owned(),
                 None,
@@ -1812,8 +1812,8 @@ fn drill_pause(s: &mut Sections, c: &Config) {
         t("Resume", "続ける"),
         String::new(),
         t(
-            "Unpause and keep going from where you stopped (Esc works too).",
-            "一時停止をやめて、止めたところから続けます（Esc でも戻ります）。",
+            "Unpause and keep going from where you stopped (Space works too).",
+            "一時停止をやめて、止めたところから続けます（Space でも戻ります）。",
         )
         .to_owned(),
         None,
@@ -1847,8 +1847,8 @@ fn drill_pause(s: &mut Sections, c: &Config) {
         t("Quit Drill", "やめて結果へ"),
         String::new(),
         t(
-            "Stop here and see the results for the steps so far.",
-            "ここでやめて、ここまでの段の結果を見ます。",
+            "Stop here and see the results for the steps so far (Esc on the keyboard).",
+            "ここでやめて、ここまでの段の結果を見ます（キーボードなら Esc）。",
         )
         .to_owned(),
         None,
@@ -2110,13 +2110,13 @@ fn quit_row(practice: bool) -> Row {
         String::new(),
         if practice {
             t(
-                "Stop practicing and go to the results.",
-                "練習をやめて、結果の画面へ。",
+                "Stop practicing and go to the results (Esc on the keyboard).",
+                "練習をやめて、結果の画面へ（キーボードなら Esc）。",
             )
         } else {
             t(
-                "Stop playing and go back to song select. Your play so far is still saved to your records.",
-                "演奏をやめて選曲に戻ります。ここまでの演奏は記録に残ります。",
+                "Stop playing and go back to song select. Your play so far is still saved to your records (Esc on the keyboard).",
+                "演奏をやめて選曲に戻ります。ここまでの演奏は記録に残ります（キーボードなら Esc）。",
             )
         }
         .to_owned(),
@@ -2337,6 +2337,15 @@ impl ConfigView {
             panel: true,
             ..Self::new()
         }
+    }
+
+    /// 一番上の一覧にいて、選択肢・確認・割り当ての待ちを開いていない（板なら、戻ると閉じるところ）
+    pub fn at_top(&self) -> bool {
+        self.stack.len() == 1
+            && self.picker.is_none()
+            && self.confirm.is_none()
+            && self.wait.is_none()
+            && self.flow.is_none()
     }
 
     /// 真ん中に出している一覧
@@ -2998,12 +3007,17 @@ fn hints_for(view: &ConfigView, row: Option<&Row>) -> Vec<ui::Hint<'static>> {
         v.push((&[Pad::FT], t("→ Open", "→ 開く")));
     }
     v.push((&[Pad::CY, Pad::RD], decide));
-    let back = match (view.panel && view.stack.len() == 1, view.page()) {
-        (true, Page::Pause) => t("Resume (Esc)", "続ける（Esc）"),
+    let top = view.panel && view.stack.len() == 1;
+    let back = match (top, view.page()) {
+        (true, Page::Pause) => t("Resume (Space)", "続ける（Space）"),
         (true, _) => t("Close (Esc)", "閉じる（Esc）"),
         _ => t("Back (Esc)", "戻る（Esc）"),
     };
     v.push((&[Pad::LC], back));
+    // 一時停止の Esc はやめる（続けて 2 回押すと演奏をやめられる）
+    if top && view.page() == Page::Pause {
+        v.push((&[], t("Quit (Esc)", "やめる（Esc）")));
+    }
     v
 }
 

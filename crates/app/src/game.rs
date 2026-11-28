@@ -38,6 +38,8 @@ const PRACTICE_LEAD_IN_MS: f64 = 1000.0;
 
 /// 基礎練習で、最後の小節が終わってから結果へ移るまで（ミリ秒）
 const DRILL_TAIL_MS: f64 = 1000.0;
+/// 間違えて始めた曲から戻れるのは、最初の叩く音符のこれだけ前まで（[`Play::before_first_note`]）
+pub const FIRST_NOTE_MARGIN_MS: f64 = 300.0;
 /// 限界チャレンジで 3 つ落としてから結果へ移るまで（ミリ秒）
 const DRILL_STOP_MS: f64 = 1500.0;
 /// 聞いてまねるのお手本の音の番号（譜面の `#WAVzz` は 36 × 36 未満なので重ならない）
@@ -461,6 +463,8 @@ pub struct Play {
     demo_seen_ms: f64,
     /// 待ちモードの時計（待ちモードでなければ None）
     wait: Option<WaitClock>,
+    /// 間違えて始めた曲として、記録にも遊んだ時間にも残さない（[`Self::discard`]）
+    discarded: bool,
 }
 
 impl Play {
@@ -838,6 +842,7 @@ impl Play {
             catching_up: false,
             demo_seen_ms: f64::NEG_INFINITY,
             wait: waits.then(WaitClock::default),
+            discarded: false,
         };
         play.lay_laps(start_ms);
         play.lay_auto(start_ms);
@@ -1353,6 +1358,25 @@ impl Play {
     /// 早送りか巻き戻しをした
     pub fn skipped(&self) -> bool {
         self.skipped
+    }
+
+    /// まだ叩く音符が来ていない（最初の叩く音符の [`FIRST_NOTE_MARGIN_MS`] 前まで）。
+    /// 間違えて始めた曲から LC 2 回で戻れるのはこのあいだだけ。リプレイと一時停止中は false
+    pub fn before_first_note(&self) -> bool {
+        if self.replay.is_some() || self.paused() {
+            return false;
+        }
+        let now = self.judge_ms(self.now_ms());
+        self.judge
+            .notes()
+            .iter()
+            .find(|n| !self.judge.is_auto(n.lane))
+            .is_some_and(|n| now < n.ms - FIRST_NOTE_MARGIN_MS)
+    }
+
+    /// 間違えて始めた曲として捨てる。記録にも遊んだ時間にも残さない
+    pub fn discard(&mut self) {
+        self.discarded = true;
     }
 
     /// 曲の時刻を `delta_ms` だけ先へ（マイナスなら前へ）飛ぶ（上流 SkipForward / SkipBackward）。
@@ -1938,6 +1962,9 @@ impl Play {
     /// 一時停止のあいだは曲の時刻が止まるので入らない。練習で叩かずに休んだ周も入れない。
     /// 全部自動のときと、音符を 1 つも叩かなかったときは None（練習した時間に数えない）
     pub fn played_ms(&self, end_ms: f64) -> Option<i64> {
+        if self.discarded {
+            return None;
+        }
         let touched = self
             .note_hits
             .iter()
@@ -2128,7 +2155,12 @@ impl Play {
     /// 音符をすべて自動で叩いたときと、早送りか巻き戻しをしたときも残さない（上流と同じ）
     pub fn session(&self) -> Option<Session> {
         // 待ちモードは点を付けない（どの音符もずれ 0 で取るので、苦手やくせの記録に入れない。叩いた時間は残す）
-        if self.all_auto() || self.skipped || self.replay.is_some() || self.wait.is_some() {
+        if self.all_auto()
+            || self.skipped
+            || self.discarded
+            || self.replay.is_some()
+            || self.wait.is_some()
+        {
             return None;
         }
         let w = self.judge.windows();
@@ -2520,6 +2552,23 @@ mod tests {
         let play = Play::load(&path, 0.0, false, rules);
         std::fs::remove_file(&path).unwrap();
         play.unwrap()
+    }
+
+    #[test]
+    fn a_play_can_be_backed_out_of_before_the_first_note() {
+        // 最初の音符は 2 小節目の頭（BPM 120 で 2000ms）。読んだ直後は曲の前の空白の中
+        let text = "#BPM 120\n#WAV01 sd.ogg\n#00212: 01\n";
+        let mut p = load_text("back-out", text, &Rules::default());
+        assert!(p.before_first_note());
+        p.discard();
+        assert!(p.session().is_none());
+        assert_eq!(p.played_ms(f64::MAX), None);
+        // 叩く音符が無い（全部自動）なら戻れない
+        let auto = Rules {
+            auto: vec![DrumLane::SD],
+            ..Rules::default()
+        };
+        assert!(!load_text("back-out-auto", text, &auto).before_first_note());
     }
 
     #[test]

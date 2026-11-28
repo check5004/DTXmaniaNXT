@@ -34,6 +34,7 @@ mod frames;
 mod game;
 mod gfx;
 mod history;
+mod input_gate;
 mod inputs;
 mod jobs;
 mod kit_phrase;
@@ -48,6 +49,7 @@ mod module_link;
 mod module_probe;
 mod movie;
 mod nx_import;
+mod pad_guard;
 mod perf;
 mod play_view;
 mod practice;
@@ -107,9 +109,11 @@ use crate::config_view::{
 use crate::game::{GaugeRule, HitSoundRule, Outcome, Play, Rules};
 use crate::gfx::{Canvas, Gfx};
 use crate::history::History;
+use crate::input_gate::{InputGate, Scene};
 use crate::lag_view::LagResult;
 use crate::loading::{Job, Loading};
 use crate::midi::MidiIn;
+use crate::pad_guard::PadGuard;
 use crate::play_view::PlayView;
 use crate::practice::{PracticeOptions, PracticeSetup};
 use crate::practice_menu::{Done, Finished, MenuInput, MenuMouse, PracticeMenu, Spot};
@@ -442,6 +446,46 @@ enum Screen {
     Dev(Box<dev_view::DevView>, bool),
 }
 
+/// パッドでは 2 回叩いて確かめてから動く操作（`pad_guard`）。キーボードの近道はすぐ動く
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Guarded {
+    /// 結果の画面のもう一度（SD。キーボードは R）
+    Retry,
+    /// 結果の画面から練習メニューへ（RD。キーボードは P）
+    Practice,
+    /// 結果の画面から今のプレイのリプレイ（HH。キーボードは V）
+    Replay,
+    /// 結果の画面の補正のおすすめ（FT。キーボードは O）
+    Advice,
+    /// 基礎練習の画面のやり方（HH。キーボードは Tab）
+    DrillWay,
+    /// 基礎練習の画面の手順（RD。キーボードは H）
+    DrillLead,
+    /// リプレイで見ている所を区間練習（RD。キーボードは P）
+    ReplayPractice,
+}
+
+impl Guarded {
+    /// 1 回目を叩いたときに出す名前（「続けて SD を叩くと『もう一度』」）
+    fn label(self) -> &'static str {
+        match self {
+            Guarded::Retry => t("Play Again", "もう一度"),
+            Guarded::Practice | Guarded::ReplayPractice => t("Practice a Section", "区間練習"),
+            Guarded::Replay => t("Replay", "リプレイ"),
+            Guarded::Advice => t("Offset", "補正"),
+            Guarded::DrillWay => t("Mode", "やり方"),
+            Guarded::DrillLead => t("Lead Hand", "手順"),
+        }
+    }
+}
+
+/// 開いている確かめ。開いた画面から離れたら閉じる
+struct Confirm {
+    action: Guarded,
+    screen: std::mem::Discriminant<Screen>,
+    question: String,
+}
+
 struct App {
     window: Option<Arc<Window>>,
     gpu: Option<Gpu>,
@@ -466,6 +510,14 @@ struct App {
     ports_checked: Instant,
     /// 選曲の画面で最後に HH を叩いた時刻（2 回で難易度を変える）
     last_hh_us: Option<i64>,
+    /// 最後に LC を叩いた時刻（間違えて始めた曲から 2 回で戻る）
+    last_lc_us: Option<i64>,
+    /// 場面（画面と、重ねている練習メニュー・板）が変わった直後は、パッドと Esc を少しのあいだ受け付けない
+    gate: InputGate<std::mem::Discriminant<Screen>>,
+    /// 1 打では戻しにくい操作（結果のもう一度など）は、同じパッドを続けて 2 回叩いてから確かめる
+    guard: PadGuard<Guarded>,
+    /// 開いている確かめ（「もう一度遊びますか？」。CY ではい、LC でいいえ）
+    confirm: Option<Confirm>,
     gfx: Gfx,
     /// 選曲画面の動き
     view: SelectView,
@@ -754,6 +806,10 @@ impl App {
             monitor: MidiMonitor::default(),
             ports_checked: Instant::now(),
             last_hh_us: None,
+            last_lc_us: None,
+            gate: InputGate::new(Instant::now()),
+            guard: PadGuard::default(),
+            confirm: None,
             gfx,
             view: SelectView::new(),
             sfx,
@@ -2263,13 +2319,30 @@ impl App {
             None => Vec::new(),
         };
         let paused_panel = self.quick.is_some();
+        self.track_scene();
+        let mut early_lc: Vec<i64> = Vec::new();
         match &mut self.screen {
             // シャッターを閉じているあいだは叩いても何もしない（演奏をやめたあとの音符も数えない）
             _ if closing => {}
             // 一時停止の板を開いているあいだは、パッドで板を操作する
             Screen::Play(play, _) if !paused_panel => {
+                // 最初の叩く音符の少し前までは、LC を 2 回で間違えて始めた曲から戻れる（back_out）
+                let early = play.before_first_note();
                 for (raw, msgs) in &received {
                     play.on_midi(raw, msgs);
+                    let Some(input) = self.menu_inputs.get_mut(raw.port).filter(|_| early) else {
+                        continue;
+                    };
+                    for &m in msgs {
+                        if let Some(InputEvent::Hit {
+                            lane: Some(DrumLane::LC),
+                            host_us,
+                            ..
+                        }) = input.feed(m, raw.arrival_us)
+                        {
+                            early_lc.push(host_us);
+                        }
+                    }
                 }
             }
             // 開発者メニューで MIDI を記録しているあいだは、届いたものを全部渡す（パッドで操作しない）
@@ -2311,6 +2384,9 @@ impl App {
                     self.on_menu_pad(lane, at);
                 }
             }
+        }
+        for at in early_lc {
+            self.back_out(at);
         }
         if let Screen::Config(view, _) = &mut self.screen
             && !closing
@@ -2961,12 +3037,20 @@ impl App {
             KeyCode::ArrowDown => ConfigInput::Down,
             KeyCode::ArrowLeft => ConfigInput::Left,
             KeyCode::ArrowRight => ConfigInput::Right,
-            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space => ConfigInput::Decide,
-            KeyCode::Escape | KeyCode::Backspace => ConfigInput::Cancel,
-            KeyCode::Pause if paused => {
+            // 一時停止の Esc は、選択肢などを開いていなければやめる（Esc を続けて 2 回で演奏をやめられる。
+            // 普通の演奏は選曲へ、練習と基礎練習は結果へ。一時停止の「やめる」の行と同じ）
+            KeyCode::Escape if paused && self.quick.as_ref().is_some_and(|q| q.at_top()) => {
+                self.sfx.play(Se::Cancel);
+                self.quick_action(ConfigAction::Run(ItemId::Quit));
+                return;
+            }
+            // 開いたキー（Space・Pause）でそのまま続ける
+            KeyCode::Space | KeyCode::Pause if paused => {
                 self.resume_play();
                 return;
             }
+            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space => ConfigInput::Decide,
+            KeyCode::Escape | KeyCode::Backspace => ConfigInput::Cancel,
             KeyCode::KeyR if paused => {
                 self.quick_action(ConfigAction::Run(ItemId::Retry));
                 return;
@@ -3280,6 +3364,20 @@ impl App {
 
     fn on_key(&mut self, code: KeyCode) {
         if self.after_close.is_some() || self.applying.is_some() {
+            return;
+        }
+        self.track_scene();
+        // 場面が変わった直後の Esc は受け付けない（連打しても 1 画面ずつしか戻らない）
+        if code == KeyCode::Escape && !self.gate.esc(Instant::now()) {
+            return;
+        }
+        // 確かめを開いていれば Enter ではい、Esc でいいえ
+        if self.confirm.is_some() {
+            match code {
+                KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space => self.answer_confirm(true),
+                KeyCode::Escape | KeyCode::Backspace => self.answer_confirm(false),
+                _ => {}
+            }
             return;
         }
         let at = host_us();
@@ -3674,6 +3772,180 @@ impl App {
         self.menu_input(input);
     }
 
+    /// 今の場面を門に見せる（変わっていれば、少しのあいだパッドと Esc を受け付けない。`input_gate`）
+    fn track_scene(&mut self) {
+        let screen = std::mem::discriminant(&self.screen);
+        // 確かめは開いた画面でだけ（画面が変わったら閉じ、1 回目も忘れる）
+        if self.confirm.as_ref().is_some_and(|c| c.screen != screen) {
+            self.confirm = None;
+            self.guard.clear();
+        }
+        let scene = Scene {
+            screen,
+            menu: self.menu.is_some(),
+            quick: self.quick.is_some(),
+            confirm: self.confirm.is_some(),
+            result: matches!(self.screen, Screen::Result(..)),
+        };
+        self.gate.observe(scene, Instant::now());
+    }
+
+    /// パッド `lane` が 2 回叩いて確かめる操作なら、それ（結果の SD・RD・HH・FT、基礎練習の HH・RD、リプレイの RD）
+    fn guarded_for(&self, lane: DrumLane) -> Option<Guarded> {
+        if self.quick.is_some() || self.menu.is_some() {
+            return None;
+        }
+        match (&self.screen, lane) {
+            (Screen::Result(..), DrumLane::SD) => Some(Guarded::Retry),
+            // 練習・基礎練習の結果の RD は戻るだけ（練習メニュー・基礎練習の画面へ）
+            (Screen::Result(o, _), DrumLane::RD) if o.practice.is_none() && o.drill.is_none() => {
+                Some(Guarded::Practice)
+            }
+            (Screen::Result(..), DrumLane::HH | DrumLane::HHO) => Some(Guarded::Replay),
+            (Screen::Result(..), DrumLane::FT) => Some(Guarded::Advice),
+            (Screen::Drills(_), DrumLane::HH | DrumLane::HHO) => Some(Guarded::DrillWay),
+            (Screen::Drills(_), DrumLane::RD) => Some(Guarded::DrillLead),
+            (Screen::Replay(_), DrumLane::RD) => Some(Guarded::ReplayPractice),
+            _ => None,
+        }
+    }
+
+    /// 確かめの文。今は効かない操作（おすすめの補正が無い、リプレイが無いなど）なら None
+    fn guard_question(&self, action: Guarded) -> Option<String> {
+        let q = match (&self.screen, action) {
+            (Screen::Result(o, _), Guarded::Retry) => {
+                if o.drill.is_some() {
+                    t("Run this drill again?", "このドリルをもう一度しますか？")
+                } else if o.practice.is_some() {
+                    t(
+                        "Practice again with the same settings?",
+                        "同じ設定でもう一度練習しますか？",
+                    )
+                } else {
+                    t("Play this song again?", "この曲をもう一度遊びますか？")
+                }
+            }
+            (Screen::Result(o, _), Guarded::Practice) if o.today.is_none() => t(
+                "Open the practice menu for this song?",
+                "この曲の練習メニューを開きますか？",
+            ),
+            (Screen::Result(o, _), Guarded::Replay)
+                if o.session_id.is_some() && o.practice.is_none() && o.drill.is_none() =>
+            {
+                t(
+                    "Watch the replay of this play?",
+                    "今のプレイのリプレイを見ますか？",
+                )
+            }
+            (Screen::Result(o, view), Guarded::Advice) if view.page == Page::Summary => {
+                let lag = o.lag.as_ref()?;
+                if lag.applied.is_some() {
+                    t("Undo the suggested offset?", "補正を元に戻しますか？")
+                } else if lag.advice.changes() {
+                    t("Use the suggested offset?", "おすすめの補正にしますか？")
+                } else {
+                    return None;
+                }
+            }
+            (Screen::Drills(m), Guarded::DrillWay) if m.can_change_way() => {
+                return Some(tf!(
+                    "Change the mode to {}?",
+                    "やり方を「{}」に変えますか？",
+                    m.next_way_name()
+                ));
+            }
+            (Screen::Drills(m), Guarded::DrillLead) if m.can_change_way() => {
+                return Some(tf!(
+                    "Switch to {}?",
+                    "手順を「{}」に変えますか？",
+                    m.other_lead_name()
+                ));
+            }
+            (Screen::Replay(_), Guarded::ReplayPractice) => t(
+                "Practice these 2 measures?",
+                "この 2 小節を区間練習しますか？",
+            ),
+            _ => return None,
+        };
+        Some(q.to_owned())
+    }
+
+    /// 2 回叩いて確かめる操作のパッド。1 回目は画面の下に知らせるだけ、続けて 2 回目で確かめを出す
+    fn guarded_pad(&mut self, lane: DrumLane, action: Guarded, at_us: i64) {
+        let Some(question) = self.guard_question(action) else {
+            self.guard.clear();
+            return;
+        };
+        if !self.guard.hit(lane, action, at_us, Instant::now()) {
+            return;
+        }
+        self.sfx.play(Se::Change);
+        self.confirm = Some(Confirm {
+            action,
+            screen: std::mem::discriminant(&self.screen),
+            question,
+        });
+    }
+
+    /// 確かめに答えた（`yes` ならその操作をする）
+    fn answer_confirm(&mut self, yes: bool) {
+        let Some(c) = self.confirm.take() else {
+            return;
+        };
+        self.guard.clear();
+        if !yes {
+            self.sfx.play(Se::Cancel);
+            return;
+        }
+        match c.action {
+            Guarded::Retry => self.result_action(ui::ResultAction::Retry),
+            Guarded::Practice => self.result_action(ui::ResultAction::Practice(None)),
+            Guarded::Replay => self.result_replay(),
+            Guarded::Advice => self.toggle_result_advice(),
+            Guarded::DrillWay => self.drills_input(drill_menu::Input::Way),
+            Guarded::DrillLead => self.drills_input(drill_menu::Input::Lead),
+            Guarded::ReplayPractice => self.replay_input(DrumLane::RD),
+        }
+    }
+
+    /// 間違えて始めた曲から戻る（読み込み中と、最初の叩く音符の少し前まで、LC を続けて 2 回）。
+    /// 記録には残さず、始めた所（選曲・練習メニュー・基礎練習の画面・今日のメニュー）へ戻る
+    fn back_out(&mut self, at_us: i64) {
+        if self.after_close.is_some() {
+            return;
+        }
+        let double = self.last_lc_us.is_some_and(|t| at_us - t <= DOUBLE_HIT_US);
+        self.last_lc_us = (!double).then_some(at_us);
+        if !double {
+            return;
+        }
+        let today = self.today.as_ref().is_some_and(|p| p.current.is_some());
+        let (next, delay) = match &mut self.screen {
+            Screen::Loading(_) => {
+                self.sfx.stop_loading();
+                (AfterClose::Select, LOADING_CANCEL_CLOSE_DELAY)
+            }
+            Screen::Play(play, _) if play.before_first_note() => {
+                play.discard();
+                play.silence();
+                let next = if today && (play.drill.is_some() || play.practice.is_some()) {
+                    AfterClose::TodayMenu
+                } else if play.drill.is_some() {
+                    AfterClose::Drills
+                } else if let Some(o) = play.practice.as_ref().map(|p| p.restart_options()) {
+                    AfterClose::Setup(play.path.clone(), Some(o), None)
+                } else {
+                    AfterClose::Select
+                };
+                (next, Duration::ZERO)
+            }
+            _ => return,
+        };
+        log::info!("backed out of a play before the first note");
+        self.sfx.play(Se::Cancel);
+        self.close_then(next, delay);
+    }
+
     /// メニューの画面での電子ドラムの操作（上流の割り当てがもと）。
     /// HT で上、LT で下、CY か RD で決定、LC で戻る。選曲は HH を 2 回で難易度、RD で簡易設定（決定は CY だけ）。
     /// 結果は SD でもう一度、RD で区間練習、CY か LC で選曲へ（練習の結果なら CY・RD・LC で練習メニューへ）。
@@ -3682,6 +3954,33 @@ impl App {
         if self.after_close.is_some() || self.applying.is_some() {
             return;
         }
+        self.track_scene();
+        // 読み込み中は、間違えて始めた曲から LC 2 回で戻るだけ（叩き続けていても効く）
+        if matches!(self.screen, Screen::Loading(_)) {
+            if lane == DrumLane::LC {
+                self.back_out(at_us);
+            }
+            return;
+        }
+        // 場面が変わった直後と、そのあと叩き続けているあいだは何もしない（前の画面で叩いた続きが効かないように）
+        if !self.gate.pad(Instant::now()) {
+            return;
+        }
+        // 確かめを開いていれば、CY ではい、LC でいいえ。ほかのパッドは効かない
+        if self.confirm.is_some() {
+            match lane {
+                DrumLane::CY => self.answer_confirm(true),
+                DrumLane::LC => self.answer_confirm(false),
+                _ => {}
+            }
+            return;
+        }
+        // 1 打では戻しにくい操作は、同じパッドを続けて 2 回叩いてから確かめる
+        if let Some(action) = self.guarded_for(lane) {
+            self.guarded_pad(lane, action, at_us);
+            return;
+        }
+        self.guard.clear();
         if self.quick.is_some() && matches!(self.screen, Screen::Select | Screen::Play(..)) {
             // 設定の画面と同じパッドの役目
             let input = match lane {
@@ -3787,16 +4086,11 @@ impl App {
                 // 今日のメニューの結果では CY で次へ
                 DrumLane::CY if o.today.is_some() => self.result_action(ui::ResultAction::Next),
                 DrumLane::CY | DrumLane::LC => self.result_action(ui::ResultAction::Back),
-                // もう一度（練習なら同じ決めごとで。キーボードは R）
-                DrumLane::SD => self.result_action(ui::ResultAction::Retry),
-                // 練習メニュー（練習の結果なら今の区間を選んでおく。キーボードは P）
+                // 練習・基礎練習の結果の RD は戻る（練習メニュー・基礎練習の画面へ）。
+                // もう一度の SD、区間練習の RD、リプレイの HH、補正の FT は 2 回叩いて確かめる（`guarded_for`）
                 DrumLane::RD => self.result_action(ui::ResultAction::Practice(None)),
-                // 「ずれ」の板のおすすめ（キーボードは O）
-                DrumLane::FT => self.toggle_result_advice(),
                 // 選曲と同じく HT と LT で動かす
                 DrumLane::HT | DrumLane::LT => self.turn_result_page(),
-                // 今のプレイのリプレイ（キーボードは V）
-                DrumLane::HH | DrumLane::HHO => self.result_replay(),
                 _ => {}
             },
             Screen::Replay(_) => self.replay_input(lane),
@@ -3808,9 +4102,7 @@ impl App {
                     DrumLane::SD => drill_menu::Input::Left,
                     DrumLane::FT => drill_menu::Input::Right,
                     DrumLane::CY => drill_menu::Input::Decide,
-                    // やり方と手順（真ん中の列で）
-                    DrumLane::HH | DrumLane::HHO => drill_menu::Input::Way,
-                    DrumLane::RD => drill_menu::Input::Lead,
+                    // やり方（HH）と手順（RD）は 2 回叩いて確かめる（`guarded_for`）
                     DrumLane::LC => drill_menu::Input::Cancel,
                     _ => return,
                 };
@@ -4169,8 +4461,16 @@ impl App {
         let egui_ctx = self.egui_ctx.clone();
         let output = egui_ctx.run_ui(input, |ui| {
             self.draw_screen(ui, &ports, scanning, &mut mouse, &mut result_actions);
-            // 短い知らせはどの画面でも（F12 で画面を残したときなど）
             let ctx = ui.ctx().clone();
+            // 2 回叩いて確かめる操作の「続けて叩くと」と、確かめ
+            self.draw_guard(&Canvas::overlay(
+                &ctx.layer_painter(egui::LayerId::new(
+                    egui::Order::Foreground,
+                    egui::Id::unique("guard"),
+                )),
+                ctx.content_rect(),
+            ));
+            // 短い知らせはどの画面でも（F12 で画面を残したときなど）
             if let Some(t) = &toast {
                 // 一時停止の板を開いているときは、板と下の帯にかからないよう、レーンの見えている所に
                 let at = if paused_panel {
@@ -4234,8 +4534,21 @@ impl App {
             ));
         }
         self.select_mouse(mouse);
-        for a in result_actions {
-            self.result_action(a);
+        // 確かめを開いているあいだは、結果の画面のボタンも効かない
+        if self.confirm.is_none() {
+            for a in result_actions {
+                self.result_action(a);
+            }
+        }
+    }
+
+    /// 2 回叩いて確かめる操作の、1 回目のあとの「続けて叩くと」と、開いている確かめ
+    fn draw_guard(&mut self, c: &Canvas) {
+        if let Some(confirm) = &self.confirm {
+            let question = confirm.question.clone();
+            pad_guard::draw_confirm(c, &mut self.gfx, &question);
+        } else if let Some((lane, action)) = self.guard.armed(Instant::now()) {
+            pad_guard::draw_armed(c, &mut self.gfx, lane, action.label());
         }
     }
 

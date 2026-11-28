@@ -930,13 +930,13 @@ pub fn draw_weak(c: &Canvas, g: &mut Gfx, o: &Outcome) {
     if let Some(t) = &o.strokes {
         draw_strokes(c, g, t, x, ty, pw, limit);
     }
-    // パッドの印（RD）と、キーボードの P（ずれの板の「FT / O」と同じ形）
+    // パッドの印（RD を 2 回）と、キーボードの P（ずれの板の「FT ×2 / O」と同じ形）
     let hint = if w.phrases.is_empty() {
-        t("RD / P: Practice a Section", "RD / P：区間を練習")
+        t("RD ×2 / P: Practice a Section", "RD ×2 / P：区間を練習")
     } else {
         t(
-            "RD / P: Practice Weak Phrases",
-            "RD / P：苦手なフレーズを練習",
+            "RD ×2 / P: Practice Weak Phrases",
+            "RD ×2 / P：苦手なフレーズを練習",
         )
     };
     let style = Style::edged(14.0, Color32::from_gray(210), Color32::BLACK, 1.0);
