@@ -9,9 +9,13 @@
 //! 型の小節 0 はカウントで、音符は 1 小節目から置く。
 //!
 //! 電子ドラムはどちらの手で叩いたかを送ってこないので、左右のずれは「型の手順どおりに叩いた」として数える。
+//!
+//! 型にはアクセントを書ける（大文字がアクセント、小文字がふつうの音）。アクセントが出たかは叩く強さを
+//! まわりのふつうの音と比べて見る（[`crate::accent`]）。強さは段の出来・最高・合否には入れない。
 
 use dtx::{DrumLane, NotePos};
 
+use crate::accent;
 use crate::analysis::mean_and_sd;
 use crate::judge::{Judgement, Tally};
 
@@ -56,9 +60,9 @@ pub enum Hand {
 impl Hand {
     pub const ALL: [Hand; 4] = [Self::Right, Self::Left, Self::Foot, Self::LeftFoot];
 
-    /// 型の文字とレーンから。足（F）は左のペダルと左のバスドラなら左足
+    /// 型の文字とレーンから（大文字と小文字は同じ手）。足（F）は左のペダルと左のバスドラなら左足
     fn of(c: char, lane: DrumLane) -> Option<Self> {
-        match c {
+        match c.to_ascii_uppercase() {
             'R' => Some(Self::Right),
             'L' => Some(Self::Left),
             'F' if matches!(lane, DrumLane::LP | DrumLane::LBD) => Some(Self::LeftFoot),
@@ -164,6 +168,8 @@ impl Way {
 pub enum Category {
     Timing,
     Rudiments,
+    /// アクセント（強く叩く音の位置）
+    Accents,
     /// 基本のビート
     Grooves,
     /// ジャンルのビート
@@ -180,9 +186,10 @@ pub enum Category {
 }
 
 impl Category {
-    pub const ALL: [Category; 9] = [
+    pub const ALL: [Category; 10] = [
         Self::Timing,
         Self::Rudiments,
+        Self::Accents,
         Self::Grooves,
         Self::Styles,
         Self::Fills,
@@ -201,7 +208,9 @@ pub struct Drill {
     pub category: Category,
     /// レーンごとの型。1 マス 1 文字で R・L は手、F は足、- は休み。小節は `|` で分け、
     /// 小節ごとのマスの数がその小節の分け方（4/4 で 16 なら 16 分、12 なら 3 連の 8 分）。どのレーンも同じ小節の数。
-    /// レーンごとにマスの数が違ってもよい（ポリリズム）
+    /// レーンごとにマスの数が違ってもよい（ポリリズム）。
+    /// 小文字（r・l・f）のあるレーンは、大文字がアクセント、小文字がふつうの音（教則本の書き方）。
+    /// 全部大文字のレーンにはアクセントが無い
     pub lanes: &'static [(DrumLane, &'static str)],
     /// クリックを鳴らす小節の数と、消す小節の数（体内時計）。あるときはテンポを上げない
     pub gap: Option<(u32, u32)>,
@@ -242,6 +251,8 @@ const LBD: DrumLane = DrumLane::LBD;
 
 /// 8 分のハイハットと 2・4 拍のスネア（ビートの多くで使う）
 const HATS_8: &str = "R-R-R-R-R-R-R-R-";
+/// 8 分のハイハットで、拍の頭にアクセント（ビートとジャンルで使う）
+const HATS_8_ON_BEAT: &str = "R-r-R-r-R-r-R-r-";
 const BACKBEAT: &str = "----L-------L---";
 
 /// すべてのドリル（画面に出す順。分け方の中はこの順）
@@ -373,40 +384,40 @@ pub const DRILLS: &[Drill] = &[
     Drill {
         id: "five_stroke",
         category: Category::Rudiments,
-        lanes: &[(SD, "RRLLR---LLRRL---")],
+        lanes: &[(SD, "rrllR---llrrL---")],
         ..Drill::BASE
     },
     Drill {
         id: "six_stroke",
         category: Category::Rudiments,
-        lanes: &[(SD, "RLLRRLRLLRRL")],
+        lanes: &[(SD, "RllrrLRllrrL")],
         default_bpm: 90,
         ..Drill::BASE
     },
     Drill {
         id: "seven_stroke",
         category: Category::Rudiments,
-        lanes: &[(SD, "RRLLRRL-LLRRLLR-")],
+        lanes: &[(SD, "rrllrrL-llrrllR-")],
         default_bpm: 90,
         ..Drill::BASE
     },
     Drill {
         id: "nine_stroke",
         category: Category::Rudiments,
-        lanes: &[(SD, "RRLLRRLLR---|LLRRLLRRL---")],
+        lanes: &[(SD, "rrllrrllR---|llrrllrrL---")],
         default_bpm: 90,
         ..Drill::BASE
     },
     Drill {
         id: "paradiddle",
         category: Category::Rudiments,
-        lanes: &[(SD, "RLRRLRLLRLRRLRLL")],
+        lanes: &[(SD, "RlrrLrllRlrrLrll")],
         ..Drill::BASE
     },
     Drill {
         id: "inverted_paradiddle",
         category: Category::Rudiments,
-        lanes: &[(SD, "RLLRLRRLRLLRLRRL")],
+        lanes: &[(SD, "RllrLrrlRllrLrrl")],
         default_bpm: 90,
         ..Drill::BASE
     },
@@ -420,41 +431,41 @@ pub const DRILLS: &[Drill] = &[
     Drill {
         id: "double_paradiddle",
         category: Category::Rudiments,
-        lanes: &[(SD, "RLRLRRLRLRLL")],
+        lanes: &[(SD, "RlrlrrLrlrll")],
         default_bpm: 90,
         ..Drill::BASE
     },
     Drill {
         id: "triple_paradiddle",
         category: Category::Rudiments,
-        lanes: &[(SD, "RLRLRLRRLRLRLRLL")],
+        lanes: &[(SD, "RlrlrlrrLrlrlrll")],
         default_bpm: 90,
         ..Drill::BASE
     },
     Drill {
         id: "paradiddle_diddle",
         category: Category::Rudiments,
-        lanes: &[(SD, "RLRRLLRLRRLL")],
+        lanes: &[(SD, "RlrrllRlrrll")],
         default_bpm: 90,
         ..Drill::BASE
     },
     Drill {
         id: "paradiddle_triplets",
         category: Category::Rudiments,
-        lanes: &[(SD, "RLRRLRLLRLRR|LRLLRLRRLRLL")],
+        lanes: &[(SD, "RlrrLrllRlrr|LrllRlrrLrll")],
         default_bpm: 90,
         ..Drill::BASE
     },
     Drill {
         id: "single_stroke_four",
         category: Category::Rudiments,
-        lanes: &[(SD, "RLRL--RLRL--")],
+        lanes: &[(SD, "rlrL--rlrL--")],
         ..Drill::BASE
     },
     Drill {
         id: "single_stroke_seven",
         category: Category::Rudiments,
-        lanes: &[(SD, "RLRLRLR-----LRLRLRL-----")],
+        lanes: &[(SD, "rlrlrlR-----lrlrlrL-----")],
         default_bpm: 90,
         ..Drill::BASE
     },
@@ -465,39 +476,144 @@ pub const DRILLS: &[Drill] = &[
         default_bpm: 90,
         ..Drill::BASE
     },
+    // ---- アクセント ----
+    Drill {
+        id: "accent_eighths",
+        category: Category::Accents,
+        lanes: &[(SD, "R-l-R-l-R-l-R-l-")],
+        ..Drill::BASE
+    },
+    Drill {
+        id: "accent_upbeats",
+        category: Category::Accents,
+        lanes: &[(SD, "r-L-r-L-r-L-r-L-")],
+        ..Drill::BASE
+    },
+    Drill {
+        id: "accent_sixteenth_1",
+        category: Category::Accents,
+        lanes: &[(SD, "RlrlRlrlRlrlRlrl")],
+        default_bpm: 90,
+        ..Drill::BASE
+    },
+    Drill {
+        id: "accent_sixteenth_2",
+        category: Category::Accents,
+        lanes: &[(SD, "rLrlrLrlrLrlrLrl")],
+        default_bpm: 90,
+        ..Drill::BASE
+    },
+    Drill {
+        id: "accent_sixteenth_3",
+        category: Category::Accents,
+        lanes: &[(SD, "rlRlrlRlrlRlrlRl")],
+        default_bpm: 90,
+        ..Drill::BASE
+    },
+    Drill {
+        id: "accent_sixteenth_4",
+        category: Category::Accents,
+        lanes: &[(SD, "rlrLrlrLrlrLrlrL")],
+        default_bpm: 90,
+        ..Drill::BASE
+    },
+    Drill {
+        id: "accent_moving",
+        category: Category::Accents,
+        // 1 小節ごとに、アクセントが 16 分の 1 つ目 → 2 つ目 → 3 つ目 → 4 つ目へ動く
+        lanes: &[(
+            SD,
+            "RlrlRlrlRlrlRlrl|rLrlrLrlrLrlrLrl|rlRlrlRlrlRlrlRl|rlrLrlrLrlrLrlrL",
+        )],
+        default_bpm: 90,
+        ..Drill::BASE
+    },
+    Drill {
+        id: "accent_triplets",
+        category: Category::Accents,
+        lanes: &[(SD, "RlrLrlRlrLrl")],
+        default_bpm: 90,
+        ..Drill::BASE
+    },
+    Drill {
+        id: "accent_threes",
+        category: Category::Accents,
+        // 16 分に 3 つずつ。拍の頭とずれていく
+        lanes: &[(SD, "RlrLrlRlrLrlRlrL")],
+        default_bpm: 90,
+        ..Drill::BASE
+    },
+    Drill {
+        id: "accent_doubles",
+        category: Category::Accents,
+        lanes: &[(SD, "RrLlRrLlRrLlRrLl")],
+        default_bpm: 90,
+        ..Drill::BASE
+    },
+    Drill {
+        id: "hats_accent_upbeats",
+        category: Category::Accents,
+        lanes: &[
+            (HH, "r-R-r-R-r-R-r-R-"),
+            (SD, BACKBEAT),
+            (BD, "F-------F-F-----"),
+        ],
+        default_bpm: 110,
+        ..Drill::BASE
+    },
     // ---- ビート ----
     Drill {
         id: "eight_beat_basic",
         category: Category::Grooves,
-        lanes: &[(HH, HATS_8), (SD, BACKBEAT), (BD, "F-------F-------")],
+        lanes: &[
+            (HH, HATS_8_ON_BEAT),
+            (SD, BACKBEAT),
+            (BD, "F-------F-------"),
+        ],
         default_bpm: 110,
         ..Drill::BASE
     },
     Drill {
         id: "eight_beat",
         category: Category::Grooves,
-        lanes: &[(HH, HATS_8), (SD, BACKBEAT), (BD, "F-------F-F-----")],
+        lanes: &[
+            (HH, HATS_8_ON_BEAT),
+            (SD, BACKBEAT),
+            (BD, "F-------F-F-----"),
+        ],
         default_bpm: 110,
         ..Drill::BASE
     },
     Drill {
         id: "kick_and_of_2",
         category: Category::Grooves,
-        lanes: &[(HH, HATS_8), (SD, BACKBEAT), (BD, "F-----F-F-------")],
+        lanes: &[
+            (HH, HATS_8_ON_BEAT),
+            (SD, BACKBEAT),
+            (BD, "F-----F-F-------"),
+        ],
         default_bpm: 110,
         ..Drill::BASE
     },
     Drill {
         id: "kick_and_of_4",
         category: Category::Grooves,
-        lanes: &[(HH, HATS_8), (SD, BACKBEAT), (BD, "F-------F-----F-")],
+        lanes: &[
+            (HH, HATS_8_ON_BEAT),
+            (SD, BACKBEAT),
+            (BD, "F-------F-----F-"),
+        ],
         default_bpm: 110,
         ..Drill::BASE
     },
     Drill {
         id: "kick_sixteenth",
         category: Category::Grooves,
-        lanes: &[(HH, HATS_8), (SD, BACKBEAT), (BD, "F------F--F-----")],
+        lanes: &[
+            (HH, HATS_8_ON_BEAT),
+            (SD, BACKBEAT),
+            (BD, "F------F--F-----"),
+        ],
         ..Drill::BASE
     },
     Drill {
@@ -537,7 +653,7 @@ pub const DRILLS: &[Drill] = &[
         id: "sixteen_one_hand",
         category: Category::Grooves,
         lanes: &[
-            (HH, "RRRRRRRRRRRRRRRR"),
+            (HH, "RrrrRrrrRrrrRrrr"),
             (SD, BACKBEAT),
             (BD, "F-------F-F-----"),
         ],
@@ -548,7 +664,7 @@ pub const DRILLS: &[Drill] = &[
         id: "half_time",
         category: Category::Grooves,
         lanes: &[
-            (HH, HATS_8),
+            (HH, HATS_8_ON_BEAT),
             (SD, "--------L-------"),
             (BD, "F-----F---F-----"),
         ],
@@ -559,7 +675,7 @@ pub const DRILLS: &[Drill] = &[
         id: "two_beat",
         category: Category::Grooves,
         lanes: &[
-            (HH, HATS_8),
+            (HH, HATS_8_ON_BEAT),
             (SD, "--L---L---L---L-"),
             (BD, "F---F---F---F---"),
         ],
@@ -570,7 +686,7 @@ pub const DRILLS: &[Drill] = &[
         id: "snare_every_beat",
         category: Category::Grooves,
         lanes: &[
-            (HH, HATS_8),
+            (HH, HATS_8_ON_BEAT),
             (SD, "L---L---L---L---"),
             (BD, "F-------F-------"),
         ],
@@ -592,7 +708,7 @@ pub const DRILLS: &[Drill] = &[
         id: "shuffle",
         category: Category::Grooves,
         lanes: &[
-            (HH, "R-RR-RR-RR-R"),
+            (HH, "R-rR-rR-rR-r"),
             (SD, "---L-----L--"),
             (BD, "F-----F-----"),
         ],
@@ -610,8 +726,8 @@ pub const DRILLS: &[Drill] = &[
         id: "funk_ghost",
         category: Category::Styles,
         lanes: &[
-            (HH, HATS_8),
-            (SD, "----L--L-L--L--L"),
+            (HH, HATS_8_ON_BEAT),
+            (SD, "----L--l-l--L--l"),
             (BD, "F-----F---F-----"),
         ],
         default_bpm: 90,
@@ -643,7 +759,11 @@ pub const DRILLS: &[Drill] = &[
     Drill {
         id: "hip_hop",
         category: Category::Styles,
-        lanes: &[(HH, HATS_8), (SD, BACKBEAT), (BD, "F------F-F---F--")],
+        lanes: &[
+            (HH, HATS_8_ON_BEAT),
+            (SD, BACKBEAT),
+            (BD, "F------F-F---F--"),
+        ],
         default_bpm: 90,
         ..Drill::BASE
     },
@@ -651,7 +771,7 @@ pub const DRILLS: &[Drill] = &[
         id: "half_time_shuffle",
         category: Category::Styles,
         lanes: &[
-            (HH, "R-RR-RR-RR-R"),
+            (HH, "R-rR-rR-rR-r"),
             (SD, "-L--L-LL--L-"),
             (BD, "F--------F--"),
         ],
@@ -662,7 +782,7 @@ pub const DRILLS: &[Drill] = &[
         id: "twelve_eight",
         category: Category::Styles,
         lanes: &[
-            (HH, "RRRRRRRRRRRR"),
+            (HH, "RrrRrrRrrRrr"),
             (SD, "---L-----L--"),
             (BD, "F-----F-----"),
         ],
@@ -673,7 +793,7 @@ pub const DRILLS: &[Drill] = &[
         id: "one_drop",
         category: Category::Styles,
         lanes: &[
-            (HH, "R-RR-RR-RR-R"),
+            (HH, "R-rR-rR-rR-r"),
             (SD, "------L-----"),
             (BD, "------F-----"),
         ],
@@ -695,7 +815,7 @@ pub const DRILLS: &[Drill] = &[
         id: "samba",
         category: Category::Styles,
         lanes: &[
-            (HH, HATS_8),
+            (HH, HATS_8_ON_BEAT),
             (SD, "---L---L---L---L"),
             (BD, "F--FF--FF--FF--F"),
         ],
@@ -723,7 +843,11 @@ pub const DRILLS: &[Drill] = &[
     Drill {
         id: "drum_and_bass",
         category: Category::Styles,
-        lanes: &[(HH, HATS_8), (SD, BACKBEAT), (BD, "F---------F-----")],
+        lanes: &[
+            (HH, HATS_8_ON_BEAT),
+            (SD, BACKBEAT),
+            (BD, "F---------F-----"),
+        ],
         default_bpm: 170,
         ..Drill::BASE
     },
@@ -1233,6 +1357,8 @@ pub struct PatternNote {
     pub cells: u32,
     pub lane: DrumLane,
     pub hand: Hand,
+    /// アクセント（強く叩く音）
+    pub accent: bool,
 }
 
 impl PatternNote {
@@ -1261,6 +1387,7 @@ impl Drill {
     pub fn notes(&self) -> Vec<PatternNote> {
         let mut v = Vec::new();
         for &(lane, text) in self.lanes {
+            let marked = lane_has_accents(text);
             for (m, bar) in text.split('|').enumerate() {
                 let cells: Vec<char> = bar.chars().filter(|c| !c.is_whitespace()).collect();
                 for (i, &c) in cells.iter().enumerate() {
@@ -1271,6 +1398,7 @@ impl Drill {
                             cells: cells.len() as u32,
                             lane,
                             hand,
+                            accent: marked && c.is_ascii_uppercase(),
                         });
                     }
                 }
@@ -1288,6 +1416,20 @@ impl Drill {
     /// 使うレーン（型に書いた順）
     pub fn lanes(&self) -> Vec<DrumLane> {
         self.lanes.iter().map(|&(l, _)| l).collect()
+    }
+
+    /// アクセントのあるレーン（型に書いた順）
+    pub fn accent_lanes(&self) -> Vec<DrumLane> {
+        self.lanes
+            .iter()
+            .filter(|(_, t)| lane_has_accents(t))
+            .map(|&(l, _)| l)
+            .collect()
+    }
+
+    /// アクセントのある型か
+    pub fn has_accents(&self) -> bool {
+        self.lanes.iter().any(|(_, t)| lane_has_accents(t))
     }
 
     /// テンポを上げないドリルか（クリックが消える小節があると、新しいテンポが分からないので）
@@ -1322,6 +1464,11 @@ impl Drill {
         let n = (quarters - 1e-9).ceil().max(1.0) as u32;
         (0..n).map(|i| (f64::from(i) / quarters, i == 0)).collect()
     }
+}
+
+/// レーンの型にアクセントがあるか（小文字の音があれば、大文字がアクセント）
+fn lane_has_accents(text: &str) -> bool {
+    text.contains(['r', 'l', 'f'])
 }
 
 /// クリックの型の文字（X・x・-）から位置と強さ
@@ -1516,15 +1663,20 @@ impl Run {
 
     /// 譜面の音符（小節と位置、レーン）を叩く手足。型に無い音符とお手本の小節は None
     pub fn hand_at(&self, at: NotePos, lane: DrumLane) -> Option<Hand> {
+        self.note_at(at, lane).map(|n| n.hand)
+    }
+
+    /// 譜面の音符（小節と位置、レーン）にあたる型の音符（左からなら手を入れ替えて）。
+    /// 型に無い音符とお手本の小節は None
+    pub fn note_at(&self, at: NotePos, lane: DrumLane) -> Option<PatternNote> {
         if self.is_demo(at.measure) {
             return None;
         }
         let pm = self.pattern_measure(at.measure)?;
-        self.notes().into_iter().find_map(|n| {
-            (n.measure == pm
+        self.notes().into_iter().find(|n| {
+            n.measure == pm
                 && n.lane == lane
-                && u64::from(n.cell) * u64::from(at.den) == u64::from(at.num) * u64::from(n.cells))
-            .then_some(n.hand)
+                && u64::from(n.cell) * u64::from(at.den) == u64::from(at.num) * u64::from(n.cells)
         })
     }
 
@@ -1620,6 +1772,8 @@ pub struct NoteOutcome {
     pub judgement: Judgement,
     /// 叩いた時刻 − 音符の時刻（ミリ秒、マイナスは早い）。見逃しは None
     pub offset_ms: Option<f64>,
+    /// 叩いた強さ（MIDI のベロシティ）。見逃しと、強さの届かない入力（キーボード）は None
+    pub velocity: Option<u8>,
 }
 
 /// 段 1 つの結果
@@ -1689,6 +1843,68 @@ pub struct Dot {
     pub hand: Option<Hand>,
     /// ずれ（ミリ秒）。POOR と MISS は None
     pub offset_ms: Option<f64>,
+    pub lane: DrumLane,
+    /// 型でアクセントの音か
+    pub accent: bool,
+    /// 叩いた強さ。見逃しと強さの届かない入力は None
+    pub velocity: Option<u8>,
+    /// アクセントが出たか。アクセントの音で、強さが届き、まわりと比べられたときだけ
+    pub stood_out: Option<bool>,
+}
+
+/// アクセントが出た数と、見た数
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AccentCount {
+    pub stood_out: u32,
+    pub judged: u32,
+}
+
+impl AccentCount {
+    /// 出た割合（0〜1）。見たアクセントが無ければ None
+    pub fn rate(&self) -> Option<f64> {
+        (self.judged > 0).then(|| f64::from(self.stood_out) / f64::from(self.judged))
+    }
+}
+
+/// 型の 1 つの音符の、強さの平均
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ShapeCell {
+    pub note: PatternNote,
+    /// 強さの平均。強さの届いた打が無ければ None
+    pub mean: Option<f64>,
+    /// 強さの届いた打の数
+    pub hits: u32,
+}
+
+/// アクセントのあるレーン 1 つの、型の小節の強さの形
+#[derive(Debug, Clone, PartialEq)]
+pub struct Shape {
+    pub lane: DrumLane,
+    /// ふつうの強さ（このレーンのアクセントでない音の中央値）
+    pub normal: Option<f64>,
+    /// 型の音符ごと（型の小節・位置の順）
+    pub cells: Vec<ShapeCell>,
+}
+
+/// 叩く強さのまとめ（アクセントのある型で、強さが届いたときだけ）
+#[derive(Debug, Clone, PartialEq)]
+pub struct Strength {
+    /// 段ごとのアクセント
+    pub steps: Vec<AccentCount>,
+    /// アクセントのあるレーンごとの、型の小節の強さの形（型に書いた順）
+    pub shapes: Vec<Shape>,
+}
+
+impl Strength {
+    /// 全部の段のアクセント
+    pub fn total(&self) -> AccentCount {
+        self.steps
+            .iter()
+            .fold(AccentCount::default(), |a, s| AccentCount {
+                stood_out: a.stood_out + s.stood_out,
+                judged: a.judged + s.judged,
+            })
+    }
 }
 
 /// 1 回の結果
@@ -1698,6 +1914,8 @@ pub struct Summary {
     /// 型に出てくる手足だけ（右・左・足の順）
     pub hands: Vec<HandLag>,
     pub dots: Vec<Dot>,
+    /// 叩く強さ。アクセントの無い型と、強さの届かない入力は None
+    pub strength: Option<Strength>,
 }
 
 impl Summary {
@@ -1713,6 +1931,19 @@ impl Summary {
     /// 全部の段を最後まで叩いた
     pub fn finished(&self) -> bool {
         !self.steps.is_empty() && self.steps.iter().all(|s| s.completed)
+    }
+
+    /// 最近叩いたアクセントのあるレーンの打（強さの届いたもの）を、古い順に `n` まで
+    pub fn recent_strokes(&self, lanes: &[DrumLane], n: usize) -> Vec<&Dot> {
+        let mut v: Vec<&Dot> = self
+            .dots
+            .iter()
+            .rev()
+            .filter(|d| d.velocity.is_some() && lanes.contains(&d.lane))
+            .take(n)
+            .collect();
+        v.reverse();
+        v
     }
 }
 
@@ -1741,7 +1972,8 @@ pub fn summarize(run: &Run, results: &[NoteOutcome], now_measure: u32) -> Summar
     for &h in &pattern_hands {
         hand_offsets.push((h, Vec::new()));
     }
-    let mut dots = Vec::new();
+    // 叩いた順の点と、それぞれの型の音符
+    let mut dots: Vec<(Dot, Option<PatternNote>)> = Vec::new();
     for r in results {
         let Some(s) = run.step_of(r.at.measure) else {
             continue;
@@ -1754,7 +1986,8 @@ pub fn summarize(run: &Run, results: &[NoteOutcome], now_measure: u32) -> Summar
             Judgement::Perfect | Judgement::Great | Judgement::Good
         );
         let offset = r.offset_ms.filter(|_| hit);
-        let hand = run.hand_at(r.at, r.lane);
+        let note = run.note_at(r.at, r.lane);
+        let hand = note.map(|n| n.hand);
         if let Some(o) = offset {
             step_offsets[s].push(o);
             if let Some(h) = hand
@@ -1763,21 +1996,29 @@ pub fn summarize(run: &Run, results: &[NoteOutcome], now_measure: u32) -> Summar
                 v.push(o);
             }
         }
-        dots.push(Dot {
-            measure: r.at.measure,
-            pos: f64::from(r.at.num) / f64::from(r.at.den.max(1)),
-            hand,
-            offset_ms: offset,
-        });
+        dots.push((
+            Dot {
+                measure: r.at.measure,
+                pos: f64::from(r.at.num) / f64::from(r.at.den.max(1)),
+                hand,
+                offset_ms: offset,
+                lane: r.lane,
+                accent: note.is_some_and(|n| n.accent),
+                velocity: r.velocity.filter(|_| r.judgement != Judgement::Miss),
+                stood_out: None,
+            },
+            note,
+        ));
     }
     for (s, offs) in steps.iter_mut().zip(&step_offsets) {
         (s.offset_mean_ms, s.offset_sd_ms) = mean_and_sd(offs);
     }
     dots.sort_by(|a, b| {
-        (a.measure, a.pos)
-            .partial_cmp(&(b.measure, b.pos))
+        (a.0.measure, a.0.pos)
+            .partial_cmp(&(b.0.measure, b.0.pos))
             .unwrap_or(std::cmp::Ordering::Equal)
     });
+    let strength = strength(run, &mut dots);
     let hands = hand_offsets
         .into_iter()
         .map(|(hand, v)| {
@@ -1790,7 +2031,89 @@ pub fn summarize(run: &Run, results: &[NoteOutcome], now_measure: u32) -> Summar
             }
         })
         .collect();
-    Summary { steps, hands, dots }
+    Summary {
+        steps,
+        hands,
+        dots: dots.into_iter().map(|(d, _)| d).collect(),
+        strength,
+    }
+}
+
+/// 叩く強さをまとめ、点ごとにアクセントが出たかを書く（`dots` は位置の順）。
+/// アクセントの無い型と、強さの届かない入力は None
+fn strength(run: &Run, dots: &mut [(Dot, Option<PatternNote>)]) -> Option<Strength> {
+    let lanes = run.drill.accent_lanes();
+    if lanes.is_empty() {
+        return None;
+    }
+    let strokes: Vec<accent::Stroke> = dots
+        .iter()
+        .map(|(d, _)| accent::Stroke {
+            at: f64::from(d.measure) + d.pos,
+            lane: d.lane,
+            accent: d.accent,
+            velocity: d.velocity,
+        })
+        .collect();
+    let on_lanes: Vec<accent::Stroke> = strokes
+        .iter()
+        .copied()
+        .filter(|s| lanes.contains(&s.lane))
+        .collect();
+    if !accent::has_strength(&on_lanes) {
+        return None;
+    }
+    let mut steps = vec![AccentCount::default(); run.steps()];
+    for ((d, _), j) in dots.iter_mut().zip(accent::judge(&strokes)) {
+        d.stood_out = j;
+        if let (Some(b), Some(s)) = (j, run.step_of(d.measure)) {
+            steps[s].judged += 1;
+            steps[s].stood_out += u32::from(b);
+        }
+    }
+    // 型の音符（小節・マス・レーン）ごとの、強さの合計と数
+    let mut sums: std::collections::HashMap<(u32, u32, DrumLane), (f64, u32)> =
+        std::collections::HashMap::new();
+    for (d, n) in dots.iter() {
+        if let (Some(n), Some(v)) = (n, d.velocity) {
+            let e = sums.entry((n.measure, n.cell, n.lane)).or_default();
+            e.0 += f64::from(v);
+            e.1 += 1;
+        }
+    }
+    let notes = run.notes();
+    let shapes = lanes
+        .iter()
+        .map(|&lane| {
+            let cells = notes
+                .iter()
+                .filter(|n| n.lane == lane)
+                .map(|&note| {
+                    let (sum, hits) = sums
+                        .get(&(note.measure, note.cell, lane))
+                        .copied()
+                        .unwrap_or_default();
+                    ShapeCell {
+                        note,
+                        mean: (hits > 0).then(|| sum / f64::from(hits)),
+                        hits,
+                    }
+                })
+                .collect();
+            let normal = accent::median(
+                dots.iter()
+                    .filter(|(d, _)| d.lane == lane && !d.accent)
+                    .filter_map(|(d, _)| d.velocity.map(f64::from))
+                    .collect(),
+            );
+            Shape {
+                lane,
+                normal,
+                cells,
+            }
+        })
+        .collect();
+    Some(Strength { steps, shapes })
 }
 
 #[cfg(test)]
@@ -1812,7 +2135,7 @@ mod tests {
                 assert_eq!(text.split('|').count() as u32, m, "{} {lane:?}", d.id);
                 for bar in text.split('|') {
                     assert!(
-                        bar.chars().all(|c| "RLF-".contains(c)),
+                        bar.chars().all(|c| "RLFrlf-".contains(c)),
                         "{} {lane:?} {bar}",
                         d.id
                     );
@@ -1827,7 +2150,8 @@ mod tests {
                     // 足の文字は足のレーンだけ、手の文字は足のレーンに書かない
                     let foot = matches!(*lane, BD | LBD | LP);
                     assert!(
-                        bar.chars().all(|c| c == '-' || (c == 'F') == foot),
+                        bar.chars()
+                            .all(|c| c == '-' || c.eq_ignore_ascii_case(&'F') == foot),
                         "{} {lane:?} {bar}",
                         d.id
                     );
@@ -1855,7 +2179,7 @@ mod tests {
         for c in Category::ALL {
             assert!(DRILLS.iter().any(|d| d.category == c), "{c:?}");
         }
-        assert_eq!(DRILLS.len(), 107);
+        assert_eq!(DRILLS.len(), 118);
     }
 
     #[test]
@@ -2230,6 +2554,7 @@ mod tests {
                         Judgement::Perfect
                     },
                     offset_ms: (!miss).then_some(if right { 2.0 } else { -10.0 }),
+                    velocity: (!miss).then_some(90),
                 });
             }
         }
@@ -2259,5 +2584,112 @@ mod tests {
         assert!(partial.steps[0].completed && !partial.steps[1].completed);
         assert_eq!(partial.steps[1].grade(), None);
         assert!(!partial.finished());
+        // アクセントの無い型は強さを見ない
+        assert!(s.strength.is_none());
+    }
+
+    #[test]
+    fn capital_letters_are_accents_only_in_lanes_with_small_letters() {
+        let accents: String = drill("paradiddle")
+            .notes()
+            .iter()
+            .map(|n| if n.accent { '>' } else { '-' })
+            .collect();
+        assert_eq!(accents, ">--->--->--->---");
+        // 小文字も同じ手として読む
+        let s: String = drill("paradiddle")
+            .notes()
+            .iter()
+            .map(|n| n.hand.letter())
+            .collect();
+        assert_eq!(s, "RLRRLRLLRLRRLRLL");
+        // 全部大文字のレーンはアクセント無し（ビートのスネアとバスドラ）
+        let d = drill("eight_beat");
+        assert_eq!(d.accent_lanes(), [HH]);
+        assert!(d.notes().iter().filter(|n| n.lane != HH).all(|n| !n.accent));
+        assert_eq!(d.notes().iter().filter(|n| n.accent).count(), 4);
+        assert!(!drill("single_stroke").has_accents());
+        assert!(drill("funk_ghost").accent_lanes().contains(&SD));
+        // アクセントの型はアクセントの分け方に。どれもアクセントがある
+        for d in DRILLS.iter().filter(|d| d.category == Category::Accents) {
+            assert!(d.has_accents(), "{}", d.id);
+        }
+        // 左からにしても、アクセントの位置は変わらない
+        let run = Run::with(drill("paradiddle"), Way::Climb, 100, 10, true);
+        let n = run.note_at(NotePos::new(1, 4, 16), SD).unwrap();
+        assert!(n.accent && n.hand == Hand::Right);
+    }
+
+    /// パラディドルを 16 小節。アクセントは `acc`、ふつうの音は `normal` の強さで叩いた（段ごとに変えられる）
+    fn paradiddle_hits(acc: [u8; 4], normal: u8, velocity: bool) -> (Run, Vec<NoteOutcome>) {
+        let run = Run::new(drill("paradiddle"), 100, 10);
+        let mut results = Vec::new();
+        for m in 1..=16u32 {
+            for c in 0..16u32 {
+                let step = ((m - 1) / 4) as usize;
+                let v = if c % 4 == 0 { acc[step] } else { normal };
+                results.push(NoteOutcome {
+                    at: NotePos::new(m, c, 16),
+                    lane: SD,
+                    judgement: Judgement::Perfect,
+                    offset_ms: Some(0.0),
+                    velocity: velocity.then_some(v),
+                });
+            }
+        }
+        (run, results)
+    }
+
+    #[test]
+    fn strength_counts_accents_per_step_and_draws_the_bar() {
+        // 段が進むほどアクセントが弱くなる（ふつう 60、最後の段は 64 で出ていない）
+        let (run, results) = paradiddle_hits([100, 95, 80, 64], 60, true);
+        let s = summarize(&run, &results, 17);
+        let st = s.strength.as_ref().unwrap();
+        let counts: Vec<(u32, u32)> = st.steps.iter().map(|c| (c.stood_out, c.judged)).collect();
+        assert_eq!(counts, [(16, 16), (16, 16), (16, 16), (0, 16)]);
+        assert_eq!(st.total().stood_out, 48);
+        assert!((st.total().rate().unwrap() - 0.75).abs() < 1e-9);
+        // 1 小節の形: 型の 16 の音符、アクセントの所は 4 段の平均
+        let shape = &st.shapes[0];
+        assert_eq!(shape.lane, SD);
+        assert_eq!(shape.cells.len(), 16);
+        assert_eq!(shape.normal, Some(60.0));
+        let first = shape.cells[0];
+        assert!(first.note.accent);
+        assert_eq!(first.hits, 16);
+        assert!((first.mean.unwrap() - (100.0 + 95.0 + 80.0 + 64.0) / 4.0).abs() < 1e-9);
+        assert_eq!(shape.cells[1].mean, Some(60.0));
+        // 点にも、アクセントが出たかを書く
+        assert_eq!(s.dots[0].stood_out, Some(true));
+        assert_eq!(s.dots[1].stood_out, None);
+        assert_eq!(s.dots.last().unwrap().velocity, Some(60));
+        let last_accent = s.dots.iter().rev().find(|d| d.accent).unwrap();
+        assert_eq!(last_accent.stood_out, Some(false));
+        // 最近の打（アクセントのあるレーンだけ、古い順）
+        let recent = s.recent_strokes(&[SD], 4);
+        assert_eq!(recent.len(), 4);
+        assert!(recent[0].accent && !recent[3].accent);
+        assert!(s.recent_strokes(&[HH], 4).is_empty());
+    }
+
+    #[test]
+    fn no_strength_without_velocity() {
+        // キーボード（強さが届かない）
+        let (run, results) = paradiddle_hits([100; 4], 60, false);
+        let s = summarize(&run, &results, 17);
+        assert!(s.strength.is_none());
+        assert!(s.dots.iter().all(|d| d.stood_out.is_none()));
+        // どの打も同じ強さで届く機器
+        let (run, results) = paradiddle_hits([100; 4], 100, true);
+        assert!(summarize(&run, &results, 17).strength.is_none());
+        // 強さがあれば、タイミングの出来はこれまでと同じ
+        let (run, results) = paradiddle_hits([60; 4], 60, true);
+        let flat = summarize(&run, &results, 17);
+        assert!(flat.strength.is_none());
+        let (run, results) = paradiddle_hits([62; 4], 60, true);
+        let weak = summarize(&run, &results, 17);
+        assert_eq!(weak.strength.as_ref().unwrap().total().stood_out, 0);
+        assert_eq!(weak.best_clean_bpm(), flat.best_clean_bpm());
     }
 }

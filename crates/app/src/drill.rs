@@ -14,6 +14,8 @@ use i18n::{t, tf};
 /// 右手と左手の色（音符の横の文字、結果のずれ）
 pub const RIGHT_COLOR: egui::Color32 = egui::Color32::from_rgb(0xFF, 0x96, 0x46);
 pub const LEFT_COLOR: egui::Color32 = egui::Color32::from_rgb(0x5A, 0xBE, 0xFF);
+/// アクセントの色（音符の > の印、強さの棒）
+pub const ACCENT_COLOR: egui::Color32 = egui::Color32::from_rgb(0xFF, 0xB8, 0x40);
 
 /// 記録に使う譜面のパスの頭
 pub const PATH_PREFIX: &str = "drill:";
@@ -68,6 +70,18 @@ pub fn name(d: &Drill) -> &'static str {
         "single_stroke_four" => t("Single Stroke Four", "シングルストローク 4"),
         "single_stroke_seven" => t("Single Stroke Seven", "シングルストローク 7"),
         "double_triplets" => t("Double Strokes in Triplets", "3 連のダブルストローク"),
+        // アクセント
+        "accent_eighths" => t("Accents on the Beat", "8 分の表にアクセント"),
+        "accent_upbeats" => t("Accents on the Upbeats", "8 分の裏にアクセント"),
+        "accent_sixteenth_1" => t("16ths: Accent on 1", "16 分の 1 つ目にアクセント"),
+        "accent_sixteenth_2" => t("16ths: Accent on e", "16 分の 2 つ目にアクセント"),
+        "accent_sixteenth_3" => t("16ths: Accent on &", "16 分の 3 つ目にアクセント"),
+        "accent_sixteenth_4" => t("16ths: Accent on a", "16 分の 4 つ目にアクセント"),
+        "accent_moving" => t("Moving Accent", "アクセント移動"),
+        "accent_triplets" => t("Triplets: Accent on 1", "3 連の頭にアクセント"),
+        "accent_threes" => t("Accents in Threes", "3 つおきのアクセント"),
+        "accent_doubles" => t("Accented Doubles", "ダブルストロークの頭にアクセント"),
+        "hats_accent_upbeats" => t("Hi-Hat Upbeat Accents", "ハイハットの裏にアクセント"),
         // ビート
         "eight_beat_basic" => t("Basic 8-Beat", "8 ビート（基本）"),
         "eight_beat" => t("8-Beat: Kick on 3&", "8 ビート：3 拍目の裏にバスドラ"),
@@ -160,6 +174,7 @@ pub fn category_name(c: Category) -> &'static str {
     match c {
         Category::Timing => t("Timing", "タイミング"),
         Category::Rudiments => t("Rudiments", "ルーディメンツ"),
+        Category::Accents => t("Accents", "アクセント"),
         Category::Grooves => t("Beats", "ビート"),
         Category::Styles => t("Styles", "ジャンル"),
         Category::Fills => t("Fills and Toms", "タム回しとフィル"),
@@ -262,6 +277,8 @@ pub struct DrillPlay {
     measure_ms: Vec<f64>,
     /// 判定の音符ごとの手足（判定の音符と同じ並び）
     pub hands: Vec<Option<Hand>>,
+    /// 判定の音符ごとの、アクセントの音か（判定の音符と同じ並び）
+    pub accents: Vec<bool>,
     /// 最後に叩いた時刻（判定の時刻）。休みを見つけるのに使う
     last_hit_ms: Option<f64>,
     /// 休みを知らせた
@@ -280,12 +297,18 @@ impl DrillPlay {
         let measure_ms = (0..=run.measure_count() as usize)
             .map(|m| tempo.measure_start_ms(m))
             .collect();
-        let hands = notes.iter().map(|n| run.hand_at(n.at, n.lane)).collect();
+        let pattern: Vec<_> = notes.iter().map(|n| run.note_at(n.at, n.lane)).collect();
+        let hands = pattern.iter().map(|p| p.map(|p| p.hand)).collect();
+        let accents = pattern
+            .iter()
+            .map(|p| p.is_some_and(|p| p.accent))
+            .collect();
         let misses = vec![0; run.steps()];
         Self {
             run,
             measure_ms,
             hands,
+            accents,
             last_hit_ms: None,
             rest_sent: false,
             misses,
@@ -608,6 +631,12 @@ mod tests {
         let p = play("paradiddle", 100, 10);
         let s: String = p.hands[..8].iter().map(|h| h.unwrap().letter()).collect();
         assert_eq!(s, "RLRRLRLL");
+        let a: String = p.accents[..8]
+            .iter()
+            .map(|&a| if a { '>' } else { '-' })
+            .collect();
+        assert_eq!(a, ">--->---");
+        assert!(play("single_stroke", 100, 10).accents.iter().all(|a| !a));
     }
 
     #[test]
