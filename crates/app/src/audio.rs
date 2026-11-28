@@ -39,15 +39,49 @@ impl Sound {
     }
 }
 
-/// カウントのクリック。短いサイン波を減衰させたもの。`accent` なら高い音（1 拍目）
+/// メトロノームとカウントのクリックの、小節の頭（1 拍目）の音量
+pub const CLICK_BAR_GAIN: f32 = 1.0;
+/// メトロノームとカウントのクリックの、ほかの拍の音量。頭は音の高さでも分かるので、少しだけ下げる
+pub const CLICK_BEAT_GAIN: f32 = 0.8;
+
+/// クリックの音量（`accent` なら小節の頭）
+pub fn click_gain(accent: bool) -> f32 {
+    if accent {
+        CLICK_BAR_GAIN
+    } else {
+        CLICK_BEAT_GAIN
+    }
+}
+
+/// クリックの山の高さ。曲の音と重なっても、全体の音量が 50 % なら 1 を超えにくい大きさ
+const CLICK_PEAK: f64 = 0.9;
+/// クリックの長さ（秒）。最後の [`CLICK_FADE_S`] で消す
+const CLICK_LEN_S: f64 = 0.12;
+const CLICK_FADE_S: f64 = 0.01;
+/// クリックの音の減り方（秒）。短すぎると曲や叩いた音に埋もれる（前は 8 ms で、曲より 2〜12 dB 小さかった）
+const CLICK_DECAY_S: f64 = 0.025;
+
+/// メトロノームとカウントのクリック。`accent` なら高い音（小節の頭）。
+/// 曲や叩いた音に埋もれないよう、耳によく届く 1.5〜2 kHz のサイン波を少し長めに鳴らし、
+/// 倍音と立ち上がりの短い高い音で輪郭を付ける
 pub fn click(rate: u32, accent: bool) -> Sound {
-    let freq = if accent { 1760.0 } else { 1175.0 };
+    let freq = if accent { 2093.0 } else { 1568.0 };
     let rate = f64::from(rate);
-    let frames = (rate * 0.04) as usize;
-    let samples: Vec<f32> = (0..frames)
-        .flat_map(|i| {
-            let t = i as f64 / rate;
-            let v = ((std::f64::consts::TAU * freq * t).sin() * (-t / 0.008).exp() * 0.7) as f32;
+    let frames = (rate * CLICK_LEN_S) as usize;
+    let tau = std::f64::consts::TAU;
+    let wave = |t: f64| {
+        let body = (tau * freq * t).sin() * (-t / CLICK_DECAY_S).exp();
+        let overtone = 0.35 * (tau * 2.0 * freq * t).sin() * (-t / (CLICK_DECAY_S * 0.5)).exp();
+        let tick = 0.35 * (tau * 4.0 * freq * t).sin() * (-t / 0.002).exp();
+        let fade = ((CLICK_LEN_S - t) / CLICK_FADE_S).clamp(0.0, 1.0);
+        (body + overtone + tick) * fade
+    };
+    let raw: Vec<f64> = (0..frames).map(|i| wave(i as f64 / rate)).collect();
+    let peak = raw.iter().fold(0.0f64, |m, v| m.max(v.abs())).max(1e-9);
+    let samples: Vec<f32> = raw
+        .iter()
+        .flat_map(|v| {
+            let v = (v / peak * CLICK_PEAK) as f32;
             [v, v]
         })
         .collect();
@@ -1227,11 +1261,28 @@ mod tests {
     }
 
     #[test]
-    fn clicks_are_short_and_start_silent() {
-        let c = click(48_000, true);
-        assert_eq!(c.frames(), 1920);
-        assert_eq!(c.0[0], 0.0);
-        assert!(c.0.iter().all(|s| s.abs() <= 0.7));
+    fn clicks_are_short_and_start_and_end_silent() {
+        for accent in [true, false] {
+            let c = click(48_000, accent);
+            assert_eq!(c.frames(), 5760);
+            assert_eq!(c.0[0], 0.0);
+            // 終わりで切れてプツッと鳴らないよう、最後は消えている
+            assert!(c.0.iter().rev().take(2).all(|s| s.abs() < 1e-3));
+            let peak = c.0.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+            assert!((peak - 0.9).abs() < 1e-3, "{peak}");
+        }
+    }
+
+    #[test]
+    fn clicks_last_long_enough_to_be_heard_over_the_song() {
+        // 曲に埋もれないよう、頭の 60 ms の平均の大きさを保つ（前の 8 ms で消える音は 0.13 で、曲に埋もれた）
+        for accent in [true, false] {
+            let c = click(48_000, accent);
+            let head = &c.0[..2 * 2880];
+            let rms = (head.iter().map(|s| s * s).sum::<f32>() / head.len() as f32).sqrt();
+            assert!(rms > 0.2, "{rms}");
+        }
+        assert!(click_gain(true) >= click_gain(false) && click_gain(false) >= 0.8);
     }
 
     #[test]

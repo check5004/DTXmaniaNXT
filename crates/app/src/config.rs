@@ -57,7 +57,7 @@ pub struct Config {
     pub practice_target: u32,
     /// 遅くするときの音程（"keep" は保つ、"tape" は音程ごと遅く）
     pub practice_pitch: String,
-    /// 練習でメトロノームを鳴らす（区間の拍ごとに小さく鳴る）
+    /// 練習でメトロノームを鳴らす（区間の拍ごとに、カウントと同じ大きさで鳴る）
     pub practice_metronome: bool,
     /// 練習の 1 段の周の数（0.5 の 1 セットの周の数 practice_set_laps とは別。そちらは読まない）
     pub practice_step_laps: u32,

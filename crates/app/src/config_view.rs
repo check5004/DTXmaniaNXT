@@ -827,7 +827,7 @@ fn drill_row_at(d: Drill, c: &Config, at: i64) -> Row {
         Drill::Metronome => pick(
             t("Metronome", "メトロノーム"),
             &["ON", "OFF"],
-            t("ON: plays a soft click on every beat during the section (accented at the start of each measure).\nThe 4-beat count-in at the start of each step plays even when OFF.", "ON: 区間のあいだ、拍ごとに小さくクリックを鳴らします（小節の頭は強く）。\n各段の始めの 4 拍のカウントは、OFF でも鳴ります。"),
+            t("ON: plays a click on every beat during the section (higher on the first beat of each measure).\nThe 4-beat count-in at the start of each step plays even when OFF. To change how loud it is, use Metronome under Volume.", "ON: 区間のあいだ、拍ごとにクリックを鳴らします（小節の頭は高い音）。\n各段の始めの 4 拍のカウントは、OFF でも鳴ります。大きさは「音量」の「メトロノーム」で変えられます。"),
         ),
     }
 }
