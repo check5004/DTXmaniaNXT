@@ -1,12 +1,13 @@
-//! 電子ドラムの音源（Roland V51）と MIDI でやり取りする。
+//! 電子ドラムの音源（Roland V71・V51・V31。[`drum_module::vseries`]）と MIDI でやり取りする。
 //!
-//! - V51 を探す（Identity Request に V51 として返事をした出力ポート）
+//! - 音源を探す（Identity Request に対応している機種として返事をした出力ポート）
 //! - 塊ごとに値を読む（RQ1 → DT1）
-//! - 値を書く（DT1）。書く前に元の値を書き戻しの記録（設定のフォルダの `v51_restore.toml`）に残し、
-//!   残していない所には書かない
-//! - 書き戻して読み直す。アプリが途中で落ちたら、次に起動したときに戻す（[`restore_on_start`]）
+//! - 値を書く（DT1）。書く前に元の値を書き戻しの記録（設定のフォルダの `module_restore.toml`）に
+//!   機種の名前と一緒に残し、残していない所には書かない
+//! - 書き戻して読み直す。アプリが途中で落ちたら、次に起動したときに戻す（[`restore_on_start`]）。
+//!   書き戻すのは、その記録を残したのと同じ機種にだけ
 //!
-//! 返事の SysEx は [`crate::midi::subscribe_sysex`] で受ける。ゲームの入力が V51 のポートを
+//! 返事の SysEx は [`crate::midi::subscribe_sysex`] で受ける。ゲームの入力が音源のポートを
 //! 開いていなければ、ここで自分でも開く。
 
 use std::fs;
@@ -19,14 +20,14 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, anyhow, bail};
 use drum_module::journal::{Entry, Journal};
 use drum_module::roland::{self, Address, BROADCAST, Collector, Identity, SysexAssembler};
-use drum_module::v51::{self, Block};
+use drum_module::vseries::{self, Block, Model};
 use midir::{MidiInput, MidiInputConnection, MidiOutput, MidiOutputConnection};
 
 use crate::config::Config;
 use crate::midi::{self, SysexIn};
 use crate::time::host_us;
 
-/// 同時に 2 つが V51 とやり取りしないように（起動したときの書き戻しと測る道具など）
+/// 同時に 2 つが音源とやり取りしないように（起動したときの書き戻しと測る道具など）
 static SESSION: Mutex<()> = Mutex::new(());
 
 /// RQ1 の返事を待つ時間
@@ -38,12 +39,17 @@ const RESTORE_GAP: Duration = Duration::from_millis(20);
 
 /// 書き戻しの記録のファイル
 pub fn journal_path() -> Option<PathBuf> {
+    Some(Config::dir()?.join("module_restore.toml"))
+}
+
+/// V51 だけに対応していたころの書き戻しの記録のファイル（あれば読み、次に書くときに移す）
+fn legacy_journal_path() -> Option<PathBuf> {
     Some(Config::dir()?.join("v51_restore.toml"))
 }
 
-/// 名前から V51 のポートらしいか
-pub fn looks_like_v51(name: &str) -> bool {
-    name.to_ascii_lowercase().contains("v51")
+/// 名前から、対応している音源のポートらしいか（その機種）
+pub fn port_model(name: &str) -> Option<Model> {
+    vseries::model_named(name)
 }
 
 /// 書き戻した結果
@@ -57,8 +63,8 @@ pub struct Restored {
     pub failed: Vec<String>,
 }
 
-/// 見つけた V51 とのつながり
-pub struct V51 {
+/// 見つけた音源とのつながり
+pub struct ModuleLink {
     out: MidiOutputConnection,
     rx: Receiver<SysexIn>,
     _inputs: Vec<MidiInputConnection<()>>,
@@ -66,6 +72,8 @@ pub struct V51 {
     /// 送っている MIDI 出力ポートの名前
     pub port: String,
     pub identity: Identity,
+    /// 返事をした機種
+    pub model: Model,
     journal: Journal,
     /// RQ1 を送ってから返事がそろうまで（µs）
     pub round_trips: Vec<i64>,
@@ -73,8 +81,8 @@ pub struct V51 {
     pub writes: usize,
 }
 
-impl V51 {
-    /// V51 を探す。`note` には見つからなかったわけなどを 1 行ずつ渡す
+impl ModuleLink {
+    /// 対応している音源を探す。`note` には見つからなかったわけなどを 1 行ずつ渡す
     pub fn find(note: &mut dyn FnMut(String)) -> Result<Self> {
         let session = SESSION.lock().unwrap_or_else(|e| e.into_inner());
         let rx = midi::subscribe_sysex();
@@ -94,11 +102,11 @@ impl V51 {
         if ports.is_empty() {
             bail!("no MIDI output ports");
         }
-        // V51 の名前のポートから試す
-        ports.sort_by_key(|(_, n)| !looks_like_v51(n));
+        // 機種の名前のポートから試す
+        ports.sort_by_key(|(_, n)| port_model(n).is_none());
         for (port, name) in &ports {
             let out = MidiOutput::new("DTXmaniaNXT")?;
-            let mut conn = match out.connect(port, "dtxmanianxt-v51") {
+            let mut conn = match out.connect(port, "dtxmanianxt-module") {
                 Ok(c) => c,
                 Err(e) => {
                     note(format!("{name}: {e}"));
@@ -115,12 +123,13 @@ impl V51 {
                 let Some(id) = roland::parse_identity_reply(&m.bytes) else {
                     continue;
                 };
-                if !v51::is_v51(&id) {
+                let Some(model) = vseries::model(&id) else {
                     note(format!("{name}: {}", roland::hex(&m.bytes)));
                     continue;
-                }
+                };
                 log::info!(
-                    "V51: out {name}, reply from {}, device {:02X}",
+                    "{}: out {name}, reply from {}, device {:02X}",
+                    model.name,
                     m.port,
                     id.device
                 );
@@ -131,6 +140,7 @@ impl V51 {
                     _session: session,
                     port: name.clone(),
                     identity: id,
+                    model,
                     journal: load_journal(),
                     round_trips: Vec::new(),
                     writes: 0,
@@ -138,7 +148,10 @@ impl V51 {
             }
         }
         let names: Vec<&str> = ports.iter().map(|(_, n)| n.as_str()).collect();
-        bail!("V51 did not answer (MIDI out: {})", names.join(", "))
+        bail!(
+            "no supported drum module answered (MIDI out: {})",
+            names.join(", ")
+        )
     }
 
     fn device(&self) -> u8 {
@@ -160,12 +173,12 @@ impl V51 {
         for _ in 0..3 {
             drain(&self.rx);
             let sent = host_us();
-            let msg = roland::rq1(self.device(), &v51::MODEL_ID, block.addr, block.size);
+            let msg = roland::rq1(self.device(), &vseries::MODEL_ID, block.addr, block.size);
             self.send(&msg)?;
             let mut c = Collector::new(block.addr, block.size);
             let deadline = Instant::now() + REPLY_WAIT;
             while let Some(m) = recv_until(&self.rx, deadline) {
-                if let Some(set) = roland::parse_dt1(&m.bytes, &v51::MODEL_ID)
+                if let Some(set) = roland::parse_dt1(&m.bytes, &vseries::MODEL_ID)
                     && set.device == self.device()
                     && c.feed(&set)
                 {
@@ -175,7 +188,8 @@ impl V51 {
             }
         }
         bail!(
-            "V51 did not answer RQ1 {} ({} bytes)",
+            "{} did not answer RQ1 {} ({} bytes)",
+            self.model.name,
             block.addr.hex(),
             block.size
         )
@@ -183,7 +197,7 @@ impl V51 {
 
     /// 書き戻しの記録に残っている所の数
     pub fn pending(&self) -> usize {
-        self.journal.entries.len()
+        self.journal.count(self.model.name)
     }
 
     /// `block`（読んだ値は `data`）の `offset` から `len` バイトを書き換える前に、元の値を記録に残して
@@ -200,6 +214,7 @@ impl V51 {
             .get(offset as usize..offset as usize + len)
             .ok_or_else(|| anyhow!("{} +{offset:X} is outside the block", block.addr.hex()))?;
         let entry = Entry::new(
+            self.model.name,
             &self.port,
             self.device(),
             block.at(offset),
@@ -216,21 +231,26 @@ impl V51 {
 
     /// 値を書く。元の値を記録に残していない所には書かない
     pub fn write(&mut self, addr: Address, data: &[u8]) -> Result<()> {
-        if !self.journal.covers(self.device(), addr, data.len()) {
+        if !self
+            .journal
+            .covers(self.model.name, self.device(), addr, data.len())
+        {
             bail!("not writing {} before keeping the original", addr.hex());
         }
-        let msg = roland::dt1(self.device(), &v51::MODEL_ID, addr, data);
+        let msg = roland::dt1(self.device(), &vseries::MODEL_ID, addr, data);
         self.send(&msg)?;
         self.writes += 1;
         Ok(())
     }
 
-    /// 記録から書き戻し、読み直して確かめる。合ったものは記録から消す
+    /// この機種の記録から書き戻し、読み直して確かめる。合ったものは記録から消す
+    /// （ほかの機種の記録は残す）
     pub fn restore(&mut self) -> Result<Restored> {
         let mut out = Restored::default();
+        let model = self.model.name;
         let plan: Vec<(Entry, Address, Vec<u8>)> = self
             .journal
-            .restore_plan()
+            .restore_plan(model)
             .into_iter()
             .map(|(e, a, b)| (e.clone(), a, b))
             .collect();
@@ -238,7 +258,7 @@ impl V51 {
             return Ok(out);
         }
         for (e, addr, bytes) in &plan {
-            let msg = roland::dt1(e.device, &v51::MODEL_ID, *addr, bytes);
+            let msg = roland::dt1(e.device, &vseries::MODEL_ID, *addr, bytes);
             self.send(&msg)?;
             out.written += 1;
             std::thread::sleep(RESTORE_GAP);
@@ -256,6 +276,10 @@ impl V51 {
         let mut blocks: Vec<(Address, Vec<u8>)> = Vec::new();
         let mut keep = Journal::default();
         for e in &self.journal.entries.clone() {
+            if e.model() != model {
+                keep.entries.push(e.clone());
+                continue;
+            }
             let ok = match e.block() {
                 // 確かめる塊が分からないものは、書き戻したところで終わりにする
                 None => true,
@@ -271,7 +295,7 @@ impl V51 {
                                 Some(d)
                             }
                             Err(err) => {
-                                log::warn!("V51 restore check: {err:#}");
+                                log::warn!("{model} restore check: {err:#}");
                                 None
                             }
                         },
@@ -301,46 +325,54 @@ impl V51 {
     }
 }
 
-/// 記録が残っていれば V51 を探して書き戻す。記録が無ければ `None`
+/// 記録が残っていれば音源を探して、その機種の記録を書き戻す。記録が無ければ `None`
 pub fn restore_pending(note: &mut dyn FnMut(String)) -> Result<Option<Restored>> {
     if load_journal().is_empty() {
         return Ok(None);
     }
-    let mut link = V51::find(note)?;
+    let mut link = ModuleLink::find(note)?;
     Ok(Some(link.restore()?))
 }
 
-/// 起動したとき、前に V51 を書き換えたまま終わっていたら（落ちたなど）書き戻す。
+/// 起動したとき、前に音源を書き換えたまま終わっていたら（落ちたなど）書き戻す。
 /// ゲームの MIDI 入力が開くのを少し待ってから、別のスレッドで行う
 pub fn restore_on_start() {
-    if !journal_path().is_some_and(|p| p.exists()) {
+    let exists = |p: Option<PathBuf>| p.is_some_and(|p| p.exists());
+    if !exists(journal_path()) && !exists(legacy_journal_path()) {
         return;
     }
     let spawned = std::thread::Builder::new()
-        .name("v51-restore".into())
+        .name("module-restore".into())
         .spawn(|| {
             std::thread::sleep(Duration::from_secs(3));
             let mut notes = Vec::new();
             match restore_pending(&mut |s| notes.push(s)) {
                 Ok(Some(r)) if r.failed.is_empty() => {
-                    log::info!("V51: restored {} values left from last time", r.verified);
+                    log::info!(
+                        "drum module: restored {} values left from last time",
+                        r.verified
+                    );
                 }
-                Ok(Some(r)) => log::warn!("V51: could not restore {}", r.failed.join("; ")),
+                Ok(Some(r)) => log::warn!("drum module: could not restore {}", r.failed.join("; ")),
                 Ok(None) => {}
                 Err(e) => log::warn!(
-                    "V51: values left from last time are not restored yet ({e:#}) {}",
+                    "drum module: values left from last time are not restored yet ({e:#}) {}",
                     notes.join("; ")
                 ),
             }
         });
     if let Err(e) = spawned {
-        log::warn!("V51 restore thread: {e}");
+        log::warn!("drum module restore thread: {e}");
     }
 }
 
-/// 書き戻しの記録を読む。読めないファイルは横に除けて（`.broken`）、空として扱う
+/// 書き戻しの記録を読む（無ければ前の名前のファイル）。読めないファイルは横に除けて（`.broken`）、空として扱う
 fn load_journal() -> Journal {
-    let Some(path) = journal_path() else {
+    let Some(path) = [journal_path(), legacy_journal_path()]
+        .into_iter()
+        .flatten()
+        .find(|p| p.exists())
+    else {
         return Journal::default();
     };
     let Ok(text) = fs::read_to_string(&path) else {
@@ -361,9 +393,13 @@ fn load_journal() -> Journal {
     }
 }
 
-/// 書き戻しの記録を書き出す（空ならファイルを消す）。途中で落ちても壊れないよう、別のファイルに書いてから置き換える
+/// 書き戻しの記録を書き出す（空ならファイルを消す）。途中で落ちても壊れないよう、別のファイルに書いてから置き換える。
+/// 前の名前のファイルは、中身をこちらに移したので消す
 fn save_journal(journal: &Journal) -> Result<()> {
     let path = journal_path().ok_or_else(|| anyhow!("no settings folder"))?;
+    if let Some(old) = legacy_journal_path().filter(|p| p.exists()) {
+        fs::remove_file(&old).with_context(|| old.display().to_string())?;
+    }
     if journal.is_empty() {
         if path.exists() {
             fs::remove_file(&path).with_context(|| path.display().to_string())?;
@@ -377,8 +413,8 @@ fn save_journal(journal: &Journal) -> Result<()> {
     {
         let mut f = fs::File::create(&tmp).with_context(|| tmp.display().to_string())?;
         f.write_all(
-            "# DTXmaniaNXT が V51 の値を書き換える前の値です。次に起動したときに V51 へ書き戻します。\n\
-             # Values the V51 had before DTXmaniaNXT changed them. They are written back on the next start.\n\n"
+            "# DTXmaniaNXT が音源（V71・V51・V31）の値を書き換える前の値です。次に起動したときに、同じ機種へ書き戻します。\n\
+             # Values the drum module had before DTXmaniaNXT changed them. They are written back to the same model on the next start.\n\n"
                 .as_bytes(),
         )?;
         f.write_all(journal.to_toml().as_bytes())?;
@@ -388,8 +424,8 @@ fn save_journal(journal: &Journal) -> Result<()> {
     Ok(())
 }
 
-/// 返事を受ける入力を開く。ゲームの入力（[`crate::midi::MidiIn`]）が開いていない V51 のポートだけ。
-/// V51 の名前のポートが無ければ、開いていないポートをすべて開く
+/// 返事を受ける入力を開く。ゲームの入力（[`crate::midi::MidiIn`]）が開いていない、機種の名前のポートだけ。
+/// 機種の名前のポートが無ければ、開いていないポートをすべて開く
 fn open_inputs(note: &mut dyn FnMut(String)) -> Vec<MidiInputConnection<()>> {
     let Ok(probe) = MidiInput::new("DTXmaniaNXT") else {
         return Vec::new();
@@ -406,10 +442,10 @@ fn open_inputs(note: &mut dyn FnMut(String)) -> Vec<MidiInputConnection<()>> {
             (name, p)
         })
         .collect();
-    let any_v51 = ports.iter().any(|(n, _)| looks_like_v51(n));
+    let any_named = ports.iter().any(|(n, _)| port_model(n).is_some());
     let mut out = Vec::new();
     for (name, port) in ports {
-        if (any_v51 && !looks_like_v51(&name)) || tapped.contains(&name) {
+        if (any_named && port_model(&name).is_none()) || tapped.contains(&name) {
             continue;
         }
         match open_input(&port, name.clone()) {
@@ -427,7 +463,7 @@ fn open_input(port: &midir::MidiInputPort, name: String) -> Result<MidiInputConn
     input
         .connect(
             port,
-            "dtxmanianxt-v51-in",
+            "dtxmanianxt-module-in",
             move |_, bytes, _| {
                 for m in sysex.feed(bytes) {
                     midi::publish_sysex(&name, m);
@@ -453,10 +489,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn v51_port_names() {
-        assert!(looks_like_v51("V51"));
-        assert!(looks_like_v51("MIDIIN2 (V51)"));
-        assert!(looks_like_v51("2- v51"));
-        assert!(!looks_like_v51("Finger Drum Pad"));
+    fn module_port_names() {
+        assert_eq!(port_model("V51"), Some(vseries::V51));
+        assert_eq!(port_model("MIDIIN2 (V51)"), Some(vseries::V51));
+        assert_eq!(port_model("2- v71"), Some(vseries::V71));
+        assert_eq!(port_model("V31 Generic Mode"), Some(vseries::V31));
+        assert_eq!(port_model("Finger Drum Pad"), None);
     }
 }

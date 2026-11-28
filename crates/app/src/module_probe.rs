@@ -1,7 +1,7 @@
-//! V51 の測る道具（開発者モードから動かす）。
+//! 音源（Roland V71・V51・V31）の測る道具（開発者モードから動かす）。
 //!
-//! V51 の値（TOM1 HEAD の音量と音色、今のキット）を書き換えてから叩いた音が変わるまでの時間などを、
-//! V51 の USB の音を録って測る。叩くのは MIDI のノートオンで、人は何もしなくてよい。
+//! 音源の値（TOM1 HEAD の音量と音色、今のキット）を書き換えてから叩いた音が変わるまでの時間などを、
+//! 音源の USB の音を録って測る。叩くのは MIDI のノートオンで、人は何もしなくてよい。
 //! 書き換える前の値は必ず記録に残し（[`crate::module_link`]）、終わったら（途中でやめても、失敗しても）
 //! 書き戻して読み直す。結果は issue に貼る Markdown（[`Finding`]）で返す（題の印と本文の長さの上限は開発者モードの側で扱う）。
 //!
@@ -17,33 +17,33 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, SampleFormat, SizedSample};
 use drum_module::listen::{self, FrameClock, Shape};
 use drum_module::roland::{self, Address};
-use drum_module::v51::{self, Block, Layer, Unit};
+use drum_module::vseries::{self, Block, Layer, Unit};
 use i18n::{t, tf, tr};
 
 use crate::dev_report::{Finding, Tool};
-use crate::module_link::{self, V51};
+use crate::module_link::{self, ModuleLink};
 use crate::time::host_us;
 
 /// 開発者メニューに並べる道具（[`crate::dev_report::TOOLS`]）
 pub const TOOL: Tool = Tool {
-    key: "v51-probe",
-    name: tr("V51 Sound Switch Test", "V51 の音の切り替えテスト"),
+    key: "module-probe",
+    name: tr("Drum Module Sound Switch Test", "音源の音の切り替えテスト"),
     desc: tr(
-        "Briefly changes the V51's TOM1 volume, TOM1 sound and kit, plays notes over MIDI, and records the V51's USB audio to see how fast each change takes effect. Everything is put back at the end.",
-        "V51 の TOM1 の音量と音色、キットを一時的に変えて MIDI で鳴らし、V51 の USB の音を録って、変えてから効くまでの時間を測ります。終わったら元に戻します。",
+        "For a Roland V71, V51 or V31. Briefly changes the module's TOM1 volume, TOM1 sound and kit, plays notes over MIDI, and records its USB audio to see how fast each change takes effect. Everything is put back at the end.",
+        "Roland V71・V51・V31 用。音源の TOM1 の音量と音色、キットを一時的に変えて MIDI で鳴らし、音源の USB の音を録って、変えてから効くまでの時間を測ります。終わったら元に戻します。",
     ),
     confirm: Some(tr(
-        "The V51 will play drum sounds for about a minute. Turn the volume down if you're on headphones, and don't touch the V51 until it's done.",
-        "V51 からドラムの音が 1 分ほど鳴ります。ヘッドホンの方は音量を下げ、終わるまで V51 に触らないでください。",
+        "The drum module will play drum sounds for about a minute. Turn the volume down if you're on headphones, and don't touch the module until it's done.",
+        "音源からドラムの音が 1 分ほど鳴ります。ヘッドホンの方は音量を下げ、終わるまで音源に触らないでください。",
     )),
-    labels: &["v51"],
-    run: run_v51_probe,
+    labels: &["drum-module"],
+    run: run_module_probe,
 };
 
 /// 鳴らす強さ
 const VELOCITY: u8 = 100;
 /// パッドのチャンネルが GLOBAL のときに送るチャンネル（本体の既定の 10 ch）
-const GLOBAL_CHANNEL_GUESS: u8 = 9;
+const GLOBAL_CHANNEL_GUESS: u8 = vseries::GLOBAL_CHANNEL_DEFAULT;
 /// 叩く間
 const HIT_GAP_US: i64 = 700_000;
 
@@ -69,37 +69,38 @@ impl std::fmt::Display for Cancelled {
 impl std::error::Error for Cancelled {}
 
 /// 開発者モードから呼ぶ。`progress` には今していることを 1 行ずつ渡す。`cancel` が立ったらやめる（書き戻しはする）
-pub fn run_v51_probe(cancel: &AtomicBool, progress: &mut dyn FnMut(String)) -> Finding {
+pub fn run_module_probe(cancel: &AtomicBool, progress: &mut dyn FnMut(String)) -> Finding {
     let started = Instant::now();
     let mut r = Report::default();
     let result = probe(cancel, progress, &mut r);
     let secs = started.elapsed().as_secs_f64();
+    let m = r.model.unwrap_or("音源");
     let (title, status) = match &result {
         Ok(()) => (
-            "V51 の測定結果".to_owned(),
+            format!("{m} の測定結果"),
             format!("最後まで測った（{secs:.0} 秒）"),
         ),
         Err(e) if e.is::<Cancelled>() => (
-            "V51 の測定（途中でやめた）".to_owned(),
+            format!("{m} の測定（途中でやめた）"),
             format!("{secs:.0} 秒でやめた。そこまでの結果"),
         ),
         Err(e) => (
-            "V51 の測定（途中で止まった）".to_owned(),
+            format!("{m} の測定（途中で止まった）"),
             format!("{secs:.0} 秒で止まった: {e:#}"),
         ),
     };
-    let mut body = format!("## V51 の測定\n\n{status}\n\n");
+    let mut body = format!("## {m} の測定\n\n{status}\n\n");
     body.push_str(&r.out);
     Finding { title, body }
 }
 
 fn probe(cancel: &AtomicBool, progress: &mut dyn FnMut(String), r: &mut Report) -> Result<()> {
-    progress(t("Looking for the V51…", "V51 を探しています…").to_owned());
+    progress(t("Looking for the drum module…", "音源を探しています…").to_owned());
     let mut notes = Vec::new();
-    let mut link = match V51::find(&mut |s| notes.push(s)) {
+    let mut link = match ModuleLink::find(&mut |s| notes.push(s)) {
         Ok(l) => l,
         Err(e) => {
-            r.line(format!("- V51 が見つからない: {e:#}"));
+            r.line(format!("- V71・V51・V31 が見つからない: {e:#}"));
             for n in &notes {
                 r.line(format!("  - {n}"));
             }
@@ -107,7 +108,8 @@ fn probe(cancel: &AtomicBool, progress: &mut dyn FnMut(String), r: &mut Report) 
         }
     };
     let id = link.identity;
-    r.h("V51");
+    r.model = Some(link.model.name);
+    r.h(link.model.name);
     r.line(format!(
         "- MIDI 出力 `{}`、Device ID {:02X}H、Identity の版 `{}`",
         link.port,
@@ -136,7 +138,7 @@ fn probe(cancel: &AtomicBool, progress: &mut dyn FnMut(String), r: &mut Report) 
         }
     }
     let result = Measure::new(&mut link, cancel).run(progress, r);
-    progress(t("Putting the V51 back…", "V51 を元に戻しています…").to_owned());
+    progress(t("Putting the drum module back…", "音源を元に戻しています…").to_owned());
     r.h("書き戻し");
     match link.restore() {
         Ok(res) if res.failed.is_empty() => r.line(format!(
@@ -161,6 +163,8 @@ fn probe(cancel: &AtomicBool, progress: &mut dyn FnMut(String), r: &mut Report) 
 #[derive(Default)]
 struct Report {
     out: String,
+    /// 見つけた音源の機種
+    model: Option<&'static str>,
 }
 
 impl Report {
@@ -193,7 +197,7 @@ impl Pad {
         let ch = unit
             .channel_field()
             .read(midi)
-            .unwrap_or(v51::CHANNEL_GLOBAL);
+            .unwrap_or(vseries::CHANNEL_GLOBAL);
         let (channel, global) = if (0..16).contains(&ch) {
             (ch as u8, false)
         } else {
@@ -271,7 +275,7 @@ impl Group {
 
 /// 測るあいだの持ち物
 struct Measure<'a> {
-    link: &'a mut V51,
+    link: &'a mut ModuleLink,
     cancel: &'a AtomicBool,
     hits: Vec<Hit>,
 }
@@ -288,7 +292,7 @@ struct Values {
 }
 
 impl<'a> Measure<'a> {
-    fn new(link: &'a mut V51, cancel: &'a AtomicBool) -> Self {
+    fn new(link: &'a mut ModuleLink, cancel: &'a AtomicBool) -> Self {
         Self {
             link,
             cancel,
@@ -348,7 +352,13 @@ impl<'a> Measure<'a> {
     }
 
     fn run(mut self, progress: &mut dyn FnMut(String), r: &mut Report) -> Result<()> {
-        progress(t("Reading the V51's settings…", "V51 の設定を読んでいます…").to_owned());
+        progress(
+            t(
+                "Reading the drum module's settings…",
+                "音源の設定を読んでいます…",
+            )
+            .to_owned(),
+        );
         let v = self.read_values(r)?;
         self.check_cancel()?;
 
@@ -365,7 +375,7 @@ impl<'a> Measure<'a> {
         };
         r.h("音の録音");
         let Some(rec) = rec else {
-            r.line("- V51 の録音の入力が見つからないので、音を使う測定はしなかった");
+            r.line("- 音源の録音の入力が見つからないので、音を使う測定はしなかった");
             for n in &notes {
                 r.line(format!("  - {n}"));
             }
@@ -393,54 +403,55 @@ impl<'a> Measure<'a> {
         drop(rec);
         match snap {
             Some(snap) => analyze(&snap, (noise_from, noise_to), &self.hits, r),
-            None => r.line("- 録音が空だった（V51 の USB の音が届いていない）"),
+            None => r.line("- 録音が空だった（音源の USB の音が届いていない）"),
         }
         result
     }
 
     fn read_values(&mut self, r: &mut Report) -> Result<Values> {
-        let current = self.link.read(v51::current())?;
-        let kit_index = v51::KIT_NUM
+        let current = self.link.read(vseries::current())?;
+        let kit_index = vseries::KIT_NUM
             .read(&current)
-            .filter(|k| (0..i32::from(v51::KIT_COUNT)).contains(k))
+            .filter(|k| (0..i32::from(vseries::KIT_COUNT)).contains(k))
             .ok_or_else(|| anyhow!("current kit is {}", roland::hex(&current)))?;
         let kit = (kit_index + 1) as u16;
-        let common = self.link.read(v51::kit_common(kit))?;
-        let midi_block = v51::kit_midi(kit);
+        let common = self.link.read(vseries::kit_common(kit))?;
+        let midi_block = vseries::kit_midi(kit);
         let midi = self.link.read(midi_block)?;
         let tom = Pad::read(&midi, Unit::Tom1Head);
         let aux = Pad::read(&midi, Unit::Aux4Head);
-        let tom_common_block = v51::unit_common(kit, Unit::Tom1Head);
+        let tom_common_block = vseries::unit_common(kit, Unit::Tom1Head);
         let tom_common = self.link.read(tom_common_block)?;
         let mut tom_layers = Vec::new();
         for layer in [Layer::A, Layer::B, Layer::C] {
-            let b = v51::unit_layer(kit, Unit::Tom1Head, layer);
+            let b = vseries::unit_layer(kit, Unit::Tom1Head, layer);
             tom_layers.push((layer, b, self.link.read(b)?));
         }
-        let snare_a_block = v51::unit_layer(kit, Unit::SnareHead, Layer::A);
+        let snare_a_block = vseries::unit_layer(kit, Unit::SnareHead, Layer::A);
         let snare_a = self.link.read(snare_a_block)?;
-        let aux_common_block = v51::unit_common(kit, Unit::Aux4Head);
+        let aux_common_block = vseries::unit_common(kit, Unit::Aux4Head);
         let aux_common = self.link.read(aux_common_block)?;
-        let aux_a_block = v51::unit_layer(kit, Unit::Aux4Head, Layer::A);
+        let aux_a_block = vseries::unit_layer(kit, Unit::Aux4Head, Layer::A);
         let aux_a = self.link.read(aux_a_block)?;
 
         r.h(&format!(
             "読んだ値（キット {kit}「{}」）",
-            v51::kit_name(&common).unwrap_or_default()
+            vseries::kit_name(&common).unwrap_or_default()
         ));
         r.line("| 所 | 番地 | 生の値 | 読み |");
         r.line("|---|---|---|---|");
-        let mut row = |label: &str, block: Block, field: v51::Field, data: &[u8], read: String| {
-            r.line(format!(
-                "| {label} | `{}` | `{}` | {read} |",
-                block.at(field.offset).hex(),
-                field.raw(data).map(roland::hex).unwrap_or_default()
-            ));
-        };
+        let mut row =
+            |label: &str, block: Block, field: vseries::Field, data: &[u8], read: String| {
+                r.line(format!(
+                    "| {label} | `{}` | `{}` | {read} |",
+                    block.at(field.offset).hex(),
+                    field.raw(data).map(roland::hex).unwrap_or_default()
+                ));
+            };
         row(
             "今のキット",
-            v51::current(),
-            v51::KIT_NUM,
+            vseries::current(),
+            vseries::KIT_NUM,
             &current,
             format!("キット {kit}"),
         );
@@ -472,91 +483,91 @@ impl<'a> Measure<'a> {
             &midi,
             String::new(),
         );
-        let vol = |data: &[u8], field: v51::Field| {
+        let vol = |data: &[u8], field: vseries::Field| {
             field.read(data).map_or_else(String::new, |x| {
-                let range = if v51::volume_in_range(x) {
+                let range = if vseries::volume_in_range(x) {
                     ""
                 } else {
                     "（範囲の外）"
                 };
-                format!("{x} = {}{range}", v51::volume_label(x))
+                format!("{x} = {}{range}", vseries::volume_label(x))
             })
         };
-        let num = |data: &[u8], field: v51::Field| {
+        let num = |data: &[u8], field: vseries::Field| {
             field.read(data).map_or_else(String::new, |x| x.to_string())
         };
         row(
             "TOM1 HEAD の音量",
             tom_common_block,
-            v51::UNIT_VOLUME,
+            vseries::UNIT_VOLUME,
             &tom_common,
-            vol(&tom_common, v51::UNIT_VOLUME),
+            vol(&tom_common, vseries::UNIT_VOLUME),
         );
         for (layer, b, data) in &tom_layers {
             let l = layer.label();
             row(
                 &format!("TOM1 HEAD レイヤー {l} の Inst Switch"),
                 *b,
-                v51::LAYER_SWITCH,
+                vseries::LAYER_SWITCH,
                 data,
-                num(data, v51::LAYER_SWITCH),
+                num(data, vseries::LAYER_SWITCH),
             );
             row(
                 &format!("TOM1 HEAD レイヤー {l} の音色"),
                 *b,
-                v51::LAYER_INSTRUMENT,
+                vseries::LAYER_INSTRUMENT,
                 data,
-                num(data, v51::LAYER_INSTRUMENT),
+                num(data, vseries::LAYER_INSTRUMENT),
             );
             row(
                 &format!("TOM1 HEAD レイヤー {l} の Inst Bank"),
                 *b,
-                v51::LAYER_BANK,
+                vseries::LAYER_BANK,
                 data,
-                num(data, v51::LAYER_BANK),
+                num(data, vseries::LAYER_BANK),
             );
             row(
                 &format!("TOM1 HEAD レイヤー {l} の音量"),
                 *b,
-                v51::LAYER_VOLUME,
+                vseries::LAYER_VOLUME,
                 data,
-                vol(data, v51::LAYER_VOLUME),
+                vol(data, vseries::LAYER_VOLUME),
             );
         }
         row(
             "SNARE HEAD レイヤー A の音色",
             snare_a_block,
-            v51::LAYER_INSTRUMENT,
+            vseries::LAYER_INSTRUMENT,
             &snare_a,
-            num(&snare_a, v51::LAYER_INSTRUMENT),
+            num(&snare_a, vseries::LAYER_INSTRUMENT),
         );
         row(
             "SNARE HEAD レイヤー A の Inst Bank",
             snare_a_block,
-            v51::LAYER_BANK,
+            vseries::LAYER_BANK,
             &snare_a,
-            num(&snare_a, v51::LAYER_BANK),
+            num(&snare_a, vseries::LAYER_BANK),
         );
         row(
             "AUX4 HEAD の音量",
             aux_common_block,
-            v51::UNIT_VOLUME,
+            vseries::UNIT_VOLUME,
             &aux_common,
-            vol(&aux_common, v51::UNIT_VOLUME),
+            vol(&aux_common, vseries::UNIT_VOLUME),
         );
         row(
             "AUX4 HEAD レイヤー A の Inst Switch",
             aux_a_block,
-            v51::LAYER_SWITCH,
+            vseries::LAYER_SWITCH,
             &aux_a,
-            num(&aux_a, v51::LAYER_SWITCH),
+            num(&aux_a, vseries::LAYER_SWITCH),
         );
         row(
             "AUX4 HEAD レイヤー A の音色",
             aux_a_block,
-            v51::LAYER_INSTRUMENT,
+            vseries::LAYER_INSTRUMENT,
             &aux_a,
-            num(&aux_a, v51::LAYER_INSTRUMENT),
+            num(&aux_a, vseries::LAYER_INSTRUMENT),
         );
         let rt: Vec<f64> = self
             .link
@@ -589,9 +600,9 @@ impl<'a> Measure<'a> {
     fn check_writes(&mut self, v: &Values, r: &mut Report) -> Result<bool> {
         let (block, data) = &v.tom_common;
         r.h("書き込みの確かめ");
-        let Some(original) = v51::UNIT_VOLUME
+        let Some(original) = vseries::UNIT_VOLUME
             .read(data)
-            .filter(|&x| v51::volume_in_range(x))
+            .filter(|&x| vseries::volume_in_range(x))
         else {
             r.line("- TOM1 HEAD の音量の読みが範囲の外なので、負の数の読み方が違う。音量は書き換えない");
             return Ok(false);
@@ -599,37 +610,37 @@ impl<'a> Measure<'a> {
         self.link.remember(
             *block,
             data,
-            v51::UNIT_VOLUME.offset,
-            v51::UNIT_VOLUME.len,
+            vseries::UNIT_VOLUME.offset,
+            vseries::UNIT_VOLUME.len,
             "TOM1 HEAD の音量（測定）",
         )?;
-        let addr = block.at(v51::UNIT_VOLUME.offset);
-        let off = v51::UNIT_VOLUME.encode(v51::VOLUME_OFF);
+        let addr = block.at(vseries::UNIT_VOLUME.offset);
+        let off = vseries::UNIT_VOLUME.encode(vseries::VOLUME_OFF);
         self.write(addr, &off)?;
         let after = self.link.read(*block)?;
-        let raw_after = v51::UNIT_VOLUME
+        let raw_after = vseries::UNIT_VOLUME
             .raw(&after)
             .map(roland::hex)
             .unwrap_or_default();
-        let read_after = v51::UNIT_VOLUME.read(&after);
-        self.write(addr, &v51::UNIT_VOLUME.encode(original))?;
+        let read_after = vseries::UNIT_VOLUME.read(&after);
+        self.write(addr, &vseries::UNIT_VOLUME.encode(original))?;
         let back = self.link.read(*block)?;
-        let read_back = v51::UNIT_VOLUME.read(&back);
+        let read_back = vseries::UNIT_VOLUME.read(&back);
         r.line(format!(
             "- -INF（`{}`）を書いて読み直すと `{raw_after}`（{}）",
             roland::hex(&off),
-            read_after.map_or_else(|| "?".to_owned(), v51::volume_label)
+            read_after.map_or_else(|| "?".to_owned(), vseries::volume_label)
         ));
         r.line(format!(
             "- 元の値（{}）に戻して読み直すと {}",
-            v51::volume_label(original),
+            vseries::volume_label(original),
             if read_back == Some(original) {
                 "合った"
             } else {
                 "合わない"
             }
         ));
-        if read_after != Some(v51::VOLUME_OFF) {
+        if read_after != Some(vseries::VOLUME_OFF) {
             r.line("- 書いた -INF がそのまま読めないので、音量を書き換える測定はしない");
             return Ok(false);
         }
@@ -651,9 +662,9 @@ impl<'a> Measure<'a> {
 
         if volume_ok {
             let (block, data) = &v.tom_common;
-            let addr = block.at(v51::UNIT_VOLUME.offset);
-            let off = v51::UNIT_VOLUME.encode(v51::VOLUME_OFF);
-            let on = v51::UNIT_VOLUME.raw(data).unwrap_or_default().to_vec();
+            let addr = block.at(vseries::UNIT_VOLUME.offset);
+            let off = vseries::UNIT_VOLUME.encode(vseries::VOLUME_OFF);
+            let on = vseries::UNIT_VOLUME.raw(data).unwrap_or_default().to_vec();
             let n = MUTE_DELAYS.len();
             for (i, d) in MUTE_DELAYS.into_iter().enumerate() {
                 let k = i + 1;
@@ -703,7 +714,8 @@ impl<'a> Measure<'a> {
 
         // 音色: TOM1 HEAD のレイヤー A を SNARE HEAD のレイヤー A の音色（Instrument と Inst Bank）にする
         let (layer_block, layer) = &v.tom_layer_a;
-        let span = v51::LAYER_INSTRUMENT.offset as usize..v51::LAYER_BANK.offset as usize + 4;
+        let span =
+            vseries::LAYER_INSTRUMENT.offset as usize..vseries::LAYER_BANK.offset as usize + 4;
         if let (Some(orig), Some(new)) = (layer.get(span.clone()), v.snare_layer_a.get(span))
             && orig != new
         {
@@ -711,11 +723,11 @@ impl<'a> Measure<'a> {
             self.link.remember(
                 *layer_block,
                 layer,
-                v51::LAYER_INSTRUMENT.offset,
+                vseries::LAYER_INSTRUMENT.offset,
                 orig.len(),
                 "TOM1 HEAD レイヤー A の音色（測定）",
             )?;
-            let addr = layer_block.at(v51::LAYER_INSTRUMENT.offset);
+            let addr = layer_block.at(vseries::LAYER_INSTRUMENT.offset);
             progress(
                 t(
                     "Recording the swapped sound…",
@@ -750,20 +762,20 @@ impl<'a> Measure<'a> {
         }
 
         // キット: となりのキットに切り替える
-        let target = if v.kit < v51::KIT_COUNT {
+        let target = if v.kit < vseries::KIT_COUNT {
             v.kit + 1
         } else {
             v.kit - 1
         };
         self.link.remember(
-            v51::current(),
+            vseries::current(),
             &v.current,
-            v51::KIT_NUM.offset,
-            v51::KIT_NUM.len,
+            vseries::KIT_NUM.offset,
+            vseries::KIT_NUM.len,
             "今のキット（測定）",
         )?;
-        let addr = v51::current().at(v51::KIT_NUM.offset);
-        let to = v51::KIT_NUM.encode(i32::from(target) - 1);
+        let addr = vseries::current().at(vseries::KIT_NUM.offset);
+        let to = vseries::KIT_NUM.encode(i32::from(target) - 1);
         let back = v.current.clone();
         progress(
             t(
@@ -809,7 +821,7 @@ impl<'a> Measure<'a> {
     }
 }
 
-/// V51 の USB の音の録音
+/// 音源の USB の音の録音
 struct Recorder {
     _stream: cpal::Stream,
     shared: Arc<Mutex<Captured>>,
@@ -846,7 +858,7 @@ impl Snap {
 }
 
 impl Recorder {
-    /// 名前に V51 を含む入力を開く。無ければ `None`（`note` に入力の名前を並べる）
+    /// 名前に機種の名前（V71・V51・V31）を含む入力を開く。無ければ `None`（`note` に入力の名前を並べる）
     fn open(note: &mut dyn FnMut(String)) -> Result<Option<Self>> {
         let host = cpal::default_host();
         let mut names = Vec::new();
@@ -856,7 +868,7 @@ impl Recorder {
                 .description()
                 .map(|x| x.name().to_owned())
                 .unwrap_or_default();
-            if found.is_none() && module_link::looks_like_v51(&name) {
+            if found.is_none() && module_link::port_model(&name).is_some() {
                 found = Some((d, name.clone()));
             }
             names.push(name);
@@ -931,7 +943,7 @@ where
                 c.frames += (data.len() / channels) as u64;
             }
         },
-        |e| log::warn!("V51 capture: {e}"),
+        |e| log::warn!("drum module capture: {e}"),
         None,
     )?;
     Ok(stream)
@@ -997,7 +1009,7 @@ fn analyze(snap: &Snap, noise: (i64, i64), hits: &[Hit], r: &mut Report) {
     }
     let Some(latency) = listen::median(&latencies) else {
         r.line(format!(
-            "- 基準の {} 回の音が録音に入っていない（V51 の USB の音に TOM1 が出ていない）。ここで調べるのをやめた",
+            "- 基準の {} 回の音が録音に入っていない（音源の USB の音に TOM1 が出ていない）。ここで調べるのをやめた",
             base.len()
         ));
         return;
@@ -1364,7 +1376,7 @@ mod tests {
 
     #[test]
     fn pad_channels() {
-        let mut midi = vec![0u8; v51::kit_midi(1).size as usize];
+        let mut midi = vec![0u8; vseries::kit_midi(1).size as usize];
         midi[0x2C..0x30].copy_from_slice(&[0, 0, 3, 0]);
         midi[Unit::Tom1Head.channel_field().offset as usize] = 16;
         let p = Pad::read(&midi, Unit::Tom1Head);
