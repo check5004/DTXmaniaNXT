@@ -466,6 +466,8 @@ struct App {
     monitor: MidiMonitor,
     /// MIDI の機器がつながったか外れたかを最後に調べた時刻
     ports_checked: Instant,
+    /// 選曲の画面で最後に HH を叩いた時刻（2 回で難易度を変える）
+    last_hh_us: Option<i64>,
     /// 最後に LC を叩いた時刻（間違えて始めた曲から 2 回で戻る）
     last_lc_us: Option<i64>,
     /// 場面（画面と、重ねている練習メニュー・板）が変わった直後は、パッドと Esc を少しのあいだ受け付けない
@@ -757,6 +759,7 @@ impl App {
             keys,
             monitor: MidiMonitor::default(),
             ports_checked: Instant::now(),
+            last_hh_us: None,
             last_lc_us: None,
             gate: InputGate::new(Instant::now()),
             gfx,
@@ -2045,27 +2048,19 @@ impl App {
                     self.sfx.play(se);
                 }
             }
-            // 今見ている所の区間練習はキーボードの P だけ（見ながら叩いたライドで練習へ飛ばないように）
+            // 今見ている所を区間練習（練習メニューに区間を選んでおく）
+            DrumLane::RD => {
+                let (path, section) = (run.play.path.clone(), run.section());
+                let options = self.practice_options(section);
+                self.sfx.play(Se::Decide);
+                self.close_then(AfterClose::Setup(path, Some(options), None), Duration::ZERO);
+            }
             DrumLane::LC => {
                 self.sfx.play(Se::Cancel);
                 self.close_then(AfterClose::LeaveReplay, Duration::ZERO);
             }
             _ => {}
         }
-    }
-
-    /// リプレイで今見ている所を区間練習（練習メニューに区間を選んでおく）。キーボードの P
-    fn replay_practice(&mut self) {
-        if self.after_close.is_some() {
-            return;
-        }
-        let Screen::Replay(run) = &self.screen else {
-            return;
-        };
-        let (path, section) = (run.play.path.clone(), run.section());
-        let options = self.practice_options(section);
-        self.sfx.play(Se::Decide);
-        self.close_then(AfterClose::Setup(path, Some(options), None), Duration::ZERO);
     }
 
     /// 区間 `section` を、設定に残したほかの決めごとで練習する
@@ -2711,9 +2706,6 @@ impl App {
             &self.monitor_list,
         );
         info.song = self.songs.selected_chart().is_some();
-        if matches!(self.screen, Screen::Select) {
-            info.sort = Some(self.songs.sort());
-        }
         info.timing = self.timing.as_ref().map(SongTiming::info);
         if let Screen::Play(p, _) = &self.screen {
             info.play = Some(play_pos(p));
@@ -2900,12 +2892,6 @@ impl App {
 
     fn quick_action(&mut self, action: ConfigAction) {
         match action {
-            ConfigAction::Set(ItemId::Sort, v) => {
-                let all = library::SortKind::ALL;
-                let to = all[(v.max(0) as usize).min(all.len() - 1)];
-                let delta = to.index() as isize - self.songs.sort().index() as isize;
-                self.change_sort(delta);
-            }
             ConfigAction::Set(ItemId::Seek, v) => {
                 // 上流 SkipForward / SkipBackward。飛んだプレイは記録に残さない
                 if let Screen::Play(play, _) = &mut self.screen {
@@ -3444,7 +3430,7 @@ impl App {
                     }
                     KeyCode::ArrowLeft | KeyCode::ArrowUp => DrumLane::HT,
                     KeyCode::ArrowRight | KeyCode::ArrowDown => DrumLane::LT,
-                    KeyCode::KeyP => return self.replay_practice(),
+                    KeyCode::KeyP => DrumLane::RD,
                     KeyCode::Escape | KeyCode::Backspace => DrumLane::LC,
                     _ => return,
                 };
@@ -3459,7 +3445,7 @@ impl App {
         };
         let failing = view.frozen_ms().is_some();
         let toast = match code {
-            // 一時停止して、一時停止の板を開く（上流 Pause。板を開いたまま Esc をもう一度でやめる）。
+            // 一時停止して、一時停止の板を開く（上流 Pause。やめるのは板の「演奏をやめる」から）。
             // STAGE FAILED を出しているあいだは止めない（出し終えると選曲に戻る）
             KeyCode::Escape | KeyCode::Space | KeyCode::Pause => {
                 if !failing {
@@ -3674,7 +3660,7 @@ impl App {
             }
             KeyCode::Backspace => self.select_action(ui::SelectAction::Back),
             KeyCode::Escape => self.select_cancel(),
-            // v2 と同じく ← → で並べ替え、R でランダムに選ぶ。難易度は Tab（パッドは SD・FT）
+            // v2 と同じく ← → で並べ替え、R でランダムに選ぶ。難易度は Tab（パッドの HH 2 回）
             KeyCode::ArrowLeft => self.change_sort(-1),
             KeyCode::ArrowRight => self.change_sort(1),
             KeyCode::KeyR => self.pick_random(),
@@ -3798,13 +3784,13 @@ impl App {
             return;
         }
         if self.quick.is_some() && matches!(self.screen, Screen::Select | Screen::Play(..)) {
-            // 設定の画面と同じパッドの役目。決定は CY だけ（RD で開いたあと、ライドを刻んでも先へ進まない）
+            // 設定の画面と同じパッドの役目
             let input = match lane {
                 DrumLane::HT => ConfigInput::Up,
                 DrumLane::LT => ConfigInput::Down,
                 DrumLane::SD => ConfigInput::Left,
                 DrumLane::FT => ConfigInput::Right,
-                DrumLane::CY => ConfigInput::Decide,
+                DrumLane::CY | DrumLane::RD => ConfigInput::Decide,
                 DrumLane::LC => ConfigInput::Cancel,
                 _ => return,
             };
@@ -3815,17 +3801,17 @@ impl App {
             Screen::Title => match lane {
                 DrumLane::HT => self.title_move(-1),
                 DrumLane::LT => self.title_move(1),
-                DrumLane::CY => self.title_decide(),
+                DrumLane::CY | DrumLane::RD => self.title_decide(),
                 _ => {}
             },
             Screen::Config(..) => {
-                // パッドの役目は設定の画面の下に出す（HT 上、LT 下、SD 左、FT 右、CY 決定、LC 戻る）
+                // パッドの役目は設定の画面の下に出す（HT 上、LT 下、SD 左、FT 右、CY・RD 決定、LC 戻る）
                 let input = match lane {
                     DrumLane::HT => ConfigInput::Up,
                     DrumLane::LT => ConfigInput::Down,
                     DrumLane::SD => ConfigInput::Left,
                     DrumLane::FT => ConfigInput::Right,
-                    DrumLane::CY => ConfigInput::Decide,
+                    DrumLane::CY | DrumLane::RD => ConfigInput::Decide,
                     DrumLane::LC => ConfigInput::Cancel,
                     _ => return,
                 };
@@ -3862,13 +3848,13 @@ impl App {
                 // ランキングはキーボードとマウスだけ。パッドを叩いたら板から出て、いつもの選曲の操作にする
                 self.ranking.focus = false;
                 if self.menu.is_some() {
-                    // 設定の画面と同じパッドの役目（SD・FT で区間や値をその場で変える。始めるのは CY だけ）
+                    // 設定の画面と同じパッドの役目（SD・FT で区間や値をその場で変える）
                     let input = match lane {
                         DrumLane::HT => MenuInput::Up,
                         DrumLane::LT => MenuInput::Down,
                         DrumLane::SD => MenuInput::Left,
                         DrumLane::FT => MenuInput::Right,
-                        DrumLane::CY => MenuInput::Decide,
+                        DrumLane::CY | DrumLane::RD => MenuInput::Decide,
                         DrumLane::LC => MenuInput::Cancel,
                         _ => return,
                     };
@@ -3878,32 +3864,44 @@ impl App {
                 match lane {
                     DrumLane::HT => self.move_cursor(-1),
                     DrumLane::LT => self.move_cursor(1),
-                    // 難易度は SD で下、FT で上（v2 の HH 2 回は、ハイハットを刻むと変わってしまうのでやめた。
-                    // 叩き間違えても反対の 1 打で戻せる）。並べ替えは簡易設定の行とキーボードの ← →
-                    DrumLane::SD => self.step_level(-1),
-                    DrumLane::FT => self.step_level(1),
+                    // v2 と同じく SD と FT で並べ替え
+                    DrumLane::SD => self.change_sort(-1),
+                    DrumLane::FT => self.change_sort(1),
                     DrumLane::CY => self.select_action(ui::SelectAction::Enter),
                     // 簡易設定（v2 は BD 2 回だが、足は演奏の合間に踏んでしまうので手で叩く RD にした）
                     DrumLane::RD => self.open_quick(),
                     // v2 と同じく LC は Esc と同じ（BOX の中なら出て、一番上ならタイトルへ）
                     DrumLane::LC => self.select_cancel(),
+                    DrumLane::HH | DrumLane::HHO => {
+                        if self.last_hh_us.is_some_and(|t| at_us - t <= DOUBLE_HIT_US) {
+                            self.last_hh_us = None;
+                            self.cycle_level();
+                        } else {
+                            self.last_hh_us = Some(at_us);
+                        }
+                    }
                     _ => {}
                 }
             }
-            // 画面の下の帯に出す役目（`ResultView::hints`）。何気なく叩いても別の画面へ飛ばないように、
-            // パッドはページと戻るだけ。もう一度・区間練習・リプレイ・補正のおすすめはキーボード（R・P・V・O）か、
-            // 戻った先から（もう一度は選曲かメニューで CY、区間練習は選曲の RD、補正は簡易設定の補正の行）
+            // 画面の下の帯に出す役目（`ResultView::hints`）
             Screen::Result(o, _) => match lane {
                 // 今日のメニューの結果では CY で次へ
                 DrumLane::CY if o.today.is_some() => self.result_action(ui::ResultAction::Next),
                 DrumLane::CY | DrumLane::LC => self.result_action(ui::ResultAction::Back),
+                // もう一度（練習なら同じ決めごとで。キーボードは R）
+                DrumLane::SD => self.result_action(ui::ResultAction::Retry),
+                // 練習メニュー（練習の結果なら今の区間を選んでおく。キーボードは P）
+                DrumLane::RD => self.result_action(ui::ResultAction::Practice(None)),
+                // 「ずれ」の板のおすすめ（キーボードは O）
+                DrumLane::FT => self.toggle_result_advice(),
                 // 選曲と同じく HT と LT で動かす
                 DrumLane::HT | DrumLane::LT => self.turn_result_page(),
+                // 今のプレイのリプレイ（キーボードは V）
+                DrumLane::HH | DrumLane::HHO => self.result_replay(),
                 _ => {}
             },
             Screen::Replay(_) => self.replay_input(lane),
-            // 設定の画面と同じパッドの役目（SD・FT でテンポ）。やり方と手順は右の欄の行で変える
-            // （HH・RD は刻むと変わってしまうので使わない。キーボードは Tab と H のまま）
+            // 設定の画面と同じパッドの役目（SD・FT でテンポ）
             Screen::Drills(_) => {
                 let input = match lane {
                     DrumLane::HT => drill_menu::Input::Up,
@@ -3911,6 +3909,9 @@ impl App {
                     DrumLane::SD => drill_menu::Input::Left,
                     DrumLane::FT => drill_menu::Input::Right,
                     DrumLane::CY => drill_menu::Input::Decide,
+                    // やり方と手順（真ん中の列で）
+                    DrumLane::HH | DrumLane::HHO => drill_menu::Input::Way,
+                    DrumLane::RD => drill_menu::Input::Lead,
                     DrumLane::LC => drill_menu::Input::Cancel,
                     _ => return,
                 };
@@ -3978,18 +3979,6 @@ impl App {
         self.songs.cycle_level();
         if self.songs.level != before {
             self.sfx.play(Se::level(self.songs.level));
-        }
-        self.remember_level();
-    }
-
-    /// 難易度を `d`（-1 で下、1 で上）だけ動かす。端では止まる（キーボードの Tab は回る）
-    fn step_level(&mut self, d: isize) {
-        let before = self.songs.level;
-        self.songs.step_level(d);
-        if self.songs.level != before {
-            self.sfx.play(Se::level(self.songs.level));
-        } else {
-            self.sfx.play(Se::Cancel);
         }
         self.remember_level();
     }
@@ -4518,9 +4507,6 @@ impl App {
                         &self.monitor_list,
                     );
                     info.song = self.songs.selected_chart().is_some();
-                    if matches!(self.screen, Screen::Select) {
-                        info.sort = Some(self.songs.sort());
-                    }
                     info.timing = self.timing.as_ref().map(SongTiming::info);
                     info.kit = kit_info;
                     let rows = config_view::rows(q.page(), &info);
@@ -4657,7 +4643,6 @@ fn config_info<'a>(
         song_count: songs.library.songs,
         song: false,
         play: None,
-        sort: None,
         timing: None,
         monitors,
         import: None,

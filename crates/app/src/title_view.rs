@@ -361,7 +361,7 @@ impl TitleView {
             },
         };
         if let Some(d) = decide {
-            v.push((&[Pad::CY], d));
+            v.push((&[Pad::CY, Pad::RD], d));
         }
         v.push((&[], t("Quit (Esc)", "終了（Esc）")));
         v

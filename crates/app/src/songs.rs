@@ -458,29 +458,6 @@ impl SongList {
         }
         self.level = level;
     }
-
-    /// 難易度を `d`（-1 で下、1 で上）だけ、選んでいる曲にある難易度へ動かす。端では止まる（回らない）。
-    /// 曲を選んでいなければ、そのまま隣の難易度へ
-    pub fn step_level(&mut self, d: isize) {
-        let Some(song) = self.selected_song() else {
-            self.level = (self.level as isize + d).clamp(0, LEVELS as isize - 1) as usize;
-            return;
-        };
-        let Some(level) = self.level_for(song) else {
-            return;
-        };
-        let have: Vec<bool> = song.charts.iter().map(Option::is_some).collect();
-        // 端で動けなくても、見えている難易度を選んだことにする
-        self.level = level;
-        let mut l = level as isize + d;
-        while (0..LEVELS as isize).contains(&l) {
-            if have[l as usize] {
-                self.level = l as usize;
-                return;
-            }
-            l += d;
-        }
-    }
 }
 
 #[cfg(test)]
@@ -585,22 +562,6 @@ mod tests {
         l.cycle_level();
         assert_eq!(l.level, 0);
         l.cycle_level();
-        assert_eq!(l.level, 3);
-    }
-
-    #[test]
-    fn step_level_skips_missing_levels_and_stops_at_the_ends() {
-        let mut l = list();
-        l.enter();
-        l.move_by(1);
-        // a は 0 と 3。いまは 3 扱い
-        l.step_level(1);
-        assert_eq!(l.level, 3);
-        l.step_level(-1);
-        assert_eq!(l.level, 0);
-        l.step_level(-1);
-        assert_eq!(l.level, 0);
-        l.step_level(1);
         assert_eq!(l.level, 3);
     }
 

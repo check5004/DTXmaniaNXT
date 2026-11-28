@@ -1375,7 +1375,7 @@ impl PracticeMenu {
             } else {
                 t("Next Value (Enter)", "次の値（Enter）")
             };
-            v.push((&[Pad::CY], decide));
+            v.push((&[Pad::CY, Pad::RD], decide));
             v.push((&[Pad::LC], t("Close (Esc)", "閉じる（Esc）")));
             return v;
         }
@@ -1392,7 +1392,7 @@ impl PracticeMenu {
             Item::Back => t("Song Select (Enter)", "選曲へ（Enter）"),
             _ => t("Start Practice (Enter)", "練習を始める（Enter）"),
         };
-        v.push((&[Pad::CY], decide));
+        v.push((&[Pad::CY, Pad::RD], decide));
         v.push((&[Pad::LC], t("Song Select (Esc)", "選曲へ（Esc）")));
         v
     }

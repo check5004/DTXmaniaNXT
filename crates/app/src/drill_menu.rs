@@ -75,25 +75,7 @@ enum Focus {
     Drills,
     /// 真ん中の列（今日のメニュー）
     Today,
-    /// 右の欄（選んだドリルのやり方・手順・テンポと、始める）
-    Detail,
 }
-
-/// 右の欄の行（上から）。ドリルを CY で選ぶと「始める」に来る
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DetailRow {
-    Mode,
-    Lead,
-    Tempo,
-    Start,
-}
-
-const DETAIL_ROWS: [DetailRow; 4] = [
-    DetailRow::Mode,
-    DetailRow::Lead,
-    DetailRow::Tempo,
-    DetailRow::Start,
-];
 
 /// 操作（パッドとキーボードから）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -105,9 +87,9 @@ pub enum Input {
     Right,
     Decide,
     Cancel,
-    /// やり方を次へ（キーボードの Tab）
+    /// やり方を次へ（HH）
     Way,
-    /// 手順の右から・左からを入れ替える（キーボードの H）
+    /// 手順の右から・左からを入れ替える（RD）
     Lead,
 }
 
@@ -205,8 +187,6 @@ pub struct DrillMenu {
     /// やり方（ドリルで使えなければ、そのドリルではテンポを上げる）
     way: Way,
     lefty: bool,
-    /// 右の欄で選んでいる行
-    detail: DetailRow,
     records: DrillRecords,
     entered: Instant,
 }
@@ -284,7 +264,6 @@ impl DrillMenu {
             bpm,
             way: Way::from_key(&prefs.way).unwrap_or(Way::Climb),
             lefty: prefs.lefty,
-            detail: DetailRow::Start,
             records,
             entered: Instant::now(),
         };
@@ -359,7 +338,7 @@ impl DrillMenu {
     pub fn selected(&self) -> Item {
         match self.focus {
             Focus::Left => left_items()[self.left],
-            Focus::Drills | Focus::Detail => Item::Drill(self.drill_index()),
+            Focus::Drills => Item::Drill(self.drill_index()),
             Focus::Today => Item::Today,
         }
     }
@@ -420,7 +399,6 @@ impl DrillMenu {
             Focus::Left => self.input_left(input),
             Focus::Drills => self.input_drills(input),
             Focus::Today => self.input_today(input),
-            Focus::Detail => self.input_detail(input),
         };
         // テンポ・上げ幅・手順が変われば、今日のメニューのテンポも変わる
         if r.changed {
@@ -533,14 +511,19 @@ impl DrillMenu {
                 }
             }
             Input::Left | Input::Right => {
-                return self.nudge_tempo(if input == Input::Left { -1 } else { 1 });
+                let dir = if input == Input::Left { -1 } else { 1 };
+                let d = self.drill();
+                let now = self.bpm_of(d);
+                let to = nudge_bpm(now, dir);
+                if to != now {
+                    self.bpm.insert(d.id, to);
+                    r.se = Some(Se::Change);
+                    r.changed = true;
+                }
             }
-            // 1 打では始めない。右の欄の「始める」へ移り、もう一度 CY で始める
-            // （やり方と手順も右の欄で変える。何気なく叩いても、すぐには始まらないように）
             Input::Decide => {
-                self.focus = Focus::Detail;
-                self.detail = DetailRow::Start;
                 r.se = Some(Se::Decide);
+                r.done = Some(Done::Start(self.run()));
             }
             Input::Cancel => {
                 // 左の列へ戻る（分け方の行に）
@@ -548,98 +531,18 @@ impl DrillMenu {
                 self.left = left_of(self.category);
                 r.se = Some(Se::Cancel);
             }
-            Input::Way => return self.step_way(1),
-            Input::Lead => return self.toggle_lead(),
+            Input::Way => {
+                self.way = self.way().next_for(self.drill());
+                r.se = Some(Se::Change);
+                r.changed = true;
+            }
+            Input::Lead => {
+                self.lefty = !self.lefty;
+                r.se = Some(Se::Change);
+                r.changed = true;
+            }
         }
         r
-    }
-
-    /// 右の欄（やり方・手順・テンポ・始める）
-    fn input_detail(&mut self, input: Input) -> Response {
-        let mut r = Response::default();
-        let at = DETAIL_ROWS
-            .iter()
-            .position(|&x| x == self.detail)
-            .unwrap_or(DETAIL_ROWS.len() - 1);
-        match input {
-            Input::Up | Input::Down => {
-                let to = if input == Input::Up {
-                    at.checked_sub(1)
-                } else {
-                    (at + 1 < DETAIL_ROWS.len()).then_some(at + 1)
-                };
-                if let Some(to) = to {
-                    self.detail = DETAIL_ROWS[to];
-                    r.se = Some(Se::Move);
-                }
-            }
-            Input::Left | Input::Right => {
-                let dir = if input == Input::Left { -1 } else { 1 };
-                return match self.detail {
-                    DetailRow::Mode => self.step_way(dir),
-                    DetailRow::Lead => self.toggle_lead(),
-                    DetailRow::Tempo => self.nudge_tempo(dir),
-                    DetailRow::Start => r,
-                };
-            }
-            Input::Decide => {
-                if self.detail == DetailRow::Start {
-                    r.se = Some(Se::Decide);
-                    r.done = Some(Done::Start(self.run()));
-                } else {
-                    // 値は SD・FT で変える。決定は「始める」へ
-                    self.detail = DetailRow::Start;
-                    r.se = Some(Se::Move);
-                }
-            }
-            Input::Cancel => {
-                self.focus = Focus::Drills;
-                r.se = Some(Se::Cancel);
-            }
-            Input::Way => return self.step_way(1),
-            Input::Lead => return self.toggle_lead(),
-        }
-        r
-    }
-
-    /// 選んでいるドリルのテンポを `dir`（-1 か 1）だけ動かす
-    fn nudge_tempo(&mut self, dir: i32) -> Response {
-        let mut r = Response::default();
-        let d = self.drill();
-        let now = self.bpm_of(d);
-        let to = nudge_bpm(now, dir);
-        if to != now {
-            self.bpm.insert(d.id, to);
-            r.se = Some(Se::Change);
-            r.changed = true;
-        }
-        r
-    }
-
-    /// やり方を次（`dir` が 1）か前（-1）へ。選んでいるドリルで使えないものは飛ばす
-    fn step_way(&mut self, dir: i32) -> Response {
-        let d = self.drill();
-        let way = self.way();
-        self.way = if dir < 0 {
-            way.prev_for(d)
-        } else {
-            way.next_for(d)
-        };
-        Response {
-            se: Some(Se::Change),
-            done: None,
-            changed: true,
-        }
-    }
-
-    /// 手順の右から・左からを入れ替える
-    fn toggle_lead(&mut self) -> Response {
-        self.lefty = !self.lefty;
-        Response {
-            se: Some(Se::Change),
-            done: None,
-            changed: true,
-        }
     }
 
     /// 真ん中の列（今日のメニュー）
@@ -778,25 +681,11 @@ impl DrillMenu {
             Item::Today => {
                 v.push((&[Pad::CY], t("Open (Enter)", "開く（Enter）")));
             }
-            Item::Drill(_) if self.focus == Focus::Detail => {
-                let change = match self.detail {
-                    DetailRow::Mode => Some(t("Mode", "やり方")),
-                    DetailRow::Lead => Some(t("Lead Hand", "手順")),
-                    DetailRow::Tempo => Some(t("Tempo", "テンポ")),
-                    DetailRow::Start => None,
-                };
-                if let Some(change) = change {
-                    v.push((&[Pad::SD, Pad::FT], change));
-                    v.push((&[Pad::CY], t("OK (Enter)", "決める（Enter）")));
-                } else {
-                    v.push((&[Pad::CY], t("Start (Enter)", "始める（Enter）")));
-                }
-                v.push((&[Pad::LC], t("Back (Esc)", "戻る（Esc）")));
-                return v;
-            }
             Item::Drill(_) => {
                 v.push((&[Pad::SD, Pad::FT], t("Tempo", "テンポ")));
-                v.push((&[Pad::CY], t("Select (Enter)", "選ぶ（Enter）")));
+                v.push((&[Pad::HH], t("Mode (Tab)", "やり方（Tab）")));
+                v.push((&[Pad::RD], t("Lead Hand (H)", "手順（H）")));
+                v.push((&[Pad::CY], t("Start (Enter)", "始める（Enter）")));
                 v.push((&[Pad::LC], t("Categories (Esc)", "カテゴリへ（Esc）")));
                 return v;
             }
@@ -817,15 +706,14 @@ impl DrillMenu {
         v
     }
 
-    /// 札の行（やり方・手順）。札は（名前、選んでいるか、使えるか）。入りきらなければ字を小さく。
-    /// `active` は右の欄でこの行を選んでいるとき（SD・FT で変わる）
+    /// 札の行（やり方・手順）。札は（名前、選んでいるか、使えるか）。入りきらなければ字を小さく
     fn chip_row(
         c: &Canvas,
         g: &mut Gfx,
         label: &str,
         chips: &[(String, bool, bool)],
         y: f32,
-        active: bool,
+        on_list: bool,
     ) {
         let (x, _, w, _) = DETAIL;
         ui::text(c, g, label, x + 20.0, y + 4.0, &plain(15.0, ui::DIM), 90.0);
@@ -847,7 +735,7 @@ impl DrillMenu {
         for ((text, on, fits), cw) in chips.iter().zip(ws) {
             let h = 26.0;
             if *on {
-                let fill = if active {
+                let fill = if on_list {
                     ACCENT
                 } else {
                     ACCENT.gamma_multiply(0.6)
@@ -1184,37 +1072,16 @@ impl DrillMenu {
                 (label, on, k.fits(d))
             })
             .collect();
-        // 右の欄を操作しているときは、選んでいる行に帯を出す
-        let row = (self.focus == Focus::Detail).then_some(self.detail);
-        match row {
-            Some(DetailRow::Mode) => Self::row_mark(c, (x + 10.0, y + 228.0, w - 20.0, 34.0), true),
-            Some(DetailRow::Lead) => Self::row_mark(c, (x + 10.0, y + 262.0, w - 20.0, 34.0), true),
-            Some(DetailRow::Tempo) => Self::row_mark(c, (x + 10.0, y + 308.0, 250.0, 148.0), true),
-            _ => {}
-        }
-        Self::chip_row(
-            c,
-            g,
-            t("Mode", "やり方"),
-            &ways,
-            y + 232.0,
-            row == Some(DetailRow::Mode),
-        );
+        let on_list = self.focus == Focus::Drills;
+        Self::chip_row(c, g, t("Mode", "やり方"), &ways, y + 232.0, on_list);
         let leads: Vec<(String, bool, bool)> = [false, true]
             .into_iter()
             .map(|l| (lead_name(l).to_owned(), l == self.lefty, true))
             .collect();
-        Self::chip_row(
-            c,
-            g,
-            t("Lead Hand", "手順"),
-            &leads,
-            y + 266.0,
-            row == Some(DetailRow::Lead),
-        );
+        Self::chip_row(c, g, t("Lead Hand", "手順"), &leads, y + 266.0, on_list);
         rule(c, y + 304.0);
-        // テンポ（SD・FT で変わるのは、ドリルの列か、右の欄のテンポの行）
-        let tempo_on = self.focus == Focus::Drills || row == Some(DetailRow::Tempo);
+        // テンポ
+        let tempo_on = matches!(self.selected(), Item::Drill(_));
         let label = if way == Way::Limit {
             t("Start Tempo", "始めのテンポ")
         } else {
@@ -1322,8 +1189,8 @@ impl DrillMenu {
             );
             draw_trail(c, &r.trail, (x + w - 176.0, y + 476.0, 150.0, 34.0));
         }
-        // 始める（ドリルの列で CY を叩くとここへ来て、もう一度 CY で始める）
-        start_button(c, g, t("Start", "始める"), row == Some(DetailRow::Start));
+        // 始める
+        start_button(c, g, t("Start", "始める"), tempo_on);
     }
 }
 
@@ -2213,18 +2080,13 @@ mod tests {
         let mut m = menu();
         // 左の列で決定すると入るだけ
         assert_eq!(m.input(Input::Decide).done, None);
-        // ドリルの列で 1 回叩いただけでは始めない（右の欄の「始める」へ）
-        assert_eq!(m.input(Input::Decide).done, None);
-        assert_eq!((m.focus, m.detail), (Focus::Detail, DetailRow::Start));
         let r = m.input(Input::Decide);
         let Some(Done::Start(run)) = r.done else {
             panic!("{r:?}");
         };
         assert_eq!(run.drill.id, m.drill().id);
         assert_eq!(run.target(), m.bpm_of(m.drill()));
-        // 右の欄 → ドリルの列 → 左の列。一番下の「タイトルに戻る」で決定しても戻る
-        m.input(Input::Cancel);
-        assert_eq!(m.focus, Focus::Drills);
+        // 一番下の「タイトルに戻る」で決定しても戻る
         m.input(Input::Cancel);
         for _ in 0..20 {
             m.input(Input::Down);
@@ -2310,39 +2172,22 @@ mod tests {
     }
 
     #[test]
-    fn the_mode_and_lead_hand_are_changed_in_the_right_panel() {
+    fn hh_changes_the_mode_and_rd_the_lead_hand_in_the_drill_column() {
         let mut m = menu();
-        // 左の列では使わない（キーボードの Tab・H）
+        // 左の列では使わない
         assert_eq!(m.input(Input::Way), Response::default());
         assert_eq!(m.input(Input::Lead), Response::default());
         m.input(Input::Decide);
         assert_eq!(m.run().way, Way::Climb);
-        // CY で右の欄へ。上へ行くとテンポ・手順・やり方の行
-        m.input(Input::Decide);
-        for _ in 0..5 {
-            m.input(Input::Up);
-        }
-        assert_eq!(m.detail, DetailRow::Mode);
-        let r = m.input(Input::Right);
+        let r = m.input(Input::Way);
         assert_eq!(r.se, Some(Se::Change));
         assert!(r.changed);
         assert_eq!(m.run().way, Way::Limit);
-        m.input(Input::Right);
+        m.input(Input::Way);
         assert_eq!(m.run().way, Way::Endurance(1));
-        m.input(Input::Left);
-        assert_eq!(m.run().way, Way::Limit);
-        m.input(Input::Right);
-        m.input(Input::Down);
-        assert_eq!(m.detail, DetailRow::Lead);
-        let r = m.input(Input::Right);
+        let r = m.input(Input::Lead);
         assert!(r.changed);
         assert!(m.run().lefty);
-        // テンポの行は SD・FT でテンポ
-        m.input(Input::Down);
-        let before = m.run().target();
-        m.input(Input::Right);
-        assert_eq!(m.run().target(), before + BPM_STEP);
-        m.input(Input::Left);
         // 覚えて、開き直しても同じ
         let p = m.prefs();
         assert_eq!(p.way, "endurance1");
@@ -2350,15 +2195,9 @@ mod tests {
         let again = DrillMenu::new(&p, HashMap::new(), setup());
         assert_eq!(again.run().way, Way::Endurance(1));
         assert!(again.run().lefty);
-        // 値の行で CY を叩くと「始める」へ移るだけ。始めるのは「始める」で CY
-        assert_eq!(m.input(Input::Decide).done, None);
-        assert_eq!(m.detail, DetailRow::Start);
+        // RD で始めない（始めるのは CY だけ）
         assert_eq!(m.input(Input::Lead).done, None);
         assert!(matches!(m.input(Input::Decide).done, Some(Done::Start(_))));
-        // キーボードの Tab・H はドリルの列でも効く
-        m.input(Input::Cancel);
-        m.input(Input::Way);
-        assert_eq!(m.run().way, Way::Endurance(2));
     }
 
     #[test]

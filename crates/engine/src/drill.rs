@@ -157,16 +157,6 @@ impl Way {
             .unwrap_or(Self::Climb)
     }
 
-    /// 前のやり方（ドリル `d` で使えないものは飛ばす。最初の前は最後）
-    pub fn prev_for(self, d: &Drill) -> Self {
-        let n = Self::ALL.len();
-        let i = Self::ALL.iter().position(|&w| w == self).unwrap_or(0);
-        (1..=n)
-            .map(|k| Self::ALL[(i + n - k) % n])
-            .find(|w| w.fits(d))
-            .unwrap_or(Self::Climb)
-    }
-
     /// 段ごとにテンポが変わるか
     pub fn changes_tempo(self) -> bool {
         matches!(self, Self::Climb | Self::Limit)
@@ -2390,10 +2380,6 @@ mod tests {
         let gap = drill("gap_2");
         assert_eq!(Way::Climb.next_for(gap), Way::Endurance(1));
         assert_eq!(Way::Blind.next_for(gap), Way::Climb);
-        // 前へは逆にたどる
-        assert_eq!(Way::Climb.prev_for(para), Way::Echo);
-        assert_eq!(Way::Climb.prev_for(gap), Way::Blind);
-        assert_eq!(Way::Climb.next_for(para).prev_for(para), Way::Climb);
         assert_eq!(Way::Limit.for_drill(gap), Way::Climb);
         assert_eq!(Run::with(gap, Way::Echo, 100, 10, false).way, Way::Climb);
         for w in Way::ALL {

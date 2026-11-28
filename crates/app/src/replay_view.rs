@@ -251,7 +251,7 @@ impl ReplayRun {
         self.view.rewind(&mut self.play);
     }
 
-    /// P で区間練習にする小節（止めていれば見ている 2 小節、再生中は今の所の 2 小節）
+    /// RD で区間練習にする小節（止めていれば見ている 2 小節、再生中は今の所の 2 小節）
     pub fn section(&self) -> Section {
         let first = self
             .detail
@@ -295,7 +295,7 @@ impl ReplayRun {
         vec![
             play,
             step,
-            (&[], t("Practice Here (P)", "ここを区間練習（P）")),
+            (&[Pad::RD], t("Practice Here (P)", "ここを区間練習（P）")),
             back,
         ]
     }

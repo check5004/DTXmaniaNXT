@@ -407,9 +407,8 @@ pub fn draw_result(c: &Canvas, g: &mut Gfx, o: &Outcome) {
         15.0,
         Color32::WHITE,
     );
-    // キーボードの O（パッドでは結果の画面から変えない。何気なく叩いて補正が変わらないように。
-    // ドラムだけなら選曲の簡易設定の補正の行から）
-    let hint = tf!("O: {hint}", "O：{hint}");
+    // パッドの印（FT）と、キーボードの O
+    let hint = tf!("FT / O: {hint}", "FT / O：{hint}");
     draw_text_right(c, g, &hint, bx + bw - 10.0, by + 11.0, 13.0, white);
 }
 

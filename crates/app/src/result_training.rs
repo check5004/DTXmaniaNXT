@@ -930,12 +930,14 @@ pub fn draw_weak(c: &Canvas, g: &mut Gfx, o: &Outcome) {
     if let Some(t) = &o.strokes {
         draw_strokes(c, g, t, x, ty, pw, limit);
     }
-    // キーボードの P（ずれの板の「O」と同じ形。パッドでは結果の画面から練習へ飛ばない。
-    // ドラムだけなら選曲の RD の簡易設定から）
+    // パッドの印（RD）と、キーボードの P（ずれの板の「FT / O」と同じ形）
     let hint = if w.phrases.is_empty() {
-        t("P: Practice a Section", "P：区間を練習")
+        t("RD / P: Practice a Section", "RD / P：区間を練習")
     } else {
-        t("P: Practice Weak Phrases", "P：苦手なフレーズを練習")
+        t(
+            "RD / P: Practice Weak Phrases",
+            "RD / P：苦手なフレーズを練習",
+        )
     };
     let style = Style::edged(14.0, Color32::from_gray(210), Color32::BLACK, 1.0);
     if let Some(t) = g.texts.get(hint, &style) {
