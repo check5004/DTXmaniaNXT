@@ -161,6 +161,20 @@ const MIGRATIONS: &[&str] = &[
     CREATE INDEX play_time_by_start ON play_time(started_at);
     CREATE INDEX play_time_by_session ON play_time(session_id);
     ",
+    // 7: 曲ごとの音源のキット（曲を始めるときに音源をこのキットに切り替える）。同じ曲の譜面すべてに同じ値を書く
+    "
+    CREATE TABLE song_kits (
+        -- 譜面のパス
+        path TEXT NOT NULL,
+        -- 音源（'roland-v51' など）
+        module TEXT NOT NULL,
+        -- キットの番号（V51 なら 1〜200）
+        kit INTEGER NOT NULL,
+        -- 変えた時刻（UNIX 秒）
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (path, module)
+    );
+    ",
 ];
 
 /// 譜面 1 つの見分け方
@@ -637,6 +651,48 @@ impl Records {
                          offset_ms = excluded.offset_ms, updated_at = excluded.updated_at",
                     params![path, offset_ms, at],
                 )?;
+            }
+        }
+        tx.commit()
+    }
+
+    /// この曲で音源 `module` に使うキット。決めていなければ None
+    pub fn song_kit(&self, chart_path: &str, module: &str) -> Result<Option<u16>> {
+        let mut q = self
+            .conn
+            .prepare_cached("SELECT kit FROM song_kits WHERE path = ?1 AND module = ?2")?;
+        let mut rows = q.query(params![chart_path, module])?;
+        match rows.next()? {
+            Some(row) => row.get(0).map(Some),
+            None => Ok(None),
+        }
+    }
+
+    /// この曲で音源 `module` に使うキットを、曲の譜面 `chart_paths` すべてに書く。None なら消す
+    pub fn set_song_kit(
+        &mut self,
+        chart_paths: &[&str],
+        module: &str,
+        kit: Option<u16>,
+        at: i64,
+    ) -> Result<()> {
+        let tx = self.conn.transaction()?;
+        for path in chart_paths {
+            match kit {
+                None => {
+                    tx.execute(
+                        "DELETE FROM song_kits WHERE path = ?1 AND module = ?2",
+                        params![path, module],
+                    )?;
+                }
+                Some(kit) => {
+                    tx.execute(
+                        "INSERT INTO song_kits (path, module, kit, updated_at) VALUES (?1, ?2, ?3, ?4)
+                         ON CONFLICT(path, module) DO UPDATE SET
+                             kit = excluded.kit, updated_at = excluded.updated_at",
+                        params![path, module, kit, at],
+                    )?;
+                }
             }
         }
         tx.commit()
@@ -1664,6 +1720,26 @@ mod tests {
         r.set_song_offset(&["a/bas.dtx"], 0.0, 300).unwrap();
         assert_eq!(r.song_offset("a/bas.dtx").unwrap(), None);
         assert_eq!(r.song_offset("a/mas.dtx").unwrap(), Some(-4.0));
+    }
+
+    #[test]
+    fn song_kits_are_kept_per_chart_and_module() {
+        let mut r = Records::open_in_memory().unwrap();
+        assert_eq!(r.song_kit("a/bas.dtx", "roland-v51").unwrap(), None);
+        r.set_song_kit(&["a/bas.dtx", "a/mas.dtx"], "roland-v51", Some(12), 100)
+            .unwrap();
+        assert_eq!(r.song_kit("a/bas.dtx", "roland-v51").unwrap(), Some(12));
+        assert_eq!(r.song_kit("a/mas.dtx", "roland-v51").unwrap(), Some(12));
+        // ほかの音源は別
+        assert_eq!(r.song_kit("a/bas.dtx", "other").unwrap(), None);
+        r.set_song_kit(&["a/bas.dtx", "a/mas.dtx"], "roland-v51", Some(200), 200)
+            .unwrap();
+        assert_eq!(r.song_kit("a/mas.dtx", "roland-v51").unwrap(), Some(200));
+        // None にしたら消す（決めていないのと同じ）
+        r.set_song_kit(&["a/bas.dtx"], "roland-v51", None, 300)
+            .unwrap();
+        assert_eq!(r.song_kit("a/bas.dtx", "roland-v51").unwrap(), None);
+        assert_eq!(r.song_kit("a/mas.dtx", "roland-v51").unwrap(), Some(200));
     }
 
     #[test]

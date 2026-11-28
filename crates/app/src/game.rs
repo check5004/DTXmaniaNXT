@@ -1635,6 +1635,27 @@ impl Play {
         self.hit(lane, 100, (at_us, at_us), None, None);
     }
 
+    /// 開発用: キーボードで、電子ドラムと同じく強さのある打を送る（`DTXMANIANXT_KEY_VELOCITY=1`）。
+    /// `strong`（Shift を押している）なら 112、ほかは 64
+    pub fn on_dev_key(&mut self, lane: DrumLane, at_us: i64, strong: bool) {
+        let velocity = if strong { 112 } else { 64 };
+        self.last_input = Some(LastInput {
+            source: crate::inputs::keyboard().into(),
+            pad: None,
+            articulation: Some(Articulation::Head),
+            lane: Some(lane),
+            velocity,
+            hh_pedal: None,
+        });
+        self.hit(
+            lane,
+            velocity,
+            (at_us, at_us),
+            Some(Articulation::Head),
+            None,
+        );
+    }
+
     /// `at_us` は叩いた時刻と、アプリに届いた時刻（ホスト時刻）
     fn hit(
         &mut self,
@@ -2015,6 +2036,8 @@ impl Play {
                 lane: h.lane,
                 judgement: h.judgement,
                 offset_ms: h.offset_ms,
+                // キーボードは叩き方（アーティキュレーション）が無く、強さはいつも同じなので見ない
+                velocity: h.velocity.filter(|_| h.articulation.is_some()),
             })
             .collect();
         // 限界チャレンジで終えた段は、最後まで叩いていない段として数える（出来は 3 つ落とした × に決まる）

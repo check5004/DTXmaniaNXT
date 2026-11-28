@@ -24,8 +24,8 @@ use i18n::{count, t, tf};
 
 use crate::band::{Band, BandData};
 use crate::drill::{
-    self, DrillRecords, LEFT_COLOR, RIGHT_COLOR, category_name, hand_letter, lead_name,
-    pattern_line, way_name,
+    self, ACCENT_COLOR, DrillRecords, LEFT_COLOR, RIGHT_COLOR, category_name, hand_letter,
+    lead_name, pattern_line, way_name,
 };
 use crate::drill_hud::{DEMO_COLOR, Stairs, clock};
 use crate::gfx::{Canvas, Gfx};
@@ -39,7 +39,7 @@ const CATS: (f32, f32, f32, f32) = (40.0, 62.0, 226.0, 618.0);
 const LIST: (f32, f32, f32, f32) = (278.0, 62.0, 330.0, 618.0);
 const DETAIL: (f32, f32, f32, f32) = (620.0, 62.0, 620.0, 618.0);
 /// 分け方の行と、ドリルの行の高さ
-const CAT_H: f32 = 48.0;
+const CAT_H: f32 = 45.0;
 const ROW_H: f32 = 42.0;
 /// 真ん中の列の、ドリルの行が始まる所（板の上から）
 const LIST_TOP: f32 = 44.0;
@@ -1140,14 +1140,22 @@ impl DrillMenu {
         );
         // 手順の絵と、手の見方・型の説明
         draw_pattern(c, g, d, self.lefty, (x + 20.0, y + 56.0, w - 40.0, 136.0));
-        ui::text(
+        let key = if d.has_accents() {
+            t(
+                "R = right hand   L = left hand   > = accent",
+                "R = 右手　L = 左手　> = アクセント",
+            )
+        } else {
+            t("R = right hand   L = left hand", "R = 右手　L = 左手")
+        };
+        let key_w = ui::text(
             c,
             g,
-            t("R = right hand   L = left hand", "R = 右手　L = 左手"),
+            key,
             x + 20.0,
             y + 198.0,
             &plain(13.0, ui::MUTED),
-            200.0,
+            300.0,
         );
         ui::text_right(
             c,
@@ -1156,7 +1164,7 @@ impl DrillMenu {
             x + w - 20.0,
             y + 198.0,
             &plain(13.0, ui::MUTED),
-            w - 260.0,
+            w - 60.0 - key_w,
         );
         let rule = |c: &Canvas, ry: f32| {
             c.fill(x + 20.0, ry, w - 40.0, 1.0, Color32::from_white_alpha(40));
@@ -2053,6 +2061,19 @@ fn draw_pattern(
                 ui::round_frame(c, nx, ny, size, size, size * 0.22, 2.0, color);
             } else {
                 ui::round_fill(c, nx, ny, size, size, size * 0.22, color);
+            }
+            // アクセントは、楽譜と同じく音符の上に >
+            if n.accent {
+                let px = (ny - ry + 5.0).clamp(10.0, 15.0);
+                ui::text_center(
+                    c,
+                    g,
+                    ">",
+                    cx,
+                    ny - px - 1.0,
+                    &bold(px, ACCENT_COLOR),
+                    cell_w.max(12.0),
+                );
             }
             let (letter, hand_color) = match n.hand {
                 Hand::Right => ("R", RIGHT_COLOR),
