@@ -22,11 +22,12 @@ use crate::drill_hud::clock;
 use crate::gfx::{Canvas, Gfx, Opt, src};
 use crate::play_view::JUDGE_LINE_Y;
 use crate::practice::{
-    CLEAR_HOLD_MS, Cue, LapState, Practice, TIME_UP_HOLD_MS, mark_label, mark_line, part_label,
-    pass_line, section_label, wait_progress, way_label, wrong_pads,
+    CLEAR_HOLD_MS, Cue, LapState, PEEK_NOTE_MS, Practice, TIME_UP_HOLD_MS, hide_help_name,
+    mark_label, mark_line, part_label, pass_line, section_label, wait_progress, way_label,
+    wrong_pads,
 };
 use crate::text::Style;
-use engine::practice_way::{Mark, TOUR_LAPS, WAIT_LAPS, Way};
+use engine::practice_way::{Mark, PEEK_BARS, TOUR_LAPS, WAIT_LAPS, Way};
 
 /// 周と速度の数字の場所（上流のスコアと同じ高さ）
 pub(crate) const LAP_X: f32 = 40.0;
@@ -1013,14 +1014,34 @@ fn way_line(p: &Practice, now: f64) -> Option<(String, Color32)> {
                 _ => tf!("{name}: {state}", "{name}：{state}"),
             }
         }
-        Way::Fade => {
-            let i = p.current_lap(now).unwrap_or(0);
-            let share = p.fade_share_of(i).unwrap_or(1.0);
-            tf!(
-                "{name}: {:.0}% of the notes shown",
-                "{name}：見える音符 {:.0}%",
-                share * 100.0
-            )
+        Way::Hide => {
+            if p.peeked_at_ms
+                .is_some_and(|at| (0.0..PEEK_NOTE_MS).contains(&(now - at)))
+            {
+                return Some((
+                    tf!(
+                        "Missed in a row: the next {PEEK_BARS} measures show the notes",
+                        "続けてミスしたので、次の {PEEK_BARS} 小節は音符を出します"
+                    ),
+                    DEMO_COLOR,
+                ));
+            }
+            let hidden = p
+                .current_lap(now)
+                .and_then(|i| p.laps.get(i))
+                .is_some_and(|l| l.hidden);
+            if hidden {
+                tf!(
+                    "{name}: {} hidden",
+                    "{name}：{}を隠しています",
+                    hide_help_name(o.hide)
+                )
+            } else {
+                tf!(
+                    "{name}: watch this loop and learn it",
+                    "{name}：この周は見て覚えます"
+                )
+            }
         }
         Way::Tour | Way::Fills | Way::Seams => {
             tf!(
@@ -1556,11 +1577,11 @@ fn start_line(p: &Practice) -> Option<String> {
             "曲の音が 2 小節ずつ消えます",
         )
         .to_owned(),
-        Way::Fade => t(
-            "Notes thin out loop by loop",
-            "周ごとに音符が減っていきます",
-        )
-        .to_owned(),
+        Way::Hide => tf!(
+            "Learn it on loop 1. From loop 2, {} are hidden",
+            "1 周目で覚え、2 周目から{}を隠します",
+            hide_help_name(o.hide)
+        ),
         Way::Tour | Way::Fills | Way::Seams => {
             let n = count(p.stops().len(), "spot", "spots", "か所");
             tf!(

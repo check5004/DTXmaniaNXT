@@ -7,8 +7,9 @@
 use std::path::PathBuf;
 
 use dtx::{DrumLane, TempoMap};
-use engine::drill::{Category, Drill, Hand, MANY_MISSES, Run, Summary, Way};
+use engine::drill::{Category, Drill, Hand, MANY_MISSES, PatternNote, Run, Summary, Way};
 use engine::judge::Judgement;
+use engine::practice_way::{Blindfold, Hide};
 use i18n::{t, tf};
 
 /// 右手と左手の色（音符の横の文字、結果のずれ）
@@ -191,7 +192,12 @@ pub fn way_name(w: Way) -> String {
         Way::Climb => t("Speed Up", "テンポを上げる").to_owned(),
         Way::Limit => t("Limit Test", "限界チャレンジ").to_owned(),
         Way::Endurance(m) => tf!("Endurance {m} min", "持久 {m} 分"),
-        Way::Blind => t("Eyes Off", "見ないで").to_owned(),
+        Way::Blind(Hide::All) => t("Eyes Off", "見ないで").to_owned(),
+        Way::Blind(h) => tf!(
+            "Eyes Off: {}",
+            "見ないで（{}）",
+            crate::practice::hide_label(h)
+        ),
         Way::Echo => t("Call and Response", "聞いてまねる").to_owned(),
     }
 }
@@ -287,6 +293,12 @@ pub struct DrillPlay {
     misses: Vec<u32>,
     /// 限界チャレンジで終えた段と、その時刻（判定の時刻）
     pub stopped: Option<(usize, f64)>,
+    /// 見ないで・聞いてまねるで、隠した音符を続けてミスしたら次の小節から音符を出す
+    pub blindfold: Blindfold,
+    /// 聞いてまねるのお手本の音符（譜面の時刻と型の音符）。流して見せ、自動で鳴らす（判定しない）
+    pub demo: Vec<(f64, PatternNote)>,
+    /// 最後に音符を出すと決めた時刻（譜面の時刻。しばらく知らせる）
+    pub peeked_at_ms: Option<f64>,
 }
 
 /// これだけ叩かなかったら止める（ミリ秒）。1 小節より短いときは 1 小節
@@ -304,7 +316,7 @@ impl DrillPlay {
             .map(|p| p.is_some_and(|p| p.accent))
             .collect();
         let misses = vec![0; run.steps()];
-        Self {
+        let mut d = Self {
             run,
             measure_ms,
             hands,
@@ -313,33 +325,92 @@ impl DrillPlay {
             rest_sent: false,
             misses,
             stopped: None,
-        }
+            blindfold: Blindfold::default(),
+            demo: Vec::new(),
+            peeked_at_ms: None,
+        };
+        d.demo = d
+            .run
+            .demo_notes()
+            .into_iter()
+            .map(|(m, n)| {
+                let (from, to) = (d.measure_start_ms(m), d.measure_start_ms(m + 1));
+                (from + n.pos() * (to - from), n)
+            })
+            .collect();
+        d
     }
 
     /// お手本の音の時刻（譜面の時刻）とレーン。聞いてまねるだけ
     pub fn demo_hits(&self) -> Vec<(f64, DrumLane)> {
+        self.demo.iter().map(|&(ms, n)| (ms, n.lane)).collect()
+    }
+
+    /// 譜面の小節 `m` を隠すか（見ないでの 2 段目から、聞いてまねるの自分の小節。
+    /// 続けてミスして音符を出すと決めた小節は隠さない）
+    pub fn bar_hidden(&self, m: u32) -> bool {
         self.run
-            .demo_notes()
-            .into_iter()
-            .map(|(m, pos, lane)| {
-                let (from, to) = (self.measure_start_ms(m), self.measure_start_ms(m + 1));
-                (from + pos * (to - from), lane)
-            })
-            .collect()
+            .hidden_index(m)
+            .is_some_and(|i| !self.blindfold.shown(i))
     }
 
-    /// 譜面の小節 `m` の音符を、譜面の時刻 `now_ms` に描く濃さ。見ないでは段ごとに薄く、
-    /// 聞いてまねるはお手本を聞いている間は先の小節を出さない（自分の小節が始まってから出す）
-    pub fn note_alpha(&self, m: u32, now_ms: f64) -> f32 {
-        if self.run.way == Way::Echo && self.measure_at(now_ms) < m {
-            return 0.0;
+    /// 譜面の小節 `m` のレーン `lane` の音符を隠すか
+    pub fn hides(&self, m: u32, lane: DrumLane) -> bool {
+        self.run.hidden_lanes() & (1 << lane as u16) != 0 && self.bar_hidden(m)
+    }
+
+    /// 譜面の時刻 `from_ms` から `to_ms` までにある隠した小節の帯（隠すやり方でなければ None）
+    pub fn blind_view(&self, from_ms: f64, to_ms: f64) -> Option<crate::game::BlindView> {
+        let lanes = self.run.hidden_lanes();
+        let (all, label) = match self.run.way {
+            _ if lanes == 0 => return None,
+            Way::Echo => (true, t("Your Turn", "まねて叩く").to_owned()),
+            Way::Blind(h) => (h == Hide::All, crate::practice::hide_tag(h, lanes)),
+            _ => return None,
+        };
+        let last = self.measure_at(to_ms).min(self.run.measure_count());
+        let bars = (self.measure_at(from_ms)..=last)
+            .filter(|&m| self.bar_hidden(m))
+            .map(|m| (self.measure_start_ms(m), self.measure_start_ms(m + 1)))
+            .collect();
+        Some(crate::game::BlindView {
+            bars,
+            lanes,
+            all,
+            label,
+        })
+    }
+
+    /// まだ画面に入っていない最初の隠す小節の番号（[`Run::hidden_index`]）。`edge_ms` は画面の上の端の
+    /// 譜面の時刻。その時刻より後に始まる小節から探す
+    fn unseen_index(&self, edge_ms: f64) -> u32 {
+        let end = self.run.measure_count();
+        (self.measure_at(edge_ms) + 1..end)
+            .find_map(|m| self.run.hidden_index(m))
+            .unwrap_or(end)
+    }
+
+    /// 音符を判定した（自動で叩いた音符は呼ばない）。`edge_ms` は画面の上の端の譜面の時刻
+    /// （隠した音符を続けてミスしたら、そこより先の小節から音符を出す）。
+    /// 限界チャレンジで同じ段に 3 つ落としたら、そのときだけ true（そこで終える）
+    pub fn on_judged(
+        &mut self,
+        (measure, lane): (u32, DrumLane),
+        judgement: Judgement,
+        ms: f64,
+        edge_ms: f64,
+    ) -> bool {
+        let missed = matches!(judgement, Judgement::Poor | Judgement::Miss);
+        if missed
+            && self.hides(measure, lane)
+            && let Some(i) = self.run.hidden_index(measure)
+        {
+            let unseen = self.unseen_index(edge_ms);
+            if self.blindfold.miss(i, unseen) {
+                self.peeked_at_ms = Some(ms);
+                log::info!("drill: missed hidden bars in a row, showing from bar index {unseen}");
+            }
         }
-        self.run.note_alpha(m)
-    }
-
-    /// 音符を判定した（自動で叩いた音符は呼ばない）。限界チャレンジで同じ段に 3 つ落としたら、
-    /// そのときだけ true（そこで終える）
-    pub fn on_judged(&mut self, measure: u32, judgement: Judgement, ms: f64) -> bool {
         if self.run.way != Way::Limit
             || self.stopped.is_some()
             || !matches!(judgement, Judgement::Poor | Judgement::Miss)
@@ -525,6 +596,7 @@ impl DrillOutcome {
 mod tests {
     use super::*;
     use engine::drill::Way;
+    use engine::practice_way::Part;
 
     fn play(id: &str, target: u32, rise: u32) -> DrillPlay {
         let run = Run::new(Drill::find(id).unwrap(), target, rise);
@@ -592,21 +664,59 @@ mod tests {
     }
 
     #[test]
-    fn call_and_response_shows_your_bar_only_once_it_starts() {
+    fn call_and_response_shows_the_heard_bar_and_hides_your_bar() {
         let run = Run::with(Drill::find("eighth").unwrap(), Way::Echo, 120, 10, false);
         let chart = dtx::parse(&run.to_dtx("echo"));
         let tempo = TempoMap::build(&chart);
         let notes = tempo.drum_notes(&chart);
-        let p = DrillPlay::new(run, &tempo, &notes);
-        // 120 BPM で 1 小節 2 秒。小節 1 はお手本、小節 2 が自分
-        assert_eq!(p.note_alpha(2, 3000.0), 0.0);
-        assert_eq!(p.note_alpha(2, 4000.0), 1.0);
-        assert_eq!(p.note_alpha(2, 5000.0), 1.0);
-        // お手本の音は小節 1 と 3 に 8 つずつ
+        let mut p = DrillPlay::new(run, &tempo, &notes);
+        // 120 BPM で 1 小節 2 秒。小節 1 はお手本（隠さない）、小節 2 が自分（隠す）
+        assert!(!p.hides(1, DrumLane::SD));
+        assert!(p.hides(2, DrumLane::SD) && p.hides(4, DrumLane::SD));
+        // お手本の音は小節 1 と 3 に 8 つずつ。流して見せるので手順も持つ
         let heard = p.demo_hits();
         assert_eq!(heard.len(), 8 * 8);
         assert_eq!(heard[0], (2000.0, DrumLane::SD));
         assert_eq!(heard[8].0, 6000.0);
+        assert_eq!(p.demo[1].1.hand, Hand::Left);
+        // 自分の小節を 2 つ続けてミスしたら、画面に入っていない次の自分の小節から 2 つ出す
+        // （小節 4 のミスを判定したとき、画面の上の端が 13 秒なら小節 6 はもう見えている）
+        let sd = (2, DrumLane::SD);
+        assert!(!p.on_judged(sd, Judgement::Miss, 4000.0, 6000.0));
+        assert!(!p.on_judged((4, DrumLane::SD), Judgement::Miss, 8000.0, 13_000.0));
+        assert!(p.hides(6, DrumLane::SD));
+        assert!(!p.hides(8, DrumLane::SD) && !p.hides(10, DrumLane::SD));
+        assert!(p.hides(12, DrumLane::SD));
+        assert_eq!(p.blindfold.peeks(), 1);
+    }
+
+    #[test]
+    fn eyes_off_hides_from_the_second_step_and_shows_again_after_two_missed_bars() {
+        let run = Run::with(
+            Drill::find("eight_beat").unwrap(),
+            Way::Blind(Hide::Part(Part::Feet)),
+            120,
+            10,
+            false,
+        );
+        let chart = dtx::parse(&run.to_dtx("blind"));
+        let tempo = TempoMap::build(&chart);
+        let notes = tempo.drum_notes(&chart);
+        let mut p = DrillPlay::new(run, &tempo, &notes);
+        // 1 段目（小節 1〜4）は見せ、小節 5 からバスドラムだけ隠す
+        assert!(!p.hides(4, DrumLane::BD));
+        assert!(p.hides(5, DrumLane::BD) && !p.hides(5, DrumLane::HH));
+        // ミスは隠した音符だけ数える
+        assert!(!p.on_judged((5, DrumLane::HH), Judgement::Miss, 10_000.0, 13_000.0));
+        assert!(!p.on_judged((6, DrumLane::HH), Judgement::Miss, 12_000.0, 15_000.0));
+        assert_eq!(p.blindfold.peeks(), 0);
+        // 小節 5・6 のバスドラムを続けてミス。12.5 秒に判定したとき画面の上の端は 15.5 秒で、
+        // 小節 7（14〜16 秒）はもう見えているので、小節 8・9 から出す
+        p.on_judged((5, DrumLane::BD), Judgement::Poor, 10_500.0, 13_500.0);
+        p.on_judged((6, DrumLane::BD), Judgement::Miss, 12_500.0, 15_500.0);
+        assert!(p.hides(7, DrumLane::BD));
+        assert!(!p.hides(8, DrumLane::BD) && !p.hides(9, DrumLane::BD));
+        assert!(p.hides(10, DrumLane::BD));
     }
 
     #[test]

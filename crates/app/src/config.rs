@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use dtx::DrumLane;
 use engine::input::MidiProfile;
 use engine::practice::{LoopStyle, PassRule, STEP_LAPS, STEP_LAPS_CHOICES, SpeedPlan, snap_speed};
-use engine::practice_way::{Build, Part, Way};
+use engine::practice_way::{Build, Hide, Part, Way};
 use i18n::Lang;
 use serde::{Deserialize, Serialize};
 
@@ -70,6 +70,9 @@ pub struct Config {
     /// 積み上げの向き（[`engine::practice_way::Build::key`]。空なら前から）
     #[serde(skip_serializing_if = "String::is_empty")]
     pub practice_build: String,
+    /// 音符を隠すで隠す音符（[`engine::practice_way::Hide::key`]。空なら全部）
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub practice_hide: String,
     /// 基礎練習で最後に選んだドリル（[`engine::drill::Drill::id`]）
     #[serde(skip_serializing_if = "String::is_empty")]
     pub drill: String,
@@ -217,6 +220,7 @@ impl Default for Config {
             practice_way: String::new(),
             practice_part: String::new(),
             practice_build: String::new(),
+            practice_hide: String::new(),
             drill: String::new(),
             drill_rise: engine::drill::DEFAULT_RISE,
             drill_way: String::new(),
@@ -495,6 +499,7 @@ impl Config {
             way: Way::from_key(&self.practice_way).unwrap_or_default(),
             part: Part::from_key(&self.practice_part).unwrap_or_default(),
             build: Build::from_key(&self.practice_build).unwrap_or_default(),
+            hide: Hide::from_key(&self.practice_hide).unwrap_or_default(),
         }
     }
 
@@ -552,6 +557,7 @@ impl Config {
         self.practice_way = key(p.way.key(), Way::default().key());
         self.practice_part = key(p.part.key(), Part::default().key());
         self.practice_build = key(p.build.key(), Build::default().key());
+        self.practice_hide = key(p.hide.key(), Hide::default().key());
     }
 
     /// 練習の 1 段の周の数（選べる数のうち一番近いもの）
@@ -709,6 +715,7 @@ mod tests {
             way: Way::Part,
             part: Part::Toms,
             build: Build::Backward,
+            hide: Hide::Part(Part::Feet),
         };
         c.set_practice_prefs(p);
         assert_eq!(c.practice_prefs(), p);
