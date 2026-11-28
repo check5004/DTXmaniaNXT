@@ -1,15 +1,15 @@
-//! キットを選んだときに V51 で鳴らす試しのフレーズ。
+//! キットを選んだときに音源（V71・V51・V31）で鳴らす試しのフレーズ。
 //!
 //! 8 ビートを 1 小節（4 拍目の裏でハイハットを開ける）、タム回しを 1 小節、最後にクラッシュとキック。
 //! テンポは 120。ノート番号とチャンネルはそのキットの [KitMidi] から読む。
 //!
 //! ハイハットの開け閉めは、工場出荷の設定で Hi-Hat Pedal CC になっている CC 4 で伝える
-//! （V51 の MIDI Implementation の例 3）。終わったら Reset All Controllers を送り、受けたペダルの位置を
+//! （3 機種の MIDI Implementation の例 3）。終わったら Reset All Controllers を送り、受けたペダルの位置を
 //! 最初の 0 に戻す。
 
 use std::time::Duration;
 
-use drum_module::v51::{self, Field, Unit};
+use drum_module::vseries::{self, Field, Unit};
 
 /// テンポ（4 分音符の数 / 分）
 const BPM: u64 = 120;
@@ -117,8 +117,8 @@ fn source(drum: Drum) -> (Field, Unit) {
         Drum::Kick => (Unit::Kick.note_field(), Unit::Kick),
         Drum::Snare => (Unit::SnareHead.note_field(), Unit::SnareHead),
         Drum::HiHatOpen => (Unit::HiHatHead.note_field(), Unit::HiHatHead),
-        Drum::HiHatClosed => (v51::HH_CLOSE_NOTE, Unit::HiHatHead),
-        Drum::HiHatPedal => (v51::HH_PEDAL_NOTE, Unit::HiHatHead),
+        Drum::HiHatClosed => (vseries::HH_CLOSE_NOTE, Unit::HiHatHead),
+        Drum::HiHatPedal => (vseries::HH_PEDAL_NOTE, Unit::HiHatHead),
         Drum::Tom1 => (Unit::Tom1Head.note_field(), Unit::Tom1Head),
         Drum::Tom2 => (Unit::Tom2Head.note_field(), Unit::Tom2Head),
         Drum::Tom3 => (Unit::Tom3Head.note_field(), Unit::Tom3Head),
@@ -131,7 +131,7 @@ fn source(drum: Drum) -> (Field, Unit) {
 fn channel(midi: &[u8], unit: Unit) -> u8 {
     match unit.channel_field().read(midi) {
         Some(ch @ 0..=15) => ch as u8,
-        _ => v51::GLOBAL_CHANNEL_DEFAULT,
+        _ => vseries::GLOBAL_CHANNEL_DEFAULT,
     }
 }
 
@@ -162,7 +162,7 @@ pub fn events(midi: &[u8]) -> Vec<Event> {
         if let Some(v) = want
             && pedal != Some(v)
         {
-            out.push(control(at, v51::HH_PEDAL_CC, v));
+            out.push(control(at, vseries::HH_PEDAL_CC, v));
             pedal = Some(v);
         }
         if let Some((ch, note)) = pad(midi, h.drum) {
@@ -219,7 +219,7 @@ mod tests {
 
     /// 工場出荷に近いキット（チャンネルは全部 GLOBAL）
     fn kit_midi() -> Vec<u8> {
-        let mut midi = vec![0u8; v51::kit_midi(1).size as usize];
+        let mut midi = vec![0u8; vseries::kit_midi(1).size as usize];
         let mut set = |field: Field, note: i32| {
             let at = field.offset as usize;
             midi[at..at + 4].copy_from_slice(&field.encode(note));
@@ -227,15 +227,15 @@ mod tests {
         set(Unit::Kick.note_field(), 36);
         set(Unit::SnareHead.note_field(), 38);
         set(Unit::HiHatHead.note_field(), 46);
-        set(v51::HH_CLOSE_NOTE, 42);
-        set(v51::HH_PEDAL_NOTE, 44);
+        set(vseries::HH_CLOSE_NOTE, 42);
+        set(vseries::HH_PEDAL_NOTE, 44);
         set(Unit::Tom1Head.note_field(), 48);
         set(Unit::Tom2Head.note_field(), 45);
         set(Unit::Tom3Head.note_field(), 43);
-        set(Unit::Tom4Head.note_field(), v51::NOTE_OFF);
+        set(Unit::Tom4Head.note_field(), vseries::NOTE_OFF);
         set(Unit::Crash1Head.note_field(), 49);
         for u in Unit::ALL {
-            midi[u.channel_field().offset as usize] = v51::CHANNEL_GLOBAL as u8;
+            midi[u.channel_field().offset as usize] = vseries::CHANNEL_GLOBAL as u8;
         }
         midi
     }

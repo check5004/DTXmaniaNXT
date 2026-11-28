@@ -1,6 +1,6 @@
 [package]
 name = "drum_module"
-description = "Talking to electronic drum sound modules (Roland V51) over MIDI for DTXmaniaNXT"
+description = "Talking to electronic drum sound modules (Roland V71/V51/V31) over MIDI for DTXmaniaNXT"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

@@ -300,7 +300,7 @@ pub enum ItemId {
     Seek,
     /// この曲の補正（ミリ秒。入力の補正（全体）に足す）
     SongOffset,
-    /// この曲で V51 を切り替えるキット（0 は決めない、1〜200 はキットの番号）
+    /// この曲で音源を切り替えるキット（0 は決めない、1〜200 はキットの番号）
     SongKit,
     /// 補正をおすすめの値にする（全体とこの曲）
     ApplyAdvice,
@@ -986,19 +986,19 @@ pub struct ConfigInfo<'a> {
     pub monitors: &'a [MonitorInfo],
     /// 他の DTXMania からの引き継ぎ（設定の画面だけ）
     pub import: Option<ImportInfo<'a>>,
-    /// 曲ごとの V51 のキット（簡易設定だけ。V51 を使っていなければ None）
+    /// 曲ごとの音源のキット（簡易設定だけ。対応している音源をつないでいなければ None）
     pub kit: Option<KitInfo>,
 }
 
-/// 曲ごとの V51 のキット（簡易設定の行に出すもの）
+/// 曲ごとの音源のキット（簡易設定の行に出すもの）
 #[derive(Debug, Clone, PartialEq)]
 pub struct KitInfo {
+    /// つないでいる音源の機種の名前（`V51`）
+    pub model: String,
     /// この曲に決めているキット（0 は決めていない）
     pub at: u16,
     /// 選択肢（0 は「決めない」、1〜200 はキットの番号と名前）
     pub labels: Vec<String>,
-    /// V51 が見つからない（覚えている名前で選べるが、切り替えはつないだときだけ）
-    pub missing: bool,
 }
 
 /// 他の DTXMania からの引き継ぎ（設定の画面に出すもの）
@@ -1147,24 +1147,17 @@ fn add_timing_rows(rows: &mut Vec<Row>, t: &TimingInfo, global_ms: i64) {
     rows.splice(i + 1..i + 1, add);
 }
 
-/// この曲の V51 のキットの行。選んでいるあいだは V51 もそのキットにする
+/// この曲の音源のキットの行（項目名と説明はつないでいる機種の名前）。選んでいるあいだは音源もそのキットにする
 fn kit_row(k: &KitInfo) -> Row {
     let at = usize::from(k.at).min(k.labels.len().saturating_sub(1));
-    let desc = if k.missing {
-        t(
-            "The V51 isn't connected. The kit you choose is kept and used when this song starts with the V51 connected.",
-            "V51 がつながっていません。選んだキットは残し、V51 をつないでこの曲を始めると切り替えます。",
-        )
-    } else {
-        t(
-            "Switches the V51 to this kit when this song starts, and back when you return to song select. The V51 changes as you choose and plays a short beat with a tom fill.",
-            "この曲を始めるときに V51 をこのキットにし、選曲に戻ると前のキットに戻します。選ぶと V51 も切り替わり、8 ビートとタム回しを鳴らします。",
-        )
-    }
-    .to_owned();
+    let m = &k.model;
+    let desc = i18n::tf!(
+        "Switches the {m} to this kit when this song starts, and back when you return to song select. The {m} changes as you choose and plays a short beat with a tom fill.",
+        "この曲を始めるときに {m} をこのキットにし、選曲に戻ると前のキットに戻します。選ぶと {m} も切り替わり、8 ビートとタム回しを鳴らします。"
+    );
     row(
         ItemId::SongKit,
-        t("V51 Kit", "V51 のキット"),
+        &i18n::tf!("{m} Kit", "{m} のキット"),
         k.labels.get(at).cloned().unwrap_or_default(),
         desc,
         Ctl::Choice {
@@ -2623,7 +2616,7 @@ impl ConfigView {
             return Response::default();
         };
         let number = matches!(r.ctl, Ctl::Number { .. });
-        // 長い選択肢（V51 のキットなど）は、左右で 10 ずつ
+        // 長い選択肢（音源のキットなど）は、左右で 10 ずつ
         let jump = if long_choice(r) { 10 } else { 1 };
         let d = match input {
             ConfigInput::Decide => {
@@ -3451,7 +3444,7 @@ fn draw_row(c: &Canvas, g: &mut Gfx, r: &Row, x: f32, y: f32, w: f32, sel: bool)
             } else {
                 Color32::from_white_alpha(70)
             };
-            // 選択肢の点は、並べきれる数のときだけ（V51 のキットのような長い選択肢は出さない）
+            // 選択肢の点は、並べきれる数のときだけ（音源のキットのような長い選択肢は出さない）
             let options = r.options().filter(|_| !long_choice(r));
             let volume = match r.ctl {
                 Ctl::Number {
@@ -4860,16 +4853,16 @@ mod tests {
 
     fn kit_info(at: u16) -> KitInfo {
         KitInfo {
+            model: "V31".to_owned(),
             at,
             labels: std::iter::once("決めない".to_owned())
                 .chain((1..=200).map(|k| format!("{k} Kit")))
                 .collect(),
-            missing: false,
         }
     }
 
     #[test]
-    fn the_kit_row_shows_only_with_a_v51() {
+    fn the_kit_row_shows_only_with_a_module() {
         let _ja = i18n::scoped(i18n::Lang::Ja);
         let c = Config::default();
         let list = rows(Page::Quick, &info(&c));
@@ -4883,7 +4876,9 @@ mod tests {
         // 曲の行（区間練習・記録）のすぐ下
         assert_eq!(list[i - 1].id, Some(ItemId::SongRecords));
         assert_eq!(list[i].value, "12 Kit");
-        assert!(list[i].desc.contains("タム回しを鳴らします"));
+        // 項目名と説明はつないでいる機種の名前
+        assert_eq!(list[i].name, "V31 のキット");
+        assert!(list[i].desc.contains("選ぶと V31 も切り替わり"));
         // 曲を選んでいなければ出さない（BOX など）
         let no_song = ConfigInfo {
             song: false,

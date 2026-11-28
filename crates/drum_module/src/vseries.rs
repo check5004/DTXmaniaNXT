@@ -1,25 +1,78 @@
-//! Roland V51 の番地表のうち、このアプリが使う所。
+//! Roland V71・V51・V31 の番地表のうち、このアプリが使う所（3 機種で同じ）。
 //!
-//! 元は「V51 MIDI Implementation」（Version 2.00）の「3. Parameter Address Map」。
-//! V51 は RQ1 で求める範囲を塊ごとに決めている（「決まった開始番地と大きさで求めること」）ので、
+//! 元は 3 機種の「MIDI Implementation」（V71 は Version 1.12、V51・V31 は Version 2.00）の
+//! 「3. Parameter Address Map」。見比べて、次が 3 機種で同じことを確かめた。
+//!
+//! - SysEx の Model ID（`01 06 01`）と、Identity Reply の Device family code（`01 06`）
+//! - Current・Kit 1〜200 の番地と、KitCommon・KitMidi・KitUnitCommon・KitUnitLayer の中の並びと大きさ
+//!
+//! 違うのは Identity Reply の Device family number code（[`Model::number`]）と、つなげるパッドの数
+//! （V31 の AUX は 1 つ。番地表の AUX2〜4 はどの機種にもある）。音色の一覧は見比べていない。
+//!
+//! 本体は RQ1 で求める範囲を塊ごとに決めている（「決まった開始番地と大きさで求めること」）ので、
 //! 読むときは [`Block`] ごとに求め、その中から値を取り出す。書くときは値の番地だけ DT1 で送ってよい。
 
 use crate::nibble;
 use crate::roland::{Address, Identity, ROLAND_ID, off};
 
-/// V51 の Model ID
+/// 3 機種で同じ Model ID
 pub const MODEL_ID: [u8; 3] = [0x01, 0x06, 0x01];
-/// Identity Reply のファミリーとその中の番号
+/// Identity Reply の Device family code（3 機種で同じ）
 pub const FAMILY: [u8; 2] = [0x01, 0x06];
-pub const NUMBER: [u8; 2] = [0x02, 0x00];
 /// 本体の設定を変えていなければこの Device ID（17）
 pub const DEFAULT_DEVICE_ID: u8 = 0x10;
-/// キットの数
+/// キットの数（3 機種で同じ）
 pub const KIT_COUNT: u16 = 200;
 
-/// Identity Reply が V51 のものか
-pub fn is_v51(id: &Identity) -> bool {
-    id.manufacturer == ROLAND_ID && id.family == FAMILY && id.number == NUMBER
+/// 機種。違いは名前と Identity の番号だけで、番地表は同じ
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Model {
+    /// 画面と記録に出す名前（`V51`）
+    pub name: &'static str,
+    /// 曲ごとのキットなどを記録に残すときの名前（`roland-v51`）
+    pub key: &'static str,
+    /// Identity Reply の Device family number code
+    pub number: [u8; 2],
+}
+
+pub const V71: Model = Model {
+    name: "V71",
+    key: "roland-v71",
+    number: [0x01, 0x00],
+};
+pub const V51: Model = Model {
+    name: "V51",
+    key: "roland-v51",
+    number: [0x02, 0x00],
+};
+pub const V31: Model = Model {
+    name: "V31",
+    key: "roland-v31",
+    number: [0x03, 0x00],
+};
+/// 対応している機種
+pub const MODELS: [Model; 3] = [V71, V51, V31];
+
+/// Identity Reply の機種（対応していなければ None）
+pub fn model(id: &Identity) -> Option<Model> {
+    (id.manufacturer == ROLAND_ID && id.family == FAMILY)
+        .then(|| MODELS.into_iter().find(|m| m.number == id.number))
+        .flatten()
+}
+
+/// MIDI のポートの名前から、その機種らしいか（`V51 Generic Mode` など）
+pub fn model_named(port: &str) -> Option<Model> {
+    let port = port.to_ascii_lowercase();
+    MODELS
+        .into_iter()
+        .find(|m| port.contains(&m.name.to_ascii_lowercase()))
+}
+
+/// 名前から機種（記録に残した名前を読むとき）
+pub fn model_by_name(name: &str) -> Option<Model> {
+    MODELS
+        .into_iter()
+        .find(|m| m.name.eq_ignore_ascii_case(name))
 }
 
 /// RQ1 で一度に求める塊（開始番地と大きさ）
@@ -508,18 +561,60 @@ mod tests {
     }
 
     #[test]
-    fn identifies_the_v51() {
+    fn identifies_the_models() {
         let id = Identity {
             device: 0x10,
             manufacturer: ROLAND_ID,
             family: FAMILY,
-            number: NUMBER,
+            number: [0x02, 0x00],
             revision: [0, 2, 0, 0],
         };
-        assert!(is_v51(&id));
-        assert!(!is_v51(&Identity {
-            number: [0x01, 0x00],
-            ..id
-        }));
+        assert_eq!(model(&id), Some(V51));
+        // MIDI Implementation の Identity Reply: V71 は 01 00、V31 は 03 00
+        assert_eq!(
+            model(&Identity {
+                number: [0x01, 0x00],
+                ..id
+            }),
+            Some(V71)
+        );
+        assert_eq!(
+            model(&Identity {
+                number: [0x03, 0x00],
+                ..id
+            }),
+            Some(V31)
+        );
+        assert_eq!(
+            model(&Identity {
+                number: [0x04, 0x00],
+                ..id
+            }),
+            None
+        );
+        assert_eq!(
+            model(&Identity {
+                family: [0x01, 0x05],
+                ..id
+            }),
+            None
+        );
+        assert_eq!(
+            model(&Identity {
+                manufacturer: 0x43,
+                ..id
+            }),
+            None
+        );
+    }
+
+    #[test]
+    fn models_by_port_name() {
+        assert_eq!(model_named("V51 Generic Mode"), Some(V51));
+        assert_eq!(model_named("MIDIIN2 (V71)"), Some(V71));
+        assert_eq!(model_named("v31"), Some(V31));
+        assert_eq!(model_named("FGDP-30"), None);
+        assert_eq!(model_by_name("v51"), Some(V51));
+        assert_eq!(model_by_name(""), None);
     }
 }

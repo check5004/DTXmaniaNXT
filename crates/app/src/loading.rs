@@ -40,8 +40,8 @@ pub struct Loading {
     job: Option<Job<Play>>,
     /// 読み終えた曲
     pub play: Option<Box<Play>>,
-    /// この曲のために切り替えている V51 のキット（番号と名前）
-    pub kit: Option<String>,
+    /// この曲のために切り替えている音源のキット（機種の名前と、キットの番号と名前）
+    pub kit: Option<(String, String)>,
 }
 
 impl Loading {
@@ -97,8 +97,8 @@ impl Loading {
         if let Some(t) = g.texts.get(&self.head.artist, &edge(30.0)) {
             t.draw_fit(c, TEXT_X, 360.0, 625.0);
         }
-        if let Some(kit) = &self.kit {
-            self.draw_kit(c, g, kit);
+        if let Some((model, kit)) = &self.kit {
+            self.draw_kit(c, g, model, kit);
         }
         // ドラムのパートのパネル（6_Part.png の 1 段目）と難易度のパネル
         if let Some(t) = g.skin.tex("Graphics/6_Part.png") {
@@ -120,8 +120,8 @@ impl Loading {
         }
     }
 
-    /// V51 のキットを切り替えていること（曲名とアーティストの下。橙の点を点滅させる）
-    fn draw_kit(&self, c: &Canvas, g: &mut Gfx, kit: &str) {
+    /// 音源のキットを切り替えていること（曲名とアーティストの下。橙の点を点滅させる）
+    fn draw_kit(&self, c: &Canvas, g: &mut Gfx, model: &str, kit: &str) {
         const Y: f32 = 430.0;
         let on = (self.started.elapsed().as_millis() / 250).is_multiple_of(2);
         let dot = if on {
@@ -131,10 +131,11 @@ impl Loading {
         };
         crate::settings_ui::round_fill(c, TEXT_X, Y + 8.0, 12.0, 12.0, 6.0, dot);
         let line = Style::edged(22.0, Color32::WHITE, Color32::BLACK, 2.0);
-        if let Some(t) = g.texts.get(
-            t("Switching the V51 kit", "V51 のキットを切り替えています"),
-            &line,
-        ) {
+        let title = i18n::tf!(
+            "Switching the {model} kit",
+            "{model} のキットを切り替えています"
+        );
+        if let Some(t) = g.texts.get(&title, &line) {
             t.draw_fit(c, TEXT_X + 22.0, Y, 600.0);
         }
         let name = Style::edged(18.0, Color32::from_rgb(189, 182, 210), Color32::BLACK, 2.0);

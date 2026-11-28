@@ -1,15 +1,18 @@
-//! 曲ごとの音源のキット（今は Roland V51 だけ）。
+//! 曲ごとの音源のキット（Roland V71・V51・V31。番地表は 3 機種で同じ）。
 //!
-//! - 曲を始めるとき（読み込みの画面）に、その曲に決めたキットへ V51 を切り替える
+//! - 曲を始めるとき（読み込みの画面）に、その曲に決めたキットへ音源を切り替える
 //! - 選曲に戻るとき・アプリを終えるときに、切り替える前のキットに戻す。書き戻しの記録
 //!   （[`crate::module_link`]）を使うので、落ちても次に起動したときに戻る
-//! - キットを選んでいるあいだは、選んでいるキットに V51 を切り替え、鳴る音が変わったころに
-//!   試しのフレーズ（[`crate::kit_phrase`]）を V51 で鳴らす。次を選ぶと途中でやめる
-//! - キットの名前は V51 から読み、設定のフォルダの `v51_kits.toml` に覚えておく
+//! - キットを選んでいるあいだは、選んでいるキットに音源を切り替え、鳴る音が変わったころに
+//!   試しのフレーズ（[`crate::kit_phrase`]）を音源で鳴らす。次を選ぶと途中でやめる
+//! - キットの名前は音源から読み、設定のフォルダの `v51_kits.toml` など（機種ごと）に覚えておく
+//! - 曲ごとのキットは機種ごとに残す（V71 のキット 12 と V51 のキット 12 は別の音なので）
+//! - 機種の名前の MIDI ポートがあり、Identity Request に返事をした機種を「つないでいる」とする。
+//!   つないでいなければ、画面には曲ごとのキットを出さない
 //!
-//! V51 とのやり取りはこのスレッド 1 本で順に行い、画面のスレッドは待たない。V51 とのつながりは
+//! 音源とのやり取りはこのスレッド 1 本で順に行い、画面のスレッドは待たない。音源とのつながりは
 //! 用があるときだけ開き、しばらく用が無ければ閉じる（測る道具と取り合わないように）。
-//! 測定（2026-11-28、issue #113）: キットを書いてから鳴る音が変わるまで 0.2〜0.5 秒より長い、RQ1 の往復は 72 ms。
+//! 測定（V51、2026-11-28、issue #113）: キットを書いてから鳴る音が変わるまで 0.2〜0.5 秒より長い、RQ1 の往復は 72 ms。
 
 use std::collections::VecDeque;
 use std::fs;
@@ -20,25 +23,23 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow};
-use drum_module::v51;
+use drum_module::vseries::{self, Model};
 use midir::MidiOutput;
 use serde::{Deserialize, Serialize};
 
 use crate::config::Config;
 use crate::kit_phrase;
 use crate::midi;
-use crate::module_link::{Restored, V51, looks_like_v51};
+use crate::module_link::{ModuleLink, Restored, port_model};
 use crate::time::host_us;
 
-/// 曲ごとのキットを記録に残すときの音源の名前
-pub const MODULE: &str = "roland-v51";
 /// キットを書いてから、鳴る音が変わりきるまで待つ時間（測定では 0.5 秒でもまだ小さく鳴った）
 pub const SETTLE: Duration = Duration::from_millis(1000);
-/// 読み込みの画面で、キットの切り替えを待つ長さの上限（V51 の返事が遅いときなど）
+/// 読み込みの画面で、キットの切り替えを待つ長さの上限（音源の返事が遅いときなど）
 pub const MAX_WAIT: Duration = Duration::from_millis(3000);
 /// 選んでいるあいだ、選ぶのが止まってから切り替えるまで（送るたびに切り替えないように）
 const AUDITION_DELAY: Duration = Duration::from_millis(350);
-/// 用が無くなってから V51 とのつながりを閉じるまで
+/// 用が無くなってから音源とのつながりを閉じるまで
 const LINK_IDLE: Duration = Duration::from_secs(2);
 /// 起動してからキットの名前を読み始めるまで（起動したときの書き戻しのあと）
 const NAMES_DELAY: Duration = Duration::from_secs(5);
@@ -49,19 +50,19 @@ const REASON: &str = "kit for a song";
 /// フレーズの音がこれより近づいたら、受け取りを待たずに眠って時刻どおりに送る
 /// （`recv_timeout` は Windows では 15 ms ほど遅れることがある）
 const EXACT: Duration = Duration::from_millis(20);
-/// 送ったノートが V51 から返ってくる（Soft Thru が ON のとき）とみなす長さ
+/// 送ったノートが音源から返ってくる（Soft Thru が ON のとき）とみなす長さ
 const ECHO_WINDOW_US: i64 = 80_000;
 
 /// 今の様子（画面のスレッドが読む）
 #[derive(Debug, Clone, Default)]
 pub struct State {
-    /// 最後に探したとき V51 が見つかったか（まだ探していなければ None）
-    pub found: Option<bool>,
-    /// キットの名前（キット 1〜200 の順。読めていなければ空の文字）
+    /// つないでいる音源の機種（Identity で確かめたもの。つないでいなければ None）
+    pub model: Option<Model>,
+    /// その機種のキットの名前（キット 1〜200 の順。読めていなければ空の文字）
     pub names: Vec<String>,
     /// 名前を読んでいるところなら、読み終えた数
     pub reading: Option<u16>,
-    /// V51 が今鳴らしているキット（このアプリが知っている範囲で）
+    /// 音源が今鳴らしているキット（このアプリが知っている範囲で）
     pub now: Option<u16>,
     /// 切り替えを送った時刻（鳴る音が変わるまで待つのに使う）
     pub switched_at: Option<Instant>,
@@ -84,9 +85,9 @@ impl State {
         !self.busy && self.switched_at.is_none_or(|t| t.elapsed() >= SETTLE)
     }
 
-    /// 曲ごとのキットを選べる（V51 が見つかったか、前に見つけて名前を覚えている）
-    pub fn available(&self) -> bool {
-        self.found == Some(true) || self.names.iter().any(|n| !n.is_empty())
+    /// 名前を全部読んだか
+    fn complete(&self) -> bool {
+        self.names.len() == usize::from(vseries::KIT_COUNT)
     }
 }
 
@@ -96,8 +97,11 @@ enum Cmd {
     /// 選んでいるキットにする（None なら前のキットに戻す）。選ぶのが止まってから。
     /// `play` なら、鳴る音が変わったころに試しのフレーズを鳴らす
     Audition { kit: Option<u16>, play: bool },
-    /// キットの名前を読む
-    ReadNames,
+    /// 機種の名前のポートがある。音源を確かめ（ほかの機種とつないでいたら、つなぎ直す）、
+    /// 読めていないキットの名前を読む
+    Detect(Model),
+    /// 機種の名前のポートが無くなった
+    Gone,
     /// 演奏しているあいだは名前を読まない
     Quiet(bool),
 }
@@ -113,23 +117,20 @@ pub struct Kits {
 }
 
 impl Kits {
-    /// スレッドを始める。V51 らしい MIDI のポートがあれば、少しあとでキットの名前を読む
+    /// スレッドを始める。機種の名前の MIDI のポートがあれば、少しあとで音源を確かめてキットの名前を読む
     pub fn start() -> Self {
-        let state = Arc::new(Mutex::new(State {
-            names: load_names(),
-            ..State::default()
-        }));
+        let state = Arc::new(Mutex::new(State::default()));
         let (tx, rx) = channel();
         let (done_tx, done) = channel();
-        let names_at = v51_port_present().then(|| Instant::now() + NAMES_DELAY);
+        let names_at = supported_port().map(|_| Instant::now() + NAMES_DELAY);
         let shared = state.clone();
         let worker = std::thread::Builder::new()
-            .name("v51-kits".into())
+            .name("module-kits".into())
             .spawn(move || {
                 Worker::new(shared, names_at).run(&rx);
                 let _ = done_tx.send(());
             })
-            .map_err(|e| log::warn!("V51 kits thread: {e}"))
+            .map_err(|e| log::warn!("drum module kits thread: {e}"))
             .ok();
         Self {
             tx: worker.is_some().then_some(tx),
@@ -143,6 +144,11 @@ impl Kits {
     /// 今の様子
     pub fn state(&self) -> MutexGuard<'_, State> {
         self.state.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// つないでいる音源の機種（つないでいなければ None。曲ごとのキットを出さない）
+    pub fn model(&self) -> Option<Model> {
+        self.state().model
     }
 
     fn send(&self, cmd: Cmd) {
@@ -179,22 +185,30 @@ impl Kits {
         });
     }
 
-    /// V51 がまだ見つかっていないか、名前を読み終えていなければ、V51 らしいポートがあるときだけ読み直す
-    /// （起動したあとで V51 をつないだとき。簡易設定を開いたときに呼ぶ）
+    /// つないでいる音源を確かめ直す（簡易設定を開いたとき・MIDI の機器が変わったときに呼ぶ）。
+    /// 機種の名前のポートが無ければ、すぐにつないでいないことにする。あれば、まだ確かめていないか、
+    /// 機種が変わったか、名前を読み終えていなければ確かめに行く
     pub fn check(&self) {
+        let port = supported_port();
         {
-            let st = self.state();
-            let complete = st.found == Some(true) && st.names.len() == usize::from(v51::KIT_COUNT);
-            if complete || st.reading.is_some() {
-                return;
+            let mut st = self.state();
+            match port {
+                None if st.model.is_none() => return,
+                None => {
+                    st.model = None;
+                    st.names.clear();
+                }
+                Some(m) => {
+                    if (st.model == Some(m) && st.complete()) || st.reading.is_some() {
+                        return;
+                    }
+                }
             }
         }
-        if v51_port_present() {
-            self.send(Cmd::ReadNames);
-        }
+        self.send(port.map_or(Cmd::Gone, Cmd::Detect));
     }
 
-    /// 演奏しているあいだは V51 に名前を聞かない（変わったときだけ送る）
+    /// 演奏しているあいだは音源に名前を聞かない（変わったときだけ送る）
     pub fn set_quiet(&mut self, on: bool) {
         if self.quiet != on {
             self.quiet = on;
@@ -259,8 +273,8 @@ impl Playing {
 
 struct Worker {
     state: Arc<Mutex<State>>,
-    link: Option<V51>,
-    /// 最後に V51 とやり取りした時刻
+    link: Option<ModuleLink>,
+    /// 最後に音源とやり取りした時刻
     used: Instant,
     want: Option<Want>,
     /// これから名前を読むキット
@@ -269,6 +283,8 @@ struct Worker {
     names_at: Option<Instant>,
     quiet: bool,
     playing: Option<Playing>,
+    /// 見つからなかったことをログに書いた（続けて書かない）
+    missing_logged: bool,
 }
 
 impl Worker {
@@ -282,6 +298,7 @@ impl Worker {
             names_at,
             quiet: false,
             playing: None,
+            missing_logged: false,
         }
     }
 
@@ -336,7 +353,16 @@ impl Worker {
                     play,
                 });
             }
-            Cmd::ReadNames => self.queue_names(),
+            Cmd::Detect(port) => self.detect(port),
+            Cmd::Gone => {
+                self.stop_phrase();
+                self.link = None;
+                self.names.clear();
+                let mut st = self.state();
+                st.model = None;
+                st.names.clear();
+                st.reading = None;
+            }
             Cmd::Quiet(on) => {
                 self.quiet = on;
                 if on {
@@ -403,25 +429,44 @@ impl Worker {
     }
 
     fn queue_names(&mut self) {
-        self.names = (1..=v51::KIT_COUNT).collect();
+        self.names = (1..=vseries::KIT_COUNT).collect();
         self.state().reading = Some(0);
     }
 
-    /// V51 とのつながり（無ければ探す）。見つからなければ None
-    fn link(&mut self) -> Option<&mut V51> {
+    /// 機種 `port` の名前のポートがある。つないでいる機種が違えばつなぎ直し、名前を読めていなければ読む
+    fn detect(&mut self, port: Model) {
+        if self.link.as_ref().is_some_and(|l| l.model != port) {
+            self.link = None;
+        }
+        if self.link().is_some() && !self.state().complete() {
+            self.queue_names();
+        }
+    }
+
+    /// 音源とのつながり（無ければ探す）。見つからなければ None。
+    /// 見つけた機種が前と違えば、その機種の覚えている名前にする
+    fn link(&mut self) -> Option<&mut ModuleLink> {
         if self.link.is_none() {
             let mut notes = Vec::new();
-            match V51::find(&mut |s| notes.push(s)) {
+            match ModuleLink::find(&mut |s| notes.push(s)) {
                 Ok(l) => {
-                    self.state().found = Some(true);
+                    let mut st = self.state();
+                    if st.model != Some(l.model) {
+                        st.names = load_names(l.model);
+                        st.model = Some(l.model);
+                    }
+                    drop(st);
+                    self.missing_logged = false;
                     self.link = Some(l);
                 }
                 Err(e) => {
-                    let mut st = self.state();
-                    if st.found != Some(false) {
-                        log::info!("V51 kits: {e:#} {}", notes.join("; "));
+                    if !self.missing_logged {
+                        log::info!("drum module kits: {e:#} {}", notes.join("; "));
+                        self.missing_logged = true;
                     }
-                    st.found = Some(false);
+                    let mut st = self.state();
+                    st.model = None;
+                    st.names.clear();
                     return None;
                 }
             }
@@ -432,7 +477,7 @@ impl Worker {
 
     /// やり取りに失敗した。つながりを閉じ、名前を読むのもフレーズもやめる
     fn lost(&mut self, e: &anyhow::Error) {
-        log::warn!("V51 kits: {e:#}");
+        log::warn!("drum module kits: {e:#}");
         self.link = None;
         self.names.clear();
         self.playing = None;
@@ -482,7 +527,7 @@ impl Worker {
         let Some(link) = self.link() else {
             return;
         };
-        match link.read(v51::kit_midi(kit)) {
+        match link.read(vseries::kit_midi(kit)) {
             Ok(midi) => {
                 self.playing = Some(Playing {
                     start,
@@ -548,24 +593,26 @@ impl Worker {
             self.state().reading = None;
             return;
         };
-        match link.read(v51::kit_common(kit)) {
+        let model = link.model;
+        match link.read(vseries::kit_common(kit)) {
             Ok(data) => {
-                let name = v51::kit_name(&data).unwrap_or_default();
+                let name = vseries::kit_name(&data).unwrap_or_default();
                 let done = self.names.is_empty();
                 let mut st = self.state();
                 let i = usize::from(kit - 1);
-                if st.names.len() < usize::from(v51::KIT_COUNT) {
-                    st.names.resize(usize::from(v51::KIT_COUNT), String::new());
+                if st.names.len() < usize::from(vseries::KIT_COUNT) {
+                    st.names
+                        .resize(usize::from(vseries::KIT_COUNT), String::new());
                 }
                 st.names[i] = name;
                 st.reading = (!done).then_some(kit);
                 if done {
                     let names = st.names.clone();
                     drop(st);
-                    if let Err(e) = save_names(&names) {
-                        log::warn!("V51 kit names: {e:#}");
+                    if let Err(e) = save_names(model, &names) {
+                        log::warn!("{} kit names: {e:#}", model.name);
                     }
-                    log::info!("V51: read {} kit names", names.len());
+                    log::info!("{}: read {} kit names", model.name, names.len());
                 }
             }
             Err(e) => self.lost(&e),
@@ -573,12 +620,12 @@ impl Worker {
     }
 }
 
-/// キットを切り替えるのに使う、V51 とのやり取り（テストでは作りものの V51 にする）
+/// キットを切り替えるのに使う、音源とのやり取り（テストでは作りものの音源にする）
 trait Link {
-    fn read(&mut self, block: v51::Block) -> Result<Vec<u8>>;
+    fn read(&mut self, block: vseries::Block) -> Result<Vec<u8>>;
     fn remember(
         &mut self,
-        block: v51::Block,
+        block: vseries::Block,
         data: &[u8],
         offset: u32,
         len: usize,
@@ -589,46 +636,52 @@ trait Link {
     fn restore(&mut self) -> Result<Restored>;
 }
 
-impl Link for V51 {
-    fn read(&mut self, block: v51::Block) -> Result<Vec<u8>> {
-        V51::read(self, block)
+impl Link for ModuleLink {
+    fn read(&mut self, block: vseries::Block) -> Result<Vec<u8>> {
+        ModuleLink::read(self, block)
     }
     fn remember(
         &mut self,
-        block: v51::Block,
+        block: vseries::Block,
         data: &[u8],
         offset: u32,
         len: usize,
         reason: &str,
     ) -> Result<()> {
-        V51::remember(self, block, data, offset, len, reason)
+        ModuleLink::remember(self, block, data, offset, len, reason)
     }
     fn write(&mut self, addr: drum_module::roland::Address, data: &[u8]) -> Result<()> {
-        V51::write(self, addr, data)
+        ModuleLink::write(self, addr, data)
     }
     fn pending(&self) -> usize {
-        V51::pending(self)
+        ModuleLink::pending(self)
     }
     fn restore(&mut self) -> Result<Restored> {
-        V51::restore(self)
+        ModuleLink::restore(self)
     }
 }
 
 /// キットを `kit` にする。前の値を書き戻しの記録に残してから書く。書いたら true（もうそのキットなら false）
 fn switch_to(link: &mut impl Link, kit: u16) -> Result<bool> {
-    let kit = kit.clamp(1, v51::KIT_COUNT);
-    let block = v51::current();
+    let kit = kit.clamp(1, vseries::KIT_COUNT);
+    let block = vseries::current();
     let data = link.read(block)?;
-    let now = v51::KIT_NUM
+    let now = vseries::KIT_NUM
         .read(&data)
         .ok_or_else(|| anyhow!("no kit number in {:?}", data))?;
     if now + 1 == i32::from(kit) {
         return Ok(false);
     }
-    link.remember(block, &data, v51::KIT_NUM.offset, v51::KIT_NUM.len, REASON)?;
-    let value = v51::KIT_NUM.encode(i32::from(kit) - 1);
-    link.write(block.at(v51::KIT_NUM.offset), &value)?;
-    log::info!("V51: kit {} -> {kit}", now + 1);
+    link.remember(
+        block,
+        &data,
+        vseries::KIT_NUM.offset,
+        vseries::KIT_NUM.len,
+        REASON,
+    )?;
+    let value = vseries::KIT_NUM.encode(i32::from(kit) - 1);
+    link.write(block.at(vseries::KIT_NUM.offset), &value)?;
+    log::info!("drum module: kit {} -> {kit}", now + 1);
     Ok(true)
 }
 
@@ -638,18 +691,18 @@ fn restore(link: &mut impl Link) -> Result<(Option<u16>, bool)> {
     if link.pending() > 0 {
         let r = link.restore()?;
         if !r.failed.is_empty() {
-            log::warn!("V51: could not restore {}", r.failed.join("; "));
+            log::warn!("drum module: could not restore {}", r.failed.join("; "));
         }
         wrote = r.written > 0;
     }
-    let data = link.read(v51::current())?;
-    let now = v51::KIT_NUM
+    let data = link.read(vseries::current())?;
+    let now = vseries::KIT_NUM
         .read(&data)
         .and_then(|n| u16::try_from(n + 1).ok());
     Ok((now, wrote))
 }
 
-/// 最近 V51 に送ったノート（チャンネル、ノート番号、送ったホスト時刻）
+/// 最近音源に送ったノート（チャンネル、ノート番号、送ったホスト時刻）
 static SENT: Mutex<VecDeque<(u8, u8, i64)>> = Mutex::new(VecDeque::new());
 
 fn sent_notes() -> MutexGuard<'static, VecDeque<(u8, u8, i64)>> {
@@ -662,8 +715,8 @@ fn remember_sent(channel: u8, note: u8, at_us: i64) {
     sent.push_back((channel, note, at_us));
 }
 
-/// 届いた MIDI が、試しのフレーズで送ったノートが V51 から返ってきたものか
-/// （V51 の Soft Thru が ON のとき。叩いたものとして画面に渡さない）
+/// 届いた MIDI が、試しのフレーズで送ったノートが音源から返ってきたものか
+/// （音源の Soft Thru が ON のとき。叩いたものとして画面に渡さない）
 pub fn is_echo(bytes: &[u8], arrival_us: i64) -> bool {
     let &[status, note, velocity] = bytes else {
         return false;
@@ -685,20 +738,22 @@ pub fn is_echo(bytes: &[u8], arrival_us: i64) -> bool {
     found.is_some()
 }
 
-/// V51 の名前の MIDI 出力ポートがあるか（無ければ、起動したときに V51 を探さない）
-fn v51_port_present() -> bool {
-    let outs = MidiOutput::new("DTXmaniaNXT").map(|o| {
-        o.ports()
-            .iter()
-            .filter_map(|p| o.port_name(p).ok())
-            .any(|n| looks_like_v51(&midi::display_name(&n)))
-    });
-    outs.unwrap_or(false)
+/// 機種の名前の MIDI 出力ポートがあれば、その機種（無ければ、音源を探さない。ほかの機器に聞かないように）
+fn supported_port() -> Option<Model> {
+    let out = MidiOutput::new("DTXmaniaNXT").ok()?;
+    out.ports()
+        .iter()
+        .filter_map(|p| out.port_name(p).ok())
+        .find_map(|n| port_model(&midi::display_name(&n)))
 }
 
-/// 覚えておくキットの名前のファイル
-fn names_path() -> Option<PathBuf> {
-    Some(Config::dir()?.join("v51_kits.toml"))
+/// 覚えておくキットの名前のファイル（機種ごと。V51 なら `v51_kits.toml`）
+fn names_path(model: Model) -> Option<PathBuf> {
+    Some(Config::dir()?.join(names_file(model)))
+}
+
+fn names_file(model: Model) -> String {
+    format!("{}_kits.toml", model.name.to_ascii_lowercase())
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -707,8 +762,8 @@ struct NamesFile {
     names: Vec<String>,
 }
 
-fn load_names() -> Vec<String> {
-    let Some(path) = names_path() else {
+fn load_names(model: Model) -> Vec<String> {
+    let Some(path) = names_path(model) else {
         return Vec::new();
     };
     let Ok(text) = fs::read_to_string(&path) else {
@@ -723,17 +778,18 @@ fn load_names() -> Vec<String> {
     }
 }
 
-fn save_names(names: &[String]) -> Result<()> {
-    let path = names_path().ok_or_else(|| anyhow!("no settings folder"))?;
+fn save_names(model: Model, names: &[String]) -> Result<()> {
+    let path = names_path(model).ok_or_else(|| anyhow!("no settings folder"))?;
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir)?;
     }
     let body = toml::to_string(&NamesFile {
         names: names.to_vec(),
     })?;
+    let m = model.name;
     let text = format!(
-        "# DTXmaniaNXT が V51 から読んだキットの名前です（キット 1 から順に）。\n\
-         # Kit names read from the V51 (from kit 1).\n\n{body}"
+        "# DTXmaniaNXT が {m} から読んだキットの名前です（キット 1 から順に）。\n\
+         # Kit names read from the {m} (from kit 1).\n\n{body}"
     );
     fs::write(&path, text).with_context(|| path.display().to_string())
 }
@@ -752,8 +808,7 @@ mod tests {
         assert_eq!(st.name(2), "Rock");
         assert_eq!(st.name(3), "");
         assert_eq!(st.name(0), "");
-        assert!(st.available());
-        assert!(!State::default().available());
+        assert!(!st.complete());
     }
 
     #[test]
@@ -768,7 +823,7 @@ mod tests {
         assert!(!st.settled());
     }
 
-    /// 作りものの V51（Current の 4 バイトと、書き戻しの記録だけ）
+    /// 作りものの音源（Current の 4 バイトと、書き戻しの記録だけ）
     struct Fake {
         current: Vec<u8>,
         /// 書き戻しの記録（番地の頭と元の値）
@@ -779,37 +834,37 @@ mod tests {
     impl Fake {
         fn at_kit(kit: u16) -> Self {
             Self {
-                current: v51::KIT_NUM.encode(i32::from(kit) - 1),
+                current: vseries::KIT_NUM.encode(i32::from(kit) - 1),
                 kept: None,
                 writes: Vec::new(),
             }
         }
         fn kit(&self) -> i32 {
-            v51::KIT_NUM.read(&self.current).unwrap() + 1
+            vseries::KIT_NUM.read(&self.current).unwrap() + 1
         }
     }
 
     impl Link for Fake {
-        fn read(&mut self, block: v51::Block) -> Result<Vec<u8>> {
-            assert_eq!(block, v51::current());
+        fn read(&mut self, block: vseries::Block) -> Result<Vec<u8>> {
+            assert_eq!(block, vseries::current());
             Ok(self.current.clone())
         }
         fn remember(
             &mut self,
-            block: v51::Block,
+            block: vseries::Block,
             data: &[u8],
             offset: u32,
             len: usize,
             _reason: &str,
         ) -> Result<()> {
-            assert_eq!(block, v51::current());
+            assert_eq!(block, vseries::current());
             if self.kept.is_none() {
                 self.kept = Some(data[offset as usize..offset as usize + len].to_vec());
             }
             Ok(())
         }
         fn write(&mut self, addr: drum_module::roland::Address, data: &[u8]) -> Result<()> {
-            assert_eq!(addr, v51::current().addr);
+            assert_eq!(addr, vseries::current().addr);
             anyhow::ensure!(self.kept.is_some(), "not kept");
             self.current = data.to_vec();
             self.writes.push(data.to_vec());
@@ -870,6 +925,12 @@ mod tests {
         assert!(!is_echo(&[0x99, 121, 0], t + 3_000));
         assert!(!is_echo(&[0x99, 121, 100], t + ECHO_WINDOW_US + 1));
         assert!(!is_echo(&[0xB9, 4, 127], t));
+    }
+
+    #[test]
+    fn names_are_kept_per_model() {
+        assert_eq!(names_file(vseries::V51), "v51_kits.toml");
+        assert_eq!(names_file(vseries::V71), "v71_kits.toml");
     }
 
     #[test]

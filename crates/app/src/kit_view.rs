@@ -1,4 +1,4 @@
-//! 曲ごとの V51 のキットを見せる部品。選曲では、キットを決めた曲のジャケットの下の端に札を出す。
+//! 曲ごとの音源のキットを見せる部品。選曲では、キットを決めた曲のジャケットの下の端に札を出す。
 
 use egui::Color32;
 
@@ -11,8 +11,8 @@ const TAG_Y: f32 = 292.0;
 const TAG_W: f32 = 284.0;
 const TAG_H: f32 = 34.0;
 
-/// 選曲の札（「V51」の印と、キットの番号と名前）
-pub fn draw_tag(c: &Canvas, g: &mut Gfx, label: &str) {
+/// 選曲の札（機種の名前の印と、キットの番号と名前）
+pub fn draw_tag(c: &Canvas, g: &mut Gfx, model: &str, label: &str) {
     ui::round_fill(
         c,
         TAG_X,
@@ -33,7 +33,7 @@ pub fn draw_tag(c: &Canvas, g: &mut Gfx, label: &str) {
         Color32::from_rgba_unmultiplied(255, 255, 255, 46),
     );
     let chip = ui::bold(13.0, Color32::BLACK);
-    let mark = "V51";
+    let mark = model;
     let cw = ui::text_width(g, mark, &chip) + 12.0;
     ui::round_fill(c, TAG_X + 10.0, TAG_Y + 8.0, cw, 18.0, 4.0, ui::STRONG);
     ui::text(c, g, mark, TAG_X + 16.0, TAG_Y + 9.0, &chip, cw);

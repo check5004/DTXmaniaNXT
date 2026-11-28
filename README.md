@@ -304,7 +304,7 @@ Set `DTXMANIANXT_AUTOPLAY=1` to have every note hit automatically while you chec
 | `crates/nx` | Reading DTXManiaNX folders (`Config.ini`, `score.ini`) |
 | `crates/video` | Chart videos (#AVI), via Media Foundation on Windows |
 | `crates/i18n` | English and Japanese text for the screens |
-| `crates/drum_module` | Talking to drum sound modules over MIDI (Roland V51 SysEx, the address map, restoring changed values) |
+| `crates/drum_module` | Talking to drum sound modules over MIDI (Roland V71/V51/V31 SysEx, the address map, restoring changed values) |
 | `crates/app` | The app: winit + wgpu + egui, cpal, midir. Draws the NX skin at the same coordinates as upstream |
 | `assets/skin` | The bundled skin, all our own artwork and sounds (see [Credits and rights](#credits-and-rights)) |
 | `tools/skin` | Prompts and build scripts for the new skin artwork and sounds |
