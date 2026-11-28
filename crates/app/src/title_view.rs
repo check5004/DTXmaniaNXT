@@ -116,7 +116,7 @@ pub struct TitleView {
     updated: Option<(String, String, Option<Instant>)>,
     /// 「更新」の行の NEW の明滅と、回る輪の起点
     since: Instant,
-    /// ほかの DTXMania を見つけた（その名前。設定を開くと引き継ぐ画面から始まる）
+    /// ほかの DTXMania を見つけた（その名前。引き継ぐ場所を知らせる。設定を開いたら消す）
     found: Option<String>,
 }
 
