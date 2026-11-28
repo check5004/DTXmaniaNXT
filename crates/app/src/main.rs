@@ -1745,6 +1745,7 @@ impl App {
                 shift_ms: v.number(settings::BGM_ADJUST) as f64,
             },
             metronome: v.flag(settings::METRONOME),
+            retake: true,
         }
     }
 

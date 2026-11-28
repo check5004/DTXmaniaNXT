@@ -577,6 +577,9 @@ pub enum InputEvent {
         velocity: u8,
         /// 叩いた瞬間のハイハットの開き具合（0 = 開き切り、127 = 閉じ切り）。まだ届いていなければ `None`
         hh_pedal: Option<u8>,
+        /// ハイハットを半開きで叩いた（開き切りでも閉じ切りでもない。[`Normalizer::half_open`]）。
+        /// 音源は開いたか閉じたかを決めて送るが、どちらのつもりかはわからないので、判定は HH と HHO の両方で取れる
+        half_open: bool,
     },
     /// シンバルを握って止めた
     Choke { host_us: i64, pad: Pad },
@@ -584,11 +587,17 @@ pub enum InputEvent {
     HiHatPedal { host_us: i64, value: u8 },
 }
 
+/// 半開きを決めるのに要る、ペダルの値の幅（いちばん開いた所といちばん閉じた所の差）。
+/// これより狭ければ、まだ開き切りも閉じ切りも見ていないとみなす
+const MIN_PEDAL_SPAN: u8 = 64;
+
 /// MIDI のメッセージを順に受け取り、[`InputEvent`] にする
 #[derive(Debug, Clone)]
 pub struct Normalizer {
     profile: MidiProfile,
     hh_pedal: Option<u8>,
+    /// この機器から届いたペダルの値の、いちばん小さい値（開いた所）と大きい値（閉じた所）
+    pedal_range: Option<(u8, u8)>,
     last_hit_us: BTreeMap<Pad, i64>,
 }
 
@@ -597,8 +606,24 @@ impl Normalizer {
         Self {
             profile,
             hh_pedal: None,
+            pedal_range: None,
             last_hit_us: BTreeMap::new(),
         }
+    }
+
+    /// ペダルの値 `v` が半開きか。音源によってペダルの値の幅は違う（閉じても 127 まで行かないものもある）ので、
+    /// この機器から届いた値のいちばん開いた所といちばん閉じた所を両はしとし、両はしから幅の 1/8 より内側を半開きとする。
+    /// まだ両はしを見ていなければ（幅が [`MIN_PEDAL_SPAN`] より狭い）、半開きとはしない
+    pub fn half_open(&self, v: u8) -> bool {
+        let Some((lo, hi)) = self.pedal_range else {
+            return false;
+        };
+        let span = hi - lo;
+        if span < MIN_PEDAL_SPAN {
+            return false;
+        }
+        let edge = span / 8;
+        v > lo + edge && v < hi - edge
     }
 
     pub fn profile(&self) -> &MidiProfile {
@@ -615,6 +640,10 @@ impl Normalizer {
                 controller, value, ..
             } if controller == self.profile.hh_pedal_cc => {
                 self.hh_pedal = Some(value);
+                self.pedal_range = Some(match self.pedal_range {
+                    Some((lo, hi)) => (lo.min(value), hi.max(value)),
+                    None => (value, value),
+                });
                 Some(InputEvent::HiHatPedal { host_us, value })
             }
             MidiMessage::PolyAftertouch { note, pressure, .. } => {
@@ -649,6 +678,8 @@ impl Normalizer {
                     articulation: m.articulation,
                     velocity,
                     hh_pedal: self.hh_pedal,
+                    half_open: m.pad == Pad::HiHat
+                        && self.hh_pedal.is_some_and(|v| self.half_open(v)),
                 })
             }
             _ => None,
@@ -818,6 +849,45 @@ mod tests {
             panic!()
         };
         assert_eq!(hh_pedal, Some(40));
+    }
+
+    #[test]
+    fn half_open_hi_hat_is_between_the_ends_seen_so_far() {
+        let mut n = Normalizer::new(MidiProfile::roland_vdrums());
+        let cc = |v| MidiMessage::ControlChange {
+            channel: 9,
+            controller: 4,
+            value: v,
+        };
+        let half = |e: Option<InputEvent>| match e {
+            Some(InputEvent::Hit { half_open, .. }) => half_open,
+            _ => panic!(),
+        };
+        // ペダルの値がまだ届いていない、閉じた所しか見ていないうちは半開きにしない
+        assert!(!half(n.feed(on(46, 100), 0)));
+        n.feed(cc(127), 10);
+        n.feed(cc(80), 20);
+        assert!(!half(n.feed(on(46, 100), 30)));
+        // 開き切ったのを見たら、両はしの 1/8（15）より内側は半開き
+        n.feed(cc(0), 40);
+        n.feed(cc(80), 50);
+        assert!(half(n.feed(on(46, 100), 60)));
+        assert!(half(n.feed(on(42, 100), 70)));
+        n.feed(cc(120), 80);
+        assert!(!half(n.feed(on(42, 100), 90)));
+        n.feed(cc(10), 100);
+        assert!(!half(n.feed(on(46, 100), 110)));
+        // ハイハット以外のパッドには付けない
+        n.feed(cc(64), 120);
+        assert!(!half(n.feed(on(38, 100), 130)));
+        // 閉じても 90 までしか行かない音源でも、見た幅で決める
+        let mut n = Normalizer::new(MidiProfile::roland_vdrums());
+        n.feed(cc(90), 0);
+        n.feed(cc(0), 10);
+        n.feed(cc(85), 20);
+        assert!(!half(n.feed(on(42, 100), 30)));
+        n.feed(cc(60), 40);
+        assert!(half(n.feed(on(46, 100), 50)));
     }
 
     #[test]
