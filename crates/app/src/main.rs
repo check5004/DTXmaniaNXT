@@ -1052,17 +1052,15 @@ impl App {
         };
         self.load_timing(chart.as_deref());
         self.refresh_monitors(true);
-        // タイトルで「見つかりました」と知らせていたら、引き継ぐ画面から始める（一度だけ）
-        let view = if !from_select && self.title.found() {
+        // タイトルの「見つかりました」の知らせは、それを見て設定を開いたら消す（もう出さない）。
+        // 設定はいつも「よく使う」から開く（引き継ぐ画面へ飛ばすと、探し終えた時刻しだいで
+        // 2 回目以降に急に飛ぶことがあり、いつ飛ぶのか分からなかった）
+        if !from_select && self.title.found() {
             self.title.set_found(None);
             self.config.import_offered = true;
             self.config.save();
-            let cursor = self.app_row(ItemId::Import);
-            ConfigView::starting_at(config_view::Cat::App, cursor, config_view::Page::Import)
-        } else {
-            ConfigView::new()
-        };
-        self.screen = Screen::Config(Box::new(view), from_select);
+        }
+        self.screen = Screen::Config(Box::default(), from_select);
         self.shutter.open(CONFIG_OPEN_DELAY);
     }
 

@@ -2373,7 +2373,7 @@ impl ConfigView {
         *self.cursor_mut() = cursor;
     }
 
-    /// 分類 `cat` の一覧の `cursor` 行目から始め、`page` を開いた画面（初めて設定を開いたときの引き継ぎ）
+    /// 分類 `cat` の一覧の `cursor` 行目から始め、`page` を開いた画面（開発者メニューから戻ったとき）
     pub fn starting_at(cat: Cat, cursor: usize, page: Page) -> Self {
         let mut v = Self::new();
         v.cat = CATS.iter().position(|&c| c == cat).unwrap_or(0);

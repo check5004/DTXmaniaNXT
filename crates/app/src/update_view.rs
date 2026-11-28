@@ -145,8 +145,8 @@ pub fn updated(c: &Canvas, g: &mut Gfx, current: &str, previous: &str, alpha: f3
 pub fn found(c: &Canvas, g: &mut Gfx, title: &str, above: bool) {
     let main = tf!("Found {title}", "{title} が見つかりました");
     let sub = t(
-        "Open Settings to import its pad mapping and settings",
-        "設定を開くと、パッドの割り当てや設定を引き継ぐ画面から始まります",
+        "Import its pad mapping and settings from Settings > General",
+        "パッドの割り当てや設定は、設定の「全般」から引き継げます",
     );
     notice(c, g, &main, Some(sub), ACCENT, 1.0, usize::from(above));
 }
