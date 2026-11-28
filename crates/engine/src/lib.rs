@@ -9,7 +9,9 @@
 //! - [`practice_way`] は曲の練習のやり方（パート練習・お手本と交互・積み上げなど）の決まり
 //! - [`stroke`] はスネアのヘッドとリムの打ち分けを見る
 //! - [`drill`] は基礎練習の型を譜面にし、段ごとの出来と手ごとのずれをまとめる
+//! - [`accent`] は叩く強さを、まわりのふつうの音と比べてアクセントが出たかを見る
 
+pub mod accent;
 pub mod analysis;
 pub mod clock;
 pub mod drill;
